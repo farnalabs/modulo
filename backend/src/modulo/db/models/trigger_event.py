@@ -7,7 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from modulo.db.models.base import OrgScoped
 
 # Full validation_result vocabulary. Generated into the ORM CheckConstraint SQL
-# below and HARDCODED (separately) in migrations 0069, 0104 and 0106 —
+# below and HARDCODED (separately) in migrations 0069, 0104, 0106 and 0176 —
 # migrations never import app constants. Keep them in sync when extending the
 # vocabulary.
 VALIDATION_RESULT_VALUES: tuple[str, ...] = (
@@ -32,6 +32,12 @@ VALIDATION_RESULT_VALUES: tuple[str, ...] = (
     "paused",
     "auto_deactivated",
     "guardrail_blocked",
+    # FAR-604: latest-wins queue coalescing folded a delivery into an
+    # existing pending run (run_id points at the coalesced run).
+    "coalesced",
+    # FAR-604: dispatcher backpressure refused run creation (queue over
+    # depth/age limits); error_detail carries the depths.
+    "backpressure_skipped",
 )
 
 _TRIGGER_EVENT_VALIDATION_SQL = f"validation_result IN {tuple(VALIDATION_RESULT_VALUES)}"

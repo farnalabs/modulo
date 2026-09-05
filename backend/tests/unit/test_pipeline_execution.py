@@ -19,6 +19,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 import modulo.core.pipeline_execution as pe
+import modulo.core.run_terminal_advance as rta
 from modulo.db.models.run import Run
 
 # ---------------------------------------------------------------------------
@@ -938,8 +939,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch.object(pe, "_record_fact_for_terminal_failed_run", new=_record),
+            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new=_record),
         ):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
@@ -992,8 +993,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch.object(pe, "_record_fact_for_terminal_failed_run", new=_boom),
+            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new=_boom),
             patch.object(pe._log, "warning"),
         ):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
@@ -1040,8 +1041,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch.object(pe, "_record_fact_for_terminal_failed_run", new_callable=AsyncMock),
+            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new_callable=AsyncMock),
         ):
             await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
@@ -1333,6 +1334,7 @@ class TestSaqWorkerSettings:
             "webhook_dedup_cleanup",
             "trigger_events_cleanup",
             "stale_run_recovery",
+            "slot_reconciliation",
             "cost_probe",
             "check_missed_fire_alerts_cron",
             "journey_reconcile",
@@ -1823,9 +1825,11 @@ class TestRunExecutorWithWatchdog:
 
 
 class TestRecordFactForTerminalFailedRunHelper:
-    """The pipeline_execution wrapper opens its own RLS-scoped session AFTER a
-    raw terminal write commits, re-selects the Run ORM, and records the daily
-    fact via the shared analytics helper — None-guarded and fail-open."""
+    """The facts helper (pipeline_execution delegates to the shared
+    ``run_terminal_advance.record_terminal_failed_fact``, FAR-604 F4) opens
+    its own RLS-scoped session AFTER a raw terminal write commits, re-selects
+    the Run ORM, and records the daily fact via the shared analytics helper —
+    None-guarded and fail-open."""
 
     def _factory_and_session(self) -> tuple[MagicMock, AsyncMock]:
         session = AsyncMock()
@@ -1845,11 +1849,11 @@ class TestRecordFactForTerminalFailedRunHelper:
         fake_run = MagicMock()
         factory, session = self._factory_and_session()
         record_facts = AsyncMock()
-        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
-        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(rta, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(rta, "set_rls_org", AsyncMock())
         with (
             patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record_facts),
-            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=fake_run),
+            patch.object(rta, "get_run", new_callable=AsyncMock, return_value=fake_run),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
 
@@ -1861,11 +1865,11 @@ class TestRecordFactForTerminalFailedRunHelper:
         org_id = str(uuid.uuid4())
         factory, _session = self._factory_and_session()
         record_facts = AsyncMock()
-        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
-        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(rta, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(rta, "set_rls_org", AsyncMock())
         with (
             patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record_facts),
-            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=None),
+            patch.object(rta, "get_run", new_callable=AsyncMock, return_value=None),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
 
@@ -1879,20 +1883,20 @@ class TestRecordFactForTerminalFailedRunHelper:
         org_id = str(uuid.uuid4())
         fake_run = MagicMock()
         factory, _session = self._factory_and_session()
-        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
-        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(rta, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(rta, "set_rls_org", AsyncMock())
 
         async def _boom(_s: object, _r: object) -> None:
             raise RuntimeError("facts boom")
 
         with (
             patch("modulo.core.analytics.record_fact_for_terminal_failed_run", new=_boom),
-            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=fake_run),
-            caplog.at_level("WARNING", logger="modulo.core.pipeline_execution"),
+            patch.object(rta, "get_run", new_callable=AsyncMock, return_value=fake_run),
+            caplog.at_level("WARNING", logger="modulo.core.run_terminal_advance"),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
 
-        assert any("terminal_failed_facts_failed" in m for m in caplog.messages)
+        assert any("facts_advance_failed" in m for m in caplog.messages)
 
 
 class TestResumeRun:

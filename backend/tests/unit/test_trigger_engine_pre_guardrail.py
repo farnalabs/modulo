@@ -318,7 +318,9 @@ async def test_handle_webhook_clean_payload_not_blocked() -> None:
     assert run is run_mock
     assert te.validation_result == "accepted"
     # A dedup slot WAS consumed for the clean delivery (dedup SELECT+DELETE ran).
-    assert _execute_call_count(session) == 8
+    # FAR-604 admission adds 2 execute calls for every non-replay delivery:
+    # evaluate_backpressure (SELECT max_concurrent_runs + get_pipeline_queue_depth).
+    assert _execute_call_count(session) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +432,9 @@ async def test_handle_webhook_warn_is_advisory() -> None:
 
     assert run is run_mock
     assert te.validation_result == "accepted"
-    assert _execute_call_count(session) == 8
+    # FAR-604 admission adds 2 execute calls for every non-replay delivery
+    # (evaluate_backpressure: SELECT max_concurrent_runs + get_pipeline_queue_depth).
+    assert _execute_call_count(session) == 10
 
 
 async def test_handle_webhook_observe_is_advisory() -> None:

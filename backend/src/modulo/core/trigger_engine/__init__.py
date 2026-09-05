@@ -62,10 +62,15 @@ from modulo.core.release_channels import (
     is_routable_channel,
     resolve_channel_binding,
 )
+from modulo.core.run_admission import (
+    coalesce_enabled,
+    derive_webhook_coalesce_key,
+    evaluate_backpressure,
+)
 from modulo.db.crud.pipeline_snapshot_versioning import (
     resolve_snapshot_for_channel,
 )
-from modulo.db.crud.run import create_run
+from modulo.db.crud.run import coalesce_pending_run, create_run
 from modulo.db.lifecycle_refs import _RESERVED_INPUT_PAYLOAD_KEYS
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
@@ -140,6 +145,21 @@ class PipelineRateLimitError(RuntimeError):
         self.key = key
         self.max_triggers = max_triggers
         self.window_seconds = window_seconds
+
+
+class PipelineBackpressureError(RuntimeError):
+    """Trigger dispatch refused run creation — pipeline queue over limits (FAR-604).
+
+    Raised by the webhook path when :func:`modulo.core.run_admission.evaluate_backpressure`
+    decides the pipeline's pending queue is over depth or age limits. The
+    delivery is NOT accepted (the sender retries); a ``backpressure_skipped``
+    TriggerEvent is recorded first so the skip is auditable, never silent.
+    """
+
+    def __init__(self, pipeline_id: uuid.UUID, reason: str) -> None:
+        super().__init__(f"Pipeline {pipeline_id} is backpressured; run not created ({reason})")
+        self.pipeline_id = pipeline_id
+        self.reason = reason
 
 
 class ReplayNotFoundError(KeyError):
@@ -1254,9 +1274,72 @@ class TriggerEngine:
         then records the ``accepted`` event and stores the raw payload for
         replay. ``is_replay`` is forwarded verbatim so downstream consumers can
         distinguish re-fires from original deliveries.
+
+        FAR-604 admission healing, applied before the insert:
+
+        * D2 queue coalescing (original deliveries only) — when the trigger's
+          payload carries a stable coalesce key (GitHub repo + PR/issue
+          number) and ``config_json.coalesce_pending`` is not ``false``
+          (default ON), a NEW delivery is folded into the pipeline's
+          UNSTARTED pending run for the same key: ``coalesced`` event, the
+          existing run returned, no new row.
+        * D3 dispatcher backpressure — when no coalesce target exists and the
+          pipeline's pending queue is over depth/age limits, run creation is
+          refused: ``backpressure_skipped`` event + ``PipelineBackpressureError``
+          (the route maps it to 429; the sender retries). Replays bypass both
+          (an intentional re-fire must never be refused or folded).
         """
         cfg = delivery.trigger.config_json or {}
         refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
+
+        coalesce_key: str | None = None
+        if not is_replay and coalesce_enabled(cfg):
+            coalesce_key = derive_webhook_coalesce_key(delivery.raw_payload)
+            if coalesce_key is not None:
+                coalesced = await coalesce_pending_run(
+                    session,
+                    org_id=delivery.org_id,
+                    pipeline_id=delivery.trigger.pipeline_id,
+                    coalesce_key=coalesce_key,
+                    input_payload=input_payload,
+                )
+                if coalesced is not None:
+                    _log.info(
+                        "Webhook coalesced for trigger %s into pending run %s (key=%s)",
+                        delivery.trigger.id,
+                        coalesced.id,
+                        coalesce_key,
+                    )
+                    trigger_event = await self._log_event(
+                        session,
+                        trigger=delivery.trigger,
+                        org_id=delivery.org_id,
+                        payload_hash=payload_hash,
+                        result="coalesced",
+                        run_id=coalesced.id,
+                    )
+                    await self._store_raw_payload(
+                        session,
+                        trigger_event_id=trigger_event.id,
+                        raw_body=delivery.raw_body,
+                        raw_payload=delivery.raw_payload,
+                        org_id=delivery.org_id,
+                    )
+                    return coalesced, trigger_event
+
+        if not is_replay:
+            backpressured, reason = await evaluate_backpressure(session, pipeline_id=delivery.trigger.pipeline_id)
+            if backpressured:
+                await self._log_event(
+                    session,
+                    trigger=delivery.trigger,
+                    org_id=delivery.org_id,
+                    payload_hash=payload_hash,
+                    result="backpressure_skipped",
+                    error_detail=reason,
+                )
+                raise PipelineBackpressureError(delivery.trigger.pipeline_id, reason)
+
         try:
             run = await create_run(
                 session,
@@ -1269,6 +1352,7 @@ class TriggerEngine:
                 rate_limit_key=rate_limit.key,
                 work_item_refs=refs,
                 is_replay=is_replay,
+                coalesce_key=coalesce_key,
             )
         except RateLimitConflictError as exc:
             _log.warning(
