@@ -1176,6 +1176,142 @@ describe('RunDetailView', () => {
       Element.prototype.scrollIntoView = originalScroll
     }
   })
+
+  it('renders no run-level warnings strip when no warning condition exists', async () => {
+    const wrapper = await mountWithDetail(baseDetail())
+
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows a warnings strip entry for unreported cost components and scrolls to the cost section on click', async () => {
+    const originalScroll = Element.prototype.scrollIntoView
+    const scrollSpy = vi.fn()
+    Element.prototype.scrollIntoView = scrollSpy
+    let wrapper: Awaited<ReturnType<typeof mountWithDetail>> | null = null
+    try {
+      wrapper = await mountWithDetail({
+        ...baseDetail(),
+        cost_breakdown: [
+          {
+            component: 'model_cost',
+            display_name: 'Model cost',
+            source: 'self_reported',
+            amount_usd: '0.000000',
+            missing_self_report: true,
+          },
+        ],
+      })
+
+      const strip = wrapper.find('[data-testid="run-detail-warnings-strip"]')
+      expect(strip.exists()).toBe(true)
+      expect(strip.attributes('role')).toBe('status')
+      expect(strip.attributes('aria-live')).toBe('polite')
+
+      const entry = wrapper.find('[data-testid="run-detail-warnings-strip-unreported-cost"]')
+      expect(entry.exists()).toBe(true)
+      expect(entry.attributes('aria-label')).toBeTruthy()
+      // The scroll target must exist in the DOM for the click to anchor.
+      expect(document.getElementById('run-detail-cost-section')).not.toBeNull()
+      await entry.trigger('click')
+      expect(scrollSpy).toHaveBeenCalled()
+    } finally {
+      wrapper?.unmount()
+      Element.prototype.scrollIntoView = originalScroll
+    }
+  })
+
+  it('shows a warnings strip entry for a clamped breakdown total', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        { component: 'model_cost', display_name: 'Model cost', source: 'self_reported', amount_usd: '1.230000' },
+        { component: '__total__', total_clamped: true },
+      ],
+    })
+
+    const strip = wrapper.find('[data-testid="run-detail-warnings-strip"]')
+    expect(strip.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-clamped-total"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('hides cost-derived strip entries when the cost section itself does not render (total_cost_usd null)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      total_cost_usd: null,
+      cost_breakdown: [
+        { component: 'model_cost', display_name: 'Model cost', source: 'self_reported', amount_usd: '0.000000', missing_self_report: true },
+      ],
+    })
+
+    // No scroll target without the cost section — no dead entries in the strip.
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows a warnings strip entry for a guardrail-blocked run', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'eval_failed',
+      error_code: 'eval_blocked',
+    })
+
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-guardrail-override"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows a warnings strip entry for a stale heartbeat', async () => {
+    const staleHeartbeatAt = new Date(Date.now() - 120_000).toISOString() // nosemgrep: new-date-without-guard
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'running',
+      heartbeat_at: staleHeartbeatAt,
+    })
+
+    const strip = wrapper.find('[data-testid="run-detail-warnings-strip"]')
+    expect(strip.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-stale-heartbeat"]').exists()).toBe(true)
+    // The stale heartbeat must appear in the strip even though it has no
+    // dedicated banner of its own.
+    expect(strip.text()).toContain('Heartbeat is stale')
+    wrapper.unmount()
+  })
+
+  it('renders a fresh heartbeat with no strip when the only signal is absent', async () => {
+    const freshHeartbeatAt = new Date(Date.now() - 5_000).toISOString() // nosemgrep: new-date-without-guard
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'running',
+      heartbeat_at: freshHeartbeatAt,
+    })
+
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows multiple strip entries together when several warning conditions exist', async () => {
+    const staleHeartbeatAt = new Date(Date.now() - 120_000).toISOString() // nosemgrep: new-date-without-guard
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'running',
+      heartbeat_at: staleHeartbeatAt,
+      cost_breakdown: [
+        { component: 'model_cost', display_name: 'Model cost', source: 'self_reported', amount_usd: '0.000000', missing_self_report: true },
+        { component: '__total__', total_clamped: true },
+      ],
+    })
+
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-unreported-cost"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-clamped-total"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-stale-heartbeat"]').exists()).toBe(true)
+    // The strip renders exactly the warning conditions present — no invented
+    // entries (queue/capacity banners are never duplicated into it).
+    const strip = wrapper.find('[data-testid="run-detail-warnings-strip"]')
+    expect(strip.findAll('button').length).toBe(3)
+    wrapper.unmount()
+  })
 })
 
 // Module-level helpers for the appended describe blocks below (the original

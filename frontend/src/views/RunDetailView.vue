@@ -45,6 +45,35 @@
         </div>
       </header>
 
+      <!-- Run-level warnings summary strip: surfaces run-level issues at the
+           top of the page so they are visible without scrolling to the
+           dedicated detail sections below. -->
+      <div
+        v-if="runLevelWarnings.length > 0"
+        data-testid="run-detail-warnings-strip"
+        role="status"
+        aria-live="polite"
+        class="mb-4 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning"
+      >
+        <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold tracking-tight">
+          <AlertTriangle aria-hidden="true" class="h-4 w-4 shrink-0" />
+          {{ $t('views.RunDetailView.warnings_strip_title', { count: runLevelWarnings.length }) }}
+        </h2>
+        <ul class="space-y-1.5">
+          <li v-for="warning in runLevelWarnings" :key="warning.id">
+            <button
+              type="button"
+              :data-testid="`run-detail-warnings-strip-${warning.id}`"
+              :aria-label="$t(warning.labelKey)"
+              class="w-full rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-left text-xs font-medium text-warning transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              @click="scrollToWarning(warning.targetId)"
+            >
+              {{ $t(warning.labelKey) }}
+            </button>
+          </li>
+        </ul>
+      </div>
+
       <!-- Queue position banner (pending + waiting on sandbox capacity) -->
       <output
         v-if="run.status === 'pending' && run.capacity?.waiting"
@@ -144,7 +173,7 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
         <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</div>
-        <div data-testid="run-detail-heartbeat">
+        <div data-testid="run-detail-heartbeat" id="run-detail-heartbeat-anchor">
           <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>
           <span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
         </div>
@@ -343,6 +372,7 @@
       <!-- Guardrail-blocked override (terminal eval_failed / eval_blocked) -->
       <div
         v-if="isGuardrailBlocked"
+        id="run-detail-guardrail-override"
         data-testid="run-detail-guardrail-override-panel"
         class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4"
       >
@@ -588,7 +618,7 @@
       </section>
 
       <!-- Total Run Cost -->
-      <section v-if="run.total_cost_usd != null" class="rounded-lg border bg-card p-6">
+      <section v-if="run.total_cost_usd != null" id="run-detail-cost-section" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
           <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
           <span class="text-2xl font-semibold tabular-nums">{{ formatMoney(Number(formattedCost), currencyCode, 6) }}</span>
@@ -765,7 +795,7 @@ import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbea
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { Check, X } from '@lucide/vue'
+import { Check, X, AlertTriangle } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
   created_at?: string | null
@@ -1709,6 +1739,60 @@ const heartbeatAge = computed<number | null>(() => {
   if (!r) return null
   return heartbeatAgeSeconds(r.heartbeat_at, r.status, heartbeatNow.value)
 })
+
+// Run-level warnings summary (strip at the top of the page). Aggregates the
+// four run-level warning signals so users see them without scrolling to the
+// dedicated detail sections; each entry anchors to its section on click.
+// Cost entries are co-gated on the cost section's own render condition so an
+// entry never points at an anchor that is not in the DOM.
+interface RunLevelWarning {
+  id: string
+  labelKey: string
+  targetId: string
+}
+
+const costSectionPresent = computed(() => run.value?.total_cost_usd != null)
+
+const hasUnreportedCostEntries = computed(() =>
+  breakdownRaw.value.some((e) => e.missing_self_report === true),
+)
+
+const runLevelWarnings = computed<RunLevelWarning[]>(() => {
+  const warnings: RunLevelWarning[] = []
+  if (costSectionPresent.value && hasUnreportedCostEntries.value) {
+    warnings.push({
+      id: 'unreported-cost',
+      labelKey: 'views.RunDetailView.warnings_strip_unreported_cost',
+      targetId: 'run-detail-cost-section',
+    })
+  }
+  if (costSectionPresent.value && breakdownTotalClamped.value) {
+    warnings.push({
+      id: 'clamped-total',
+      labelKey: 'views.RunDetailView.warnings_strip_clamped_total',
+      targetId: 'run-detail-cost-section',
+    })
+  }
+  if (isGuardrailBlocked.value) {
+    warnings.push({
+      id: 'guardrail-override',
+      labelKey: 'views.RunDetailView.warnings_strip_guardrail_override',
+      targetId: 'run-detail-guardrail-override',
+    })
+  }
+  if (isHeartbeatStale(heartbeatAge.value)) {
+    warnings.push({
+      id: 'stale-heartbeat',
+      labelKey: 'views.RunDetailView.warnings_strip_stale_heartbeat',
+      targetId: 'run-detail-heartbeat-anchor',
+    })
+  }
+  return warnings
+})
+
+function scrollToWarning(targetId: string) {
+  document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 function childRunBadgeClass(status: string | undefined): string {
   return statusBadgeClassFor(status)
