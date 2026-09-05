@@ -15,7 +15,7 @@
         <PageHeader :title="$t('views.PipelineListView.title')">
           <template #right>
             <div class="flex items-center gap-2">
-              <div class="w-48 sm:w-auto">
+              <div class="w-full sm:w-auto">
                 <FilterBar
                   :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
                   :search-value="search"

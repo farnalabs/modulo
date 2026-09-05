@@ -62,11 +62,11 @@ describe('PageHeader', () => {
     )
   })
 
-  it('makes the right-slot container full width and wrapping on mobile, intrinsic width at sm+ (FAR-627)', () => {
+  it('makes the right-slot container full width and wrapping on mobile, nowrap intrinsic width at sm+ (FAR-627)', () => {
     const wrapper = mountPageHeader({ title: 'Runs' }, { rightSlot: '<span data-testid="right-slot-content">Filters</span>' })
     const rightContainer = wrapper.find('[data-testid="right-slot-content"]').element.parentElement
     expect(rightContainer).toBeTruthy()
     const classes = rightContainer!.className.split(' ')
-    expect(classes).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'items-center', 'gap-2', 'w-full', 'sm:w-auto', 'sm:shrink-0']))
+    expect(classes).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'sm:flex-nowrap', 'items-center', 'gap-2', 'w-full', 'sm:w-auto', 'sm:shrink-0']))
   })
 })

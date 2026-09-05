@@ -13,8 +13,9 @@
       @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadFeedback() } }"
     >
       <template #after>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <Select
+  class="w-full sm:w-auto"
   :aria-label="$t('views.FeedbackInboxView.pipeline')"
   v-model="pipelineFilter"
   @update:model-value="loadFeedback"
@@ -32,14 +33,14 @@
             v-model="dateFrom"
             type="date"
             data-testid="feedback-inbox-date-from"
-            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="w-full sm:w-auto rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="loadFeedback"
           />
           <input :aria-label="$t('views.FeedbackInboxView.to')"
             v-model="dateTo"
             type="date"
             data-testid="feedback-inbox-date-to"
-            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="w-full sm:w-auto rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @change="loadFeedback"
           />
         </div>

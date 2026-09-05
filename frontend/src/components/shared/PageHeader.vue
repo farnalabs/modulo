@@ -8,7 +8,7 @@
       <h1 class="text-2xl font-semibold tracking-tight">{{ title }}</h1>
       <p v-if="subtitle" class="mt-1 text-sm text-muted-foreground">{{ subtitle }}</p>
     </div>
-    <div v-if="$slots.right" class="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:shrink-0">
+    <div v-if="$slots.right" class="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full sm:w-auto sm:shrink-0">
       <slot name="right" />
     </div>
   </header>
