@@ -79,30 +79,26 @@ describe('SettingsSsoView — provider list', () => {
     expect(wrapper.text()).toContain('sso down')
   })
 
-  it('BUG CHARACTERISATION: the ErrorAlert retry button is hidden (repo-wide, see report)', async () => {
-    // ErrorAlert guards its Retry button with `onRetry && retryable !== false`,
-    // but `retryable` is an absent Boolean prop, which Vue casts to `false`
-    // (resolvePropValue: isAbsent && !hasDefault => false). The guard therefore
-    // always fails unless a view also passes :retryable="true", which no view
-    // does. Reported in the delivery report; fixing ErrorAlert flips this test.
+  it('renders the ErrorAlert retry button by default (fe-002)', async () => {
+    // ErrorAlert defaults retryable to true (FAR-608), so any error rendered
+    // with an on-retry handler offers the retry action.
     ;(api.GET as Mock).mockRejectedValue(new Error('sso down'))
     const wrapper = mountView()
     await nextTick()
     expect(wrapper.text()).toContain('sso down')
-    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
   })
 
-  it('BUG CHARACTERISATION: a failing GET error envelope renders the empty state, not an error (see report)', async () => {
-    // The view's fetcher normalises the response and DISCARDS the error
-    // envelope: `Array.isArray(resp.data) ? resp.data : resp.data?.items ?? []`
-    // turns a failed GET into `[]`, so the UI shows "No SSO providers
-    // configured" for a server failure instead of an inline ErrorAlert.
-    // Reported in the delivery report; a fix should flip this test.
+  it('surfaces a failing GET error envelope inline instead of the empty state (fe-002)', async () => {
+    // The view's fetcher forwards the response's error envelope to
+    // useDataFetch (FAR-608), so a failed GET renders the ErrorAlert — not
+    // the "No SSO providers configured" empty state.
     ;(api.GET as Mock).mockResolvedValue({ data: undefined, error: { detail: 'sso down' } })
     const wrapper = mountView()
     await nextTick()
-    expect(wrapper.text()).toContain('No SSO providers configured')
-    expect(wrapper.text()).not.toContain('Retry')
+    expect(wrapper.text()).toContain('sso down')
+    expect(wrapper.text()).not.toContain('No SSO providers configured')
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
   })
 
   it('renders a SAML provider with its entity id', async () => {
@@ -178,18 +174,20 @@ describe('SettingsSsoView — create provider', () => {
       discovery_url: 'https://idp.new/.well-known',
       scopes: ['openid', 'email'],
     })
-    // The form closes, but the new provider is NOT appended to the visible
-    // list: `providers.value.push(data)` mutates vue-query's readonly data
-    // proxy, which silently no-ops (see delivery report). The fix is to
-    // reassign or refetch; this test documents the current behaviour.
+    // The form closes and the list refetches (FAR-608): the created provider
+    // appears once the GET mock reflects the server state after the POST.
     expect(wrapper.text()).not.toContain('New SSO Provider')
-    expect(wrapper.text()).not.toContain('New SSO')
   })
 
-  it('BUG CHARACTERISATION: the created provider is not appended to the list (readonly mutation no-op, see report)', async () => {
-    // Companion to the test above: even with a successful POST, the list
-    // still shows only the pre-existing providers.
-    ;(api.POST as Mock).mockResolvedValue({ data: provider({ id: 'sso-new', name: 'New SSO' }), error: undefined })
+  it('the created provider appears in the list after the refetch', async () => {
+    // createProvider refetches on success (FAR-608) instead of pushing into
+    // the readonly vue-query proxy — simulate the server gaining the provider.
+    let current = [provider()]
+    ;(api.GET as Mock).mockImplementation(async () => ({ data: current, error: undefined }))
+    ;(api.POST as Mock).mockImplementation(async () => {
+      current = [provider(), provider({ id: 'sso-new', name: 'New SSO' })]
+      return { data: provider({ id: 'sso-new', name: 'New SSO' }), error: undefined }
+    })
     const wrapper = mountView()
     await nextTick()
     await wrapper.find('[data-testid="settings-sso-add-provider"]').trigger('click')
@@ -198,7 +196,7 @@ describe('SettingsSsoView — create provider', () => {
     await wrapper.findAll('button').find((b) => b.text() === 'Create')!.trigger('click')
     await nextTick()
     expect(wrapper.text()).toContain('Acme SSO')
-    expect(wrapper.text()).not.toContain('New SSO')
+    expect(wrapper.text()).toContain('New SSO')
   })
 
   it('creates a SAML provider carrying metadata fields instead of OIDC fields', async () => {
@@ -292,10 +290,15 @@ describe('SettingsSsoView — edit provider', () => {
     expect(wrapper.find('#ssoproviderform-field-9').exists()).toBe(false)
   })
 
-  it('BUG CHARACTERISATION: the renamed provider is not reflected in the list (readonly mutation no-op, see report)', async () => {
-    // updateProvider replaces the row via `providers.value[idx] = data`,
-    // which silently no-ops on vue-query's readonly data proxy, so the card
-    // keeps showing the old name until a refetch (delivery report).
+  it('the renamed provider is reflected in the list after the refetch', async () => {
+    // updateProvider refetches on success (FAR-608) instead of writing into
+    // the readonly vue-query proxy — simulate the server having the new name.
+    let current = [provider()]
+    ;(api.GET as Mock).mockImplementation(async () => ({ data: current, error: undefined }))
+    ;(api.PUT as Mock).mockImplementation(async () => {
+      current = [provider({ name: 'Acme SSO Renamed' })]
+      return { data: current[0], error: undefined }
+    })
     const wrapper = mountView()
     await nextTick()
     await openEditForm(wrapper)
@@ -303,8 +306,8 @@ describe('SettingsSsoView — edit provider', () => {
     await wrapper.findAll('button').find((b) => b.text() === 'Save')!.trigger('click')
     await nextTick()
     expect(api.PUT).toHaveBeenCalledTimes(1)
-    expect(wrapper.text()).toContain('Acme SSO')
-    expect(wrapper.text()).not.toContain('Acme SSO Renamed')
+    expect(wrapper.text()).toContain('Acme SSO Renamed')
+    expect(wrapper.text()).not.toContain('New SSO Provider')
   })
 
   it('includes the client secret in the PUT body only when re-entered', async () => {
@@ -355,17 +358,21 @@ describe('SettingsSsoView — toggle provider', () => {
     expect(opts.params.path.provider_id).toBe('sso-1')
   })
 
-  it('BUG CHARACTERISATION: a successful toggle does not flip the switch visually (readonly mutation no-op, see report)', async () => {
-    // toggleProvider replaces the row via `providers.value[idx] = data` —
-    // a silent no-op on vue-query's readonly data proxy — so the switch
-    // stays visually "on" until a refetch (delivery report).
-    ;(api.PUT as Mock).mockResolvedValue({ data: provider({ enabled: false }), error: undefined })
+  it('a successful toggle refetches and flips the switch visually', async () => {
+    // toggleProvider refetches on success (FAR-608) instead of writing into
+    // the readonly vue-query proxy — simulate the server toggling the state.
+    let current = provider({ enabled: true })
+    ;(api.GET as Mock).mockImplementation(async () => ({ data: [current], error: undefined }))
+    ;(api.PUT as Mock).mockImplementation(async () => {
+      current = provider({ enabled: false })
+      return { data: current, error: undefined }
+    })
     const wrapper = mountView()
     await nextTick()
     await wrapper.find('[data-testid="settings-sso-toggle"]').trigger('click')
     await nextTick()
     expect(api.PUT).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('[data-testid="settings-sso-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.find('[data-testid="settings-sso-toggle"]').attributes('aria-checked')).toBe('false')
   })
 
   it('shows a toggle failure from the error envelope', async () => {

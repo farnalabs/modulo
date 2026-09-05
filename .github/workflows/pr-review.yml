@@ -76,71 +76,34 @@ jobs:
           SHA: ${{ steps.pr-details.outputs.head_sha }}
           BRANCH: ${{ steps.pr-details.outputs.head_branch }}
         run: |
-          PAYLOAD=$(cat << ENDJSON
-          {
-            "action": "check_run",
-            "repository": {"full_name": "${REPO}"},
-            "pull_request": {
-              "number": ${PR_NUMBER},
-              "head": {"sha": "${SHA}", "ref": "${BRANCH}"}
-            }
-          }
-          ENDJSON
-          )
-          BODY=$(echo "${PAYLOAD}")
+          TIMESTAMP=$(date +%s)
+          # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
+          # name (legal in git refnames, e.g. containing '"') cannot inject
+          # keys or break the payload. See FAR-568.
+          BODY=$(jq -n \
+            --arg repo "${REPO}" \
+            --argjson prNumber "${PR_NUMBER}" \
+            --arg sha "${SHA}" \
+            --arg ref "${BRANCH}" \
+            '{action: "check_run", repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
           RESPONSE_FILE=$(mktemp)
-          trap 'rm -f "${RESPONSE_FILE}"' EXIT
-          ACCEPTED=false
-          # Retry with exponential backoff on 429/5xx (max 5 attempts).
-          # The Modulo app answers 503 "Pipeline snapshot lock unavailable
-          # after 5 attempts - retry the webhook delivery" while a snapshot
-          # lock is contended, so a single-shot POST loses the review for
-          # that PR outright: no run is created and nothing else re-drives
-          # it. Mirrors the Branch Fixer webhook step's retry policy.
-          for i in 1 2 3 4 5; do
-            # Timestamp and HMAC are recomputed per attempt so a signature
-            # is never replayed outside the app's timestamp freshness window
-            # after a long backoff.
-            TIMESTAMP=$(date +%s)
-            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
-            # Truncate the shared response file before each attempt so a curl
-            # failure that writes no output cannot leak the previous attempt's
-            # stale body into the logs (control flow keys off HTTP_CODE, but
-            # the echoed body should stay honest).
-            : > "${RESPONSE_FILE}"
-            HTTP_CODE=$(curl -s --connect-timeout 10 --max-time 60 -o "${RESPONSE_FILE}" -w '%{http_code}' -X POST "${MODULO_WEBHOOK_URL}" \
-              -H "Content-Type: application/json" \
-              -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
-              -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
-              -d "${BODY}") || HTTP_CODE="000"
-            echo "Modulo PR Review webhook responded with HTTP ${HTTP_CODE} (attempt ${i}/5)"
-            echo "Response body:"
-            cat "${RESPONSE_FILE}" || true
-            echo
-            case "${HTTP_CODE}" in
-              2*)
-                echo "Webhook POST accepted."
-                ACCEPTED=true
-                break
-                ;;
-              429|000|5*)
-                if [ "${i}" -eq 5 ]; then
-                  break
-                fi
-                DELAY=$((2 ** (i - 1) * 5))
-                echo "::warning::Modulo PR Review webhook returned HTTP ${HTTP_CODE} (attempt ${i}/5) - retrying in ${DELAY}s"
-                sleep "${DELAY}"
-                ;;
-              *)
-                echo "::error::Modulo PR Review webhook POST failed with HTTP ${HTTP_CODE} (non-retryable) - no pipeline run was created."
-                exit 1
-                ;;
-            esac
-          done
-          # Still fail the job when every attempt was refused: the missing
-          # review is a real blockage and the Lifecycle Watchdog keys off
-          # this workflow's conclusion to detect and re-drive it.
-          if [ "${ACCEPTED}" != "true" ]; then
-            echo "::error::Modulo PR Review webhook POST failed with HTTP ${HTTP_CODE} after 5 attempts - no pipeline run was created."
-            exit 1
-          fi
+          HTTP_CODE=$(curl -s -o "${RESPONSE_FILE}" -w '%{http_code}' -X POST "${MODULO_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "${BODY}") || true
+          echo "Modulo PR Review webhook responded with HTTP ${HTTP_CODE}"
+          echo "Response body:"
+          cat "${RESPONSE_FILE}" || true
+          echo
+          rm -f "${RESPONSE_FILE}"
+          case "${HTTP_CODE}" in
+            2*)
+              echo "Webhook POST accepted."
+              ;;
+            *)
+              echo "::error::Modulo PR Review webhook POST failed with HTTP ${HTTP_CODE} - no pipeline run was created."
+              exit 1
+              ;;
+          esac

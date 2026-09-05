@@ -43,8 +43,9 @@ _MIGRATION_PATH = (
 
 # The chain head after the FAR-604 admission-healing migration widened the
 # ck_trigger_events_validation_result vocabulary (coalesced /
-# backpressure_skipped) on top of 0174_per_org_last_admin_guard.
-_CHAIN_HEAD_MIGRATION_NAME = "0176_trigger_event_validation_results"
+# backpressure_skipped) on top of 0174_per_org_last_admin_guard, and the
+# FAR-461 in-app invite tokens migration (0177_invitations) chains off it.
+_CHAIN_HEAD_MIGRATION_NAME = "0177_invitations"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

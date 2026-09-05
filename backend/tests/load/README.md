@@ -7,7 +7,7 @@ an open-source, Python-based load testing tool.
 
 - **Locust** installed: `uv tool install locust` or `pip install locust`
 - **websocket-client** for WebSocket users: `pip install websocket-client`
-- Docker Compose stack running (Postgres 16, Redis 7, backend on port 8000)
+- Docker Compose stack running (Postgres 16, Redis 8, backend on port 8000)
 - Test data seeded (see [Data Seeding](#data-seeding) below)
 - Test user credentials present in the target environment (`admin@modulo.test` / `test-password-123`)
 

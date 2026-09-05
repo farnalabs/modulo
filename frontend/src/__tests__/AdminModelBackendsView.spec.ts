@@ -366,11 +366,9 @@ describe('AdminModelBackendsView — delete', () => {
     expect(wrapper.text()).toContain('backend in use')
   })
 
-  it('BUG CHARACTERISATION: cancel does not close the delete confirmation (see report)', async () => {
-    // The delete-confirm Cancel button calls closeForm(), which resets
-    // formMode but NOT deleteConfirmBackendId — so the confirmation block
-    // stays visible and Delete remains clickable. Reported; a fix that also
-    // clears deleteConfirmBackendId flips this test.
+  it('cancel closes the delete confirmation (FAR-608 fix)', async () => {
+    // The delete-confirm Cancel button calls closeForm(), which now also
+    // resets deleteConfirmBackendId, so the confirmation block disappears.
     const wrapper = mountView()
     await nextTick()
     await nextTick()
@@ -378,7 +376,7 @@ describe('AdminModelBackendsView — delete', () => {
     // Only the delete block's cancel button exists (the add form is closed).
     await wrapper.find('[data-testid="admin-model-backends-cancel"]').trigger('click')
     await nextTick()
-    expect(wrapper.text()).toContain('Delete "Display mb-1"?')
+    expect(wrapper.text()).not.toContain('Delete "Display mb-1"?')
     expect(mockDelete).not.toHaveBeenCalled()
   })
 })

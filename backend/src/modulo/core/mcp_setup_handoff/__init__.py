@@ -9,9 +9,7 @@ Flow:
 Future tools: call create_handoff() and consume_handoff().
 """
 
-import hashlib
 import logging
-import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.mcp_setup_token import McpSetupToken
 from modulo.settings import get_settings
+from modulo.util.one_time_token import generate_token, hash_token
 
 _log = logging.getLogger(__name__)
 
@@ -28,11 +27,11 @@ HANDOFF_TTL_MINUTES = 15
 
 
 def _generate_token() -> str:
-    return secrets.token_urlsafe(32)
+    return generate_token()
 
 
 def _hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+    return hash_token(token)
 
 
 async def create_handoff(

@@ -3,8 +3,8 @@
   <div class="page-wide">
     <div class="flex items-center justify-between">
       <PageHeader title="Users" :subtitle="$t('views.AdminUsersView.manage_user_accounts_and_permissions')" />
-      <Button class="border-primary/30" data-testid="admin-users-add-user" @click="showCreate = true">
-        + Add User
+      <Button class="border-primary/30" data-testid="admin-users-add-user" @click="openAddUser">
+        {{ $t('views.AdminUsersView.add_user') }}
       </Button>
     </div>
 
@@ -67,11 +67,11 @@
             <td class="table-cell">
               <span v-if="u.is_active" class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success">
                 <span class="h-1.5 w-1.5 rounded-full bg-success" />
-                Active
+                {{ $t('views.AdminUsersView.active') }}
               </span>
               <span v-else class="inline-flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive">
                 <span class="h-1.5 w-1.5 rounded-full bg-destructive" />
-                Inactive
+                {{ $t('views.AdminUsersView.inactive') }}
               </span>
             </td>
             <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider }}</td>
@@ -98,10 +98,10 @@
           class="px-3 py-1.5 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="page--; loadUsers()"
         >
-          Previous
+          {{ $t('views.AdminUsersView.previous') }}
         </button>
         <span class="text-sm text-muted-foreground">
-          Page {{ page }} of {{ Math.ceil(total / pageSize) }}
+          {{ $t('views.AdminUsersView.page_of', { page, pages: Math.ceil(total / pageSize) }) }}
         </span>
         <button type="button"
           :disabled="page >= Math.ceil(total / pageSize)"
@@ -109,10 +109,68 @@
           class="px-3 py-1.5 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="page++; loadUsers()"
         >
-          Next
+          {{ $t('views.AdminUsersView.next') }}
         </button>
       </div>
     </div>
+
+    <!-- Pending Invitations (FAR-461) -->
+    <section class="mt-8" data-testid="admin-invitations-section">
+      <h2 class="text-base font-semibold mb-2">{{ $t('views.AdminUsersView.pending_invitations') }}</h2>
+      <LoadingSpinner v-if="invitationsLoading" />
+      <p
+        v-else-if="invitationsError"
+        class="text-sm text-destructive"
+        data-testid="admin-invitations-error"
+      >
+        {{ invitationsError }}
+      </p>
+      <p
+        v-else-if="pendingInvitations.length === 0"
+        class="text-sm text-muted-foreground"
+        data-testid="admin-invitations-empty"
+      >
+        {{ $t('views.AdminUsersView.no_pending_invitations') }}
+      </p>
+      <div v-else class="table-wrapper overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr>
+              <th class="table-header">{{ $t('common.email') }}</th>
+              <th class="table-header">{{ $t('views.AdminUsersView.role') }}</th>
+              <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.invited_col') }}</th>
+              <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.expires_col') }}</th>
+              <th class="table-header table-cell-numeric">{{ $t('views.AdminUsersView.actions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="inv in pendingInvitations"
+              :key="inv.id"
+              class="border-b last:border-0 hover:bg-muted/20 transition-colors"
+              data-testid="admin-invitations-row"
+            >
+              <td class="table-cell">
+                <span class="font-medium">{{ inv.display_name || inv.email }}</span>
+                <span class="block text-xs text-muted-foreground">{{ inv.email }}</span>
+              </td>
+              <td class="table-cell capitalize">{{ inv.org_role }}</td>
+              <td class="table-cell-numeric text-xs text-muted-foreground">
+                {{ formatDateShort(new Date(inv.created_at)) }}
+              </td>
+              <td class="table-cell-numeric text-xs text-muted-foreground">
+                {{ formatDateShort(new Date(inv.expires_at)) }}
+              </td>
+              <td class="table-cell-numeric">
+                <Button severity="danger" outlined :disabled="actionLoading[inv.id]" data-testid="admin-invitations-revoke" @click="openRevoke(inv)">
+                  {{ $t('views.AdminUsersView.revoke_invitation') }}
+                </Button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
     <div v-if="flashMessage" :class="['rounded-lg border px-4 py-3 text-sm', flashMessage.type === 'success' ? 'border-success/50 bg-success/10 text-success' : 'border-destructive/50 bg-destructive/10 text-destructive']">
       {{ flashMessage.text }}
@@ -121,13 +179,35 @@
     <FormDialog
       :open="showCreate"
       @update:open="showCreate = false"
-      title="Create User"
-      confirmText="Create"
+      :title="createMode === 'invite' ? $t('views.AdminUsersView.invite_user') : $t('views.AdminUsersView.create_user')"
+      :confirm-text="createMode === 'invite' ? $t('views.AdminUsersView.send_invitation') : $t('common.create')"
       :loading="createLoading"
-      :confirmDisabled="createLoading"
-      @confirm="createUser"
+      :confirm-disabled="createLoading"
+      @confirm="submitCreate"
     >
-      <form @submit.prevent="createUser">
+      <form @submit.prevent="submitCreate">
+        <div class="mb-3 flex gap-2" role="tablist" :aria-label="$t('views.AdminUsersView.add_user_mode')">
+          <button
+            type="button"
+            role="tab"
+            data-testid="admin-users-mode-create"
+            :aria-selected="createMode === 'password'"
+            :class="['px-3 py-1.5 rounded-lg text-sm border transition-colors', createMode === 'password' ? 'bg-primary text-primary-foreground border-primary' : 'border-input hover:bg-accent']"
+            @click="createMode = 'password'"
+          >
+            {{ $t('views.AdminUsersView.mode_password') }}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-testid="admin-users-mode-invite"
+            :aria-selected="createMode === 'invite'"
+            :class="['px-3 py-1.5 rounded-lg text-sm border transition-colors', createMode === 'invite' ? 'bg-primary text-primary-foreground border-primary' : 'border-input hover:bg-accent']"
+            @click="createMode = 'invite'"
+          >
+            {{ $t('views.AdminUsersView.mode_invite') }}
+          </button>
+        </div>
         <div>
           <label for="adminusersview-field-4" class="block text-sm font-medium mb-1">{{ $t('common.email') }}</label>
           <input id="adminusersview-field-4" v-model="newUser.email" data-testid="admin-users-create-email" type="email" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
@@ -136,7 +216,7 @@
           <label for="adminusersview-field-3" class="block text-sm font-medium mb-1">{{ $t('views.AdminModelBackendsView.display_name') }}</label>
           <input id="adminusersview-field-3" v-model="newUser.display_name" data-testid="admin-users-create-display-name" type="text" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" required />
         </div>
-        <div>
+        <div v-if="createMode === 'password'">
           <label for="adminusersview-field-2" class="block text-sm font-medium mb-1">{{ $t('common.password') }}</label>
           <div class="flex gap-2">
             <input id="adminusersview-field-2" v-model="newUser.password" data-testid="admin-users-create-password" type="password" class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm" minlength="8" required />
@@ -145,6 +225,9 @@
             </Button>
           </div>
         </div>
+        <p v-if="createMode === 'invite'" class="mt-2 text-xs text-muted-foreground">
+          {{ $t('views.AdminUsersView.invite_mode_hint') }}
+        </p>
         <div>
           <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">{{ $t('views.AdminUsersView.role') }}</label>
           <Select
@@ -167,27 +250,97 @@
       </form>
     </FormDialog>
 
-    <Dialog :visible="showCredentialDialog" :modal="true" :dismissable-mask="true" :style="{ width: '28rem' }" @update:visible="showCredentialDialog = false">
+    <!-- Reusable credential dialog: temporary password OR invite link -->
+    <Dialog
+      :visible="showCredentialDialog"
+      :modal="true"
+      :dismissable-mask="true"
+      :style="{ width: '28rem' }"
+      @update:visible="dismissCredentialDialog"
+    >
       <template #header>
         <div class="text-lg font-semibold">{{ credentialTitle }}</div>
       </template>
-      <p v-if="credentialMode === 'reset'" class="text-sm text-muted-foreground">
-        {{ $t('views.AdminUsersView.credential_body_reset', { email: credentialEmail }) }}
-      </p>
-      <p v-else class="text-sm text-muted-foreground">
-        {{ $t('views.AdminUsersView.credential_body_created', { email: credentialEmail }) }}
-      </p>
-      <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3 mt-2">
-        <code class="flex-1 text-sm font-mono break-all">{{ credentialPassword }}</code>
-        <Button class="shrink-0" data-testid="admin-users-copy-password" @click="copyPassword">
-          {{ copied ? 'Copied!' : 'Copy' }}
+
+      <template v-if="credentialKind === 'password'">
+        <p v-if="credentialMode === 'reset'" class="text-sm text-muted-foreground">
+          {{ $t('views.AdminUsersView.credential_body_reset', { email: credentialEmail }) }}
+        </p>
+        <p v-else class="text-sm text-muted-foreground">
+          {{ $t('views.AdminUsersView.credential_body_created', { email: credentialEmail }) }}
+        </p>
+      </template>
+      <template v-else>
+        <p class="text-sm text-muted-foreground">
+          {{ $t('views.AdminUsersView.invitation_link_created_for', { email: credentialEmail }) }}
+        </p>
+        <div class="my-3 flex justify-center" data-testid="admin-users-invite-qr-wrapper">
+          <img
+            v-if="inviteQrDataUrl"
+            :src="inviteQrDataUrl"
+            :alt="$t('views.AdminUsersView.invite_qr_alt')"
+            class="h-40 w-40 rounded-lg border border-border bg-white p-1"
+            data-testid="admin-users-invite-qr"
+          />
+        </div>
+        <p class="mb-2 text-xs text-muted-foreground">{{ $t('views.AdminUsersView.invite_expiry_note', { expires: credentialExpiresAt }) }}</p>
+      </template>
+
+      <p class="mb-1 mt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ $t('views.AdminUsersView.credentials') }}</p>
+      <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
+        <code class="flex-1 text-sm font-mono break-all select-all" data-testid="admin-users-credential-value">{{ credentialValue }}</code>
+        <Button
+          class="shrink-0"
+          :data-testid="credentialKind === 'invite' ? 'admin-users-invite-copy-url' : 'admin-users-copy-password'"
+          @click="copyCredential"
+        >
+          {{ copied ? $t('views.AdminUsersView.copied') : $t('views.AdminUsersView.copy') }}
         </Button>
       </div>
+      <p
+        v-if="copyError"
+        role="alert"
+        data-testid="admin-users-copy-error"
+        class="mt-2 text-sm text-destructive"
+      >
+        {{ copyError }}
+      </p>
       <template #footer>
         <div class="flex justify-end">
-          <Button data-testid="admin-users-reset-done" @click="showCredentialDialog = false">
-            Done
+          <Button
+            v-if="credentialKind === 'invite'"
+            data-testid="admin-users-invite-done"
+            @click="dismissCredentialDialog"
+          >
+            {{ $t('views.AdminUsersView.done') }}
           </Button>
+          <Button
+            v-else
+            data-testid="admin-users-reset-done"
+            @click="dismissCredentialDialog"
+          >
+            {{ $t('views.AdminUsersView.done') }}
+          </Button>
+        </div>
+      </template>
+    </Dialog>
+
+    <!-- Revoke invitation confirmation -->
+    <Dialog
+      :visible="showRevokeDialog"
+      :modal="true"
+      :dismissable-mask="true"
+      :style="{ width: '24rem' }"
+      @update:visible="showRevokeDialog = false"
+    >
+      <template #header>
+        <div class="text-lg font-semibold">{{ $t('views.AdminUsersView.revoke_invitation') }}</div>
+      </template>
+      <p class="text-sm text-muted-foreground">{{ $t('views.AdminUsersView.confirm_revoke_invitation', { email: revokeTarget?.email ?? '' }) }}</p>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <Button severity="secondary" outlined @click="showRevokeDialog = false">{{ $t('common.cancel') }}</Button>
+          <Button severity="danger" data-testid="admin-invitations-confirm-revoke" @click="revokeInvitation">{{ $t('common.confirm') }}</Button>
         </div>
       </template>
     </Dialog>
@@ -199,6 +352,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import QRCode from 'qrcode'
 import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -209,7 +363,9 @@ import Dialog from 'primevue/dialog'
 import TableActions from '../components/shared/TableActions.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort, formatDateShortWithTime, formatRelativeTime } from '../lib/formatDate'
+import type { components } from '../lib/api/client'
 import { generateStrongPassword } from '../utils/password'
+import { passwordRuleKey, validatePasswordClient } from '../lib/passwordRules'
 import Select from 'primevue/select'
 
 interface UserItem {
@@ -230,8 +386,11 @@ interface UserListResponse {
   page_size: number
 }
 
+type InvitationItem = components['schemas']['InvitationItem']
+type InvitationListResponse = components['schemas']['InvitationListResponse']
+
 const { t } = useI18n()
-const { get, put: httpPut, post } = useApi()
+const { get, put: httpPut, post, delete: httpDelete } = useApi()
 
 const page = ref(1)
 const pageSize = ref(50)
@@ -243,27 +402,116 @@ const { data: usersResp, loading, error, load: loadUsers } = useDataFetch(
 
 const users = computed(() => usersResp.value?.items ?? [])
 const total = computed(() => usersResp.value?.total ?? 0)
+
+// ── Pending invitations ──────────────────────────────────────
+
+const { data: invitationsResp, loading: invitationsLoading, error: invitationsError, load: loadInvitations } = useDataFetch(
+  () => get<InvitationListResponse>('/api/v1/admin/users/invitations?page=1&page_size=100').then(d => ({ data: d })),
+  { initialValue: { items: [] as InvitationItem[], total: 0, page: 1, page_size: 100 } as InvitationListResponse }
+)
+const pendingInvitations = computed(() => invitationsResp.value?.items ?? [])
+
+// ── Create / invite dialog ───────────────────────────────────
+
 const showCreate = ref(false)
+const createMode = ref<'password' | 'invite'>('password')
 const createError = ref('')
 const createLoading = ref(false)
 const newUser = ref({ email: '', display_name: '', password: '', org_role: 'runner' })
 
+function resetNewUser() {
+  newUser.value = { email: '', display_name: '', password: '', org_role: 'runner' }
+}
+
+function openAddUser() {
+  createMode.value = 'password'
+  createError.value = ''
+  resetNewUser()
+  showCreate.value = true
+}
+
+function submitCreate() {
+  if (createMode.value === 'invite') return sendInvite()
+  return createUser()
+}
+
+// ─── Credential dialog (shared: temp password / invite link) ───
+
+type CredentialKind = 'password' | 'invite'
 // FAR-460: one reusable credential dialog shared by reset-password and
 // create-user so the admin can copy the credential exactly once.
 type CredentialMode = 'reset' | 'created'
 const showCredentialDialog = ref(false)
+const credentialKind = ref<CredentialKind>('password')
 const credentialMode = ref<CredentialMode>('reset')
+const credentialValue = ref('')
 const credentialEmail = ref('')
-const credentialPassword = ref('')
-const credentialTitle = computed(() =>
-  credentialMode.value === 'reset'
-    ? t('views.AdminUsersView.password_reset')
-    : t('views.AdminUsersView.credentials')
-)
+const credentialExpiresAt = ref('')
+const inviteQrDataUrl = ref('')
+const credentialTitle = computed(() => {
+  if (credentialKind.value === 'invite') return t('views.AdminUsersView.invitation_ready')
+  return credentialMode.value === 'created'
+    ? t('views.AdminUsersView.credentials')
+    : t('views.AdminUsersView.password_reset')
+})
 const copied = ref(false)
+// Clipboard failure must be visible: for a show-once secret a silent (or
+// lying "Copied!") failure can lock the admin out of the credential.
+const copyError = ref('')
+
+async function showCredential(kind: CredentialKind, value: string, email: string, expiresAt = '') {
+  // Clear any previous secret before swapping the dialog contents.
+  dismissCredentialState()
+  credentialKind.value = kind
+  credentialValue.value = value
+  credentialEmail.value = email
+  credentialExpiresAt.value = expiresAt
+  copied.value = false
+  inviteQrDataUrl.value = ''
+  showCredentialDialog.value = true
+  if (kind === 'invite') {
+    try {
+      inviteQrDataUrl.value = await QRCode.toDataURL(value, { margin: 1 })
+    } catch {
+      inviteQrDataUrl.value = '' // QR is a convenience — copy link still works.
+    }
+  }
+}
+
+function dismissCredentialState() {
+  credentialValue.value = ''
+  credentialEmail.value = ''
+  credentialExpiresAt.value = ''
+  inviteQrDataUrl.value = ''
+  copied.value = false
+  copyError.value = ''
+}
+
+function dismissCredentialDialog() {
+  showCredentialDialog.value = false
+  // Minor b: the secret must not linger in component memory once dismissed.
+  dismissCredentialState()
+}
+
+let copyTimeout: ReturnType<typeof setTimeout> | null = null
+
+async function copyCredential() {
+  copyError.value = ''
+  if (copyTimeout) clearTimeout(copyTimeout)
+  try {
+    await navigator.clipboard.writeText(credentialValue.value)
+    copied.value = true
+    copyTimeout = setTimeout(() => { copied.value = false }, 2000)
+  } catch {
+    copied.value = false
+    copyError.value = t('views.AdminUsersView.copy_failed_manual')
+  }
+}
+
+// ── Flash + user actions ─────────────────────────────────────
+
 const flashMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
 const actionLoading = ref<Record<string, boolean>>({})
-let copyTimeout: ReturnType<typeof setTimeout> | null = null
 let flashTimeout: ReturnType<typeof setTimeout> | null = null
 
 function initialOf(name: string): string {
@@ -289,10 +537,10 @@ async function updateRole(u: UserItem, newRole: unknown) {
   try {
     const data = await httpPut<UserItem>(`/api/v1/admin/users/${u.id}`, { org_role: newRole })
     updateUserInList(data)
-    showFlash('success', `Role changed to ${data.org_role} for ${u.email}`)
+    showFlash('success', t('views.AdminUsersView.role_changed_to', { role: data.org_role, email: u.email }))
   } catch (e) {
     u.org_role = prevRole
-    showFlash('error', e instanceof Error ? e.message : 'Failed to update role')
+    showFlash('error', e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_update_role'))
   } finally {
     actionLoading.value[u.id] = false
   }
@@ -303,9 +551,9 @@ async function deactivate(u: UserItem) {
   try {
     const data = await post<UserItem>(`/api/v1/admin/users/${u.id}/deactivate`)
     updateUserInList(data)
-    showFlash('success', `User ${u.email} deactivated`)
+    showFlash('success', t('views.AdminUsersView.user_deactivated', { email: u.email }))
   } catch (e) {
-    showFlash('error', e instanceof Error ? e.message : 'Failed to deactivate user')
+    showFlash('error', e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_deactivate_user'))
   } finally {
     actionLoading.value[u.id] = false
   }
@@ -316,9 +564,9 @@ async function reactivate(u: UserItem) {
   try {
     const data = await post<UserItem>(`/api/v1/admin/users/${u.id}/reactivate`)
     updateUserInList(data)
-    showFlash('success', `User ${u.email} reactivated`)
+    showFlash('success', t('views.AdminUsersView.user_reactivated', { email: u.email }))
   } catch (e) {
-    showFlash('error', e instanceof Error ? e.message : 'Failed to reactivate user')
+    showFlash('error', e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_reactivate_user'))
   } finally {
     actionLoading.value[u.id] = false
   }
@@ -330,7 +578,7 @@ async function resetPassword(u: UserItem) {
     const data = await post<{ temporary_password: string }>(`/api/v1/admin/users/${u.id}/reset-password`)
     openCredentialDialog('reset', u.email, data.temporary_password)
   } catch {
-    showFlash('error', 'Failed to reset password')
+    showFlash('error', t('views.AdminUsersView.failed_to_reset_password'))
   } finally {
     actionLoading.value[u.id] = false
   }
@@ -338,17 +586,14 @@ async function resetPassword(u: UserItem) {
 
 function openCredentialDialog(mode: CredentialMode, email: string, password: string) {
   credentialMode.value = mode
-  credentialEmail.value = email
-  credentialPassword.value = password
-  copied.value = false
-  showCredentialDialog.value = true
+  void showCredential('password', password, email)
 }
 
 function rowActions(u: UserItem) {
   const actions: { key: string; label: string; onClick: () => void; disabled?: boolean; danger?: boolean }[] = [
     {
       key: 'reset-password',
-      label: 'Reset Password',
+      label: t('views.AdminUsersView.reset_password'),
       onClick: () => resetPassword(u),
       disabled: actionLoading.value[u.id],
     },
@@ -356,7 +601,7 @@ function rowActions(u: UserItem) {
   if (u.is_active) {
     actions.push({
       key: 'deactivate',
-      label: 'Deactivate',
+      label: t('views.AdminUsersView.deactivate'),
       onClick: () => deactivate(u),
       disabled: actionLoading.value[u.id],
       danger: true,
@@ -364,7 +609,7 @@ function rowActions(u: UserItem) {
   } else {
     actions.push({
       key: 'reactivate',
-      label: 'Reactivate',
+      label: t('views.AdminUsersView.reactivate'),
       onClick: () => reactivate(u),
       disabled: actionLoading.value[u.id],
     })
@@ -372,11 +617,17 @@ function rowActions(u: UserItem) {
   return actions
 }
 
-function copyPassword() {
-  navigator.clipboard.writeText(credentialPassword.value)
-  copied.value = true
-  if (copyTimeout) clearTimeout(copyTimeout)
-  copyTimeout = setTimeout(() => { copied.value = false }, 2000)
+// ─── Create / invite submissions ────────────────────────────────
+
+function validateEmailAndName(): string {
+  const { email, display_name } = newUser.value
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return t('views.AdminUsersView.please_enter_a_valid_email_address')
+  }
+  if (!display_name || !display_name.trim()) {
+    return t('views.AdminUsersView.display_name_is_required')
+  }
+  return ''
 }
 
 function generatePassword() {
@@ -385,21 +636,15 @@ function generatePassword() {
 
 async function createUser() {
   createError.value = ''
-  const { email, display_name, password } = newUser.value
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    createError.value = 'Please enter a valid email address'
+  const { email, password } = newUser.value
+  const preError = validateEmailAndName()
+  if (preError) {
+    createError.value = preError
     return
   }
-  if (!display_name || !display_name.trim()) {
-    createError.value = 'Display name is required'
-    return
-  }
-  if (!password || password.length < 8) {
-    createError.value = 'Password must be at least 8 characters'
-    return
-  }
-  if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) {
-    createError.value = 'Password must contain at least one uppercase letter, one lowercase letter, and one digit'
+  const ruleCode = validatePasswordClient(password)
+  if (ruleCode) {
+    createError.value = t(passwordRuleKey(ruleCode))
     return
   }
   createLoading.value = true
@@ -408,13 +653,71 @@ async function createUser() {
     showCreate.value = false
     // FAR-460: surface the hand-typed credential once before it is discarded.
     openCredentialDialog('created', email, password)
-    newUser.value = { ...newUser.value, password: '' }
-    showFlash('success', `User ${email} created`)
+    resetNewUser()
+    showFlash('success', t('views.AdminUsersView.user_created', { email }))
     loadUsers()
-  } catch (e: any) {
-    createError.value = e instanceof Error ? e.message : 'Failed to create user'
+  } catch (e: unknown) {
+    createError.value = e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_create_user')
   } finally {
     createLoading.value = false
+  }
+}
+
+async function sendInvite() {
+  createError.value = ''
+  const { email, display_name, org_role } = newUser.value
+  const preError = validateEmailAndName()
+  if (preError) {
+    createError.value = preError
+    return
+  }
+  createLoading.value = true
+  try {
+    const data = await post<{ id: string; invite_url: string; expires_at: string }>('/api/v1/admin/users/invite', {
+      email,
+      display_name,
+      org_role,
+    })
+    showCreate.value = false
+    resetNewUser()
+    loadInvitations()
+    await showCredential(
+      'invite',
+      data.invite_url,
+      email,
+      data.expires_at ? formatDateShort(new Date(data.expires_at)) : '',
+    )
+    showFlash('success', t('views.AdminUsersView.invitation_sent', { email }))
+  } catch (e: unknown) {
+    createError.value = e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_send_invitation')
+  } finally {
+    createLoading.value = false
+  }
+}
+
+// ── Revoke invitation ────────────────────────────────────────
+
+const showRevokeDialog = ref(false)
+const revokeTarget = ref<InvitationItem | null>(null)
+
+function openRevoke(inv: InvitationItem) {
+  revokeTarget.value = inv
+  showRevokeDialog.value = true
+}
+
+async function revokeInvitation() {
+  const inv = revokeTarget.value
+  if (!inv) return
+  actionLoading.value[inv.id] = true
+  try {
+    await httpDelete(`/api/v1/admin/users/invitations/${inv.id}`)
+    showRevokeDialog.value = false
+    showFlash('success', t('views.AdminUsersView.invitation_revoked', { email: inv.email }))
+    loadInvitations()
+  } catch (e) {
+    showFlash('error', e instanceof Error ? e.message : t('views.AdminUsersView.failed_to_revoke_invitation'))
+  } finally {
+    actionLoading.value[inv.id] = false
   }
 }
 
@@ -422,5 +725,7 @@ onBeforeUnmount(() => {
   if (copyTimeout) clearTimeout(copyTimeout)
   if (flashTimeout) clearTimeout(flashTimeout)
 })
+defineExpose({ updateRole, deactivate, reactivate })
+
 /* onMounted handled by useDataFetch */
 </script>

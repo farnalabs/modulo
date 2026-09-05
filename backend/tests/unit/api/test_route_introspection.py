@@ -95,6 +95,9 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/auth/refresh"): "auth (no principal)",
     ("POST", "/api/v1/auth/logout"): "auth (refresh-token auth)",
     ("POST", "/api/v1/auth/saml/acs"): "SAML ACS (IdP session)",
+    # FAR-461: pre-enrollment token consumption happens before any principal
+    # exists (the token IS the credential), so it cannot carry a permission tag.
+    ("POST", "/api/v1/auth/accept-invite"): "auth (no principal - pre-enrollment token consumption)",
     # FAR-535: demo auto-login MINTS the principal — the kill switch + demo-org
     # viewer scoping are the gates; a permission tag would require the session
     # the endpoint exists to create.
@@ -108,6 +111,10 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/runs/{run_id}/nodes/{node_id}/recover"): "inline admin/operator check in handler",
     # Runs: guardrail-override carries an inline admin/operator check in the handler.
     ("POST", "/api/v1/runs/{run_id}/guardrail-override"): "inline admin/operator check in handler",
+    # FAR-461: admin invite/revoke routes carry an inline _require_admin check
+    # in the handler (admin-only), consistent with the runs inline-check pattern.
+    ("POST", "/api/v1/admin/users/invite"): "inline admin check in handler",
+    ("DELETE", "/api/v1/admin/users/invitations/{invitation_id}"): "inline admin check in handler",
     # Webhooks: HMAC/shared-secret is the authorization (exempt channel).
     ("POST", "/api/v1/triggers/{trigger_id}/webhook"): "HMAC/shared-secret channel",
     # Stripe: Stripe-Signature (HMAC-SHA256 of the raw body with the webhook

@@ -49,6 +49,7 @@ import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
+import { passwordRuleKey, validatePasswordClient } from '../../lib/passwordRules'
 
 const emit = defineEmits<{ (e: 'changed'): void }>()
 
@@ -76,8 +77,9 @@ async function changePassword() {
     passError.value = t('views.MyProfileView.new_password_must_differ')
     return
   }
-  if (newPassword.value.length < 8) {
-    passError.value = t('views.MyProfileView.password_must_be_at_least_8_characters')
+  const ruleCode = validatePasswordClient(newPassword.value)
+  if (ruleCode) {
+    passError.value = t(passwordRuleKey(ruleCode))
     return
   }
   passSaving.value = true
