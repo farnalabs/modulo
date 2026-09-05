@@ -40,6 +40,7 @@
   </template>
 </Select>
     <slot name="after" />
+    <slot />
   </div>
 </template>
 

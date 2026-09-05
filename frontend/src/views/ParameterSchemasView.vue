@@ -1,6 +1,6 @@
 <template>
   <div class="page-wide">
-    <template v-if="!editingSchema">
+    <template v-if="!editorOpen">
       <header class="flex items-center justify-between">
         <PageHeader
           :title="$t('views.ParameterSchemasView.title')"
@@ -520,6 +520,7 @@
             <p class="text-sm font-medium text-destructive">
               {{ $t('views.ParameterSchemasView.delete_set_confirm', { name: deleteSetConfirmName }) }}
             </p>
+            <p v-if="deleteSetError" class="mt-1 text-sm text-destructive/80">{{ deleteSetError }}</p>
             <div class="mt-3 flex items-center gap-2">
               <Button :disabled="deletingSet" severity="danger" @click="doDeleteSet">
                 {{ deletingSet ? $t('views.ParameterSchemasView.deleting') : $t('views.ParameterSchemasView.delete') }}
@@ -731,6 +732,10 @@ const { loading, error, data: schemasResp, load: loadSchemas } = useDataFetch<Sc
 const schemas = computed(() => schemasResp.value?.items ?? [])
 
 const editingSchema = ref<SchemaItem | null>(null)
+// "New Schema" opens the editor with no schema loaded — creatingSchema keeps
+// the editor branch visible while editingSchema is still null (FAR-608).
+const creatingSchema = ref(false)
+const editorOpen = computed(() => editingSchema.value !== null || creatingSchema.value)
 const isNew = computed(() => !editingSchema.value?.id)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
@@ -762,6 +767,7 @@ function removeParameter(idx: number) {
 }
 
 function startNewSchema() {
+  creatingSchema.value = true
   editingSchema.value = null
   schemaForm.value = { name: '', description: '', parameters: [] }
   saveError.value = null
@@ -770,6 +776,7 @@ function startNewSchema() {
 }
 
 function editSchema(schema: SchemaItem) {
+  creatingSchema.value = false
   editingSchema.value = schema
   schemaForm.value = {
     name: schema.name,
@@ -787,6 +794,7 @@ function editSchema(schema: SchemaItem) {
 
 function closeEditor() {
   editingSchema.value = null
+  creatingSchema.value = false
   saveError.value = null
   saveSuccess.value = null
   cancelSetEdit()
@@ -829,7 +837,10 @@ async function saveSchema() {
       ? t('views.ParameterSchemasView.schema_created')
       : t('views.ParameterSchemasView.schema_saved_new_version')
     await loadSchemas()
-    if (!isNew.value && resp?.data) {
+    if (resp?.data) {
+      // Adopt the created/updated schema so the editor switches from the
+      // "new schema" state to the normal edit flow.
+      creatingSchema.value = false
       editingSchema.value = resp.data as unknown as SchemaItem
     }
   } catch (err: any) {
@@ -970,27 +981,30 @@ async function saveSet() {
 const deleteSetConfirmId = ref<string | null>(null)
 const deleteSetConfirmName = ref('')
 const deletingSet = ref(false)
+const deleteSetError = ref<string | null>(null)
 
 function confirmDeleteSet(set: SetItem) {
   deleteSetConfirmId.value = set.id
   deleteSetConfirmName.value = set.name
+  deleteSetError.value = null
 }
 
 async function doDeleteSet() {
   if (!deleteSetConfirmId.value || !editingSchema.value?.id) return
   deletingSet.value = true
+  deleteSetError.value = null
   try {
     const resp = await api.DELETE('/api/v1/parameter-schemas/{schema_id}/sets/{set_id}', {
       params: { path: { schema_id: editingSchema.value.id, set_id: deleteSetConfirmId.value } },
     })
     if (resp.error) {
-      console.warn('Failed to delete set:', resp.error)
+      deleteSetError.value = formatApiError(resp.error)
       return
     }
     deleteSetConfirmId.value = null
     await loadSets()
   } catch (err: any) {
-    console.warn('Failed to delete set:', err)
+    deleteSetError.value = formatApiError(err)
   } finally {
     deletingSet.value = false
   }
@@ -1049,7 +1063,13 @@ async function doValidate() {
       }
       return
     }
-    validateResult.value = { valid: true }
+    // A 2xx body can still be a failed validation — honour data.valid.
+    const result = resp.data as { valid?: boolean; errors?: unknown[] } | undefined
+    if (result && result.valid === false) {
+      validateResult.value = { valid: false, errors: result.errors ?? [] }
+    } else {
+      validateResult.value = { valid: true }
+    }
   } catch (err: any) {
     validateResult.value = { valid: false, errors: [{ message: formatApiError(err) }] }
   } finally {

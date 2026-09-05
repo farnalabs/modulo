@@ -62,10 +62,9 @@ beforeEach(() => {
   mockAuditGet([auditEvent('evt-1'), auditEvent('evt-2', { event_type: 'run.failed' })])
 })
 
-// The view's initial fetch ALWAYS fails with a TDZ ReferenceError (see the bug
-// characterisation test below); in tests vue-query retry is disabled, so the
-// error state persists. Refetching after setup completes works — applyFilters
-// is the real user path that does that.
+// The initial fetch succeeds (the filter refs are declared above
+// useDataFetch, FAR-608). mountLoaded still applies the filters once — the
+// real user path — before asserting, so the refetched state is what's checked.
 async function mountLoaded() {
   const wrapper = mountView()
   await nextTick()
@@ -75,19 +74,14 @@ async function mountLoaded() {
 }
 
 describe('AdminAuditView — event list', () => {
-  it('BUG CHARACTERISATION: the initial fetch fails with a TDZ error (see report)', async () => {
-    // The useDataFetch fetcher calls buildQuery(), which reads
-    // filterEventType/filterActor/filterDateFrom/filterDateTo/filterTargetType
-    // — refs declared AFTER the useDataFetch call. When vue-query runs the
-    // queryFn synchronously during setup, those refs are still in their
-    // temporal dead zone and the fetch throws. Production masks this with
-    // `retry: 1` (the retried fetch succeeds after setup finished); in tests
-    // retry is disabled so the error surfaces. Fix: move the filter refs above
-    // the useDataFetch call.
+  it('loads the audit events on mount without a TDZ error (FAR-608 fix)', async () => {
+    // The filter refs are declared above the useDataFetch call, so
+    // buildQuery() no longer hits a temporal dead zone on the initial fetch.
     const wrapper = mountView()
     await nextTick()
-    expect(wrapper.text()).toContain("Cannot access 'filterEventType' before initialization")
-    expect(wrapper.find('[data-testid="admin-audit-event-row-evt-1"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain("Cannot access 'filterEventType' before initialization")
+    expect(wrapper.find('[data-testid="admin-audit-event-row-evt-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-audit-event-row-evt-2"]').exists()).toBe(true)
   })
 
   it('renders audit events with timestamp, badge, actor, target and summary', async () => {
@@ -125,16 +119,16 @@ describe('AdminAuditView — event list', () => {
     expect(wrapper.findAll('tbody tr')).toHaveLength(8)
   })
 
-  it('BUG CHARACTERISATION: the ErrorAlert retry button is hidden (repo-wide, see report)', async () => {
-    // ErrorAlert's `retryable !== false` guard always fails for an absent
-    // Boolean prop (Vue casts absent booleans to false). See delivery report.
-    // Load first (works via refetch), then make the refetch fail.
+  it('the ErrorAlert retry button renders (fe-002, FAR-608 fix)', async () => {
+    // ErrorAlert defaults retryable to true, so a load failure with an
+    // on-retry handler offers the retry action.
+    // Load first, then make the refetch fail.
     const wrapper = await mountLoaded()
     ;(api.GET as Mock).mockRejectedValue(new Error('audit down'))
     await wrapper.find('[data-testid="admin-audit-apply-filters"]').trigger('click')
     await nextTick()
     expect(wrapper.text()).toContain('audit down')
-    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
   })
 })
 
@@ -209,14 +203,12 @@ describe('AdminAuditView — pagination', () => {
 })
 
 describe('AdminAuditView — filters', () => {
-  it('BUG CHARACTERISATION: the To-date and target-type filters never render (FilterBar has no default slot, see report)', async () => {
-    // The view passes the To date input and the target-type Select to
-    // FilterBar's DEFAULT slot, but FilterBar's template only renders the
-    // #after slot — no <slot /> for default content. Those two filters are
-    // therefore dead UI in production. Reported; fix flips this test.
+  it('renders the To-date and target-type filters (FilterBar default slot, FAR-608 fix)', async () => {
+    // FilterBar now renders its default slot, so the view's To date input and
+    // target-type Select are live UI.
     const wrapper = await mountLoaded()
-    expect(wrapper.find('[data-testid="admin-audit-date-to"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="admin-audit-target-type"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-audit-date-to"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-audit-target-type"]').exists()).toBe(true)
   })
 
   it('apply filters resets the cursor and sends the actor, from-date and entity type', async () => {
@@ -225,11 +217,10 @@ describe('AdminAuditView — filters', () => {
 
     await wrapper.find('[data-testid="admin-audit-actor"]').setValue('user-12345678')
     await wrapper.find('[data-testid="admin-audit-date-from"]').setValue('2026-08-01')
-    // The To-date and target-type filters are not rendered (FilterBar default
-    // slot bug above) — drive their refs directly.
-    const vm = wrapper.vm as unknown as { filterTargetType: string; filterDateTo: string }
+    await wrapper.find('[data-testid="admin-audit-date-to"]').setValue('2026-08-31')
+    // The target-type filter is a PrimeVue Select — drive its ref directly.
+    const vm = wrapper.vm as unknown as { filterTargetType: string }
     vm.filterTargetType = 'pipeline'
-    vm.filterDateTo = '2026-08-31'
     await nextTick()
 
     await wrapper.find('[data-testid="admin-audit-apply-filters"]').trigger('click')
@@ -310,10 +301,9 @@ describe('AdminAuditView — verify chain', () => {
     expect(wrapper.text()).toContain('bad-hash')
   })
 
-  it('shows the error envelope as a broken chain (detail stringified — minor view bug, see report)', async () => {
-    // verifyChain renders the error envelope via String(err), which yields
-    // '[object Object]' instead of the formatted detail. Reported as a minor
-    // bug; this test pins the banner behaviour.
+  it('shows the error envelope as a broken chain with the formatted detail (FAR-608 fix)', async () => {
+    // verifyChain formats the error envelope via formatError, so the detail
+    // message renders instead of '[object Object]'.
     ;(api.GET as Mock).mockImplementation(async (url: string) => {
       if (url === '/api/v1/admin/audit/verify') {
         return { data: undefined, error: { detail: 'verify exploded' } }
@@ -325,7 +315,7 @@ describe('AdminAuditView — verify chain', () => {
     await wrapper.find('[data-testid="admin-audit-verify-chain"]').trigger('click')
     await nextTick()
     expect(wrapper.text()).toContain('Chain Integrity: ❌ Broken')
-    expect(wrapper.text()).not.toContain('verify exploded')
+    expect(wrapper.text()).toContain('verify exploded')
   })
 })
 

@@ -739,15 +739,17 @@ def test_single_migration_head() -> None:
     chaining_off_0173 = [p for p in revisions if parents[p] == "0173_per_org_deactivation"]
     assert [_basename(p) for p in chaining_off_0173] == ["0174_per_org_last_admin_guard.py"]
     # 0176_trigger_event_validation_results (FAR-604, on main) chains off 0174.
-    # 0177_case_insensitive_emails (FAR-584, this PR) renumbers the former
-    # 0176_case_insensitive_emails and chains off 0176 -> 0177 is the single head.
     chaining_off_0174 = [p for p in revisions if parents[p] == "0174_per_org_last_admin_guard"]
     assert [_basename(p) for p in chaining_off_0174] == ["0176_trigger_event_validation_results.py"]
-    # The FAR-584 migration chains off 0176 -> it is the single head.
+    # 0177_invitations (FAR-461 in-app invite tokens, on main) chains off 0176_trigger_event_validation_results.
     chaining_off_0176 = [p for p in revisions if parents[p] == "0176_trigger_event_validation_results"]
-    assert [_basename(p) for p in chaining_off_0176] == ["0177_case_insensitive_emails.py"]
-    chaining_off_0177 = [p for p in revisions if parents[p] == "0177_case_insensitive_emails"]
-    assert not chaining_off_0177
+    assert [_basename(p) for p in chaining_off_0176] == ["0177_invitations.py"]
+    # 0178_case_insensitive_emails (FAR-584, this PR) renumbers the former 0176_case_insensitive_emails
+    # and chains off 0177_invitations -> it is the single head.
+    chaining_off_0177 = [p for p in revisions if parents[p] == "0177_invitations"]
+    assert [_basename(p) for p in chaining_off_0177] == ["0178_case_insensitive_emails.py"]
+    chaining_off_0178 = [p for p in revisions if parents[p] == "0178_case_insensitive_emails"]
+    assert chaining_off_0178 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

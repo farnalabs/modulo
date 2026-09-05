@@ -1,11 +1,11 @@
-"""Integration tests for migration 0177_case_insensitive_emails (FAR-584).
+"""Integration tests for migration 0178_case_insensitive_emails (FAR-584).
 
 Runs the real Alembic chain against a dedicated Postgres container:
 
 * the fixture upgrades a fresh database to ``0174_per_org_last_admin_guard``
   (the pre-0176 head) and seeds accounts through raw SQL, exactly as a
   pre-upgrade deployment would hold them;
-* the tests then run ``upgrade`` to ``0177_case_insensitive_emails`` and
+* the tests then run ``upgrade`` to ``0178_case_insensitive_emails`` and
   verify the three contract points: the backfill lowercases every stored
   email, the collision guard FAILS LOUD (RuntimeError listing the colliding
   addresses, no silent merges) when case-insensitive duplicates exist, and
@@ -35,7 +35,7 @@ pytestmark = [pytest.mark.integration]
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
 _PRE_0176 = "0174_per_org_last_admin_guard"
-_REV = "0177_case_insensitive_emails"
+_REV = "0178_case_insensitive_emails"
 
 
 def _alembic_config(db_url: str) -> Config:

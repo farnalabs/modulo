@@ -44,8 +44,8 @@ _MIGRATION_PATH = (
 # The chain head after the FAR-604 admission-healing migration widened the
 # ck_trigger_events_validation_result vocabulary (coalesced /
 # backpressure_skipped) on top of 0174_per_org_last_admin_guard, and the
-# FAR-584 case-insensitive-emails migration (0177) chained on top of it.
-_CHAIN_HEAD_MIGRATION_NAME = "0177_case_insensitive_emails"
+# FAR-584 case-insensitive-emails migration (0178) chains off 0177_invitations.
+_CHAIN_HEAD_MIGRATION_NAME = "0178_case_insensitive_emails"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

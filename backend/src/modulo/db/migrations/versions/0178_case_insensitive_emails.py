@@ -1,7 +1,7 @@
 """Case-insensitive emails: backfill + functional unique index on accounts.
 
-Revision ID: 0177_case_insensitive_emails
-Revises: 0176_trigger_event_validation_results
+Revision ID: 0178_case_insensitive_emails
+Revises: 0177_invitations
 Create Date: 2026-09-03
 
 FAR-584: email addresses are case-insensitive in the real world. This migration
@@ -53,8 +53,8 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
-revision: str = "0177_case_insensitive_emails"
-down_revision: str | None = "0176_trigger_event_validation_results"
+revision: str = "0178_case_insensitive_emails"
+down_revision: str | None = "0177_invitations"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
@@ -83,7 +83,7 @@ def upgrade() -> None:
     if collisions:
         colliding = ", ".join(f"{row['canonical_email']!r} x{row['rows']}" for row in collisions)
         raise RuntimeError(
-            "Migration 0177_case_insensitive_emails found existing accounts whose emails "
+            "Migration 0178_case_insensitive_emails found existing accounts whose emails "
             f"collide case-insensitively: {colliding}. Emails are now case-insensitive, so these "
             "accounts cannot coexist. Resolve BEFORE upgrading, outside the application — there "
             "is NO admin-UI rename for account emails: rename one of the colliding rows via SQL "

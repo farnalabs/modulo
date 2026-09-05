@@ -36,7 +36,7 @@ Modulo is a self-hosted agent governance platform for building governed, repeata
                        │ LangGraph (StateGraph execution)
                        │ SQLAlchemy async (asyncpg)
 ┌──────────────────────▼───────────────────────────────────────┐
-│              PostgreSQL 16 + Redis 7                          │
+│              PostgreSQL 16 + Redis 8                          │
 │  Models → Migrations → RLS → LangGraph checkpoints            │
 │  SAQ worker jobs (Redis-backed)                                │
 │  Rate limiting (Redis token bucket or in-memory)              │
@@ -62,7 +62,7 @@ Modulo is a self-hosted agent governance platform for building governed, repeata
 | **Routing** | Vue Router | Client-side routing |
 | **Styling** | CSS custom properties | Theming (standard/agent) |
 | **Database** | PostgreSQL 16 | Primary data store |
-| **Cache/queue** | Redis 7 | SAQ broker, rate limiting |
+| **Cache/queue** | Redis 8 | SAQ broker, rate limiting |
 | **Container** | Docker Compose | Local dev, production |
 | **Orchestration** | Docker Compose + Fly.io | Managed hosting (app.modulo.run) / self-hosted single-server |
 
@@ -372,12 +372,12 @@ Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory n
 | Mode | Components | Use case |
 |------|-----------|----------|
 | **Standalone** | Single process + SQLite file | Local dev, quick evaluation |
-| **Docker Compose** | Backend + Frontend + PostgreSQL 16 + (optional) Redis 7 + (optional) OTel stack | Single-server production |
+| **Docker Compose** | Backend + Frontend + PostgreSQL 16 + (optional) Redis 8 + (optional) OTel stack | Single-server production |
 
 ### Docker Compose
 
 Compose files (`docker-compose*.yml` at the repo root; the non-default ones live under `deploy/compose/`):
-- `docker-compose.yml` – dev mode (builds from source, Postgres 16, Redis 7)
+- `docker-compose.yml` – dev mode (builds from source, Postgres 16, Redis 8)
 - `docker-compose.local.yml` – with observability profile (otel-collector, Prometheus, Grafana)
 - `deploy/compose/docker-compose.prod.yml` – self-hosted single-server production (prebuilt image)
 - `deploy/compose/docker-compose.test.yml` – CI test environment

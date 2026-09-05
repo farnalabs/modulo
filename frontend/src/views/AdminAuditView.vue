@@ -333,6 +333,15 @@ interface AuditPage {
 const cursor = ref<string | null>(null)
 const currentPage = ref(1)
 
+// Filter refs must be declared BEFORE the useDataFetch call: the fetcher
+// invokes buildQuery(), which reads them. Declaring them after caused a TDZ
+// ReferenceError on the initial fetch (FAR-608).
+const filterEventType = ref('')
+const filterActor = ref('')
+const filterDateFrom = ref('')
+const filterDateTo = ref('')
+const filterTargetType = ref('__all__')
+
 const { data: auditData, loading, error, load: loadEvents } = useDataFetch(
   () => api.GET('/api/v1/admin/audit', { params: { query: buildQuery() as any } }),
   { initialValue: { items: [] as AuditEvent[], total: 0, next_cursor: null as string | null, prev_cursor: null as string | null } }
@@ -343,12 +352,6 @@ const events = computed(() => auditPage.value.items ?? [])
 const total = computed(() => auditPage.value.total ?? 0)
 const nextCursor = computed(() => auditPage.value.next_cursor ?? null)
 const prevCursor = computed(() => auditPage.value.prev_cursor ?? null)
-
-const filterEventType = ref('')
-const filterActor = ref('')
-const filterDateFrom = ref('')
-const filterDateTo = ref('')
-const filterTargetType = ref('__all__')
 
 const expandedId = ref<string | null>(null)
 const expandedEvent = ref<AuditEvent | null>(null)
@@ -523,7 +526,7 @@ async function verifyChain() {
     const data = res.data as any
     const err = res.error
     if (err) {
-      chainResult.value = { valid: false, error: String(err) }
+      chainResult.value = { valid: false, error: formatError(err) }
     } else if (data) {
       chainResult.value = {
         valid: data.valid !== false,

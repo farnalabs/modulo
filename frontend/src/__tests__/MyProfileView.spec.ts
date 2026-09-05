@@ -189,6 +189,24 @@ describe('MyProfileView', () => {
     expect(mockPut).not.toHaveBeenCalled()
   })
 
+  it('shows error when new password lacks a required character class', async () => {
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+
+    const currentInput = wrapper.find('[data-testid="change-password-current"]')
+    const newInput = wrapper.find('[data-testid="change-password-new"]')
+    const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
+
+    await currentInput.setValue('old-password')
+    await newInput.setValue('all-lowercase-1')
+    await confirmInput.setValue('all-lowercase-1')
+
+    await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
+
+    expect(wrapper.text()).toContain('Password must contain at least one uppercase letter')
+    expect(mockPut).not.toHaveBeenCalled()
+  })
+
   it('shows error when new password is the same as the current password', async () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
@@ -216,8 +234,8 @@ describe('MyProfileView', () => {
     const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('old-password')
-    await newInput.setValue('new-strong-password-42')
-    await confirmInput.setValue('new-strong-password-42')
+    await newInput.setValue('New-Strong-Password-42')
+    await confirmInput.setValue('New-Strong-Password-42')
 
     await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
     await nextTick()
@@ -225,7 +243,7 @@ describe('MyProfileView', () => {
     expect(mockPut).toHaveBeenCalledWith('/api/v1/me/password', {
       body: {
         current_password: 'old-password',
-        new_password: 'new-strong-password-42',
+        new_password: 'New-Strong-Password-42',
       },
     })
     expect(wrapper.text()).toContain('Password changed successfully')
@@ -242,8 +260,8 @@ describe('MyProfileView', () => {
     const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('wrong-password')
-    await newInput.setValue('new-strong-password-42')
-    await confirmInput.setValue('new-strong-password-42')
+    await newInput.setValue('New-Strong-Password-42')
+    await confirmInput.setValue('New-Strong-Password-42')
 
     await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
     await nextTick()
@@ -262,8 +280,8 @@ describe('MyProfileView', () => {
     const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('old-password')
-    await newInput.setValue('new-strong-password-42')
-    await confirmInput.setValue('new-strong-password-42')
+    await newInput.setValue('New-Strong-Password-42')
+    await confirmInput.setValue('New-Strong-Password-42')
 
     await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
     await nextTick()
@@ -285,8 +303,8 @@ describe('MyProfileView', () => {
     const confirmInput = wrapper.find('[data-testid="change-password-confirm"]')
 
     await currentInput.setValue('old-password')
-    await newInput.setValue('new-strong-password-42')
-    await confirmInput.setValue('new-strong-password-42')
+    await newInput.setValue('New-Strong-Password-42')
+    await confirmInput.setValue('New-Strong-Password-42')
 
     await wrapper.find('[data-testid="change-password-submit"]').trigger('submit')
     await nextTick()
