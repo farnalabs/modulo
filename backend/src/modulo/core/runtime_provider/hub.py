@@ -164,7 +164,7 @@ class RuntimeProviderHub:
         are not retained, and teardown continues with the remaining providers.
         Failures are logged per provider and never mask the remaining teardown.
         """
-        for name, provider in list(self._providers.items()):
+        for name, provider in tuple(self._providers.items()):
             try:
                 await asyncio.wait_for(provider.close(), timeout=_PROVIDER_CLOSE_TIMEOUT_S)
             except asyncio.CancelledError:

@@ -127,7 +127,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         directories they would leak on the host filesystem after the hub is
         gone. ``destroy_workspace`` is already best-effort per workspace.
         """
-        for provider_ref in list(self._workspaces.keys()):
+        for provider_ref in tuple(self._workspaces.keys()):
             try:
                 await self.destroy_workspace(provider_ref)
             except asyncio.CancelledError:

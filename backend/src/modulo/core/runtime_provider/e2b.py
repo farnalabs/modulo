@@ -180,7 +180,7 @@ class E2BRuntimeProvider(RuntimeProvider):
         hub is gone. Best-effort per sandbox — a kill failure is logged and
         never masks the remaining teardown.
         """
-        for provider_ref in list(self._sandboxes.keys()):
+        for provider_ref in tuple(self._sandboxes.keys()):
             try:
                 await self.destroy_workspace(provider_ref)
             except asyncio.CancelledError:
