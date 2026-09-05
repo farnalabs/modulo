@@ -51,6 +51,13 @@ _MARK_RUN_FAILED_SQL_TEMPLATE = (
     "__CLAIM_FENCE__"
 )
 
+# ``SET LOCAL lock_timeout`` (FAR-583): utility commands do not accept bind
+# parameters (asyncpg rewrites :lt to $1 → "syntax error at or near $1"), so
+# the value is inlined via the same __PLACEHOLDER__ + str.replace pattern as
+# the template above. int() validation precedes stringification — only digits
+# can reach the statement, never caller data.
+_SET_LOCK_TIMEOUT_SQL_TEMPLATE = "SET LOCAL lock_timeout = __LOCK_TIMEOUT_MS__"
+
 _ENGINE: AsyncEngine | None = None
 _ENGINE_LOCK = threading.Lock()
 
@@ -242,8 +249,13 @@ async def _mark_run_failed(
             if bind.dialect.name == "postgresql":
                 # Utility commands do not accept bind parameters (asyncpg
                 # rewrites :lt to $1 → "syntax error at or near $1"), so the
-                # validated integer is inlined.
-                await session.execute(text(f"SET LOCAL lock_timeout = {int(lock_timeout_ms)}"))
+                # validated integer is inlined via the __PLACEHOLDER__ +
+                # str.replace pattern (see _SET_LOCK_TIMEOUT_SQL_TEMPLATE) —
+                # an f-stringed text() violates the raw-SQL architecture rule.
+                lock_timeout_statement = _SET_LOCK_TIMEOUT_SQL_TEMPLATE.replace(
+                    "__LOCK_TIMEOUT_MS__", str(int(lock_timeout_ms))
+                )
+                await session.execute(text(lock_timeout_statement))
         result = await session.execute(
             text(statement),
             params,

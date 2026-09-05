@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.audit_logger.append_only import register_append_only_guard
 from modulo.db.models.audit_event import AuditEvent
 
+pytestmark = pytest.mark.integration
 BACKEND_ROOT = Path(__file__).parents[2]
 
 # ---------------------------------------------------------------------------

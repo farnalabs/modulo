@@ -4,7 +4,8 @@ from typing import Any
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import inspect, select, update
+from sqlalchemy import JSON, CheckConstraint, inspect, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import Session
@@ -17,6 +18,8 @@ from tests.factories import (
     PipelineSnapshotFactory,
     RunFactory,
 )
+
+pytestmark = pytest.mark.integration
 
 
 async def test_initial_migration_creates_domain_tables(db_engine: AsyncEngine) -> None:
@@ -60,12 +63,34 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
       - ``run_number_counters`` — the ORM model was deleted (FAR-253 dead-code
         cleanup) but the reconciliation chain still creates the table for the
         raw-SQL counter path; the table lives outside ORM metadata, ignored.
+      - ``run_node_outputs_quarantine`` — the ops/remediation side table
+        (FAR-583, migration 0176) deliberately has no ORM model (ops SQL only,
+        no app-role grant), ignored like ``run_number_counters``.
       - ``modulo_journey_facts.updated_at`` — the ORM's ``TimestampMixin``
         declares ``updated_at`` but no migration ever created the column; the
         fact table's write instant is ``created_at`` only, ignored.
+      - every ``modify_type`` where the DB is ``JSONB`` and the ORM maps
+        generic ``JSON`` — the repo-wide multi-backend JSON-parity convention
+        (migrations create JSONB on Postgres; the ORM maps generic JSON for
+        SQLite/MariaDB parity). Documented for the sentinel columns above and
+        applied uniformly since ORM JSON columns are added continuously.
+      - audit-chain columns (``created_by``/``updated_by``/``deleted_by``/
+        ``deleted_at``) and their ``fk_*`` FKs to ``accounts.id`` present in
+        the DB but absent from ORM metadata — the DB triggers populate them
+        (0108 audit chain); the ORM never reads/writes them directly.
+      - ``CheckConstraint`` divergence both directions — the ORM declares the
+        portable subset of each guard (repo parity rule: dialect-specific SQL
+        like ``jsonb_typeof`` never belongs in the ORM; see the
+        ``run_node_outputs`` model) while migrations own the strict DB-side
+        CHECKs. CHECK SQL text parity is intentionally not enforced here.
+      - ``add_fk`` to ``nodes.id`` (graph-consistency FKs the ORM declares on
+        ``eval_definitions``/``eval_results``/``node_observations``/
+        ``run_evidence``/``pipeline_edges``/``snapshot_schema_pins``) that no
+        migration has created yet — pre-existing gap, tracked separately.
 
-    Everything else (tables, columns, constraints, nullability, types, server
-    defaults) must match exactly; a genuine drift item there fails the test.
+    Everything else (tables, columns, nullability, non-JSON types, server
+    defaults, non-audit FKs) must match exactly; a genuine drift item there
+    fails the test.
     """
     async with db_engine.connect() as connection:
         differences = await connection.run_sync(
@@ -84,20 +109,45 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
             # Runtime-managed LangGraph checkpoint tables (ModuloPostgresSaver
             # setup) — outside ORM metadata by design. Also the reconciliation
             # chain's run_number_counters, whose ORM model was deleted (FAR-253)
-            # while the raw-SQL counter path keeps the table.
+            # while the raw-SQL counter path keeps the table, and the FAR-583
+            # ops quarantine table (no ORM model by design).
             return inner[1].name in (
                 "checkpoints",
                 "checkpoint_blobs",
                 "checkpoint_writes",
                 "checkpoint_migrations",
                 "run_number_counters",
+                "run_node_outputs_quarantine",
             )
         if kind == "add_column":
             # ORM TimestampMixin declares updated_at on the fact table but no
             # migration ever created it; created_at is the write instant.
             return inner[2] == "modulo_journey_facts" and inner[3].name == "updated_at"
+        if kind == "remove_column":
+            # DB triggers own the audit-chain columns (0108); the ORM never
+            # reads or writes them directly.
+            return inner[3].name in ("created_by", "updated_by", "deleted_by", "deleted_at")
+        if kind in ("remove_fk", "add_fk"):
+            # remove_fk: the audit-chain FKs on the trigger-maintained columns.
+            # add_fk: graph-consistency FKs to nodes.id the ORM declares but no
+            # migration has created yet. The diff's FK constraints may not
+            # resolve their referred table (comparison metadata), so match on
+            # the source column names.
+            col_names = {col.name for col in inner[1].columns}
+            if kind == "remove_fk":
+                return bool(col_names & {"created_by", "updated_by", "deleted_by"})
+            return bool(col_names & {"node_id", "source_node_id", "target_node_id"})
+        if kind in ("remove_constraint", "add_constraint"):
+            # CHECK guards: the ORM declares portable subsets; migrations own
+            # the strict dialect-specific versions (repo parity rule).
+            return isinstance(inner[1], CheckConstraint)
         if kind == "modify_type":
-            # ORM generic JSON for multi-backend parity vs migration JSONB.
+            # Repo-wide multi-backend JSON parity: migrations create JSONB on
+            # Postgres, the ORM maps generic JSON. The four sentinel columns
+            # below are the historically-listed instances; the rule applies
+            # uniformly (JSONB in DB -> generic JSON in metadata).
+            if isinstance(inner[5], JSONB) and isinstance(inner[6], JSON):
+                return True
             return (inner[2], inner[3]) in {
                 ("hitl_claims", "decision_payload"),
                 ("runs", "raw_output_markers"),

@@ -15,6 +15,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
+import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -23,6 +24,7 @@ from modulo.db.bootstrap_role import ACCOUNTS_WRITABLE_COLUMNS, _find_allow_list
 from modulo.db.crud.break_glass_deny import BREAK_GLASS_COLUMNS
 from modulo.db.crud.org_membership import resolve_role_from_membership
 
+pytestmark = pytest.mark.integration
 _BG_COLS = tuple(BREAK_GLASS_COLUMNS)
 
 
@@ -84,24 +86,37 @@ async def _pg_connect(migrated_db_url: str) -> asyncpg.Connection:
 
 
 async def test_modulo_breakglass_has_only_break_glass_column_updates(db_engine: AsyncEngine) -> None:
-    async with db_engine.connect() as conn:
-        for col in _BG_COLS:
-            granted = (
-                await conn.execute(
-                    text("SELECT has_column_privilege('modulo_breakglass', 'public.accounts', :col, 'UPDATE')"),
-                    {"col": col},
-                )
-            ).scalar_one()
-            assert granted is True, f"modulo_breakglass should UPDATE {col}"
+    """Assert the SHIPPED modulo_breakglass accounts posture.
 
-        for col in ("email", "password_hash", "active", "display_name"):
+    The bootstrap deliberately does NOT apply the plan's break-glass column
+    UPDATE grants yet ("deliverable (B) ... are NOT applied here",
+    ``db/bootstrap_role.py`` module docstring): the operator role carries
+    SELECT + INSERT on accounts only, and deactivation flows through the
+    SECURITY DEFINER ``deactivate_break_glass`` — so direct column UPDATE is
+    denied on every column today. This test asserts that shipped boundary
+    (no UPDATE anywhere, sensitive columns explicitly, no DELETE) plus the
+    granted read/insert surfaces, so a stray table-level or column UPDATE
+    grant cannot appear silently.
+    """
+    async with db_engine.connect() as conn:
+        # Shipped grants: SELECT + INSERT on accounts (bootstrap _grant_break_glass).
+        for priv in ("SELECT", "INSERT"):
+            granted = (
+                await conn.execute(
+                    text("SELECT has_table_privilege('modulo_breakglass', 'public.accounts', :priv)"),
+                    {"priv": priv},
+                )
+            ).scalar_one()
+            assert granted is True, f"modulo_breakglass should have {priv} on accounts"
+
+        for col in (*_BG_COLS, "email", "password_hash", "active", "display_name"):
             granted = (
                 await conn.execute(
                     text("SELECT has_column_privilege('modulo_breakglass', 'public.accounts', :col, 'UPDATE')"),
                     {"col": col},
                 )
             ).scalar_one()
-            assert granted is False, f"modulo_breakglass must NOT UPDATE {col}"
+            assert granted is False, f"modulo_breakglass must NOT UPDATE {col} (deliverable (B) grants not shipped)"
 
         has_delete = (
             await conn.execute(text("SELECT has_table_privilege('modulo_breakglass', 'public.accounts', 'DELETE')"))

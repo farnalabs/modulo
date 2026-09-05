@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 from sqlalchemy import delete, event, select, text, update
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session as SASession
 
@@ -20,6 +21,8 @@ from modulo.db.rls import (
     set_rls_org,
     set_rls_user_context,
 )
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # SET LOCAL / set_config scoping tests
@@ -158,6 +161,11 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
             "checkpoints",
             "checkpoint_blobs",
             "checkpoint_writes",
+            # Ops/remediation evidence table (FAR-583, migration 0176): written
+            # by migrations and read by ops SQL only — no app-role grant and
+            # deliberately NO RLS policy, so quarantined sentinel rows stay
+            # visible for remediation regardless of org context.
+            "run_node_outputs_quarantine",
         }
     )
     missing = expected - tables_with_policy
@@ -404,23 +412,24 @@ async def test_strict_rls_tables_fail_closed_with_empty_org_context(
             await conn.execute(
                 text(
                     "INSERT INTO parameter_sets "
-                    "(id, parameter_schema_id, version, schema_version, name, account_id, values) "
-                    "VALUES (:id, :sid, 1, 1, 'set1', :aid, '{}'::json)",
+                    "(id, parameter_schema_id, organisation_id, version, schema_version, name, account_id, values) "
+                    "VALUES (:id, :sid, :oid, 1, 1, 'set1', :aid, '{}'::json)",
                 ),
-                {"id": str(uuid.uuid4()), "sid": str(schema_id), "aid": str(account_id)},
+                {"id": str(uuid.uuid4()), "sid": str(schema_id), "oid": str(org_id), "aid": str(account_id)},
             )
             await conn.execute(
                 text(
                     "INSERT INTO oauth_authorization_codes "
-                    "(code, client_id, organisation_id, account_id, scopes, redirect_uri, expires_at) "
-                    "VALUES (:code, 'client1', :oid, :aid, 'read', 'https://x/cb', now() + interval '1 hour')",
+                    "(code, client_id, organisation_id, account_id, scopes, redirect_uri, expires_at, used) "
+                    "VALUES (:code, 'client1', :oid, :aid, 'read', 'https://x/cb', now() + interval '1 hour', false)",
                 ),
                 {"code": f"code-{org_id.hex[:8]}", "oid": str(org_id), "aid": str(account_id)},
             )
             await conn.execute(
                 text(
-                    "INSERT INTO oauth_token_families (family_id, client_id, organisation_id) "
-                    "VALUES (:fid, 'client1', :oid)",
+                    "INSERT INTO oauth_token_families "
+                    "(family_id, client_id, organisation_id, max_sequence, is_blacklisted) "
+                    "VALUES (:fid, 'client1', :oid, 0, false)",
                 ),
                 {"fid": str(uuid.uuid4()), "oid": str(org_id)},
             )
@@ -477,6 +486,284 @@ async def test_strict_rls_tables_fail_closed_with_empty_org_context(
                 "DELETE FROM organisations WHERE id = :oid",
             ):
                 await conn.execute(text(stmt), params)
+
+
+# ---------------------------------------------------------------------------
+# run_node_outputs (FAR-583) — strict fail-closed RLS + repo-module org gates
+# ---------------------------------------------------------------------------
+
+
+async def _seed_outputs_tenant(
+    db_engine: AsyncEngine,
+    account_id: uuid.UUID,
+    *,
+    label: str,
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+    """Commit org + pipeline + snapshot + run as superuser.
+
+    Returns ``(org_id, pipeline_id, snapshot_id, run_id)``. A dedicated org
+    per call keeps ``UNIQUE(organisation_id, run_number)`` collision-free
+    under the pre-deploy gate's ``-n 2``.
+    """
+    org_id, pipeline_id, snapshot_id, run_id = (uuid.uuid4() for _ in range(4))
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
+            {
+                "id": str(org_id),
+                "name": f"Outputs RLS Org {label}",
+                "slug": f"outputs-rls-{label}-{org_id.hex[:8]}",
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(org_id),
+                "name": f"Outputs RLS Pipeline {label}",
+                "aid": str(account_id),
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
+                "trigger_type, status, run_number, input_hash, langgraph_thread_id, claim_token) "
+                "VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :hash, :thread, :tok)"
+            ),
+            {
+                "id": str(run_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "sid": str(snapshot_id),
+                "hash": "e" * 64,
+                "thread": f"outputs-rls-{run_id}",
+                "tok": f"tok-seed-{run_id}",
+            },
+        )
+    return org_id, pipeline_id, snapshot_id, run_id
+
+
+async def _cleanup_outputs_tenants(
+    db_engine: AsyncEngine,
+    org_ids: list[uuid.UUID],
+    run_ids: list[uuid.UUID],
+) -> None:
+    """Delete seeded tenants (superuser bypasses RLS) in FK-dependency order."""
+    async with db_engine.connect() as conn, conn.begin():
+        for run_id in run_ids:
+            await conn.execute(text("DELETE FROM run_node_outputs WHERE run_id = :rid"), {"rid": str(run_id)})
+            await conn.execute(text("DELETE FROM runs WHERE id = :rid"), {"rid": str(run_id)})
+        for org_id in org_ids:
+            await conn.execute(
+                text("DELETE FROM pipeline_snapshots WHERE organisation_id = :oid"), {"oid": str(org_id)}
+            )
+            await conn.execute(text("DELETE FROM pipelines WHERE organisation_id = :oid"), {"oid": str(org_id)})
+            await conn.execute(text("DELETE FROM organisations WHERE id = :oid"), {"oid": str(org_id)})
+
+
+async def test_run_node_outputs_rls_strict_fail_closed(
+    db_engine: AsyncEngine,
+    non_superuser_role: str,
+    test_user: uuid.UUID,
+) -> None:
+    """run_node_outputs is strict fail-closed: org-filtered, NO null-context branch.
+
+    Migration 0176 gives the table ENABLE + FORCE RLS + the 0162/0163-style
+    strict policy (``organisation_id = nullif(current_setting(
+    'app.organisation_id', true), '')::uuid``). As a non-superuser (so RLS
+    applies): the owning org sees its row, a sibling org sees none, and an
+    EMPTY org context sees none. The positive control proves the policy
+    filters by org rather than denying everything.
+    """
+    org_id, _pipeline_id, _snapshot_id, run_id = await _seed_outputs_tenant(db_engine, test_user, label="strict")
+    try:
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) "
+                    "VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"
+                ),
+                {"rid": str(run_id), "oid": str(org_id), "oj": '{"a": 1}'},
+            )
+
+        # Positive control: the owning org's context sees exactly its row.
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text(f'SET LOCAL ROLE "{non_superuser_role}"'))
+            await conn.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            count = (await conn.execute(text("SELECT count(*) FROM run_node_outputs"))).scalar()
+            assert count == 1, f"owning org context returned {count} rows — policy missing or denying all"
+
+        # Cross-org read: a sibling org's context must see nothing.
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text(f'SET LOCAL ROLE "{non_superuser_role}"'))
+            await conn.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(uuid.uuid4())},
+            )
+            count = (await conn.execute(text("SELECT count(*) FROM run_node_outputs"))).scalar()
+            assert count == 0, f"cross-org context leaked {count} rows"
+
+        # Empty org context must fail CLOSED (no null-context allow branch).
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text(f'SET LOCAL ROLE "{non_superuser_role}"'))
+            await conn.execute(text("SELECT set_config('app.organisation_id', '', true)"))
+            count = (await conn.execute(text("SELECT count(*) FROM run_node_outputs"))).scalar()
+            assert count == 0, f"empty org context leaked {count} rows — fail-open RLS reintroduced"
+    finally:
+        await _cleanup_outputs_tenants(db_engine, [org_id], [run_id])
+
+
+async def test_run_node_outputs_null_context_insert_rejected(
+    db_engine: AsyncEngine,
+    non_superuser_role: str,
+    test_user: uuid.UUID,
+) -> None:
+    """A NULL-context INSERT must raise 42501 (no policy branch to fall through).
+
+    Postgres' strict policy has no null-context allow branch, so an INSERT
+    under an empty ``app.organisation_id`` violates the policy — the same
+    SQLSTATE the repo module's DualWriteError retry classifier treats as
+    non-retryable. A sibling SELECT proves the same context cannot read
+    anything either.
+    """
+    org_id, _pipeline_id, _snapshot_id, run_id = await _seed_outputs_tenant(db_engine, test_user, label="insert")
+    try:
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text(f'SET LOCAL ROLE "{non_superuser_role}"'))
+            await conn.execute(text("SELECT set_config('app.organisation_id', '', true)"))
+            with pytest.raises(ProgrammingError) as excinfo:
+                await conn.execute(
+                    text(
+                        "INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) "
+                        "VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"
+                    ),
+                    {"rid": str(run_id), "oid": str(org_id), "oj": '{"a": 1}'},
+                )
+            err = excinfo.value
+            sqlstate = getattr(getattr(err, "orig", None), "sqlstate", None)
+            assert sqlstate == "42501", f"expected a 42501 RLS rejection, got {type(err).__name__}: {err}"
+
+        # The same empty context cannot read the table either.
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text(f'SET LOCAL ROLE "{non_superuser_role}"'))
+            await conn.execute(text("SELECT set_config('app.organisation_id', '', true)"))
+            count = (await conn.execute(text("SELECT count(*) FROM run_node_outputs"))).scalar()
+            assert count == 0
+    finally:
+        await _cleanup_outputs_tenants(db_engine, [org_id], [run_id])
+
+
+async def test_run_node_outputs_repo_module_org_gates(
+    db_engine: AsyncEngine,
+    app_engine: AsyncEngine,
+    test_user: uuid.UUID,
+) -> None:
+    """The repo module's Python org gate: write strict, read skip-or-raise.
+
+    WRITE paths REQUIRE a bound, matching RLS org context — a session with no
+    org context, an explicit ``organisation_id=None``, and a mismatched org
+    all raise :class:`OutputsRlsMismatch` BEFORE any SQL is attempted (SQLite's
+    tenant filter does not cover INSERT, so the Python gate must catch what
+    the database does not). READ paths skip the consistency check when the
+    session has no org context and raise on a mismatched one.
+    """
+    from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback, replace_run_node_outputs
+    from modulo.db.rls import OutputsRlsMismatch
+
+    org_id, _pipeline_id, _snapshot_id, run_id = await _seed_outputs_tenant(db_engine, test_user, label="gates")
+    try:
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
+
+        # Write with NO org context bound → OutputsRlsMismatch.
+        async with factory() as session, session.begin():
+            with pytest.raises(OutputsRlsMismatch, match="bound RLS organisation context"):
+                await replace_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=org_id,
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
+
+        # Org bound but the row org omitted → OutputsRlsMismatch.
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            with pytest.raises(OutputsRlsMismatch, match="explicit organisation_id"):
+                await replace_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=None,
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
+
+        # Mismatched org → OutputsRlsMismatch.
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            with pytest.raises(OutputsRlsMismatch, match="org mismatch"):
+                await replace_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=uuid.uuid4(),
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
+
+        # The failed writes raised BEFORE any SQL — zero rows exist.
+        async with db_engine.connect() as conn:
+            count = (
+                await conn.execute(
+                    text("SELECT count(*) FROM run_node_outputs WHERE run_id = :rid"),
+                    {"rid": str(run_id)},
+                )
+            ).scalar()
+            assert count == 0, "a gated write reached the table"
+
+        # READ with no org context → check SKIPPED, rows served. The superuser
+        # session sees the seeded rows even under FORCE RLS, so a returned
+        # payload proves the skip branch flowed rows through instead of raising.
+        async with db_engine.connect() as conn:
+            seed_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+            async with seed_factory() as session, session.begin():
+                await session.execute(
+                    text(
+                        "INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) "
+                        "VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"
+                    ),
+                    {"rid": str(run_id), "oid": str(org_id), "oj": '{"a": 1}'},
+                )
+            async with seed_factory() as session, session.begin():
+                blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=org_id)
+            assert blobs.outputs == {"n1": {"a": 1}}
+
+        # READ with a MISMATCHED org context → OutputsRlsMismatch (the NOBYPASSRLS
+        # role's RLS scope filters the rows, so the row-org falls back to the
+        # explicit argument and the Python gate catches the disagreement).
+        async with factory() as session, session.begin():
+            await set_rls_org(session, uuid.uuid4())
+            with pytest.raises(OutputsRlsMismatch, match="org mismatch"):
+                await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=org_id)
+    finally:
+        await _cleanup_outputs_tenants(db_engine, [org_id], [run_id])
 
 
 async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine) -> None:
