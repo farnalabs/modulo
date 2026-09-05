@@ -61,26 +61,29 @@ async def test_local_close_logs_destroy_error(monkeypatch: pytest.MonkeyPatch) -
     # Must not raise.
     await provider.close()
 
-    # ---------------------------------------------------------------------------
-    # DockerRuntimeProvider.close()
-    # ---------------------------------------------------------------------------
 
-    async def test_docker_close_destroy_timeout_force_drops(monkeypatch: pytest.MonkeyPatch) -> None:
-        """A hung destroy is force-dropped (timeout branch) and teardown continues."""
-        provider = DockerRuntimeProvider()
-        provider._workspaces["ws1"] = "ws1"
+# ---------------------------------------------------------------------------
+# DockerRuntimeProvider.close()
+# ---------------------------------------------------------------------------
 
-        async def _timeout(ref: str) -> None:
-            raise TimeoutError("hung daemon")
 
-        monkeypatch.setattr(provider, "destroy_workspace", _timeout)
-        provider._client = AsyncMock()
-        provider._client.close = AsyncMock()
+async def test_docker_close_destroy_timeout_force_drops(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hung destroy is force-dropped (timeout branch) and teardown continues."""
+    provider = DockerRuntimeProvider()
+    provider._workspaces["ws1"] = "ws1"
 
-        # Must not raise; the loop continues to the client close.
-        await provider.close()
+    async def _timeout(ref: str) -> None:
+        raise TimeoutError("hung daemon")
 
-        assert provider._client.close.await_count == 1
+    monkeypatch.setattr(provider, "destroy_workspace", _timeout)
+    client = AsyncMock()
+    provider._client = client
+
+    # Must not raise; the loop continues to the client close.
+    await provider.close()
+
+    assert client.close.await_count == 1
+    assert provider._client is None
 
 
 async def test_docker_close_destroy_exception_logged(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,7 +104,7 @@ async def test_docker_close_destroy_exception_logged(monkeypatch: pytest.MonkeyP
     assert client.close.await_count == 1
 
 
-async def test_docker_close_client_timeout_force_drops(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_docker_close_client_timeout_force_drops() -> None:
     """A hung client close is force-dropped (timeout branch)."""
     provider = DockerRuntimeProvider()
     provider._workspaces.clear()
@@ -113,7 +116,7 @@ async def test_docker_close_client_timeout_force_drops(monkeypatch: pytest.Monke
     assert provider._client is None
 
 
-async def test_docker_close_client_exception_logged(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_docker_close_client_exception_logged() -> None:
     """A generic client close failure is logged and clears the client ref."""
     provider = DockerRuntimeProvider()
     provider._workspaces.clear()

@@ -335,6 +335,9 @@ class TestDeleteProfileWithoutLeaseTable:
             deleted = await delete_environment_profile(session, deletable_profile)
             assert deleted is True
 
+            # Hard delete (delete_environment_profile is not a soft delete):
+            # the row is gone, even with include_deleted=True. The point of
+            # this test is that the workspace_leases RESTRICT FK (removed with
+            # the lease table in 0179) no longer blocks the delete.
             fetched = await get_environment_profile(session, deletable_profile, include_deleted=True)
-        assert fetched is not None
-        assert fetched.deleted_at is not None
+        assert fetched is None

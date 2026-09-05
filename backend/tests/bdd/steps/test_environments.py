@@ -223,7 +223,8 @@ def provider_with_active_workspace(ctx):
 def shell_connector_with_provider(ctx):
     from modulo.connectors.shell import ShellConnector
 
-    ctx["connector"] = ShellConnector(runtime_provider=ctx["provider"], allowed_commands=["echo"])
+    with pytest.warns(DeprecationWarning, match="ShellConnector is deprecated"):
+        ctx["connector"] = ShellConnector(runtime_provider=ctx["provider"], allowed_commands=["echo"])
 
 
 @given('an EnvironmentProfile with capabilities ["docker", "python3.12"]')

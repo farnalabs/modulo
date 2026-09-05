@@ -3,8 +3,8 @@
 Structural: load the migration module and assert its contract without a
 database, and pin model/migration parity for the provider_type vocabulary:
 
-* the chain is pinned (revision -> 0176_trigger_event_validation_results,
-   main's head that 0175 is spliced into);
+* the chain is pinned (revision -> 0177_invitations, the main-chain head
+  this revision extends);
 * the upgrade widens ``ck_env_profiles_provider_type`` with 'runner_docker'
   (guarded ``DROP CONSTRAINT IF EXISTS`` + re-add) and drops the legacy
   ``'local_docker'`` server default (guarded: only when the default is the
@@ -45,7 +45,7 @@ def _source_code() -> str:
 def test_metadata_pins_chain() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
-    assert module.down_revision == "0176_trigger_event_validation_results"
+    assert module.down_revision == "0177_invitations"
     assert module.branch_labels is None
     assert module.depends_on is None
 
@@ -94,5 +94,5 @@ def test_model_parity_widened_check_no_server_default() -> None:
     column = EnvironmentProfile.__table__.columns["provider_type"]
     assert column.nullable is False
     assert column.server_default is None, (
-        "model/migration drift: the DB default was dropped by 0176; the model must not re-introduce it"
+        "model/migration drift: the DB default was dropped by 0178; the model must not re-introduce it"
     )
