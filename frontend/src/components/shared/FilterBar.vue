@@ -1,6 +1,6 @@
 <template>
-  <div class="flex flex-wrap items-center gap-2">
-    <div v-if="search" class="relative">
+  <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
+    <div v-if="search" class="relative w-full sm:w-auto">
       <svg
         class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none"
         xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -25,7 +25,7 @@
   @update:model-value="(val) => $emit('update:filter', filter.key, val === '__all__' ? '' : String(val))"
   :placeholder="filter.label"
   :data-testid="`filter-bar-${filter.key}`"
-  class="w-auto min-w-[140px]"
+  class="w-full sm:w-auto min-w-0 sm:min-w-[140px]"
   :options="[{ value: '__all__', label: allLabel(filter) }, ...filter.options.map(opt => ({ value: opt.value, label: opt.label }))]"
   option-label="label"
   option-value="value"
