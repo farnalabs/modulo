@@ -339,15 +339,6 @@ class TestAbortSandboxes:
         assert await _abort_org_live_sandboxes(mock_session, _ORG_ID) == 0
 
     async def test_kills_each_distinct_sandbox(self, mock_session: AsyncMock) -> None:
-        present = MagicMock()
-        present.first = MagicMock(return_value=(1,))
-        rows = MagicMock()
-        rows.all = MagicMock(return_value=[("sb-1",), ("sb-2",)])
-        col_check = MagicMock()
-        col_check.first = MagicMock(return_value=(1,))
-        listing = MagicMock(all=MagicMock(return_value=[("sb-1",), ("sb-2",)]))
-        col_check.first = MagicMock(return_value=None)  # build then ignore; replaced below
-        _ = listing
         col_check = MagicMock()
         col_check.first = MagicMock(return_value=(1,))
         sandbox_result = MagicMock()

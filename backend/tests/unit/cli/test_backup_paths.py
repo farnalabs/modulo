@@ -403,10 +403,6 @@ class TestRestoreSyncFunctions:
 
 class TestPreviewRestore:
     @staticmethod
-    def _manifest() -> dict[str, Any]:
-        return {"fernet_key_hash": "hash-current", "backup_type": "full"}
-
-    @staticmethod
     def _settings(key_hash: str = "hash-current") -> SimpleNamespace:
         return SimpleNamespace(fernet_key="k", fernet_key_hash=key_hash)
 

@@ -185,12 +185,6 @@ class TestUpdateAndDeprecate:
 
 
 class TestDeleteSchema:
-    async def _patched_reference_counts(
-        self, mock_session: AsyncMock, *, agents: int, pins: int, libs: int, execute_mock: AsyncMock
-    ) -> None:
-        del agents, pins, libs  # values injected via execute side-effects below
-        del mock_session, execute_mock
-
     async def test_returns_false_when_missing(self, mock_session: AsyncMock) -> None:
         with patch("modulo.db.crud.schema.get_schema", AsyncMock(return_value=None)):
             from modulo.db.crud.schema import delete_schema

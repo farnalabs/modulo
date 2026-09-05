@@ -191,7 +191,7 @@ class TestAddPromptVersion:
         assert isinstance(latest["created_at"], str)
         assert result.prompt_template == "new prompt"
         mock_session.flush.assert_awaited_once()
-        assert isinstance(before, datetime)
+        assert datetime.fromisoformat(latest["created_at"]) >= before
 
     async def test_appends_with_version_label_and_eval_refs(self, mock_session: AsyncMock) -> None:
         agent = _make_agent()

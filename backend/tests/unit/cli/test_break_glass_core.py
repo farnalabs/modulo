@@ -367,24 +367,19 @@ class TestLatestActorReason:
 
     async def test_first_event_per_org_wins(self) -> None:
         session = _mock_session()
-        events = [
-            SimpleNamespace(
-                organisation_id=_ORG_ID,
-                payload_json={"operator": "operator", "reason": "latest"},
-            ),
-            SimpleNamespace(
-                organisation_id=_ORG_ID,
-                payload_json={"operator": "older", "reason": "old"},
-            ),
-        ]
+        latest_event = SimpleNamespace(
+            organisation_id=_ORG_ID,
+            payload_json={"operator": "operator", "reason": "latest"},
+        )
+        older_event = SimpleNamespace(
+            organisation_id=_ORG_ID,
+            payload_json={"operator": "older", "reason": "old"},
+        )
         result = MagicMock()
-        result.scalars = MagicMock(return_value=iter(events))
-        events = iter(events)
-        del events  # replaced below
-        result.scalars = MagicMock(return_value=())
+        result.scalars = MagicMock(return_value=iter([latest_event, older_event]))
         session.execute = AsyncMock(return_value=result)
         latest = await _latest_activation_actor_reason(session, {str(_ORG_ID)})
-        assert latest == {}
+        assert latest == {str(_ORG_ID): ("operator", "latest")}
 
     async def test_rows_scoped_to_requested_orgs(self) -> None:
         session = _mock_session()
