@@ -106,6 +106,21 @@ EXECUTOR_HEARTBEAT_LOST_ERROR_CODE = "executor_heartbeat_lost"
 # stalled node from a run that never dispatched a node at all.
 NODE_DEADLINE_EXCEEDED_ERROR_CODE = "node_deadline_exceeded"
 
+# FAR-603: bound on how long a cancelled executor waits for a watchdog task to
+# settle in the UNCLASSIFIED (worker-shutdown) cancellation path. A watchdog
+# with real work in flight — a classified stall whose ``fail_run_terminal`` is
+# committing — finishes in well under a second (a single fenced UPDATE plus two
+# fail-open follow-ups), so 5s is ~2 orders of magnitude above normal write
+# latency. A watchdog that is merely sleeping out its setup grace is a zombie
+# there: its exec target is already cancelled, so at grace expiry it stands
+# down WITHOUT writing, yet awaiting its full remaining grace — up to
+# ``saq_setup_grace_seconds`` (600s by default) — delayed the stand-down +
+# re-raise for the whole window and wedged worker shutdown per cancelled run.
+# Classified causes (stall_requested / health_failed / superseded) still wait
+# unconditionally so their terminal write always commits; only the zombie wait
+# is capped.
+_WATCHDOG_AWAIT_BOUND_SECONDS = 5.0
+
 
 class ClaimSupersededError(Exception):
     """Raised when this executor's claim token no longer matches the run's current claim.
@@ -608,74 +623,32 @@ async def _advance_journeys_from_stored_refs(
 ) -> None:
     """FAR-143 — advance journeys from a run's stored refs, fail-open.
 
-    ``mark_complete`` / ``fail_run_terminal`` write the terminal status with a
-    raw ``text()`` UPDATE on a connection and never run ``finalize_cost`` (so
-    they never parse outputs or persist them). Runs carrying CREATE-STAMPED
-    refs (``runs.work_item_refs``) would therefore never advance their journeys
-    through those paths. This helper opens its OWN session/transaction AFTER the
-    raw write succeeds (the write is committed before it runs) and advances
-    journeys from the stored refs only — no self-report parse here (the raw
-    writers have no merged outputs).
-
-    FAIL-OPEN: a journey-write failure is logged and swallowed — it must never
-    roll back or fail the already-committed terminal write.
+    Thin delegate to the shared langgraph-free implementation
+    (``run_terminal_advance.advance_journeys_from_stored_refs`` — FAR-604 F4);
+    the name/signature is the wiring seam ``mark_complete`` /
+    ``fail_run_terminal`` call (and tests patch), while the implementation
+    lives once in the shared module. FAIL-OPEN: a journey-write failure is
+    logged and swallowed — it must never roll back or fail the
+    already-committed terminal write.
     """
-    try:
-        from modulo.core.lifecycle_map.advancement import advance_journeys
+    from modulo.core.run_terminal_advance import advance_journeys_from_stored_refs
 
-        factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, uuid.UUID(org_id))
-            run = await get_run(session, uuid.UUID(run_id))
-            if run is None or not run.work_item_refs:
-                return
-            await advance_journeys(
-                session,
-                run.organisation_id,
-                run_id=run.id,
-                pipeline_id=run.pipeline_id,
-                refs=run.work_item_refs,
-                status=status,
-                completed_at=run.completed_at,
-                run_created_at=run.created_at,
-                is_replay=bool(run.is_replay),
-                variant_group_id=run.variant_group_id,
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("pipeline_execution.journey_advance_failed run=%s", run_id, exc_info=True)
+    await advance_journeys_from_stored_refs(aeng, run_id, org_id, status)
 
 
 async def _record_fact_for_terminal_failed_run(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
     """Best-effort daily-fact write for a run terminalised by a raw writer (P6').
 
-    ``fail_run_terminal`` / the stale-run sweep write ``status='failed'`` with
-    a raw ``text()`` UPDATE on a connection and never run ``finalize_cost``, so
-    those runs would never appear in ``run_daily_facts`` (invisible in the
-    analytics failure/stall dimensions). This helper opens its OWN session/
-    transaction AFTER the raw terminal UPDATE commits, sets the RLS org
-    context, re-selects the Run ORM (a pre-update entity would record
-    ``status='running'`` with a NULL ``completed_at``), and records the daily
-    fact via the shared :func:`record_fact_for_terminal_failed_run` wrapper.
+    Thin delegate to the shared langgraph-free implementation
+    (``run_terminal_advance.record_terminal_failed_fact`` — FAR-604 F4); the
+    name/signature is the wiring seam the terminal writers call (and tests
+    patch), while the implementation lives once in the shared module.
     None-guarded and fail-open: any failure logs and is swallowed — it must
     never roll back or fail the already-committed terminal write.
     """
-    try:
-        from modulo.core.analytics import record_fact_for_terminal_failed_run
+    from modulo.core.run_terminal_advance import record_terminal_failed_fact
 
-        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
-        async with factory() as session, session.begin():
-            await set_rls_org(session, uuid.UUID(org_id))
-            run = await get_run(session, uuid.UUID(run_id))
-            if run is None:
-                _log.warning("pipeline_execution.terminal_failed_facts_run_missing run=%s", run_id)
-                return
-            await record_fact_for_terminal_failed_run(session, run)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("pipeline_execution.terminal_failed_facts_failed run=%s", run_id, exc_info=True)
+    await record_terminal_failed_fact(aengine, run_id, org_id)
 
 
 async def zombie_watchdog(
@@ -1266,6 +1239,50 @@ async def _await_executor_task(
         await _cancel_and_await_tasks(abort_watch_task, watchdog_task, node_deadline_task, exec_task, heartbeat_task)
 
 
+async def _await_watchdog_bounded(
+    task: asyncio.Task[Any] | None,
+    *,
+    stall_requested: asyncio.Event,
+    health_failed: asyncio.Event,
+    superseded: asyncio.Event,
+    label: str,
+    rid: uuid.UUID,
+) -> None:
+    """Await a watchdog task, bounded only in the unclassified path (FAR-603).
+
+    Waits up to ``_WATCHDOG_AWAIT_BOUND_SECONDS`` for *task* to settle — the
+    common case, which returns immediately. If the bound expires and a
+    classification signal is set, the cause is classified and the watchdog is
+    awaited to completion UNBOUNDED: its ``fail_run_terminal`` transaction must
+    never be aborted mid-write (cancelling a watchdog mid-write aborts the
+    terminal-fail transaction and leaves the run ``running`` forever — see the
+    CancelledError handler in :func:`_await_executor_task`). If the bound
+    expires with NO classification signal, this is a worker-shutdown
+    cancellation and the watchdog is a zombie — still sleeping out its setup
+    grace with no pending write (its exec target is already cancelled, so it
+    stands down without failing the run) — so log loudly and let the caller
+    proceed with the stand-down + re-raise immediately instead of waiting out
+    the full remaining grace.
+    """
+    if task is None or task.done():
+        return
+    done, _ = await asyncio.wait({task}, timeout=_WATCHDOG_AWAIT_BOUND_SECONDS)
+    if done:
+        return
+    if stall_requested.is_set() or health_failed.is_set() or superseded.is_set():
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return
+    _log.warning(
+        "pipeline_execution.watchdog_await_bound_exceeded run=%s watchdog=%s "
+        "bound=%ss — unclassified cancellation: proceeding with stand-down "
+        "instead of waiting out the watchdog's remaining setup grace",
+        rid,
+        label,
+        _WATCHDOG_AWAIT_BOUND_SECONDS,
+    )
+
+
 async def _resolve_cancel_outcome(
     *,
     watchdog_task: asyncio.Task[Any] | None,
@@ -1281,19 +1298,36 @@ async def _resolve_cancel_outcome(
 ) -> None:
     """Classify a cancelled execution: watchdog / heartbeat / supersession.
 
-    Awaits the in-flight watchdogs to completion FIRST so their
-    ``fail_run_terminal`` transactions commit, then handles the abort cause:
-    the node/executor watchdog (``stall_requested``), heartbeat loss
-    (``health_failed`` — kill the sandbox and terminal-fail with
-    ``executor_heartbeat_lost``), or a supersession (``superseded``). A
-    genuine worker-shutdown cancellation is re-raised so SAQ can retry.
+    Awaits the in-flight watchdogs so their ``fail_run_terminal`` transactions
+    commit, then handles the abort cause: the node/executor watchdog
+    (``stall_requested``), heartbeat loss (``health_failed`` — kill the sandbox
+    and terminal-fail with ``executor_heartbeat_lost``), or a supersession
+    (``superseded``). A genuine worker-shutdown cancellation is re-raised so
+    SAQ can retry. FAR-603: each watchdog await is bounded
+    (``_WATCHDOG_AWAIT_BOUND_SECONDS``) — a classified cause keeps waiting
+    unbounded so its terminal write always commits, but a watchdog that is
+    merely sleeping out its setup grace (the unclassified worker-shutdown
+    path, where it can never write) no longer delays the re-raise by its full
+    remaining grace.
     """
     if watchdog_task is not None and not watchdog_task.done():
-        with contextlib.suppress(asyncio.CancelledError):
-            await watchdog_task
+        await _await_watchdog_bounded(
+            watchdog_task,
+            stall_requested=stall_requested,
+            health_failed=health_failed,
+            superseded=superseded,
+            label="zombie-watchdog",
+            rid=rid,
+        )
     if not node_deadline_task.done():
-        with contextlib.suppress(asyncio.CancelledError):
-            await node_deadline_task
+        await _await_watchdog_bounded(
+            node_deadline_task,
+            stall_requested=stall_requested,
+            health_failed=health_failed,
+            superseded=superseded,
+            label="node-deadline-watchdog",
+            rid=rid,
+        )
     if stall_requested.is_set():
         _log.warning("run_executor_with_watchdog: execution cancelled by node/executor watchdog for run %s", rid)
     elif health_failed.is_set():
@@ -1540,18 +1574,16 @@ async def _advance_terminalised_run(
 
     The sweep's raw terminal UPDATEs never run ``finalize_cost``, so the swept
     runs' journeys would never advance (FAR-143 follow-up) and the runs would
-    be invisible to the analytics failure/stall dimensions (FAR-162, P6'). Each
-    helper opens its own RLS-scoped session after the sweep's UPDATEs have
-    committed, so it reads the run as ``failed`` with ``completed_at`` set.
-    Fail-open per run — one run's facts failure must not fail the whole sweep.
+    be invisible to the analytics failure/stall dimensions (FAR-162, P6').
+    Delegates to the shared langgraph-free orchestration
+    (``run_terminal_advance.advance_terminalised_run`` — FAR-604 F4), which
+    ``run_admission``'s slot-reconciliation sweep also uses. Call signature
+    unchanged. Fail-open per run — one run's facts failure must not fail the
+    whole sweep.
     """
-    await _advance_journeys_from_stored_refs(async_engine, str(run_id), str(org_id), "failed")
-    try:
-        await _record_fact_for_terminal_failed_run(async_engine, str(run_id), str(org_id))
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("pipeline_execution.sweep_terminal_facts_failed run=%s", run_id, exc_info=True)
+    from modulo.core.run_terminal_advance import advance_terminalised_run
+
+    await advance_terminalised_run(async_engine, run_id, org_id)
 
 
 async def stale_run_recovery_sweep(

@@ -172,6 +172,19 @@ class TestReservedKeyStripBeforeHash:
         for key in ("_work_item_id", "_modulo.work_item", "_feedback_correction"):
             assert key not in run.input_payload
 
+    async def test_forged_coalesce_key_is_stripped_before_persistence(self, session: AsyncSession) -> None:
+        """FAR-604 F1: ``_coalesce_key`` is a reserved key. A manual/API run
+        created with a planted ``_coalesce_key`` in its payload (the
+        ``coalesce_key=None`` path) must have it stripped before persistence —
+        otherwise a later webhook delivery for the same work item would fold
+        into the planted run, replacing its payload and carrying its stale
+        work-item refs."""
+        await _seed_org(session)
+        run = await _create(session, input_payload={"user": "x", "_coalesce_key": "github:o/r:pr:1"})
+        assert run.input_payload is not None
+        assert run.input_payload == {"user": "x"}
+        assert "_coalesce_key" not in run.input_payload
+
     async def test_forged_work_item_id_never_survives(self, session: AsyncSession) -> None:
         """A payload carrying _work_item_id must not forge the anchor — the run
         gets its deterministic floor id, not the forged value."""

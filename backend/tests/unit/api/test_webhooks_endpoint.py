@@ -907,6 +907,58 @@ def test_receive_webhook_trigger_busy_records_delivery_then_acks(client: TestCli
     assert len(kwargs["payload_hash"]) == 64
 
 
+def test_receive_webhook_backpressure_refusal_records_event_after_unwind(client: TestClient) -> None:
+    """FAR-604 F2: a backpressured delivery returns 429 AND the
+    ``backpressure_skipped`` TriggerEvent + raw payload survive the refusal.
+    The engine's in-transaction event write rolls back with the main
+    transaction (deliberately NOT swallowed inside the begin-block — that
+    would commit the dedup insert and break the sender-retry contract), so
+    the route re-records the event + raw payload in a FRESH transaction
+    AFTER the unwind, then raises the 429. Auditable, never silent."""
+    from modulo.core.trigger_engine import PipelineBackpressureError
+
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.record_backpressure_delivery", new_callable=AsyncMock) as record,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.side_effect = PipelineBackpressureError(uuid.uuid4(), "queue_depth=8 limit=6")
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": "1700000000"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 429
+    # The main transaction UNWOUND (aexit saw the exception → rollback) — the
+    # engine's in-transaction event write never persisted, and the dedup
+    # insert rolled back so a byte-identical sender retry is re-evaluated.
+    aexit = begin_cm.__aexit__
+    assert aexit.await_count == 1
+    assert aexit.await_args.args[0] is PipelineBackpressureError
+    # The event + raw payload were re-recorded AFTER the unwind, in a fresh
+    # transaction, BEFORE the 429 was raised.
+    record.assert_awaited_once()
+    kwargs = record.await_args.kwargs
+    assert kwargs["trigger_id"] == _TRIGGER_ID
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["trigger_type"] == "webhook"
+    assert kwargs["reason"] == "queue_depth=8 limit=6"
+    assert kwargs["raw_payload"] == {"event": "test"}
+    assert kwargs["raw_body"].startswith(b'{"event"')
+    assert len(kwargs["payload_hash"]) == 64
+
+
 def test_receive_webhook_invalid_config_json_returns_400(client: TestClient) -> None:
     """A non-dict config_json (schema drift / manual edit) must 400 at the
     route, not AttributeError -> 500 on external ingress."""

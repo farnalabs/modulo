@@ -36,7 +36,7 @@ def test_site_a_evaltype_full_universe():
 
 
 def test_site_b_evals_regexes_accept_guardrail():
-    import modulo.api.routes.evals as evals
+    from modulo.api.routes import evals
 
     create_pattern = evals.CreateEvalRequest.model_fields["eval_type"].metadata[0].pattern
     update_pattern = evals.UpdateEvalRequest.model_fields["eval_type"].metadata[0].pattern
@@ -53,7 +53,7 @@ def test_site_b_from_run_regex_excludes_guardrail():
     # guardrail deny-rule (regex pattern / json_schema) cannot be derived from a
     # sample. A stub config would be silently-inert (fail-open) for a
     # data-safety control, so the API edge rejects it outright.
-    import modulo.api.routes.evals as evals
+    from modulo.api.routes import evals
 
     from_run_pattern = evals.CreateEvalFromRunRequest.model_fields["eval_type"].metadata[0].pattern
     assert not re.match(f"^{from_run_pattern}$", "guardrail"), from_run_pattern

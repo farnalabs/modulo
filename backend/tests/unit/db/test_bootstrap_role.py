@@ -38,6 +38,8 @@ from modulo.db.bootstrap_role import (
     main,
 )
 
+_NOLOGIN_ROLE: str = "role_nologin_example"
+
 _BREAK_GLASS_COLS = ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
 
 
@@ -278,9 +280,9 @@ class TestCreateOrUpdateRole:
         assert any('CREATE ROLE "modulo_app" LOGIN NOBYPASSRLS PASSWORD' in q for q in conn.executed)
 
     async def test_alter_of_nologin_role_without_bypassrls_states_nobypassrls_explicitly(self, conn: _FakeConn) -> None:
-        conn.roles[_MIGRATE_ROLE] = True
-        await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None, bypassrls=False)
-        assert any(f'ALTER ROLE "{_MIGRATE_ROLE}" WITH NOSUPERUSER NOLOGIN NOBYPASSRLS' in q for q in conn.executed)
+        conn.roles[_NOLOGIN_ROLE] = True
+        await _create_or_update_role(conn, _NOLOGIN_ROLE, login=False, password=None, bypassrls=False)
+        assert any(f'ALTER ROLE "{_NOLOGIN_ROLE}" WITH NOSUPERUSER NOLOGIN NOBYPASSRLS' in q for q in conn.executed)
 
 
 # ---------------------------------------------------------------------------

@@ -684,4 +684,51 @@ describe('PipelineEditorView', () => {
     // no command data on the node → no read-only block either
     expect(wrapper.find('[data-testid="pipeline-editor-node-commands-readonly"]').exists()).toBe(false)
   })
+
+  it('labels a sandbox_agent node "Runner" in the node properties panel (ADR 029 vocabulary)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'sandbox_agent',
+        agent_id: 'agent-1',
+        agent_commands: [],
+        label: 'My Runner Node',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'My Runner Node', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Runner')
+  })
+
+  it('labels an agent node "Inline Prompt" in the node properties panel (ADR 029 vocabulary)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'agent',
+        agent_id: 'agent-1',
+        label: 'My Prompt Node',
+        description: '',
+        position: { x: 0, y: 0 },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'My Prompt Node', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Inline Prompt')
+  })
 })

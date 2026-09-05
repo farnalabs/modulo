@@ -137,8 +137,10 @@ class _FakePoolSession:
     """Async-session shaped fake: ``async with`` + ``begin()`` + ``execute()``.
 
     ``execute`` returns a result whose ``scalar_one_or_none`` yields
-    *pipeline_max_concurrent* (the single-pipeline reference path). The org
-    path bypasses ``execute`` entirely and calls the org-limit reader.
+    *pipeline_max_concurrent* (legacy single-value reads) and whose
+    ``scalars()`` iterates ``[pipeline_max_concurrent]`` (the FAR-604 cap-list
+    reads). The org path bypasses ``execute`` entirely and calls the org-limit
+    reader.
     """
 
     def __init__(self, pipeline_max_concurrent: int | None) -> None:
@@ -154,8 +156,34 @@ class _FakePoolSession:
         return self
 
     async def execute(self, stmt, params=None):
-        result = AsyncMock()
+        result = MagicMock()
         result.scalar_one_or_none = MagicMock(return_value=self._pipeline_max_concurrent)
+        result.scalars.return_value = iter([self._pipeline_max_concurrent])
+        return result
+
+
+class _FakeMixedCapsSession:
+    """Session fake for the multi-pipeline / org-wide cap reads (FAR-604).
+
+    ``execute().scalars()`` iterates *pipeline_caps* — the caps of every
+    pipeline row the statement scopes (filtered ids or the whole org).
+    """
+
+    def __init__(self, pipeline_caps: list[int | None]) -> None:
+        self._pipeline_caps = pipeline_caps
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args) -> bool:
+        return False
+
+    def begin(self):
+        return self
+
+    async def execute(self, stmt, params=None):
+        result = MagicMock()
+        result.scalars.return_value = iter(self._pipeline_caps)
         return result
 
 
@@ -204,17 +232,99 @@ class TestResolvePoolReference:
         assert value == 7, "a single pipeline filter must use that pipeline's max_concurrent_runs"
         mock_org.assert_not_awaited(), "the org limit must NOT be read when a single pipeline is filtered"
 
-    async def test_single_pipeline_missing_row_returns_none(self) -> None:
+    async def test_single_pipeline_missing_row_falls_back_to_org_limit(self) -> None:
         session = _FakePoolSession(pipeline_max_concurrent=None)
         factory = MagicMock(return_value=session)
         with (
             patch.object(svc, "set_rls_org", new_callable=AsyncMock),
             patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
-            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock()) as mock_org,
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=20)) as mock_org,
         ):
             value = await self._call(factory, pipeline_ids=(uuid.uuid4(),))
-        assert value is None, "a missing pipeline row must degrade to None, not raise"
-        mock_org.assert_not_awaited()
+        assert value == 20, "a missing pipeline row must fall back to the org limit, not raise"
+        mock_org.assert_awaited_once()
+
+    async def test_multi_pipeline_uniform_caps_with_lower_org_limit_return_org_limit(self) -> None:
+        # FAR-604: two pipelines capped at 7 each do NOT bind before a LOWER
+        # org limit — the org gate applies to every pipeline, so the enforced
+        # ceiling is min(shared_cap=7, org_limit=5) = 5. The old code returned
+        # the shared cap WITHOUT reading the org limit (overstated ceiling:
+        # the chart showed 7 while runs blocked at 5).
+        session = _FakePoolSession(pipeline_max_concurrent=7)
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=5)) as mock_org,
+        ):
+            value = await self._call(factory, pipeline_ids=(uuid.uuid4(), uuid.uuid4()))
+        assert value == 5, "min(shared_cap=7, org_limit=5) = 5 — the org limit is the enforced ceiling"
+        mock_org.assert_awaited_once()
+
+    async def test_multi_pipeline_uniform_caps_with_higher_org_limit_return_shared_cap(self) -> None:
+        # The mirror case: the org limit sits ABOVE the pipelines' shared cap,
+        # so the shared cap stays the enforced ceiling (min semantics — the org
+        # limit must never overstate past the caps the runs actually bind at).
+        session = _FakePoolSession(pipeline_max_concurrent=7)
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=20)) as mock_org,
+        ):
+            value = await self._call(factory, pipeline_ids=(uuid.uuid4(), uuid.uuid4()))
+        assert value == 7, "min(shared_cap=7, org_limit=20) = 7 — the shared cap is the enforced ceiling"
+        mock_org.assert_awaited_once()
+
+    async def test_multi_pipeline_mixed_caps_with_org_limit_return_the_tightest_ceiling(self) -> None:
+        session = _FakeMixedCapsSession(pipeline_caps=[5, 20])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=12)),
+        ):
+            value = await self._call(factory, pipeline_ids=(uuid.uuid4(), uuid.uuid4()))
+        assert value == 5, "min(org_limit=12, tightest cap=5) = 5 — the tightest applicable cap is the ceiling"
+
+    async def test_multi_pipeline_mixed_caps_without_org_limit_return_tightest(self) -> None:
+        session = _FakeMixedCapsSession(pipeline_caps=[5, 20])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=None)) as mock_org,
+        ):
+            value = await self._call(factory, pipeline_ids=(uuid.uuid4(), uuid.uuid4()))
+        assert value == 5, "mixed caps with no org limit must report the tightest (MIN) cap in scope"
+        mock_org.assert_awaited_once()
+
+    async def test_org_wide_without_org_limit_reports_tightest_pipeline_cap(self) -> None:
+        # FAR-604: an org-wide query with no run_concurrency_limit configured
+        # used to report None even while pipelines starved at their own caps —
+        # the ceiling was not reportable. The tightest pipeline cap is the
+        # enforced ceiling most likely to explain starvation.
+        session = _FakeMixedCapsSession(pipeline_caps=[20, 5, 20])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=None)) as mock_org,
+        ):
+            value = await self._call(factory)
+        assert value == 5, "org-wide with no org cap must fall back to the tightest pipeline cap"
+        mock_org.assert_awaited_once()
+
+    async def test_org_wide_without_org_limit_or_pipelines_returns_none(self) -> None:
+        session = _FakeMixedCapsSession(pipeline_caps=[])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=None)),
+        ):
+            value = await self._call(factory)
+        assert value is None, "no org cap and no pipelines means no cap is enforced — None is honest"
 
     async def test_org_limit_reader_failure_degrades_to_none(self) -> None:
         session = _FakePoolSession(pipeline_max_concurrent=None)
