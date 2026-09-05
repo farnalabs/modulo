@@ -25,8 +25,8 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
-import modulo.core.dispatch as dispatch
 from modulo.api.models.error import ErrorEventInput
+from modulo.core import dispatch
 
 RUN_ID = "fb4b1368-68ca-4125-8091-ca8d7c25839e"
 ORG_ID = "18348064-eca3-4aa7-be96-8f6c9123efd0"
@@ -1231,13 +1231,13 @@ class TestCallSiteConversions:
     def test_webhooks_module_uses_dispatch_run(self) -> None:
         from fastapi import BackgroundTasks
 
-        import modulo.api.routes.webhooks as webhooks
+        from modulo.api.routes import webhooks
 
         assert webhooks.dispatch_run is dispatch.dispatch_run
         assert webhooks.BackgroundTasks is BackgroundTasks
 
     def test_runs_manual_route_uses_dispatch_run(self) -> None:
-        import modulo.api.routes.runs as runs
+        from modulo.api.routes import runs
 
         assert runs.dispatch_run is dispatch.dispatch_run
 
