@@ -27,7 +27,8 @@ _MIGRATION_PATH = (
 def _load_migration() -> types.ModuleType:
     assert _MIGRATION_PATH.exists(), f"Migration file missing: {_MIGRATION_PATH}"
     spec = importlib.util.spec_from_file_location(f"migration_{_MIGRATION_NAME}", _MIGRATION_PATH)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
