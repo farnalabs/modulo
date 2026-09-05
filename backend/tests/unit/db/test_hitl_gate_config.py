@@ -10,6 +10,8 @@ edge of the pipeline carried no ``hitl_gate_config``).
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+from sqlalchemy.exc import MultipleResultsFound
+
 from modulo.db.crud.hitl_gate_config import (
     MSG_HUMAN_ONLY_DENY,
     MSG_HUMAN_ONLY_UNRESOLVED,
@@ -215,6 +217,46 @@ class TestResolveFallbacks:
         assert str(_TARGET_ID) in bind_values
         assert str(_PIPELINE_ID) in bind_values
         assert str(_ORG_ID) in bind_values
+        # Gated edges are always normal edges; uq_pipeline_edges_path includes
+        # edge_type, so the fallback must filter to normal edges or two rows
+        # match (normal + reject sharing one topology) and raise.
+        assert "normal" in bind_values
+
+    async def test_duplicate_topology_pair_resolves_normal_edge_config(self) -> None:
+        """A normal AND a reject edge may share one (source, target) pair
+        (uq_pipeline_edges_path is unique per edge_type). The fallback must
+        resolve the normal edge's config instead of raising
+        MultipleResultsFound on the two-row match."""
+        normal_edge = MagicMock()
+        normal_edge.hitl_gate_config = {"human_only": True}
+        session = AsyncMock()
+
+        async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            text = str(stmt)
+            if "pipeline_snapshots" in text:
+                result.scalar_one_or_none.return_value = None
+            elif "pipeline_edges" in text:
+                bind_values = [str(value) for value in stmt.compile().params.values()]
+                if "normal" in bind_values:
+                    # edge_type filter present → only the normal edge matches.
+                    result.scalar_one_or_none.return_value = normal_edge
+                else:
+                    # No filter → both rows match → the real Result raises.
+                    result.scalar_one_or_none.side_effect = MultipleResultsFound
+            elif "pipelines" in text:
+                result.scalar_one_or_none.return_value = None
+            else:
+                raise AssertionError(f"Unexpected query in resolver: {text}")
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        )
+
+        assert result == {"human_only": True}
 
     async def test_returns_none_when_run_missing(self) -> None:
         session = AsyncMock()

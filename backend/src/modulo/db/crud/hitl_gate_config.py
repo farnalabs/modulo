@@ -28,7 +28,10 @@ add explicit ``organisation_id`` filters as defence in depth):
    node-level gates have no edge-level config in the persisted definition.
 2. FALLBACK — snapshot missing or legacy (gate config absent from the
    snapshot graph): parse source/target out of the gate id and look the edge
-   up in the LIVE ``pipeline_edges`` table. Node ids are UUIDs (hyphens, no
+   up in the LIVE ``pipeline_edges`` table, filtered to normal edges — a
+   reject/conditional edge may share the gate's (source, target) topology
+   (``uq_pipeline_edges_path`` includes ``edge_type``) and only normal edges
+   carry gate config. Node ids are UUIDs (hyphens, no
    underscores), so the gate id splits from the RIGHT into exactly two
    segments; live edge node-id columns are UUIDs, so non-UUID node ids cannot
    match and the fallback yields None. If the live edge has no config either,
@@ -174,6 +177,11 @@ async def _config_from_live_edges(
                 PipelineEdge.organisation_id == org_id,
                 PipelineEdge.source_node_id == source_uuid,
                 PipelineEdge.target_node_id == target_uuid,
+                # Gated edges are always normal edges, and uq_pipeline_edges_path
+                # includes edge_type — a reject/conditional edge may share the
+                # same (source, target) pair, so without this filter two rows
+                # match and scalar_one_or_none raises MultipleResultsFound.
+                PipelineEdge.edge_type == "normal",
             )
         )
     ).scalar_one_or_none()
