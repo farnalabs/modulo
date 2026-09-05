@@ -76,18 +76,15 @@ jobs:
           SHA: ${{ steps.pr-details.outputs.head_sha }}
           BRANCH: ${{ steps.pr-details.outputs.head_branch }}
         run: |
-          PAYLOAD=$(cat << ENDJSON
-          {
-            "action": "check_run",
-            "repository": {"full_name": "${REPO}"},
-            "pull_request": {
-              "number": ${PR_NUMBER},
-              "head": {"sha": "${SHA}", "ref": "${BRANCH}"}
-            }
-          }
-          ENDJSON
-          )
-          BODY=$(echo "${PAYLOAD}")
+          # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
+          # name (legal in git refnames, e.g. containing '"') cannot inject
+          # keys or break the payload. See FAR-568.
+          BODY=$(jq -n \
+            --arg repo "${REPO}" \
+            --argjson prNumber "${PR_NUMBER}" \
+            --arg sha "${SHA}" \
+            --arg ref "${BRANCH}" \
+            '{action: "check_run", repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
           RESPONSE_FILE=$(mktemp)
           trap 'rm -f "${RESPONSE_FILE}"' EXIT
           ACCEPTED=false
