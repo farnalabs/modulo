@@ -1,10 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { createApp, h } from 'vue'
+import type { Router } from 'vue-router'
 import { createErrorTracker, getErrorTracker } from '../lib/error-tracking'
 import { BuiltinMonitorBackend } from '../monitor/backends/builtin'
-import { BreadcrumbCollector } from '../lib/error-tracking/breadcrumbs'
+import { BreadcrumbCollector, getCollector } from '../lib/error-tracking/breadcrumbs'
 import { usePlanStore } from '../stores/planStore'
+
+/** Route-change breadcrumb data captured by the tracker's collector. */
+function trackerBreadcrumbRouteChanges(): Array<Record<string, unknown>> {
+  const collector = getCollector()
+  return (
+    collector
+      ?.getBreadcrumbs()
+      .filter((c) => c.type === 'route_change')
+      .map((c) => c.data) ?? []
+  )
+}
 
 const mockFetch = vi.fn()
 
@@ -414,5 +426,134 @@ describe('Context enrichment', () => {
     expect(event.context_json.tier).toBe('team')
 
     tracker.dispose()
+  })
+})
+
+describe('ErrorTracker advanced behaviour', () => {
+  afterEach(() => {
+    const tracker = getErrorTracker()
+    if (tracker) tracker.dispose()
+  })
+
+  function makeBackendSpy() {
+    const backend = new BuiltinMonitorBackend()
+    return {
+      backend,
+      captureError: vi.spyOn(backend, 'captureError'),
+      captureMessage: vi.spyOn(backend, 'captureMessage'),
+      setUser: vi.spyOn(backend, 'setUser'),
+      setTags: vi.spyOn(backend, 'setTags'),
+      dispose: vi.spyOn(backend, 'dispose'),
+    }
+  }
+
+  it('connectRouter records route changes as breadcrumbs', () => {
+    const tracker = createErrorTracker()
+    // Holder object defeats TS narrowing (the hook is assigned inside the
+    // afterEach mock, which control-flow analysis cannot see).
+    const hookRef: { fn: ((to: unknown, from: unknown) => void) | null } = { fn: null }
+    let unsubCalled = false
+    const fakeRouter = {
+      afterEach: vi.fn((cb: (to: unknown, from: unknown) => void) => {
+        hookRef.fn = cb
+        return () => {
+          unsubCalled = true
+        }
+      }),
+    } as unknown as Router
+
+    tracker.connectRouter(fakeRouter)
+    expect(fakeRouter.afterEach).toHaveBeenCalledTimes(1)
+
+    hookRef.fn?.({ name: 'runs' }, { name: 'dashboard' })
+    const crumbs = trackerBreadcrumbRouteChanges()
+    expect(crumbs.at(-1)).toEqual({ from: 'dashboard', to: 'runs' })
+
+    // re-connecting unsubscribes the previous hook
+    tracker.connectRouter(fakeRouter)
+    expect(unsubCalled).toBe(true)
+  })
+
+  it('connectRouter tolerates non-string route names', () => {
+    const tracker = createErrorTracker()
+    const hookRef: { fn: ((to: unknown, from: unknown) => void) | null } = { fn: null }
+    const fakeRouter = {
+      afterEach: vi.fn((cb: (to: unknown, from: unknown) => void) => {
+        hookRef.fn = cb
+        return () => undefined
+      }),
+    } as unknown as Router
+
+    tracker.connectRouter(fakeRouter)
+    hookRef.fn?.({}, undefined)
+
+    const crumbs = trackerBreadcrumbRouteChanges()
+    expect(crumbs.at(-1)).toEqual({ from: '', to: '' })
+  })
+
+  it('reloadBackends disposes the old backends and re-applies user + tags', () => {
+    const first = makeBackendSpy()
+    const tracker = createErrorTracker({ monitorBackends: [first.backend] })
+    tracker.setUser({ id: 'u-1', name: 'Duncan' })
+    tracker.setTags({ tier: 'team' })
+
+    const second = makeBackendSpy()
+    tracker.reloadBackends([second.backend])
+
+    expect(first.dispose).toHaveBeenCalledTimes(1)
+    expect(second.setUser).toHaveBeenCalledWith({ id: 'u-1', name: 'Duncan' })
+    expect(second.setTags).toHaveBeenCalledWith({ tier: 'team' })
+
+    tracker.captureError(new Error('after reload'))
+    expect(second.captureError).toHaveBeenCalledTimes(1)
+    expect(first.captureError).not.toHaveBeenCalled()
+  })
+
+  it('getContextState exposes the user and tags it was given', () => {
+    const tracker = createErrorTracker()
+    tracker.setUser({ id: 'u-2', email: 'd@modulo.run' })
+    tracker.setTags({ env: 'test' })
+
+    const state = tracker.getContextState()
+    expect(state.user).toEqual({ id: 'u-2', email: 'd@modulo.run' })
+    expect(state.tags).toEqual({ env: 'test' })
+  })
+
+  it('the vue plugin forwards warnings to captureMessage and preserves the original handler', () => {
+    const tracker = createErrorTracker()
+    const captureMessage = vi.spyOn(tracker, 'captureMessage')
+    const app = createApp({ render() { return h('div', 'test') } })
+    const origWarn = vi.fn()
+    app.config.warnHandler = origWarn
+
+    app.use(tracker.vuePlugin)
+    const wrapped = app.config.warnHandler!
+    wrapped('suspicious warn', null, 'trace text')
+
+    expect(captureMessage).toHaveBeenCalledWith('suspicious warn', 'warning')
+    expect(origWarn).toHaveBeenCalledWith('suspicious warn', null, 'trace text')
+  })
+
+  it('captureError is a no-op when tracking is disabled', () => {
+    ;(window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = true
+    const spy = makeBackendSpy()
+    const tracker = createErrorTracker({ monitorBackends: [spy.backend] })
+
+    tracker.captureError(new Error('ignored'))
+    tracker.captureMessage('also ignored')
+
+    expect(spy.captureError).not.toHaveBeenCalled()
+    expect(spy.captureMessage).not.toHaveBeenCalled()
+  })
+
+  it('skips events whose error has no usable message', () => {
+    const spy = makeBackendSpy()
+    const tracker = createErrorTracker({ monitorBackends: [spy.backend] })
+    const bad = new Error('will be clobbered')
+    Object.defineProperty(bad, 'message', { value: 42 })
+
+    tracker.captureError(bad)
+
+    expect(spy.captureError).not.toHaveBeenCalled()
   })
 })
