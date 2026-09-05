@@ -94,16 +94,20 @@ describe('SettingsErrorForwardersView', () => {
     wrapper.unmount()
   })
 
-  it('surfaces the load failure inline (retry button hidden — repo-wide ErrorAlert bug, see report)', async () => {
+  it('surfaces the load failure inline with a Retry button (recovery path, FAR-608 fix)', async () => {
     mockGetError = { detail: 'forwarders_disabled' }
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.text()).toContain('forwarders_disabled')
-    // BUG CHARACTERISATION (repo-wide, mirrors ParameterSchemasView.spec.ts):
-    // the ErrorAlert retry button is hidden — `:on-retry="..."` does not
-    // reach the child's `onRetry` prop, so `v-if="onRetry && ..."` stays
-    // false. No recovery path is offered from this screen.
-    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
+    // FAR-608 fix: the ErrorAlert retry button now renders (`:on-retry="..."`
+    // reaches the child's `onRetry` prop), so a recovery path IS offered.
+    const retry = wrapper.findAll('button').find((b) => b.text() === 'Retry')
+    expect(retry).toBeTruthy()
+    // Clicking Retry re-invokes the fetch and clears the error.
+    ;(api.GET as ReturnType<typeof vi.fn>).mockResolvedValueOnce(apiResult({ forwarders: [] }))
+    await retry!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('forwarders_disabled')
     wrapper.unmount()
   })
 
