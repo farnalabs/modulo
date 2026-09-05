@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 import uuid
 from types import SimpleNamespace
@@ -1591,6 +1592,141 @@ class TestRunExecutorWithWatchdog:
                 await task
         # Worker shutdown is NOT a watchdog stall — the run is never terminal-failed.
         fail.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_zombie_watchdog_bound_caps_worker_shutdown_reraise(self, caplog: pytest.LogCaptureFixture) -> None:
+        """FAR-603: a zombie watchdog must not delay the unclassified re-raise.
+
+        On worker shutdown the watchdog has no pending terminal write — its
+        exec target is already cancelled, so at grace expiry it stands down
+        without failing the run — yet it may still be sleeping out its setup
+        grace. The cancellation path must re-raise within
+        ``_WATCHDOG_AWAIT_BOUND_SECONDS`` (logging loudly) instead of waiting
+        out the watchdog's full remaining grace. The watchdog here never
+        settles at all, so an unbounded wait would hang forever and trip the
+        ``wait_for`` guard.
+        """
+        executor = MagicMock()
+        started = asyncio.Event()
+
+        async def _hang() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        async def _zombie_watchdog(*_a: Any, **_kw: Any) -> None:
+            await asyncio.Event().wait()
+
+        bound = pe._WATCHDOG_AWAIT_BOUND_SECONDS
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch.object(pe, "zombie_watchdog", _zombie_watchdog),
+            caplog.at_level(logging.WARNING),
+        ):
+            task = asyncio.create_task(
+                pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                    engine,
+                    run_id=str(uuid.uuid4()),
+                    org_id=str(uuid.uuid4()),
+                    executor=executor,
+                    job=None,
+                    execute_fn=_hang,
+                )
+            )
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=bound + 2)
+        # Worker shutdown is NOT a watchdog stall — the run is never terminal-failed.
+        fail.assert_not_awaited()
+        assert "watchdog_await_bound_exceeded" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_classified_stall_not_abandoned_at_watchdog_await_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-603: the bound must never abandon a classified watchdog write.
+
+        A watchdog whose cause is classified (``stall_requested`` set — which
+        precedes its ``fail_run_terminal``) keeps being awaited past the bound
+        so its terminal write always commits; only the unclassified zombie
+        wait is capped. The bound is zeroed so the bound expiry is instant,
+        making the classified continuation deterministic without wall-clock
+        sleeps.
+        """
+        monkeypatch.setattr(pe, "_WATCHDOG_AWAIT_BOUND_SECONDS", 0.0)
+        stall = asyncio.Event()
+        release_write = asyncio.Event()
+        committed: list[str] = []
+
+        async def _stalling_watchdog() -> None:
+            # zombie_watchdog's ordering: the stall signal precedes the write.
+            stall.set()
+            await release_write.wait()
+            committed.append("executor_stalled")
+
+        watchdog_task = asyncio.create_task(_stalling_watchdog())
+        node_deadline_task = asyncio.create_task(asyncio.sleep(0))
+        await node_deadline_task
+        outcome = asyncio.create_task(
+            pe._resolve_cancel_outcome(
+                watchdog_task=watchdog_task,
+                node_deadline_task=node_deadline_task,
+                stall_requested=stall,
+                health_failed=asyncio.Event(),
+                superseded=asyncio.Event(),
+                aeng=MagicMock(),  # type: ignore[arg-type]
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                claim_token=None,
+                rid=uuid.uuid4(),
+            )
+        )
+        # A zero bound expires within one event-loop tick; give the outcome
+        # task that tick, then prove it is still awaiting the classified write.
+        await asyncio.sleep(0.05)
+        assert not outcome.done()
+        release_write.set()
+        await asyncio.wait_for(outcome, timeout=5)
+        assert watchdog_task.done()
+        assert committed == ["executor_stalled"]
+
+    @pytest.mark.asyncio
+    async def test_unclassified_reraises_immediately_when_watchdog_settles(self) -> None:
+        """FAR-603: the common case (watchdog already settled) re-raises at once.
+
+        The bound only caps the zombie case — a settled watchdog must not add
+        any observable delay to the unclassified re-raise.
+        """
+        watchdog_task = asyncio.create_task(asyncio.sleep(0))
+        node_deadline_task = asyncio.create_task(asyncio.sleep(0))
+        await watchdog_task
+        await node_deadline_task
+        # A 1s wait_for guard: an immediate re-raise propagates the
+        # CancelledError; a bound-scale (5s) delay would surface as
+        # TimeoutError and fail the test.
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(
+                pe._resolve_cancel_outcome(
+                    watchdog_task=watchdog_task,
+                    node_deadline_task=node_deadline_task,
+                    stall_requested=asyncio.Event(),
+                    health_failed=asyncio.Event(),
+                    superseded=asyncio.Event(),
+                    aeng=MagicMock(),  # type: ignore[arg-type]
+                    run_id=str(uuid.uuid4()),
+                    org_id=str(uuid.uuid4()),
+                    claim_token=None,
+                    rid=uuid.uuid4(),
+                ),
+                timeout=1,
+            )
 
     @pytest.mark.asyncio
     async def test_heartbeat_loss_cancellation_is_classified_not_propagated(self) -> None:
