@@ -14651,6 +14651,10 @@ export interface components {
             cost_breakdown?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Warnings */
+            warnings?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Child Runs Cost Usd
              * @default 0.000000

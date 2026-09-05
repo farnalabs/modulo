@@ -1073,6 +1073,7 @@ export default {
       "end": "End",
       "duration": "Duration",
       "cost": "Cost",
+      "warnings": "Warnings",
       "elapsed": "(elapsed)",
       "cost_includes_child_runs": "(+child)",
       "cost_includes_child_runs_count": "(+{count} child) | (+{count} children)",
@@ -1403,6 +1404,10 @@ export default {
       "reported": "reported",
       "not_reported": "not reported",
       "eval_error_badge": "eval error",
+      "no_model_cost_reported_basis": "No model cost reported by the agent",
+      "warnings": "1 warning | {count} warnings",
+      "warning_missing_self_report": "No model cost was reported by the agent for this run.",
+      "warning_generic": "Run warning.",
       "sum_of_components": "Sum of components",
       "breakdown_sum_not_total": "Component sums can fall short of the total by design — sandbox infra is org-level, not per-node.",
       "amounts_below_micro_note": "Amounts below $0.000001 display as $0.000000; the basis is shown.",
@@ -2893,6 +2898,10 @@ export default {
     "Sparkline": {
       "no_data": "No data",
       "chart_series": "Chart with {count} data points: {values}"
+    },
+    "RunWarningsBadge": {
+      "one_warning": "1 warning",
+      "n_warnings": "{count} warnings"
     },
     "ViewToggle": {
       "saved_views": "Saved Views",

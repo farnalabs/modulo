@@ -22,6 +22,7 @@ export interface RunListItem extends Record<string, unknown> {
   trigger_actor?: string | null
   heartbeat_at?: string | null
   capacity?: { active_runs: number; concurrency_limit: number | null; waiting: boolean } | null
+  warnings_count?: number
 }
 
 export interface RunListResponse {
