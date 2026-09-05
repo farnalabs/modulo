@@ -738,12 +738,15 @@ def test_single_migration_head() -> None:
     # 0174_per_org_last_admin_guard (FAR-539 per-org last-admin guard) chains off 0173.
     chaining_off_0173 = [p for p in revisions if parents[p] == "0173_per_org_deactivation"]
     assert [_basename(p) for p in chaining_off_0173] == ["0174_per_org_last_admin_guard.py"]
-    # 0176_trigger_event_validation_results (FAR-604, this PR) chains off 0174.
+    # 0176_trigger_event_validation_results (FAR-604, on main) chains off 0174.
     chaining_off_0174 = [p for p in revisions if parents[p] == "0174_per_org_last_admin_guard"]
     assert [_basename(p) for p in chaining_off_0174] == ["0176_trigger_event_validation_results.py"]
-    # Nothing chains off 0176 -> it is the single head.
+    # 0177_invitations (FAR-461 in-app invite tokens) chains off 0176_trigger_event_validation_results.
     chaining_off_0176 = [p for p in revisions if parents[p] == "0176_trigger_event_validation_results"]
-    assert chaining_off_0176 == []
+    assert [_basename(p) for p in chaining_off_0176] == ["0177_invitations.py"]
+    # Nothing chains off 0177_invitations -> it is the single head.
+    chaining_off_0177 = [p for p in revisions if parents[p] == "0177_invitations"]
+    assert chaining_off_0177 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

@@ -48,6 +48,18 @@ routes:
         deprecated: false
         exact: true
 
+    /accept-invite:
+        name: accept-invite
+        breadcrumb: Accept Invitation
+        parent:
+        product_map: [feat-auth]
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+        exact: true
+
     /onboarding:
         name: onboarding
         breadcrumb: Onboarding
@@ -3012,6 +3024,28 @@ features:
             - "[x] The login response and /me (both /api/v1/auth/me and /api/v1/viewmodel/me) carry must_change_password so the frontend can force the change flow on fresh logins and restored sessions"
             - "[x] When must_change_password is true, App.vue renders ONLY the forced change-password view (all navigation blocked by construction); PUT /api/v1/me/password clears the flag in the same transaction as the hash swap and refresh-token families are blacklisted"
             - "[x] Admin create-user shows the shared credential dialog (email + password + copy) after success and offers a client-side strong-password generator meeting the form's displayed rules (8+ chars, upper+lower+digit)"
+            # In-app invitation enrollment (FAR-461).
+
+            # Creation & admin management
+            - "[x] An admin mints an invitation scoped to their own organisation with email, display name and an org_role bounded to admin/operator/runner/viewer — any other role is rejected with 422"
+            - "[x] Inviting an email that is already a member of the organisation is rejected with 409; a second LIVE (un-consumed / un-revoked / un-expired) invitation for the same email in the same organisation is also rejected with 409"
+            - "[x] The one-time plaintext token is returned exactly once in the create response and is never persisted — only its SHA-256 hash is stored; the invite URL is anchored to settings.modulo_public_url, not the request Host header"
+            - "[x] An invitation expires after settings.invitation_expiry_hours (default 72h, bounded 1-8760); consumed, revoked and expired invitations are never consumable"
+            - "[x] Pending-invitation listing and revocation are org-scoped — an admin only sees and can only revoke invitations owned by their own organisation"
+
+            # Accept-invite (unauthenticated)
+            - "[x] accept-invite is unauthenticated by design — the invitation token IS the credential; IP-based rate limiting fails CLOSED, recording a failure on every denial path and clearing accumulated failures (record_success) once enrollment commits"
+            - "[x] Token lookup hashes the presented token (SHA-256), filters to still-live rows and row-locks; consumption is single-use compare-and-swap — a raced consumer matches zero rows and its whole transaction aborts, so an invitation can never enroll twice"
+            - "[x] RLS context is set to the invitation's organisation before any membership write; the invitations table itself deliberately carries no RLS policy (pre-auth lookup)"
+
+            # Account resolution
+            - "[x] No existing account: a local account is created with the chosen password plus the invited membership"
+            - "[x] Non-local (SSO/SCIM) account: rejected with 409 — a local password is never set for a federated account"
+            - "[x] Local account without a password: adopts the chosen password and gains the invited membership"
+            - "[x] Local account with a password: the existing password is left untouched; a membership is added only when absent, and the response carries existing_account=true so the UI directs the user to sign in"
+
+            # Audit
+            - "[x] Audit events invite_created / invite_revoked (admin paths) and invite_consumed (accept path) record the invitation lifecycle; consume audit is fail-open — an audit failure never fails enrollment"
     feat-analytics:
         description: Reporting and analytics over runs, costs, and facts
     feat-audit:

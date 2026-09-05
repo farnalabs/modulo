@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     # SSO defaults
     modulo_sso_default_role: str = Field("runner")
 
+    # In-app invitations (FAR-461): how long an invite token stays consumable.
+    invitation_expiry_hours: int = Field(default=72, ge=1, le=8760)
+
     # ------------------------------------------------------------------
     # Break-glass admin recovery (deliverable B) — operator CLI + watchdog
     # ------------------------------------------------------------------
