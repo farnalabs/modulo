@@ -1727,7 +1727,7 @@ async def stale_run_recovery_sweep(
 _RESUME_CLAIM_UPDATE_SQL = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
     "WHERE id=:rid AND organisation_id=:oid "
-    "AND (status IN ('awaiting_human', 'claimed') "
+    "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
     "RETURNING id"
@@ -1736,7 +1736,7 @@ _RESUME_CLAIM_UPDATE_SQL = text(
 _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok "
     "WHERE id=:rid AND organisation_id=:oid "
-    "AND (status IN ('awaiting_human', 'claimed') "
+    "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
     "RETURNING id"
@@ -1753,8 +1753,12 @@ def build_resume_claim_update(
 
     Claimable rows (plan F6a):
 
-      * ``status IN ('awaiting_human', 'claimed')`` — the gate decision has
-        already been committed by the caller, the run is waiting to resume.
+      * ``status IN ('awaiting_human', 'claimed', 'hitl_parked')`` — the gate
+        decision has already been committed by the caller, the run is waiting to
+        resume. ``hitl_parked`` is also claimable: the park-sweep vs decide race
+        (decision tx commits while the park UPDATE is in flight) can leave a run
+        parked with a committed decision, and the resume claim is its self-heal
+        (``status='running'`` is the correct resume transition out of parked).
       * ``status = 'running'`` with a stale heartbeat — a mid-resume crash left
         the run running but the worker died.
 

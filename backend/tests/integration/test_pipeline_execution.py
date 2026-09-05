@@ -392,3 +392,44 @@ async def test_claim_resume_run_async_real_pg(
     assert row is not None
     assert row[0] == "running"
     assert row[1] == token
+
+
+async def test_claim_resume_run_async_parked_real_pg(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """A ``hitl_parked`` run with a committed gate decision is claimable by the
+    resume claim — the park-sweep vs decide race self-heal (FAR-604 F1).
+
+    The run must transition out of the parked state into ``running`` so the
+    stranded parked run resumes instead of being re-enqueued on every reconcile
+    tick. Before this fix the claimable IN-list only matched
+    ``('awaiting_human', 'claimed')`` and the resume claim matched ZERO rows.
+    """
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="hitl_parked",
+        claim_token="tok-parked",
+    )
+
+    token = await pe.claim_resume_run_async(app_engine, str(run_id), str(test_org))
+    assert token is not None, "resume claim must succeed for a hitl_parked run (F1 self-heal)"
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running", "parked run must resume into running"
