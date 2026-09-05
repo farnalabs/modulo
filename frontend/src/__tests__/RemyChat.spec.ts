@@ -371,23 +371,23 @@ describe('RemyChat slash commands', () => {
     expect((wrapper.find('.remy-input').element as HTMLTextAreaElement).value).toBe('')
   })
 
-  it('only ever executes /rename without an argument (triggerRename) — typed arguments cannot reach the command', async () => {
-    // BUG NOTE (FAR-578 report): the slash menu only opens while the input has
-    // no spaces (onInput), so a command with arguments (e.g. "/rename New
-    // Name") closes the menu and Enter routes the text to handleSend as a
-    // chat message instead of the slash action. executeSlashCommand always
-    // sees the bare "/rename" and falls back to triggerRename.
+  it('executes /rename with typed arguments on Enter instead of sending them as a chat message', async () => {
+    // The slash menu stays open while arguments are typed, and Enter routes
+    // the full input to the matching command so "/rename New Name" renames
+    // the session (FAR-606) rather than going to sendMessage.
     const store = useRemyStore()
     store.activeSessionId = 'session-1'
-    const renameSpy = vi.spyOn(store, 'renameSession')
+    const renameSpy = vi.spyOn(store, 'renameSession').mockResolvedValue(true as never)
     const sendSpy = vi.spyOn(store, 'sendMessage').mockResolvedValue(undefined as never)
     const wrapper = mountChat(false)
     await wrapper.find('.remy-input').setValue('/rename New Name')
     await wrapper.find('.remy-input').trigger('input')
-    expect(wrapper.find('.remy-slash-menu').exists()).toBe(false)
+    expect(wrapper.find('.remy-slash-menu').exists()).toBe(true)
+    expect(wrapper.find('.remy-slash-command').text()).toBe('/rename')
     await wrapper.find('.remy-input').trigger('keydown', { key: 'Enter' })
-    expect(renameSpy).not.toHaveBeenCalled()
-    expect(sendSpy).toHaveBeenCalledWith('/rename New Name')
+    expect(renameSpy).toHaveBeenCalledWith('session-1', 'New Name')
+    expect(sendSpy).not.toHaveBeenCalled()
+    expect((wrapper.find('.remy-input').element as HTMLTextAreaElement).value).toBe('')
   })
 
   it('runs /rename without a name and triggers the panel rename UI', async () => {

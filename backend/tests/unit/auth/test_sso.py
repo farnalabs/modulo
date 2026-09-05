@@ -7,8 +7,8 @@ from collections.abc import Generator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import defusedxml.ElementTree as ElementTree
 import pytest
+from defusedxml import ElementTree
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession

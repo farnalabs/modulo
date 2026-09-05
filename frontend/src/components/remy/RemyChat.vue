@@ -402,19 +402,30 @@ const showDeleteConfirm = ref(false)
 const filteredSlashCommands = computed(() => {
   const text = inputText.value
   if (!text.startsWith('/')) return []
-  const partial = text.slice(1).toLowerCase()
+  // Match on the command token only, so typed arguments ("/rename Foo")
+  // keep the matching command visible in the menu.
+  const partial = text.slice(1).split(' ')[0].toLowerCase()
   if (!partial) return slashCommands
   return slashCommands.filter(c => c.command.slice(1).toLowerCase().startsWith(partial))
 })
 
 function onInput() {
   resizeInput()
-  if (inputText.value.startsWith('/') && !inputText.value.includes(' ')) {
+  if (inputText.value.startsWith('/')) {
     showSlashMenu.value = true
     slashHighlightIdx.value = 0
   } else {
     showSlashMenu.value = false
   }
+}
+
+// Returns the slash command when the full input is that command plus
+// arguments (e.g. "/rename New Name"), null for bare/partial commands.
+function slashCommandWithArgs(text: string): SlashCommand | null {
+  if (!text.startsWith('/')) return null
+  const name = text.split(' ')[0]
+  const cmd = slashCommands.find(c => c.command === name)
+  return cmd && text.length > cmd.command.length ? cmd : null
 }
 
 function executeSlashCommand(cmd: SlashCommand) {
@@ -437,6 +448,13 @@ function onInputKeydown(e: KeyboardEvent) {
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
+      // A command with typed arguments is complete — execute it with the
+      // full input so commands like "/rename Foo" receive their arguments.
+      const withArgs = slashCommandWithArgs(inputText.value)
+      if (withArgs) {
+        executeSlashCommand(withArgs)
+        return
+      }
       const cmd = filteredSlashCommands.value[slashHighlightIdx.value]
       if (cmd.command === '/exit' || cmd.command === '/delete') {
         executeSlashCommand(cmd)

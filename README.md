@@ -152,7 +152,7 @@ covers pipeline graph and node configuration.
 | API | Python 3.12, FastAPI, SQLAlchemy, Alembic |
 | Agent orchestration | LangGraph and provider-specific LangChain packages |
 | Web application | Vue 3, TypeScript, Pinia, Vite |
-| Data services | PostgreSQL 16 and Redis 7 |
+| Data services | PostgreSQL 16 and Redis 8 |
 | Local deployment | Docker Compose |
 | Quality tooling | pytest, Vitest, Ruff, mypy, ESLint, Semgrep, Bandit |
 
@@ -176,8 +176,8 @@ pnpm run test:unit
 The repository also contains integration, multi-database, browser, security,
 and container suites. Some require local services or deployment credentials
 and therefore do not run on every pull request. See
-[docs/definition-of-done.md](docs/definition-of-done.md) §1 for the current
-test suite inventory and prerequisites.
+[CONTRIBUTING.md](CONTRIBUTING.md) for the current test suite inventory and
+prerequisites.
 
 ## Contributing
 

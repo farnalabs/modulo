@@ -9,7 +9,7 @@ load testing tool. Scripts live in `tests/performance/` and target the Modulo AP
 ## Prerequisites
 
 - [k6](https://k6.io/docs/getting-started/installation/) installed locally (v0.49+)
-- The Modulo backend (and its dependencies: Postgres 16, Redis 7) is running
+- The Modulo backend (and its dependencies: Postgres 16, Redis 8) is running
 - Test user credentials exist in the target environment:
   - `admin@modulo.test` / `test-password-123`
   - `user-one@modulo.test` / `test-password-123`

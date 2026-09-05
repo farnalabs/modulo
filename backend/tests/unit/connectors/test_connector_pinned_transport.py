@@ -22,7 +22,6 @@ from collections.abc import Callable
 
 import pytest
 
-import modulo.core.ssrf as ssrf
 from modulo.connectors.asana import AsanaConnector
 from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
 from modulo.connectors.azure_pipelines import AzurePipelinesConnector
@@ -67,6 +66,7 @@ from modulo.connectors.ticket_tracker.trello import TrelloTicketTracker
 from modulo.connectors.trello import TrelloConnector
 from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
+from modulo.core import ssrf
 
 # Resolver flip: first validation resolves PUBLIC (accepted), any later lookup
 # answers with the cloud-metadata address (what an attacker's rebinding DNS

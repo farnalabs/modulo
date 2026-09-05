@@ -213,7 +213,8 @@ function emptyForm(): SsoFormState {
 const { loading, error, data: providers, load: loadProviders } = useDataFetch<SsoProviderResponse[]>(
   async () => {
     const resp = await api.GET('/api/v1/admin/sso/providers')
-    return { data: (Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? []) }
+    if (resp.error) return { data: [], error: resp.error }
+    return { data: Array.isArray(resp.data) ? resp.data : (resp.data as any)?.items ?? [] }
   },
   { initialValue: [] as SsoProviderResponse[] }
 )
@@ -347,8 +348,8 @@ async function createProvider() {
     if (err) {
       formError.value = formatError(err)
     } else if (data) {
-      providers.value.push(data)
       closeForm()
+      loadProviders()
     }
   } catch (e: unknown) {
     formError.value = formatError(e)
@@ -373,9 +374,8 @@ async function updateProvider() {
     if (err) {
       formError.value = formatError(err)
     } else if (data) {
-      const idx = providers.value.findIndex(p => p.id === editProviderId.value)
-      if (idx >= 0) providers.value[idx] = data
       closeEditForm()
+      loadProviders()
     }
   } catch (e: unknown) {
     formError.value = formatError(e)
@@ -393,8 +393,7 @@ async function toggleProvider(provider: SsoProviderResponse) {
     if (err) {
       error.value = `Toggle failed: ${formatError(err)}`
     } else if (data) {
-      const idx = providers.value.findIndex(p => p.id === provider.id)
-      if (idx >= 0) providers.value[idx] = data
+      loadProviders()
     }
   } catch (e: unknown) {
     error.value = `Toggle failed: ${formatApiError(e)}`

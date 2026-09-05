@@ -31,8 +31,9 @@ _HEALTH_SETTINGS = Settings(
 )
 
 #: Every ``_check_*`` probe the readiness endpoint runs, keyed by the name the
-#: feature file uses. ``stale_run_recovery`` and ``break_glass`` are advisory,
-#: but the probes are still patched so no real dependency is touched.
+#: feature file uses. ``stale_run_recovery``, ``slot_reconciliation`` and
+#: ``break_glass`` are advisory, but the probes are still patched so no real
+#: dependency is touched.
 _CHECK_PROBES = (
     "database",
     "redis",
@@ -42,6 +43,7 @@ _CHECK_PROBES = (
     "system_crons",
     "dispatcher_reconcile",
     "stale_run_recovery",
+    "slot_reconciliation",
 )
 
 _OUTCOMES = ("ok", "degraded", "unavailable")

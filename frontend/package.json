@@ -92,5 +92,8 @@
         "vue-tsc": "^3.3.7",
         "@typescript/native": "npm:typescript@^7.0.2"
     },
-    "packageManager": "pnpm@11.25.0"
+    "packageManager": "pnpm@11.25.0",
+    "overrides": {
+        "qs": ">=6.15.3"
+    }
 }

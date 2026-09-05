@@ -32,7 +32,6 @@ from typing import Self
 import httpx
 import pytest
 
-import modulo.core.ssrf as ssrf
 from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
 from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
@@ -46,6 +45,7 @@ from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.teamcity import TeamCityConnector
 from modulo.connectors.trivy import TrivyConnector
 from modulo.connectors.youtrack import YouTrackConnector
+from modulo.core import ssrf
 
 # Resolver flip: first validation resolves PUBLIC (accepted), any later lookup
 # answers with the cloud-metadata address (what an attacker's rebinding DNS

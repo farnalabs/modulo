@@ -18,15 +18,16 @@ vi.mock('../../lib/api/client', () => ({
   },
 }))
 
-// Faithful PrimeVue Select stub: without option-value the real component
-// emits the WHOLE option object as the model value (see FAR-578 report).
+// Faithful PrimeVue Select stub: with option-value/option-label the real
+// component emits the option's value field; without them it emits the whole
+// option object (FAR-606).
 const SelectStub = {
   name: 'SelectStub',
   props: ['modelValue', 'options', 'placeholder', 'optionLabel', 'optionValue', 'dataTestid'],
   emits: ['update:modelValue'],
   template: `
-    <select data-testid="mock-select" @change="$emit('update:modelValue', options[Number($event.target.value)])">
-      <option v-for="(o, i) in options" :key="i" :value="i">{{ o.label ?? o }}</option>
+    <select data-testid="mock-select" @change="$emit('update:modelValue', optionValue ? options[Number($event.target.value)]?.[optionValue] : options[Number($event.target.value)])">
+      <option v-for="(o, i) in options" :key="i" :value="i">{{ optionLabel ? o[optionLabel] : (o.label ?? o) }}</option>
     </select>`,
 }
 
@@ -76,8 +77,6 @@ async function flushMount(items: TimelineSnapshot[] | null, rejects = false) {
 function rowFor(wrapper: ReturnType<typeof mount>, id: string) {
   return wrapper.find(`[data-testid="snapshot-timeline-row-${id}"]`)
 }
-
-const EM_DASH = '\u2014'
 
 describe('PipelineSnapshotTimeline', () => {
   beforeEach(() => {
@@ -142,9 +141,10 @@ describe('PipelineSnapshotTimeline', () => {
     await rowFor(wrapper, 'snap-1').trigger('click')
     await wrapper.find('[data-testid="snapshot-timeline-rollback"]').trigger('click')
     await flushPromises()
-    // BUG NOTE (FAR-578): the component renders String(error), so a structured
-    // ProblemDetail error shows as "[object Object]" instead of the detail.
-    expect(wrapper.text()).toContain('[object Object]')
+    // Structured ProblemDetail errors render via formatApiError, surfacing
+    // the human-readable detail instead of "[object Object]".
+    expect(wrapper.text()).toContain('rollback forbidden')
+    expect(wrapper.text()).not.toContain('[object Object]')
   })
 
   it('diffs the selected snapshot against the compare base', async () => {
@@ -168,14 +168,12 @@ describe('PipelineSnapshotTimeline', () => {
     await flushPromises()
     expect(apiPost).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/snapshots/diff', {
       params: { path: { pipeline_id: 'pipe-1' } },
-      // BUG NOTE (FAR-578): compareB holds the whole {value,label} option
-      // object because the PrimeVue Select has no option-value prop, so the
-      // diff request posts an object where the backend expects a snapshot id.
-      // This assertion documents the current behaviour and must be updated
-      // (to { snapshot_b_id: 'snap-2' }) together with the component fix.
+      // The compare Select passes option-value="value", so compareB holds the
+      // snapshot id (not the whole {value,label} option object) and the diff
+      // request posts a real snapshot id (FAR-606).
       body: {
         snapshot_a_id: 'snap-1',
-        snapshot_b_id: { value: 'snap-2', label: `v2 ${EM_DASH} run` },
+        snapshot_b_id: 'snap-2',
       },
     })
     const result = wrapper.find('[data-testid="snapshot-timeline-diff-result"]')
@@ -204,9 +202,9 @@ describe('PipelineSnapshotTimeline', () => {
     await wrapper.find('[data-testid="mock-select"]').setValue('1')
     await wrapper.find('[data-testid="snapshot-timeline-diff"]').trigger('click')
     await flushPromises()
-    // BUG NOTE (FAR-578): String(error) on a structured error renders as
-    // "[object Object]" - see the rollback-failure test.
-    expect(wrapper.text()).toContain('[object Object]')
+    // Structured errors render via formatApiError (same as the rollback path).
+    expect(wrapper.text()).toContain('diff unavailable')
+    expect(wrapper.text()).not.toContain('[object Object]')
   })
 
   it('survives a failed snapshot load by showing the empty state', async () => {

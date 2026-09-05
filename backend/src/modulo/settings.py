@@ -227,6 +227,20 @@ class Settings(BaseSettings):
     saq_reenqueue_window: int = Field(default=600, alias="SAQ_REENQUEUE_WINDOW", ge=1, le=3600)
     saq_never_dispatched_window: int = Field(default=300, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
     saq_worker_lost_window: int = Field(default=600, alias="SAQ_WORKER_LOST_WINDOW", ge=1, le=3600)
+    # FAR-604 slot reconciliation sweep: a ``running`` run whose heartbeat is
+    # stale past this window holds a leaked pipeline slot (a crashed worker
+    # never wrote a terminal status). The sweep force-releases such slots by
+    # terminalising the run with ``worker_lost``. Default 30 min — far above
+    # the 30s DB heartbeat cadence, so a live executor is never swept.
+    slot_reconcile_stale_seconds: int = Field(default=1800, alias="SLOT_RECONCILE_STALE_SECONDS", ge=60, le=86400)
+    # FAR-604 dispatcher backpressure: a trigger fire (webhook/cron/polling) is
+    # skipped when the pipeline's pending-queue OLDEST run is older than this.
+    # Depth-based backpressure is derived from the pipeline's own
+    # max_concurrent_runs (max(3x, 5)); this knob bounds queue AGE so a wedged
+    # admission gate stops accumulating deliveries even below the depth cap.
+    trigger_backpressure_max_age_seconds: int = Field(
+        default=3600, alias="TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS", ge=60, le=86400
+    )
     # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
     # least one node within this setup window or the execute_run zombie watchdog
     # fails it. Covers the pre-node hang window: checkpointer setup, graph
