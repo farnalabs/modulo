@@ -88,7 +88,7 @@ function guardrailBlockedRun() {
   }
 }
 
-function mountView(run: unknown = guardrailBlockedRun()) {
+function mountView(run: unknown = guardrailBlockedRun(), attachTo = false) {
   ;(api.GET as any).mockImplementation((url: string) => {
     if (url === '/api/v1/runs/{run_id}') {
       return Promise.resolve({ data: run, error: undefined })
@@ -102,6 +102,7 @@ function mountView(run: unknown = guardrailBlockedRun()) {
     return Promise.resolve({ data: null, error: undefined })
   })
   return mount(RunDetailView, {
+    attachTo: attachTo ? document.body : undefined,
     global: {
       stubs: {
         Dialog: {
@@ -218,5 +219,47 @@ describe('RunDetailView guardrail summary + override', () => {
     const err = wrapper.find('[data-testid="run-detail-override-error"]')
     expect(err.exists()).toBe(true)
     expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('shows the guardrail override disclosure in the run-level warnings strip', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    const strip = wrapper.find('[data-testid="run-detail-warnings-strip"]')
+    expect(strip.exists()).toBe(true)
+    expect(strip.attributes('role')).toBe('status')
+    const entry = wrapper.find('[data-testid="run-detail-warnings-strip-guardrail-override"]')
+    expect(entry.exists()).toBe(true)
+    expect(entry.attributes('aria-label')).toBeTruthy()
+  })
+
+  it('clicking the guardrail strip entry scrolls to the override panel', async () => {
+    const originalScroll = Element.prototype.scrollIntoView
+    const scrollSpy = vi.fn()
+    Element.prototype.scrollIntoView = scrollSpy
+    let wrapper: ReturnType<typeof mountView> | null = null
+    try {
+      wrapper = mountView(guardrailBlockedRun(), true)
+      await flush()
+
+      const entry = wrapper.find('[data-testid="run-detail-warnings-strip-guardrail-override"]')
+      expect(entry.exists()).toBe(true)
+      // The scroll target must exist in the DOM for the click to anchor.
+      expect(document.getElementById('run-detail-guardrail-override')).not.toBeNull()
+      await entry.trigger('click')
+      expect(scrollSpy).toHaveBeenCalled()
+    } finally {
+      wrapper?.unmount()
+      Element.prototype.scrollIntoView = originalScroll
+    }
+  })
+
+  it('shows no guardrail entry in the warnings strip for non-blocked runs', async () => {
+    const nonBlocked = { ...guardrailBlockedRun(), status: 'failed', error_code: 'harness.worker_failed' }
+    const wrapper = mountView(nonBlocked)
+    await flush()
+
+    expect(wrapper.find('[data-testid="run-detail-warnings-strip-guardrail-override"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 })

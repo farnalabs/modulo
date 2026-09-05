@@ -2239,6 +2239,9 @@ elements:
       - testid: run-detail-queued-starting
         type: element
         dynamic_testid: false
+      - testid: run-detail-warnings-strip
+        type: element
+        dynamic_testid: false
       - testid: run-detail-copy-gate-id
         type: button
         dynamic_testid: false
