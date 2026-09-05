@@ -18,7 +18,7 @@ class Account(Base, TimestampMixin):
             name="ck_accounts_break_glass_expiry",
         ),
         # FAR-584: emails are case-insensitive. Case-insensitive uniqueness is
-        # enforced by this functional unique index (migration 0176 created the
+        # enforced by this functional unique index (migration 0177 created the
         # DB-side twin after backfilling + collision-guarding existing rows);
         # the plain case-sensitive UNIQUE constraint on email is retired.
         Index("uq_accounts_email_lower", func.lower(sa_text("email")), unique=True),

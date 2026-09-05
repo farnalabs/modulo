@@ -727,7 +727,7 @@ async def _get_admin_account(session: Any) -> Any | None:
     """Return the bootstrap admin account (case-insensitive email ``admin``), if any.
 
     Consolidates the identical admin lookups in _seed_system_schemas and
-    _seed_environment_profiles. Post-0176 at most one row can match
+    _seed_environment_profiles. Post-0177 at most one row can match
     ``lower(email) == 'admin'`` (functional unique index uq_accounts_email_lower),
     so ``order_by(...).limit(1)`` is kept purely defensively.
     """

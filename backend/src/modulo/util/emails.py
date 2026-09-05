@@ -8,7 +8,7 @@ FAR-584: email addresses are case-insensitive in the real world. Every
 account boundary (creation, lookup, SCIM/SSO provisioning, seeds) stores and
 compares emails through :func:`normalize_email`, and the database enforces
 case-insensitive uniqueness via the ``uq_accounts_email_lower`` functional
-unique index (migration 0176).
+unique index (migration 0177).
 """
 
 from __future__ import annotations

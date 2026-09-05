@@ -18,7 +18,7 @@ async def get_account_by_email(session: AsyncSession, email: str) -> Account | N
 
     The comparison canonicalises the submitted email and lowercases the stored
     column, so a case-variant of an existing address resolves to the same
-    account — including pre-0176 rows that still hold mixed-case spellings.
+    account — including pre-0177 rows that still hold mixed-case spellings.
     Postgres satisfies this via the ``uq_accounts_email_lower`` functional
     unique index.
     """
