@@ -544,6 +544,7 @@ function openEditForm(backend: ModelBackendItem) {
 
 function closeForm() {
   formMode.value = null
+  deleteConfirmBackendId.value = null
   Object.assign(formData, emptyForm())
   formError.value = null
 }

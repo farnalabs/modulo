@@ -741,9 +741,12 @@ def test_single_migration_head() -> None:
     # 0176_trigger_event_validation_results (FAR-604) chains off 0174.
     chaining_off_0174 = [p for p in revisions if parents[p] == "0174_per_org_last_admin_guard"]
     assert [_basename(p) for p in chaining_off_0174] == ["0176_trigger_event_validation_results.py"]
-    # 0178_env_profiles_runner_docker (FAR-587 provider_type widen + default drop) chains off 0176.
+    # 0177_invitations (FAR-461 in-app invite tokens, on main) chains off 0176_trigger_event_validation_results.
     chaining_off_0176 = [p for p in revisions if parents[p] == "0176_trigger_event_validation_results"]
-    assert [_basename(p) for p in chaining_off_0176] == ["0178_env_profiles_runner_docker.py"]
+    assert [_basename(p) for p in chaining_off_0176] == ["0177_invitations.py"]
+    # 0178_env_profiles_runner_docker (FAR-587 provider_type widen + default drop) chains off 0177.
+    chaining_off_0177 = [p for p in revisions if parents[p] == "0177_invitations"]
+    assert [_basename(p) for p in chaining_off_0177] == ["0178_env_profiles_runner_docker.py"]
     # 0179_drop_workspace_leases (FAR-587 workspace-lease removal) chains off 0178.
     chaining_off_0178 = [p for p in revisions if parents[p] == "0178_env_profiles_runner_docker"]
     assert [_basename(p) for p in chaining_off_0178] == ["0179_drop_workspace_leases.py"]

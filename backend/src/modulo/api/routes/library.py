@@ -1673,6 +1673,9 @@ async def list_community_contributions_endpoint(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail=MSG_FEATURE_NOT_AVAILABLE,
             ) from None
+        except SQLAlchemyError:
+            _log.exception("list_community_contributions_endpoint: SQLAlchemyError")
+            raise _unavailable_error() from None
         items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
     except HTTPException:
         raise

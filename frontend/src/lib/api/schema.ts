@@ -205,6 +205,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/users/invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Invite User
+         * @description Mint a one-time in-app enrollment link (FAR-461).
+         *
+         *     The response embeds the token plaintext exactly once — it is never
+         *     persisted (only its SHA-256 hash is stored). ``invite_url`` is anchored to
+         *     ``settings.modulo_public_url`` (same origin decision as
+         *     ``mcp_setup_handoff`` / SSO routes): the admin may copy the link from any
+         *     machine/proxy and self-hosted deployments set this once globally; deriving
+         *     from the request's Host header would mint proxy-dependent URLs.
+         */
+        post: operations["admin_invite_user_api_v1_admin_users_invite_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin List Invitations */
+        get: operations["admin_list_invitations_api_v1_admin_users_invitations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/invitations/{invitation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Admin Revoke Invitation */
+        delete: operations["admin_revoke_invitation_api_v1_admin_users_invitations__invitation_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/teams/{team_id}": {
         parameters: {
             query?: never;
@@ -1109,6 +1170,44 @@ export interface paths {
          *     (10/hour, with the process-local token-bucket floor when Redis is absent).
          */
         post: operations["demo_login_api_v1_auth_demo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/accept-invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Invite
+         * @description Redeem a one-time invitation token and enroll the holder (FAR-461).
+         *
+         *     Unauthenticated by design — the token IS the credential. Account
+         *     resolution rules:
+         *       (a) no account → create local account + membership;
+         *       (b) non-local (SSO/SCIM) account → 409, never set a local password;
+         *       (c) local without password_hash → set it + membership;
+         *       (d) local with password_hash → membership only when absent, password
+         *           untouched, ``existing_account=true`` in the response. A tombstoned
+         *           membership (deactivated_at set, FAR-533) is reactivated with the
+         *           invitation's role instead of skipped, preserving the row.
+         *
+         *     The invitation compare-and-swap consumption runs as the FINAL DB statement
+         *     of the success path: if another consumer raced us, the CAS matches zero
+         *     rows and the whole transaction aborts. RLS context is set to the
+         *     *invitation's* org before any membership write (the caller is otherwise
+         *     pre-authenticated); the invitations table itself deliberately carries no
+         *     RLS policy. IP-based failures are recorded for every denial path; a
+         *     successful enrollment clears them (``record_success``).
+         */
+        post: operations["accept_invite_api_v1_auth_accept_invite_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8303,6 +8402,26 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** AcceptInviteRequest */
+        AcceptInviteRequest: {
+            /** Token */
+            token: string;
+            /** Password */
+            password: string;
+        };
+        /** AcceptInviteResponse */
+        AcceptInviteResponse: {
+            /**
+             * Detail
+             * @default Invitation accepted
+             */
+            detail: string;
+            /**
+             * Existing Account
+             * @default false
+             */
+            existing_account: boolean;
+        };
         /** AccessList */
         AccessList: {
             /** User Ids */
@@ -11444,6 +11563,55 @@ export interface components {
         InstallRequest: {
             /** Target Team Id */
             target_team_id?: string | null;
+        };
+        /** InvitationItem */
+        InvitationItem: {
+            /** Id */
+            id: string;
+            /** Email */
+            email: string;
+            /** Display Name */
+            display_name: string;
+            /** Org Role */
+            org_role: string;
+            /** Invited By */
+            invited_by: string;
+            /** Created At */
+            created_at: string;
+            /** Expires At */
+            expires_at: string;
+        };
+        /** InvitationListResponse */
+        InvitationListResponse: {
+            /** Items */
+            items: components["schemas"]["InvitationItem"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** InviteUserRequest */
+        InviteUserRequest: {
+            /** Email */
+            email: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Org Role
+             * @default runner
+             */
+            org_role: string;
+        };
+        /** InviteUserResponse */
+        InviteUserResponse: {
+            /** Id */
+            id: string;
+            /** Invite Url */
+            invite_url: string;
+            /** Expires At */
+            expires_at: string;
         };
         /**
          * JoinAggregateSpec
@@ -17564,6 +17732,105 @@ export interface operations {
             };
         };
     };
+    admin_invite_user_api_v1_admin_users_invite_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InviteUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_invitations_api_v1_admin_users_invitations_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_revoke_invitation_api_v1_admin_users_invitations__invitation_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                invitation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     admin_update_team_api_v1_admin_teams__team_id__put: {
         parameters: {
             query?: {
@@ -19881,6 +20148,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_invite_api_v1_auth_accept_invite_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptInviteResponse"];
                 };
             };
             /** @description Validation Error */

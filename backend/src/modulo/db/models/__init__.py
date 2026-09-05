@@ -37,6 +37,7 @@ from modulo.db.models.eval_suite_run import (
 )
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.invitation import Invitation
 from modulo.db.models.journey import Journey
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.library_sync_state import LibrarySyncState
@@ -119,6 +120,7 @@ __all__ = [
     "FeedbackRecord",
     "HitlClaim",
     "IllegalStateTransitionError",
+    "Invitation",
     "Journey",
     "JourneyFact",
     "LibraryPrimitive",
