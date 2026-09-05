@@ -16,8 +16,9 @@ Two worker processes (plan F1/F2):
   :func:`_effective_redis_pool_size`), web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
-  crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
-  webhook-dedup cleanup, stale_run_recovery.
+  crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, hitl-overdue,
+  retention, webhook-dedup cleanup, stale_run_recovery, slot-reconciliation,
+  hitl-park (FAR-604 D2).
 
 Accepted design target: concurrency 20 per worker x up to 5 machines = up to 100
 concurrent runs (recorded in ADR 017).
@@ -1173,6 +1174,27 @@ async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-604 D2 HITL park-on-expiry sweep (every 5 min).
+
+    Parks runs whose open HITL gate expired unanswered past the grace window
+    (``HITL_PARK_GRACE_SECONDS``, default 24h): the run leaves
+    ``awaiting_human`` for the non-terminal ``hitl_parked`` status and the
+    gate is stamped ``parked_at`` — the gate itself stays OPEN AND CLAIMABLE
+    (park ≠ decide) and a later decision un-parks the run back into normal
+    admission. Each park is logged loudly (``hitl_park.parked``).
+
+    Failure contract: the sweep raises :class:`HitlParkError` (with the
+    partial ``parked`` count) which propagates so SAQ's ``retries=2``
+    engages. No /healthz/ready liveness key: parking is post-D1 hygiene (a
+    parked run no longer consumes pipeline capacity), so a dead sweep delays
+    visibility only — the monitored SAQ task-failure sink carries the alert.
+    """
+    from modulo.core.run_admission import park_expired_hitl_runs
+
+    return await park_expired_hitl_runs(_get_async_engine())
+
+
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — the cost-tracking probe (spec §4.7, every 5 min, retries=0).
 
@@ -1460,6 +1482,7 @@ def _system_functions() -> list[Any]:
         trigger_events_cleanup,
         stale_run_recovery,
         slot_reconciliation,
+        hitl_park_sweep,
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
@@ -1568,6 +1591,21 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # sweep must never re-open the FAR-604 wedge invisibly (F6).
         CronJob(
             slot_reconciliation,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # hitl_park_sweep: every 5 min (FAR-604 D2) — a run waiting on an
+        # unanswered HITL gate parks after expires_at + grace so it stops
+        # occupying review state; the gate stays open/claimable (park ≠
+        # decide) and a later decision un-parks the run. unique=True so
+        # overlapping ticks cannot double-park (the guarded UPDATE is
+        # idempotent regardless). Failures RAISE (retries=2 engages).
+        CronJob(
+            hitl_park_sweep,
             cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=120,

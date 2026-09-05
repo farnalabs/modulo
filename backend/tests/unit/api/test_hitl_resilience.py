@@ -2,6 +2,8 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -68,6 +70,56 @@ class TestClaimGateSQLAlchemyError:
             json={"expiry_minutes": 15},
         )
         assert resp.status_code == 503
+
+
+class TestClaimGateKeepsParkedRunParked:
+    """FAR-604 D2/D3: claiming the gate of a ``hitl_parked`` run must NOT
+    transition the run to ``claimed`` — a claim is not a decision, and the
+    claim-expiry sweep would otherwise un-park the run via the
+    claimed→awaiting_human reset. The un-park happens at decision time
+    (``HITLManager._decide``)."""
+
+    @staticmethod
+    def _claim_gate_response() -> MagicMock:
+        gate = MagicMock()
+        gate.run_id = _RUN_ID
+        gate.gate_id = "gate-1"
+        gate.claim_token = "tok-123"
+        gate.expires_at = datetime.now(UTC)
+        return gate
+
+    @patch("modulo.api.routes.hitl.update_run_status", new_callable=AsyncMock)
+    @patch("modulo.api.routes.hitl.get_run", new_callable=AsyncMock)
+    @patch("modulo.api.routes.hitl.HITLManager.claim", new_callable=AsyncMock)
+    def test_parked_run_is_not_transitioned_to_claimed(
+        self, claim: AsyncMock, get_run: AsyncMock, update_run_status: AsyncMock, client: TestClient
+    ) -> None:
+        claim.return_value = self._claim_gate_response()
+        get_run.return_value = SimpleNamespace(status="hitl_parked")
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+            json={"expiry_minutes": 15},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["claim_token"] == "tok-123"
+        update_run_status.assert_not_awaited()
+
+    @patch("modulo.api.routes.hitl.update_run_status", new_callable=AsyncMock)
+    @patch("modulo.api.routes.hitl.get_run", new_callable=AsyncMock)
+    @patch("modulo.api.routes.hitl.HITLManager.claim", new_callable=AsyncMock)
+    def test_awaiting_human_run_is_still_transitioned_to_claimed(
+        self, claim: AsyncMock, get_run: AsyncMock, update_run_status: AsyncMock, client: TestClient
+    ) -> None:
+        claim.return_value = self._claim_gate_response()
+        get_run.return_value = SimpleNamespace(status="awaiting_human")
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+            json={"expiry_minutes": 15},
+        )
+        assert resp.status_code == 200
+        update_run_status.assert_awaited_once()
+        assert update_run_status.call_args.args[1] == _RUN_ID
+        assert update_run_status.call_args.args[2] == "claimed"
 
 
 class TestClaimGateNotTeamMemberError:

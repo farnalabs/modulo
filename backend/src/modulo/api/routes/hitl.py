@@ -199,8 +199,16 @@ async def claim_gate(
                 logger.warning("hitl.claim_gate.team_access_denied: %s", exc)
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
-            # Update run status to "claimed".
-            await update_run_status(session, run_id, "claimed")
+            # Update run status to "claimed" — UNLESS the run is parked
+            # (FAR-604 D2/D3): a ``hitl_parked`` run stays parked while its
+            # gate is claimed-but-undecided (a claim is not a decision; the
+            # claim-expiry sweep must never un-park it via the
+            # claimed→awaiting_human reset). The decision-time un-park lives
+            # in ``HITLManager._decide`` and re-enters the run into normal
+            # admission on approve/reject/deliver-manual.
+            parked_run = await get_run(session, run_id)
+            if parked_run is not None and parked_run.status != "hitl_parked":
+                await update_run_status(session, run_id, "claimed")
     except ProgrammingError as exc:
         logger.exception("hitl.claim_gate")
         raise HTTPException(

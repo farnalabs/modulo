@@ -43,3 +43,9 @@ class HitlClaim(OrgScoped):
     # been dispatched for this claim — keeps the job idempotent (one warning
     # per claim, no re-alerting every tick).
     overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # FAR-604 D2 park stamp — set by the park sweep (run_admission.
+    # park_expired_hitl_runs) when the run was transitioned to ``hitl_parked``
+    # because this gate expired unanswered past the grace window. The gate row
+    # STAYS OPEN AND CLAIMABLE (decision stays NULL); the stamp lets the HITL
+    # UI show "expired — parked" and lets the sweep stay idempotent.
+    parked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -64,6 +64,7 @@ from modulo.core.eval_engine import (
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.hitl_manager import HITLManager
+from modulo.core.hitl_manager.gate_coalescing import evaluate_gate_coalescing
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -4753,27 +4754,54 @@ class PipelineExecutor:
         if pipeline_id is not None and org_id is not None:
             mgr = HITLManager()
             pipeline_name: str | None = None
+            coalesce_reused = False
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
-                await mgr.create_gate(
+                # FAR-604 D4 gate coalescing: when an OPEN gate already
+                # covers this work item, the duplicate run never raises a
+                # second gate. Unchanged SHA → "reuse" (the existing gate
+                # decides; this run is terminalised superseded below);
+                # changed SHA → the old gate was auto-superseded in the same
+                # transaction and this run raises fresh.
+                outcome = await evaluate_gate_coalescing(
                     session,
                     run_id=run_id,
                     gate_id=gate_id,
                     pipeline_id=pipeline_id,
                     org_id=org_id,
-                    required_team_id=required_team_id,
                 )
-                try:
-                    pipeline = await get_pipeline(session, pipeline_id)
-                    pipeline_name = pipeline.name if pipeline is not None else None
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "hitl_gate.pipeline_name_lookup_failed",
-                        extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                if outcome == "reuse":
+                    coalesce_reused = True
+                else:
+                    await mgr.create_gate(
+                        session,
+                        run_id=run_id,
+                        gate_id=gate_id,
+                        pipeline_id=pipeline_id,
+                        org_id=org_id,
+                        required_team_id=required_team_id,
                     )
+                    try:
+                        pipeline = await get_pipeline(session, pipeline_id)
+                        pipeline_name = pipeline.name if pipeline is not None else None
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.warning(
+                            "hitl_gate.pipeline_name_lookup_failed",
+                            extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                        )
+            if coalesce_reused:
+                detail = (
+                    "HITL gate coalesced (FAR-604 D4): an open gate already covers this work item "
+                    f"(unchanged payload hash); the existing gate decides. run={run_id} gate={gate_id}"
+                )
+                _log.info(
+                    "pipeline.gate_coalesced",
+                    extra={"run_id": str(run_id), "gate_id": gate_id, "pipeline_id": str(pipeline_id)},
+                )
+                return _terminal_failure(broker, "failed", "executor_superseded", detail, node_token_usage)
             broker.publish(
                 "hitl_awaiting",
                 {

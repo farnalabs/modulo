@@ -34,7 +34,7 @@ from modulo.db.lifecycle_refs import (
 )
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, PIPELINE_CAPACITY_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.unique_violation import is_unique_violation
 
 _log = logging.getLogger(__name__)
@@ -106,6 +106,7 @@ RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
         "awaiting_human",
         "claimed",
         "unknown",
+        "hitl_parked",
         "complete",
         "failed",
         "cancelled",
@@ -147,8 +148,11 @@ _RUN_CONCURRENCY_MAX = 100
 # per-work-item coalesce key. System-injected (never forgeable via
 # input_payload — the strip in create_run/coalesce_pending_run runs first),
 # so the coalesce lookup can find a trigger's pending run for the same work
-# item without a dedicated column.
+# item without a dedicated column. ``COALESCE_KEY_FIELD`` is the public alias
+# consumed outside the db layer (hitl_manager gate coalescing reads the same
+# stamp off runs reaching a HITL gate — FAR-604 D4).
 _COALESCE_KEY_FIELD = "_coalesce_key"
+COALESCE_KEY_FIELD = _COALESCE_KEY_FIELD
 # Bounded candidate scan for non-Postgres backends (no server-side JSON path
 # filter available): pending runs of ONE pipeline only.
 _COALESCE_CANDIDATE_LIMIT = 200
@@ -2041,16 +2045,25 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
 _ACTIVE_RUN_STATUSES = ACTIVE_RUN_STATUSES
 
 
-def _active_run_statuses(include_pending: bool) -> set[str]:
+def _active_run_statuses(include_pending: bool, *, scope: str) -> set[str]:
     """Resolve the status set for an active-run count.
 
-    * ``include_pending=False`` (capacity gate): running/awaiting_human/claimed
-      — a pending run does not hold capacity.
     * ``include_pending=True`` (quota): all non-terminal runs including
       ``pending``.
+    * ``include_pending=False`` + ``scope='org'`` (org run-concurrency gate):
+      running/awaiting_human/hitl_parked/claimed/unknown — a pending run does
+      not hold capacity, but a run parked on a human decision still occupies
+      the org-wide worker pool so the org-level ``run_concurrency_limit``
+      keeps bounding it (FAR-604 D1).
+    * ``include_pending=False`` + ``scope='pipeline'`` (pipeline
+      ``max_concurrent_runs`` gate): ``PIPELINE_CAPACITY_STATUSES`` —
+      awaiting_human/hitl_parked runs do NOT consume a pipeline slot (FAR-604
+      D1; a human decision may take days and must never starve admission).
     """
     if include_pending:
         return set(_ACTIVE_RUN_STATUSES)
+    if scope == "pipeline":
+        return set(PIPELINE_CAPACITY_STATUSES)
     return set(_ACTIVE_RUN_STATUSES - {"pending"})
 
 
@@ -2066,14 +2079,16 @@ async def _count_active_runs(
 
     Scopes to exactly one of *org_id* (org gate) or *pipeline_id* (pipeline
     gate). ``include_pending`` selects the status set via
-    :func:`_active_run_statuses`. Optionally excludes a specific *run_id* so a
-    pending run does not count itself when checking capacity.
+    :func:`_active_run_statuses` (the pipeline gate additionally excludes the
+    human-waiting statuses — FAR-604 D1). Optionally excludes a specific
+    *run_id* so a pending run does not count itself when checking capacity.
     """
+    scope = "pipeline" if pipeline_id is not None else "org"
     stmt = (
         select(func.count())
         .select_from(Run)
         .where(
-            Run.status.in_(_active_run_statuses(include_pending)),
+            Run.status.in_(_active_run_statuses(include_pending, scope=scope)),
             Run.cancellation_requested.is_(False),
         )
     )
@@ -2099,8 +2114,12 @@ async def count_active_runs_for_pipeline(
     instead of three):
 
     * ``include_pending=False`` (capacity gate): counts only runs that are
-      actually executing or claimed (running/awaiting_human/claimed) — a
-      pending run does not hold capacity.
+      actually executing or claimed (running/claimed/unknown) — a pending run
+      does not hold capacity, and NEITHER does a run parked on a human
+      decision (``awaiting_human``/``hitl_parked`` are excluded — FAR-604 D1:
+      a human decision may take days and must never starve the pipeline's
+      admission; the 2026-09-04 incident had 20 awaiting_human runs consuming
+      a 20-cap pipeline for 26h). The org-level gate still counts those runs.
     * ``include_pending=True`` (variant-group quota): counts all non-terminal
       runs including ``pending``, preserving the 429 quota semantics.
 
@@ -2129,8 +2148,12 @@ async def count_active_runs_for_org(
     across all pipelines. ``include_pending`` selects the same two behaviours:
 
     * ``include_pending=False`` (dispatch admission gate): counts only runs
-      that are actually executing or claimed (running/awaiting_human/claimed) —
-      a pending run does not hold capacity.
+      that are actually executing or held (running/awaiting_human/claimed/
+      unknown) — a pending run does not hold capacity. UNLIKE the pipeline
+      gate, human-waiting runs (``awaiting_human``/``hitl_parked``) still
+      count here: the org-wide worker pool is the global shared resource the
+      org-level ``run_concurrency_limit`` exists to bound, and parked runs
+      must not escape that bound (FAR-604 D1).
     * ``include_pending=True`` (quota semantics): counts all non-terminal runs
       including ``pending``.
 
