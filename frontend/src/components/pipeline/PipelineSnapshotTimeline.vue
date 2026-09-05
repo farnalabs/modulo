@@ -57,6 +57,8 @@
           aria-label="Base snapshot to compare"
           :placeholder="$t('components.PipelineSnapshotTimeline.select_base_snapshot')"
           :options="compareOptions"
+          option-value="value"
+          option-label="label"
           v-model="compareB"
         />
         <Button
@@ -117,6 +119,7 @@ import Button from 'primevue/button'
 import LoadingSpinner from '../shared/LoadingSpinner.vue'
 import { formatDateShort } from '../../lib/formatDate'
 import { api } from '../../lib/api/client'
+import { formatApiError } from '../../lib/api/formatError'
 
 interface TimelineSnapshot {
   id: string
@@ -185,7 +188,7 @@ async function runDiff(): Promise<void> {
     body: { snapshot_a_id: selectedSnapshotId.value, snapshot_b_id: compareB.value },
   })
   if (error) {
-    actionError.value = String(error)
+    actionError.value = formatApiError(error)
     return
   }
   diffResult.value = data as Record<string, any>
@@ -198,7 +201,7 @@ async function rollback(): Promise<void> {
     params: { path: { pipeline_id: props.pipelineId, snapshot_id: selectedSnapshotId.value } },
   })
   if (error) {
-    actionError.value = String(error)
+    actionError.value = formatApiError(error)
     return
   }
   actionError.value = null
