@@ -4,8 +4,8 @@ Complements the existing eval test modules (endpoint contract, compare,
 leaderboard, coverage-gap, dashboard) by covering the admin-gate 403s, the
 guardrail-request validation 422s, the run-evals listing, the compare
 fallback helpers, the from-run creation, and the route error convention
-(ProgrammingErrorâ†'501 / IntegrityErrorâ†'409 / SQLAlchemyErrorâ†'503 /
-Exceptionâ†'500) across all eval endpoints.
+(ProgrammingError→501 / IntegrityError→409 / SQLAlchemyError→503 /
+Exception→500) across all eval endpoints.
 """
 
 from __future__ import annotations
@@ -184,7 +184,7 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 
 
 # ---------------------------------------------------------------------------
-# POST /evals â€” admin gate, guardrail validation, pipeline 404, error mapping
+# POST /evals — admin gate, guardrail validation, pipeline 404, error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -382,7 +382,7 @@ def test_update_suite_alerting_rejects_operators() -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /runs/{run_id}/evals â€” happy path + 404
+# GET /runs/{run_id}/evals — happy path + 404
 # ---------------------------------------------------------------------------
 
 
@@ -423,7 +423,7 @@ def test_list_run_evals_unknown_run_returns_404(client: tuple[TestClient, AsyncM
 
 
 # ---------------------------------------------------------------------------
-# POST /evals/compare â€” run-B 404 + mixed-result helper paths
+# POST /evals/compare — run-B 404 + mixed-result helper paths
 # ---------------------------------------------------------------------------
 
 
@@ -488,7 +488,7 @@ def test_compare_evals_handles_missing_sides_and_null_scores(client: tuple[TestC
 
 
 # ---------------------------------------------------------------------------
-# POST /evals/from-run â€” happy path + pipeline 404
+# POST /evals/from-run — happy path + pipeline 404
 # ---------------------------------------------------------------------------
 
 

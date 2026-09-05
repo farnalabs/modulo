@@ -2,9 +2,9 @@
 
 Complements ``test_in_app_notifications_preferences.py`` (which exercises the
 preferences endpoints against a real SQLite session) by covering the remaining
-dashboard/unread/list/detail/dismiss/review-later surfaces with mocked CRUD â€”
-happy paths, the route error convention (ProgrammingErrorâ†'501,
-IntegrityErrorâ†'409, SQLAlchemyErrorâ†'500), and the 400/404 client-error paths.
+dashboard/unread/list/detail/dismiss/review-later surfaces with mocked CRUD —
+happy paths, the route error convention (ProgrammingError→501,
+IntegrityError→409, SQLAlchemyError→500), and the 400/404 client-error paths.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Route-level tests for the guardrail config-as-code workflow (FAR-574).
 
 Complements ``test_guardrail_config_elevated_read.py`` (masked vs elevated
-reads) by covering the propose â†' apply/reject workflow, the drift endpoint and
+reads) by covering the propose → apply/reject workflow, the drift endpoint and
 its pin status transitions, the reconcile-collision 409, and the route error
 convention paths.
 """
@@ -384,7 +384,7 @@ def test_drift_config_error_fails_closed_422(admin_client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /config â€” the pin-less and error branches
+# GET /config — the pin-less and error branches
 # ---------------------------------------------------------------------------
 
 

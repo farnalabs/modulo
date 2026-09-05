@@ -1,9 +1,9 @@
 """Route-level tests for the lifecycle-map CRUD/version/journey endpoints (FAR-574).
 
-The service layer is mocked at the route boundary (unit tier: no DB) â€” these
+The service layer is mocked at the route boundary (unit tier: no DB) — these
 tests pin the wire contract (status codes, payload shapes, the route error
-convention ProgrammingErrorâ†'501 / IntegrityErrorâ†'409 / SQLAlchemyErrorâ†'503 /
-Exceptionâ†'500) for every endpoint in ``api/routes/lifecycle_maps.py``.
+convention ProgrammingError→501 / IntegrityError→409 / SQLAlchemyError→503 /
+Exception→500) for every endpoint in ``api/routes/lifecycle_maps.py``.
 """
 
 from __future__ import annotations
@@ -805,8 +805,8 @@ def test_self_report_unexpected_error_maps_to_500(client: tuple[TestClient, _Har
 
 
 # ---------------------------------------------------------------------------
-# Exception-mapping matrix â€” every endpoint honours the route error convention
-# (ProgrammingErrorâ†'501, SQLAlchemyErrorâ†'503, Exceptionâ†'500). Each case patches
+# Exception-mapping matrix — every endpoint honours the route error convention
+# (ProgrammingError→501, SQLAlchemyError→503, Exception→500). Each case patches
 # the FIRST service call the endpoint makes and asserts the mapped status.
 # ---------------------------------------------------------------------------
 

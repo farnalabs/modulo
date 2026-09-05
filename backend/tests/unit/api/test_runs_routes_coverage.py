@@ -5,8 +5,8 @@ override contracts), ``test_node_output.py`` (node output masking),
 ``test_node_observe.py`` and ``test_prompt_reveal.py`` by covering the
 stats/heatmap, IO, export-fixture, workspace-lease, workspace-events and
 node-output error surfaces plus the route error convention
-(ProgrammingErrorâ†'501 / IntegrityErrorâ†'409 / SQLAlchemyErrorâ†'503 /
-Exceptionâ†'500) and the remaining helper branches.
+(ProgrammingError→501 / IntegrityError→409 / SQLAlchemyError→503 /
+Exception→500) and the remaining helper branches.
 """
 
 from __future__ import annotations
@@ -218,7 +218,7 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 
 @pytest.fixture
 def runner_client() -> Generator[TestClient, None, None]:
-    """A runner principal â€” denied by the observe/recover/override role gates."""
+    """A runner principal — denied by the observe/recover/override role gates."""
     session = _make_session()
     _install_overrides(session, org_role="runner")
     yield TestClient(app)
@@ -289,7 +289,7 @@ def test_run_heatmap_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /runs/{run_id}/io â€” 404 + error mapping
+# GET /runs/{run_id}/io — 404 + error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -465,7 +465,7 @@ def test_workspace_events_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /runs/{run_id}/nodes/{node_id}/output â€” error mapping
+# GET /runs/{run_id}/nodes/{node_id}/output — error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -478,7 +478,7 @@ def test_node_output_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /runs/{run_id}/nodes/{node_id}/observe â€” error mapping (both blocks)
+# POST /runs/{run_id}/nodes/{node_id}/observe — error mapping (both blocks)
 # ---------------------------------------------------------------------------
 
 
@@ -503,7 +503,7 @@ def test_observe_write_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /runs/{run_id}/nodes/{node_id}/recover â€” role gate + error mapping
+# POST /runs/{run_id}/nodes/{node_id}/recover — role gate + error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -565,7 +565,7 @@ def test_recover_node_dispatch_failure_maps_to_500() -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /runs/{run_id}/guardrail-override â€” role gate + error mapping
+# POST /runs/{run_id}/guardrail-override — role gate + error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -628,7 +628,7 @@ def test_guardrail_override_dispatch_failure_maps_to_500() -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /runs (list) â€” error mapping via _do_list_runs
+# GET /runs (list) — error mapping via _do_list_runs
 # ---------------------------------------------------------------------------
 
 
@@ -644,7 +644,7 @@ def test_list_runs_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /runs/{run_id} â€” error mapping via _do_get_run
+# GET /runs/{run_id} — error mapping via _do_get_run
 # ---------------------------------------------------------------------------
 
 
@@ -657,7 +657,7 @@ def test_get_run_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /runs/{run_id}/cancel â€” error mapping via _cancel_run
+# POST /runs/{run_id}/cancel — error mapping via _cancel_run
 # ---------------------------------------------------------------------------
 
 
@@ -670,7 +670,7 @@ def test_cancel_run_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /runs (trigger) â€” error mapping via _create_manual_run
+# POST /runs (trigger) — error mapping via _create_manual_run
 # ---------------------------------------------------------------------------
 
 
@@ -687,7 +687,7 @@ def test_trigger_run_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /runs/diff â€” error mapping + run-B 404
+# POST /runs/diff — error mapping + run-B 404
 # ---------------------------------------------------------------------------
 
 
@@ -729,7 +729,7 @@ def test_diff_run_b_missing_returns_404(client: tuple[TestClient, AsyncMock]) ->
 
 
 # ---------------------------------------------------------------------------
-# POST .../prompt/reveal â€” error mapping
+# POST .../prompt/reveal — error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -757,7 +757,7 @@ def test_reveal_snapshot_load_error_maps_to_503(client: tuple[TestClient, AsyncM
 
 
 # ---------------------------------------------------------------------------
-# Helper units â€” branches not reachable through the endpoint happy paths
+# Helper units — branches not reachable through the endpoint happy paths
 # ---------------------------------------------------------------------------
 
 
@@ -798,7 +798,7 @@ def test_select_trigger_actor_paths() -> None:
     run.account_id = None
     run.trigger_id = trigger_id
     assert runs_module._select_trigger_actor(run, {}, {trigger_id: "cron"}) == "cron"
-    # No account, no trigger â†' None.
+    # No account, no trigger → None.
     run.trigger_id = None
     assert runs_module._select_trigger_actor(run, {}, {}) is None
 
@@ -869,7 +869,7 @@ async def test_load_account_and_trigger_labels() -> None:
     trigger_labels = await runs_module._load_trigger_labels(session, [run])
     assert trigger_labels == {trigger.id: "webhook"}
 
-    # No ids â†' no queries.
+    # No ids → no queries.
     run.account_id = None
     run.trigger_id = None
     assert not await runs_module._load_account_labels(session, [run])
@@ -930,7 +930,7 @@ async def test_require_valid_entry_agent_rejects_missing_agent() -> None:
 async def test_validate_run_input_basics_rejects_non_dict_payload() -> None:
     from fastapi import HTTPException
 
-    # The entry node must carry an agent_id â€” the input check is only reached
+    # The entry node must carry an agent_id — the input check is only reached
     # when entry-agent validation has run (the agent lookup succeeds here).
     session = _make_session()
     _queue_execute(session, [_result(scalar_one_or_none=MagicMock())])
@@ -944,7 +944,7 @@ async def test_enforce_trigger_rate_limit_paths() -> None:
     pipeline = MagicMock()
     pipeline.id = _PIPELINE_ID
     pipeline.rate_limit_config = None
-    # No rate limit configured â†' None without querying.
+    # No rate limit configured → None without querying.
     assert await runs_module._enforce_trigger_rate_limit(session, pipeline, {}) is None
 
     pipeline.rate_limit_config = {"max_triggers": 1, "window_seconds": 60}
