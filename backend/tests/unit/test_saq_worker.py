@@ -95,6 +95,7 @@ class TestFunctionsWiring:
         assert "webhook_dedup_cleanup" in names
         assert "trigger_events_cleanup" in names
         assert "stale_run_recovery" in names
+        assert "slot_reconciliation" in names
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
@@ -113,6 +114,7 @@ class TestFunctionsWiring:
             "webhook_dedup_cleanup",
             "trigger_events_cleanup",
             "stale_run_recovery",
+            "slot_reconciliation",
             "cost_probe",
             "analytics_facts_maintenance",
             "journey_reconcile",
@@ -142,6 +144,15 @@ class TestFunctionsWiring:
         assert ho.heartbeat == 30
         assert ho.ttl == 300
         assert ho.unique is True
+        # slot_reconciliation: every 5 min (FAR-604), unique so overlapping
+        # ticks cannot interleave (the guarded UPDATE is idempotent anyway).
+        sr = jobs["slot_reconciliation"]
+        assert sr.cron == "*/5 * * * *"
+        assert sr.timeout == 120
+        assert sr.retries == 2
+        assert sr.heartbeat == 30
+        assert sr.ttl == 300
+        assert sr.unique is True
         # check_missed_fire_alerts: hourly, 5-field form (NOT 6-field — the bug
         # class #680 croniter seconds-field misparse), unique so overlaps are
         # impossible (the probe has its own in-memory cooldown).
@@ -1338,7 +1349,92 @@ class TestSystemJobDelegates:
 
         assert result == 5
         sweep.assert_awaited_once()
-        assert "stale_run_recovery_stats_persist_failed" in caplog.text
+        assert "sweep_stats_persist_failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_slot_reconciliation_delegates_and_persists_stats(self) -> None:
+        """FAR-604 F6: the slot-reconciliation wrapper persists a liveness
+        stats key (last_run_at + released counts + TTL) every tick so
+        /healthz/ready can detect a silently dead sweep."""
+        redis_client = AsyncMock()
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch(
+                "modulo.core.run_admission.reconcile_pipeline_slots",
+                new_callable=AsyncMock,
+                return_value={"released": 2, "per_pipeline": {"p1": 2}},
+            ) as sweep,
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client) as from_url,
+        ):
+            result = await sw.slot_reconciliation({})
+
+        assert result == {"released": 2, "per_pipeline": {"p1": 2}}
+        sweep.assert_awaited_once()
+        from_url.assert_called_once()
+        redis_client.set.assert_awaited_once()
+        assert redis_client.set.await_args.args[0] == sw.SLOT_RECONCILIATION_STATS_KEY
+        assert redis_client.set.await_args.kwargs["ex"] == sw.SLOT_RECONCILIATION_STATS_TTL_SECONDS
+        assert sw.SLOT_RECONCILIATION_STATS_TTL_SECONDS > sw.SLOT_RECONCILIATION_STALE_SECONDS
+        import json as _json
+
+        stats = _json.loads(redis_client.set.await_args.args[1])
+        assert stats["released"] == 2
+        assert stats["last_run_at"]
+
+    @pytest.mark.asyncio
+    async def test_slot_reconciliation_failure_persists_partial_stats_then_raises(self) -> None:
+        """FAR-604 F6: a sweep failure is persisted (with the PARTIAL counts
+        the sweep achieved) and then RE-RAISED so SAQ's retries=2 engages —
+        a silently dead sweep must never re-open the FAR-604 wedge invisibly."""
+        redis_client = AsyncMock()
+        from modulo.core.run_admission import SlotReconciliationError
+
+        err = SlotReconciliationError("sweep failed", released=1, per_pipeline={"p1": 1})
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch(
+                "modulo.core.run_admission.reconcile_pipeline_slots",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client),
+            pytest.raises(SlotReconciliationError),
+        ):
+            await sw.slot_reconciliation({})
+
+        redis_client.set.assert_awaited_once()
+        import json as _json
+
+        stats = _json.loads(redis_client.set.await_args.args[1])
+        assert stats["released"] == 1
+        assert stats["per_pipeline"] == {"p1": 1}
+        assert stats["error"] == "sweep_failed"
+        assert stats["last_run_at"]
+
+    @pytest.mark.asyncio
+    async def test_slot_reconciliation_persist_failure_does_not_break_sweep(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A stats-persistence failure must never fail the sweep itself."""
+        redis_client = AsyncMock()
+        redis_client.set.side_effect = RuntimeError("redis down")
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch(
+                "modulo.core.run_admission.reconcile_pipeline_slots",
+                new_callable=AsyncMock,
+                return_value={"released": 0, "per_pipeline": {}},
+            ),
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client),
+            caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.slot_reconciliation({})
+
+        assert result == {"released": 0, "per_pipeline": {}}
+        assert "sweep_stats_persist_failed" in caplog.text
 
     @pytest.mark.asyncio
     async def test_cost_probe_delegates(self) -> None:

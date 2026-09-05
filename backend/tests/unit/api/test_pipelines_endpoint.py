@@ -261,6 +261,32 @@ def test_create_pipeline_returns_201(client: TestClient) -> None:
     assert create.await_args.kwargs["account_id"] == _USER_ID
 
 
+def test_create_pipeline_rejects_zero_max_concurrent_runs(client: TestClient) -> None:
+    """FAR-604: 0 (or negative) permanently wedges run admission — the create
+    contract rejects it with a validation error before any row is written."""
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline") as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/pipelines", json={"name": "Wedged", "max_concurrent_runs": 0})
+
+    assert resp.status_code == 422
+    create.assert_not_awaited()
+
+
+def test_create_pipeline_rejects_negative_max_concurrent_runs(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.pipelines.create_pipeline") as create,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/pipelines", json={"name": "Wedged", "max_concurrent_runs": -1})
+
+    assert resp.status_code == 422
+    create.assert_not_awaited()
+
+
 def test_create_pipeline_default_autonomy_level(client: TestClient) -> None:
     pipeline = _make_pipeline()
     pipeline.default_autonomy_level = "notify_on_complete"

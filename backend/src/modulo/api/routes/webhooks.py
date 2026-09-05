@@ -38,7 +38,7 @@ from modulo.api.dependencies import (
     require_permission,
     system_engine_is_fallback,
 )
-from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
+from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_backpressure_delivery, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.auth.secret_storage import decode_stored_secret_scoped
@@ -52,6 +52,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
+    PipelineBackpressureError,
     PipelineRateLimitError,
     ReplayNotFoundError,
     TimestampExpiredError,
@@ -360,6 +361,39 @@ async def receive_webhook(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Concurrent run limit of {exc.limit} reached",
+        ) from exc
+    except PipelineBackpressureError as exc:
+        # FAR-604: the pipeline's pending queue is over the depth/age
+        # backpressure limits — refuse the delivery so the sender retries
+        # instead of ratcheting the queue further.
+        #
+        # The engine's ``backpressure_skipped`` event write happened INSIDE the
+        # (now unwound) main transaction, so it rolled back with the refusal —
+        # re-record the event + raw payload in a FRESH transaction (the
+        # TriggerBusyError post-unwind pattern) BEFORE raising the 429, or the
+        # skip is invisible, contradicting the "auditable, never silent"
+        # contract. Deliberately NOT caught inside the begin-block: swallowing
+        # there would COMMIT the dedup insert, so a byte-identical sender
+        # retry would be deduped instead of re-evaluated.
+        _log.info(
+            "webhooks.receive_webhook.backpressure_refused trigger=%s pipeline=%s reason=%s",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+            exc.reason,
+        )
+        if org_id is not None:
+            await record_backpressure_delivery(
+                trigger_id=trigger_id,
+                org_id=org_id,
+                trigger_type="webhook",
+                payload_hash=sha256_hex(raw_body),
+                reason=exc.reason,
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
         ) from exc
     except PipelineRateLimitError as exc:
         raise HTTPException(

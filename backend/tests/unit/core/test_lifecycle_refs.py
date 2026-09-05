@@ -140,6 +140,7 @@ class TestReservedKeys:
         assert "_work_item_id" in _RESERVED_INPUT_PAYLOAD_KEYS
         assert "_modulo.work_item" in _RESERVED_INPUT_PAYLOAD_KEYS
         assert "_feedback_correction" in _RESERVED_INPUT_PAYLOAD_KEYS
+        assert "_coalesce_key" in _RESERVED_INPUT_PAYLOAD_KEYS
 
     def test_payload_mapping_rejects_reserved_targets(self) -> None:
         for reserved in ("_work_item_id", "_modulo.work_item", "_feedback_correction"):

@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.jwt import create_claim_token as _create_claim_jwt
 from modulo.auth.jwt import decode_claim_token as _decode_claim_jwt
+from modulo.core import hitl_email_alerts
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.team_membership import TeamMembership
@@ -53,6 +54,15 @@ _log = logging.getLogger(__name__)
 # role is ``runner`` or ``operator`` (mirroring the org-level ``hitl.claim``
 # permission, which is runner-scoped).
 _TEAM_CLAIM_ROLES: tuple[str, ...] = ("runner", "operator")
+
+# Explicit overdue-threshold default (FAR-602). A gate config that lacks
+# ``overdue_threshold_minutes`` flows as ``None`` today: the interrupt payload
+# (``node_runner.make_hitl_gate_node``) carries ``hitl_config.get(...)`` and
+# the awaiting-human event reaches the UI without a threshold. The backend's
+# overdue tooling in THIS module (``list_overdue``/``count_overdue``) has
+# always used 30 minutes as its bare-literal default — named here so the
+# default has a single explicit owner instead of a magic number.
+DEFAULT_OVERDUE_THRESHOLD_MINUTES: int = 30
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -198,6 +208,27 @@ class HITLManager:
             if existing is None:
                 raise RuntimeError(f"Concurrent gate creation lost race for run={run_id} gate={gate_id}") from None
             return existing
+        # FAR-602: the gate just fired — fire-and-forget the user-configurable
+        # email alerts. Scheduling must never delay the interrupt (pure task
+        # creation) nor break it (any failure is logged, never raised); the
+        # background task opens its OWN session because this one belongs to
+        # the interrupt transaction. Only the fresh-insert path dispatches:
+        # the idempotent re-entry path above is a replay, not a new gate.
+        try:
+            hitl_email_alerts.schedule_hitl_email_dispatch(
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                run_id=run_id,
+                gate_label=gate_id,
+            )
+        except Exception as exc:
+            # schedule_hitl_email_dispatch is no-throw by contract; this guard
+            # keeps a scheduling defect from ever breaking gate creation.
+            _log.warning(
+                "hitl_manager.gate_email_schedule_failed: %s",
+                exc,
+                extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+            )
         return gate
 
     # ------------------------------------------------------------------
@@ -608,7 +639,7 @@ class HITLManager:
         session: AsyncSession,
         org_id: uuid.UUID,
         *,
-        threshold_minutes: int = 30,
+        threshold_minutes: int = DEFAULT_OVERDUE_THRESHOLD_MINUTES,
     ) -> list[dict[str, Any]]:
         """Return gates whose ``claimed_at`` exceeds the overdue threshold.
 
@@ -643,7 +674,7 @@ class HITLManager:
         session: AsyncSession,
         org_id: uuid.UUID,
         *,
-        threshold_minutes: int = 30,
+        threshold_minutes: int = DEFAULT_OVERDUE_THRESHOLD_MINUTES,
     ) -> int:
         """Return the number of gates that exceed the overdue threshold."""
         now = datetime.now(UTC)

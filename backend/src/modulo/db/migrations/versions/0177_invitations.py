@@ -1,7 +1,7 @@
 """invitations — one-time in-app invite tokens (FAR-461).
 
-Revision ID: 0176_invitations
-Revises: 0174_per_org_last_admin_guard
+Revision ID: 0177_invitations
+Revises: 0176_trigger_event_validation_results
 Create Date: 2026-08-27
 
 Admins hand new members a one-time enrollment link instead of typing a
@@ -32,8 +32,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0176_invitations"
-down_revision: str | None = "0174_per_org_last_admin_guard"
+revision: str = "0177_invitations"
+down_revision: str | None = "0176_trigger_event_validation_results"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
