@@ -63,6 +63,11 @@ DEMO_ORG_NAME = "Demo"
 
 DEMO_PIPELINE_NAME = "Demo Governance Pipeline"
 
+# The seeded demo run's single node output (FAR-583: written to
+# run_node_outputs via the repo REPLACE, no longer a legacy runs column).
+_DEMO_OUTPUT_NODE_ID = "demo"
+_DEMO_OUTPUT_TEXT = "Sample demo output — synthetic, no agent execution."
+
 # SQLAlchemy DBAPIError/StatementError str() and repr() embed the failed
 # statement's bind parameters as a "[parameters: (...)]" section. The demo
 # account INSERT binds include the demo user's bcrypt password_hash, so every
@@ -498,7 +503,6 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
             total_cost_usd=total_cost_usd,
             error_detail="Demo sample failure — no real work was performed." if status == "failed" else None,
             error_code="DEMO_SAMPLE" if status == "failed" else None,
-            outputs_json={"demo": "Sample demo output — synthetic, no agent execution."},
         )
         try:
             # Savepoint: same multi-boot protection for the run row
@@ -506,6 +510,30 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
             async with session.begin_nested():
                 session.add(run)
                 await session.flush()
+                # FAR-583: the demo blobs write through the repo REPLACE
+                # (run_node_outputs) in the SAME transaction — the seeder is a
+                # live seeder for the new table. Best-effort scoped to its own
+                # savepoint: the seeder must never break boot
+                # (commit-then-error ordering — the run row is already
+                # written; the catch-up sweep in dispatcher_reconcile heals
+                # the new table within one tick if this write fails).
+                try:
+                    from modulo.db.crud.run_node_outputs import replace_run_node_outputs
+
+                    async with session.begin_nested():
+                        await replace_run_node_outputs(
+                            session,
+                            run_id=run.id,
+                            organisation_id=org.id,
+                            outputs={_DEMO_OUTPUT_NODE_ID: _DEMO_OUTPUT_TEXT},
+                            telemetry=None,
+                        )
+                except Exception as exc:
+                    _log.warning(
+                        "demo_seed.run_outputs_write_failed run=%s: %s",
+                        run.id,
+                        _safe_exc_text(exc),
+                    )
         except IntegrityError:
             existing_result = await session.execute(
                 select(Run.id).where(Run.organisation_id == org.id, Run.run_number == run_number)

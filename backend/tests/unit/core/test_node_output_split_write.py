@@ -20,6 +20,7 @@ from modulo.core.cost_controller.finalize import (
     finalize_cancelled_run,
     finalize_cost,
 )
+from modulo.db.crud.run_node_outputs import RunBlobs
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -145,6 +146,10 @@ async def test_finalize_already_pure_rows_idempotent_noop() -> None:
     session = _mock_session(run)
     with (
         patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
+        ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
         patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
     ):
@@ -193,6 +198,10 @@ async def test_cancel_path_does_not_resplit_pure_rows() -> None:
     session = _mock_session(run)
     with (
         patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
+        ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
         patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
         patch("modulo.core.cost_controller.finalize._log") as mock_log,
@@ -285,6 +294,10 @@ async def test_recovery_fields_survive_later_finalize_merge() -> None:
     session2 = _mock_session(run2)
     with (
         patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
+        ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs2,
         patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
     ):

@@ -94,7 +94,7 @@ from modulo.core.spend_ceiling import (
     evaluate_spend_ceilings,
 )
 from modulo.db.crud.run import update_run_status
-from modulo.db.crud.run_node_outputs import DualWriteError
+from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs_with_fallback
 from modulo.db.models.agent import Agent
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.journey import Journey
@@ -1566,9 +1566,14 @@ async def finalize_cost(
     status = _apply_cancel_wins(run, status)
 
     merged_usage = _merge(run.node_token_usage, segment_node_token_usage, segment_wins=True)
+    # FAR-583 read-switch: the stored cumulative blobs reassemble from
+    # run_node_outputs via the repo reader (with the empty/mismatch legacy
+    # fallback) inside the caller's SAME transaction — one batched repo query,
+    # never a per-node lazy load. The merge/write ordering is unchanged.
+    stored_blobs = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
     merged_outputs, merged_telemetry = _split_merge_outputs(
-        run.outputs_json,
-        run.node_telemetry_json,
+        stored_blobs.outputs,
+        stored_blobs.telemetry,
         segment_completed_node_outputs,
         node_type_map,
         run_id=str(run.id),
@@ -1981,15 +1986,20 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     the cancel process lacks the in-memory dicts, so the accrued segment count
     is never determinable).
 
-    Both stored output columns are re-fed (FAR-125 P1b): ``outputs_json`` as
-    the segment and ``node_telemetry_json`` as the split signal read inside
-    ``finalize_cost``, so already-pure rows are idempotent no-ops and legacy
-    rows are split exactly once.
+    Both stored output columns are re-fed (FAR-125 P1b): the reassembled
+    outputs as the segment and the reassembled telemetry as the split signal
+    read inside ``finalize_cost``, so already-pure rows are idempotent no-ops
+    and legacy rows are split exactly once. Both reassemble from
+    ``run_node_outputs`` via the repo reader (FAR-583 read-switch, with the
+    legacy fallback) in the SAME transaction.
     """
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         return
-    if not (run.outputs_json or run.node_token_usage or run.node_telemetry_json):
+    # FAR-583 read-switch: ONE batched repo read (legacy fallback included)
+    # for the re-feed decision + the segment payload below.
+    stored_blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=run.organisation_id)
+    if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
         _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
         return
     node_type_map = await _load_node_type_map(session, run.snapshot_id)
@@ -1999,7 +2009,7 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
         org_id=org_id,
         status="cancelled",
         segment_node_token_usage=run.node_token_usage,
-        segment_completed_node_outputs=run.outputs_json,
+        segment_completed_node_outputs=stored_blobs.outputs,
         node_type_map=node_type_map,
         is_terminal=True,
         session_factory=None,

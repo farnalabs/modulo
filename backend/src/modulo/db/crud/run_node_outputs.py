@@ -66,7 +66,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, NamedTuple
 
-from sqlalchemy import JSON, cast, delete, func, null, select, update
+from sqlalchemy import JSON, String, and_, cast, delete, exists, func, null, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -239,6 +239,22 @@ def _sql_null() -> Any:
     NULL expression.
     """
     return cast(null(), JSON)
+
+
+# "A side holds a meaningful value": ``CAST(col AS TEXT) != 'null'``. The
+# legacy columns hold one of three states — SQL NULL (side absent), the JSON
+# null VALUE (an explicitly-None side: SQLAlchemy's JSON type serialises
+# ``None`` as the 'null' VALUE, see :func:`_sql_null`), or a real value. The
+# text-cast comparison is dialect-portable: Postgres renders ``col::text``
+# (jsonb null's text IS 'null'), SQLite's TEXT-backed JSON already IS text,
+# and SQL NULL compares NULL (excluded). A direct JSON-typed cast cannot be
+# used — SQLite's CAST to the non-native JSON type name collapses to NUMERIC
+# affinity ('null' -> 0), making every TEXT compare non-equal.
+_JSON_NULL_TEXT = "null"
+
+
+def _side_present(column: Any) -> Any:
+    return cast(column, String) != _JSON_NULL_TEXT
 
 
 async def _resolve_dialect(session: AsyncSession) -> str:
@@ -809,6 +825,27 @@ def _markers_have_sentinel_node_id(markers: dict[str, Any] | None) -> bool:
     return False
 
 
+async def _existing_row_updated_at(
+    session: AsyncSession, run_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, datetime | None]:
+    """Per-run ``max(updated_at)`` over the run's new-table rows (None = none).
+
+    Used twice by the backfill: the census baseline and the pre-insert
+    re-terminalization ghost re-check. Module-level so tests can simulate a
+    concurrent commit between the two reads.
+    """
+    if not run_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(RunNodeOutput.run_id, func.max(RunNodeOutput.updated_at))
+            .where(RunNodeOutput.run_id.in_(list(run_ids)))
+            .group_by(RunNodeOutput.run_id)
+        )
+    ).all()
+    return {uuid.UUID(str(r.run_id)): r.updated_at for r in rows}
+
+
 async def backfill_run_node_outputs_batch(
     session: AsyncSession,
     *,
@@ -821,22 +858,54 @@ async def backfill_run_node_outputs_batch(
     Selection (high-water): ``organisation_id == :org AND status IN
     (TERMINAL_STATUSES) AND completed_at > :mark ORDER BY completed_at ASC
     LIMIT :cap`` — the mark advances to the max ``completed_at`` in the
-    batch. Per run the FULL representation is written idempotently (``ON
-    CONFLICT DO NOTHING``): per-node ``__final__`` rows from the UNION of
-    both dicts (values as-is; per-side SQL NULL when a side lacks the key),
-    the metadata row when either side is ``{}``, and one marker row per
-    legacy markers key (node id via the twin parser; unparseable keys kept
-    as ``__unknown__`` rows). Runs whose legacy dicts carry ``__``-prefixed
+    batch. Two NOT-EXISTS trigger legs keep already-healed runs out of the
+    batch entirely (the design's trigger predicate, SQL-side so a drained
+    org re-scans almost nothing on the steady-state tick):
+
+    * blobs leg — any legacy blob non-NULL AND no ``__final__`` row for the
+      run (the writers are all-or-nothing per run inside one transaction, so
+      a ``__final__`` row's presence proves the outputs/telemetry/metadata
+      representation was written);
+    * markers leg — markers non-NULL AND no attempt-keyed marker row for the
+      run.
+
+    Per run the FULL representation is written idempotently (``ON CONFLICT
+    DO NOTHING``): per-node ``__final__`` rows from the UNION of both dicts
+    (values as-is; per-side SQL NULL when a side lacks the key), the
+    metadata row when either side is ``{}``, and one marker row per legacy
+    markers key (node id via the twin parser; unparseable keys kept as
+    ``__unknown__`` rows). Runs whose legacy dicts carry ``__``-prefixed
     node ids are SKIPPED and counted (migration 0176 quarantines them to the
     side table; the sweep never touches them), never aborting on data.
 
-    Returns ``{"runs_selected", "runs_backfilled", "runs_quarantined",
-    "rows_written", "unknown_marker_keys", "new_high_water"}`` — the last is
-    a ``datetime`` (or the unchanged mark). The ``status='unknown'`` markers
-    leg lives in migration 0176 only: the sweep heals TERMINAL runs, whose
-    markers are complete.
+    Re-terminalization ghost protection (FAR-583): immediately before the
+    INSERT batch the run's new-table ``max(updated_at)`` is re-checked
+    against the value captured by the batch census; a run whose rows moved
+    (a concurrent dual-write/REPLACE committed between census and insert) is
+    SKIPPED — the concurrent writer owns the run's rows this pass.
+
+    Returns ``{"runs_selected", "runs_backfilled", "runs_skipped_healed",
+    "runs_skipped_ghost", "runs_quarantined", "rows_written",
+    "unknown_marker_keys", "new_high_water"}`` — the last is a ``datetime``
+    (or the unchanged mark). The ``status='unknown'`` markers leg lives in
+    migration 0176 only: the sweep heals TERMINAL runs, whose markers are
+    complete. Ties at the same ``completed_at`` are consumed by the strict
+    ``> mark`` advance one batch at a time; a batch boundary inside a tie
+    skips the remainder of that tie until the next mark-less pass.
     """
     await _assert_write_org(session, organisation_id)
+
+    # The __final__ row kind carries the outputs/telemetry/metadata
+    # representation; the marker rows carry non-__final__ attempt keys. The
+    # inner ``Run.id`` reference auto-correlates to the outer runs FROM.
+    final_row_exists = exists().where(
+        RunNodeOutput.run_id == Run.id,
+        RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+    )
+    marker_row_exists = exists().where(
+        RunNodeOutput.run_id == Run.id,
+        RunNodeOutput.attempt_key != FINAL_ATTEMPT_KEY,
+    )
 
     run_stmt = (
         select(Run.id, Run.outputs_json, Run.node_telemetry_json, Run.raw_output_markers, Run.completed_at)
@@ -849,17 +918,63 @@ async def backfill_run_node_outputs_batch(
     )
     if high_water_mark is not None:
         run_stmt = run_stmt.where(Run.completed_at > high_water_mark)
+    # Trigger predicate: only runs the sweep can actually heal enter the
+    # batch (absent representation OR absent marker rows) — a drained org
+    # selects nothing on the steady-state tick. A side counts as PRESENT only
+    # when it holds a real JSON value (see _side_present).
+    run_stmt = run_stmt.where(
+        or_(
+            and_(
+                or_(
+                    _side_present(Run.outputs_json),
+                    _side_present(Run.node_telemetry_json),
+                    _side_present(Run.raw_output_markers),
+                ),
+                ~final_row_exists,
+            ),
+            and_(_side_present(Run.raw_output_markers), ~marker_row_exists),
+        )
+    )
     batch = (await session.execute(run_stmt)).all()
 
     counts: dict[str, Any] = {
         "runs_selected": len(batch),
         "runs_backfilled": 0,
+        "runs_skipped_healed": 0,
+        "runs_skipped_ghost": 0,
         "runs_quarantined": 0,
         "rows_written": 0,
         "unknown_marker_keys": 0,
         "new_high_water": high_water_mark,
     }
     max_completed: datetime | None = high_water_mark
+
+    if not batch:
+        return counts
+
+    # ONE batched census of the batch's existing rows: the key set (for the
+    # per-run already-healed skip) and the max(updated_at) (the baseline the
+    # pre-insert ghost re-check compares against).
+    captured_keys: dict[uuid.UUID, set[tuple[str, str]]] = {}
+    captured_updated: dict[uuid.UUID, datetime | None] = {}
+    census = (
+        await session.execute(
+            select(
+                RunNodeOutput.run_id,
+                RunNodeOutput.node_id,
+                RunNodeOutput.attempt_key,
+                RunNodeOutput.updated_at,
+            ).where(RunNodeOutput.run_id.in_([row.id for row in batch]))
+        )
+    ).all()
+    for r in census:
+        run_key = uuid.UUID(str(r.run_id))
+        captured_keys.setdefault(run_key, set()).add((r.node_id, r.attempt_key))
+        previous = captured_updated.get(run_key)
+        if previous is None or (r.updated_at is not None and r.updated_at > previous):
+            captured_updated[run_key] = r.updated_at
+
+    insert_bound: list[tuple[uuid.UUID, list[NodeOutputWrite]]] = []
 
     for run_row in batch:
         run_id: uuid.UUID = run_row.id
@@ -909,9 +1024,35 @@ async def backfill_run_node_outputs_batch(
                 if node_id == UNKNOWN_NODE_ID:
                     counts["unknown_marker_keys"] += 1
 
-        await _upsert_rows(session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=True)
-        counts["runs_backfilled"] += 1
-        counts["rows_written"] += len(rows)
+        # Already-healed skip: every row this pass would write is already
+        # present (ON CONFLICT DO NOTHING would no-op) — skip without
+        # touching the table. Marker key-set parity is inherent: a missing
+        # marker key is a would-write key not in the captured set.
+        would_write = {(row.node_id, row.attempt_key) for row in rows}
+        if would_write and would_write <= captured_keys.get(run_id, set()):
+            counts["runs_skipped_healed"] += 1
+            continue
+
+        insert_bound.append((run_id, rows))
+
+    if insert_bound:
+        # Re-terminalization ghost protection: re-check max(updated_at) for
+        # the insert-bound runs immediately before the INSERT batch; a run
+        # whose rows moved since the census is owned by a concurrent writer
+        # this pass — skip it (ON CONFLICT DO NOTHING alone would keep the
+        # concurrent rows, but the skip keeps the counters honest and avoids
+        # racing the in-flight REPLACE write).
+        fresh_updated = await _existing_row_updated_at(session, [run_id for run_id, _ in insert_bound])
+
+        for run_id, rows in insert_bound:
+            if fresh_updated.get(run_id) != captured_updated.get(run_id):
+                counts["runs_skipped_ghost"] += 1
+                continue
+            await _upsert_rows(
+                session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=True
+            )
+            counts["runs_backfilled"] += 1
+            counts["rows_written"] += len(rows)
 
     counts["new_high_water"] = max_completed
     return counts

@@ -518,6 +518,61 @@ class TestBackfill:
             result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_B, cap=100)
         assert result["runs_selected"] == 0
 
+    async def test_already_healed_runs_are_excluded_from_selection(self, session: AsyncSession) -> None:
+        """The NOT-EXISTS trigger legs keep healed runs out of the batch — a
+        drained org selects nothing on the steady-state (mark-less) tick."""
+        await _seed_run(session, completed_at=datetime(2026, 9, 1, 12, 0, 0), outputs={"a": {"v": 1}})
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert first["runs_selected"] == 1
+        assert first["runs_backfilled"] == 1
+
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            second = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert second["runs_selected"] == 0
+        assert second["runs_backfilled"] == 0
+
+    async def test_markers_only_run_selected_by_trigger_leg(self, session: AsyncSession) -> None:
+        """A markers-only run (no outputs/telemetry) matches the markers leg."""
+        await _seed_run(
+            session,
+            completed_at=datetime(2026, 9, 1, 12, 0, 0),
+            markers={"junk-key": {"raw": "x"}},
+        )
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert result["runs_selected"] == 1
+        assert result["unknown_marker_keys"] == 1
+
+    async def test_ghost_moved_rows_skip_the_insert(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Re-terminalization ghost protection: rows that moved between the
+        census and the pre-insert re-check are skipped, never overwritten."""
+        import modulo.db.crud.run_node_outputs as repo_module
+
+        run = await _seed_run(session, completed_at=datetime(2026, 9, 1, 12, 0, 0), outputs={"a": {"v": 1}})
+
+        async def _moved_recheck(s: AsyncSession, run_ids: Any) -> dict[uuid.UUID, datetime | None]:
+            # The pre-insert re-check pretends a concurrent dual-write just
+            # committed new rows for the run after the census read.
+            return {uuid.UUID(str(rid)): datetime(2026, 9, 2, 0, 0, 0) for rid in run_ids}
+
+        monkeypatch.setattr(repo_module, "_existing_row_updated_at", _moved_recheck)
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert result["runs_selected"] == 1
+        assert result["runs_skipped_ghost"] == 1
+        assert result["runs_backfilled"] == 0
+        assert result["rows_written"] == 0
+        blobs = await _read_blobs(session, run, raw=True)
+        # Nothing was written by the ghosted pass.
+        assert blobs == RunBlobs(outputs=None, telemetry=None, markers=None)
+
 
 class TestBytesAccounting:
     async def test_metadata_row_is_excluded(self, session: AsyncSession) -> None:

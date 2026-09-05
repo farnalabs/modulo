@@ -34,6 +34,7 @@ from modulo.core.cost_controller.finalize import (
     finalize_cancelled_run,
     finalize_cost,
 )
+from modulo.db.crud.run_node_outputs import RunBlobs
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -548,6 +549,10 @@ async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
             "modulo.core.cost_controller.finalize.load_live_components",
             side_effect=RuntimeError("boom"),
         ),
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
+        ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
         # This test exercises the fallback cost calc, not the ledger block
@@ -594,6 +599,10 @@ async def test_finalize_cost_fallback_runs_ledger_block() -> None:
         patch(
             "modulo.core.cost_controller.finalize.load_live_components",
             side_effect=RuntimeError("boom"),
+        ),
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
         patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
@@ -654,7 +663,13 @@ async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> N
             MagicMock(scalar_one_or_none=MagicMock(return_value={"nodes": [{"id": "node-a"}]})),  # graph_json
         ]
     )
-    with patch("modulo.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize:
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
+        ),
+        patch("modulo.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize,
+    ):
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
     mock_finalize.assert_awaited_once()
     kwargs = mock_finalize.await_args.kwargs

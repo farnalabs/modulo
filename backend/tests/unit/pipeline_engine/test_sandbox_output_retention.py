@@ -24,6 +24,7 @@ import asyncio
 import logging
 import re
 import uuid
+from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -113,6 +114,23 @@ class _RetentionResult:
     def scalar_one_or_none(self) -> _FakeRunRow | None:
         return self._row
 
+    def all(self) -> list[Any]:
+        # The FAR-583 repo readers batch the new-table rows via .all(); the
+        # fake serves an EMPTY new table (markers reassemble from the legacy
+        # fallback below).
+        return []
+
+    def first(self) -> Any:
+        # The FAR-583 legacy fallback reads the three blob columns; serve the
+        # fake row's values (the gate then reassembles the markers dict).
+        if self._row is None or "raw_output_markers" not in self._statement:
+            return None
+        return SimpleNamespace(
+            outputs_json=self._row.outputs_json,
+            node_telemetry_json=self._row.node_telemetry_json,
+            raw_output_markers=self._row.raw_output_markers,
+        )
+
     def fetchone(self) -> tuple[Any] | None:
         # The dispatch-marker fenced UPDATE (sandbox_dispatch_state ...
         # RETURNING id) must grant regardless of row presence.
@@ -150,6 +168,11 @@ class _RetentionSession:
         return False
 
     def begin(self) -> "_RetentionSession":
+        return self
+
+    def begin_nested(self) -> "_RetentionSession":
+        # The FAR-583 marker persist writes the new-table leg inside a
+        # SAVEPOINT; the fake models it as the same no-op session scope.
         return self
 
     def in_transaction(self) -> bool:
@@ -826,11 +849,12 @@ async def test_guard_a_skips_when_prior_attempt_marked_delivery_done():
     carries delivery_done=True returns the SKIPPED ENVELOPE without provisioning
     a sandbox."""
     row = _FakeRunRow()
+    _run_uuid = str(uuid.uuid4())
     row.raw_output_markers = {
-        "run:run-1:node:n1:1": {
+        f"run:{_run_uuid}:node:n1:1": {
             "_modulo_marker": True,
             "delivery_done": True,
-            "attempt_key": "run:run-1:node:n1:1",
+            "attempt_key": f"run:{_run_uuid}:node:n1:1",
         }
     }
     sandbox = _make_sandbox_mock()
@@ -846,6 +870,9 @@ async def test_guard_a_skips_when_prior_attempt_marked_delivery_done():
     settings = MagicMock(modulo_idempotency_gate_enabled=True)
     state = _run_state()
     state["_claim_lease"] = "tok-claim"
+    # FAR-583: the gate's repo read parses the run id as a UUID; the seeded
+    # marker key embeds the SAME id so the delivery_done lookup matches.
+    state["_run_id"] = _run_uuid
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.settings.get_settings", return_value=settings),
@@ -879,6 +906,8 @@ async def test_guard_a_skips_after_success_persisted_marker():
     settings = MagicMock(modulo_idempotency_gate_enabled=True)
     state = _run_state()
     state["_claim_lease"] = "tok-claim"
+    # FAR-583: the gate's repo read parses the run id as a UUID.
+    state["_run_id"] = str(uuid.uuid4())
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
@@ -888,7 +917,7 @@ async def test_guard_a_skips_after_success_persisted_marker():
 
     assert first["output"]["status"] == "completed"
     assert _single_marker(row)["delivery_done"] is True
-    assert _marker_delivery_done_for_node(row.raw_output_markers, "run-1", "n1") is True
+    assert _marker_delivery_done_for_node(row.raw_output_markers, state["_run_id"], "n1") is True
 
     # Re-entry: the same node executes again (process death after completion).
     # Guard A must read the SUCCESS-persisted marker and skip — no sandbox.

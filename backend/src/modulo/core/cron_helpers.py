@@ -4886,7 +4886,99 @@ def _dispatcher_summary() -> dict[str, Any]:
         "run_api_key_scanned": 0,
         "run_api_key_revoked": 0,
         "run_api_key_errors": 0,
+        # FAR-583 catch-up sweep counters — bumped per org by the sweep leg
+        # inside _reconcile_org; the dual_write_* keys are NOT tick counters
+        # (the app-process chokepoint orchestration bumps them on the shared
+        # Redis key directly — core.run_outputs_dualwrite).
+        "outputs_sweep_healed": 0,
+        "outputs_sweep_failed": 0,
+        "outputs_sweep_org_failed": 0,
     }
+
+
+# Per-org, per-tick cap on runs the FAR-583 catch-up sweep backfills. Bounds
+# the sweep's write volume so a drained backlog cannot starve the tick's
+# terminalizers: with the drain loop below, a backlog of N unhealed runs is
+# consumed at 500 runs per org per tick, and a steady-state org (every run
+# healed) selects zero rows because the helper's NOT-EXISTS trigger legs keep
+# healed runs out of the selection. 500 mirrors the repo helper's default cap.
+_OUTPUTS_SWEEP_TICK_CAP = 500
+
+
+async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any]) -> None:
+    """FAR-583 catch-up sweep for ONE org (own session/transaction).
+
+    Drains the org's un-healed TERMINAL runs into ``run_node_outputs`` by
+    calling the repo module's batched backfill helper in a drain loop: each
+    iteration backfills up to *remaining* runs and advances the high-water
+    mark to the batch's max ``completed_at`` until either the selection is
+    exhausted or the per-tick cap is consumed.
+
+    Isolation contract (design §CATCH-UP SWEEP): the sweep runs in its OWN
+    session/transaction — never the outer reconcile transaction — so a sweep
+    failure cannot roll back that tick's terminalizers. Per-org error
+    isolation: a failing org bumps ``outputs_sweep_org_failed`` and the
+    remaining orgs continue. Best-effort: a failure never raises past this
+    helper (cancellation excepted).
+    """
+    from modulo.db.crud.run_node_outputs import backfill_run_node_outputs_batch
+
+    factory = _open_system_factory()
+    healed = 0
+    failed = 0
+    skipped_healed = 0
+    skipped_ghost = 0
+    quarantined = 0
+    high_water: datetime | None = None
+    remaining = _OUTPUTS_SWEEP_TICK_CAP
+    try:
+        while remaining > 0:
+            requested = remaining
+            async with factory() as session, session.begin():
+                await _set_rls_org(session, org_id)
+                result = await backfill_run_node_outputs_batch(
+                    session,
+                    organisation_id=org_id,
+                    high_water_mark=high_water,
+                    cap=remaining,
+                )
+            selected = int(result["runs_selected"])
+            healed += int(result["runs_backfilled"])
+            failed += int(result.get("runs_failed", 0))
+            skipped_healed += int(result.get("runs_skipped_healed", 0))
+            skipped_ghost += int(result.get("runs_skipped_ghost", 0))
+            quarantined += int(result.get("runs_quarantined", 0))
+            new_high_water = result["new_high_water"]
+            remaining -= selected
+            # Drain loop safety: stop when the backlog is exhausted (a
+            # not-full batch means nothing further to select) or the mark
+            # cannot advance (no completed_at in the batch — the loop would
+            # re-select the same rows forever).
+            if selected == 0 or selected < requested:
+                break
+            if new_high_water is None or new_high_water == high_water:
+                break
+            high_water = new_high_water
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["outputs_sweep_org_failed"] += 1
+        _log.exception("dispatcher_reconcile.outputs_sweep_org_failed (org %s)", org_id)
+        return
+    if healed or failed or quarantined or skipped_ghost:
+        summary["outputs_sweep_healed"] += healed
+        summary["outputs_sweep_failed"] += failed
+        _log.info(
+            "dispatcher_reconcile.outputs_sweep",
+            extra={
+                "org_id": str(org_id),
+                "healed": healed,
+                "failed": failed,
+                "skipped_healed": skipped_healed,
+                "skipped_ghost": skipped_ghost,
+                "quarantined": quarantined,
+            },
+        )
 
 
 async def _reconcile_org(
@@ -4975,6 +5067,12 @@ async def _reconcile_org(
                 summary,
                 terminalized_run_ids,
             )
+
+    # FAR-583 catch-up sweep: runs AFTER the reconcile transaction committed
+    # (its own session/tx — a sweep failure must not roll back this tick's
+    # terminalizers) and is per-org failure-isolated: one org failing bumps
+    # outputs_sweep_org_failed while the remaining orgs continue.
+    await _run_outputs_sweep_for_org(org_id, summary)
     return enqueue_failed_redispatched
 
 

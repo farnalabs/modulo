@@ -27,6 +27,7 @@ from modulo.core.pipeline_engine.recovery import (
     GuardrailOverrideRequiredError,
 )
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -131,6 +132,59 @@ def _make_snapshot() -> MagicMock:
         "edges": [],
     }
     return snapshot
+
+
+@pytest.fixture(autouse=True)
+def _stub_gate_fired(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-583: the detail endpoint's gate-fired flag derives in its own short
+    transaction (``_do_get_run_gate_fired``) and its markers leg reads through
+    the run_node_outputs repo reader — neither can run against the mocked
+    session. The stub re-derives from the run the test patched into
+    ``_do_get_run``, with the markers stub serving the run's raw_output_markers
+    exactly as the real reader reassembles them."""
+    import modulo.api.routes.runs as runs_module
+
+    async def _gate(factory: Any, principal: Any, run_id: Any) -> Any:
+        run = getattr(runs_module._do_get_run, "return_value", None)
+        if run is None:
+            raise runs_module.RunNotFoundError(run_id)
+        return await runs_module._run_gate_fired(None, run)
+
+    async def _markers(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        run = getattr(runs_module._do_get_run, "return_value", None)
+        markers = getattr(run, "raw_output_markers", None) if run is not None else None
+        return markers if isinstance(markers, dict) else None
+
+    monkeypatch.setattr(runs_module, "_do_get_run_gate_fired", _gate)
+    monkeypatch.setattr(runs_module, "read_run_markers_with_fallback", _markers)
+
+    # The io/diff endpoints reassemble the blobs through the repo reader too
+    # (FAR-583); the mocked session cannot serve the real queries, so the stub
+    # reassembles from the run the test patched into get_run (return_value
+    # style) or from the side_effect list in call order (diff style).
+    blob_state = {"calls": 0}
+
+    def _current_run(run_id: Any) -> Any:
+        get_run_mock = runs_module.get_run
+        ret = getattr(get_run_mock, "return_value", None)
+        if ret is not None and isinstance(getattr(ret, "outputs_json", None), dict):
+            return ret
+        se = getattr(get_run_mock, "side_effect", None)
+        if isinstance(se, list):
+            for candidate in se:
+                if getattr(candidate, "id", None) == run_id:
+                    return candidate
+        return None
+
+    async def _blobs(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+
+        run = _current_run(run_id)
+        blob_state["calls"] += 1
+        outputs = run.outputs_json if run is not None and isinstance(run.outputs_json, dict) else {}
+        telemetry = run.node_telemetry_json if run is not None and isinstance(run.node_telemetry_json, dict) else {}
+        return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
+
+    monkeypatch.setattr(runs_module, "read_run_blobs_with_fallback", _blobs)
 
 
 def _make_mock_session() -> AsyncMock:
@@ -1499,6 +1553,18 @@ def test_diff_node_output_success(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs.get_run") as mock_get_run,
         patch("modulo.api.routes.runs.set_rls_org"),
+        # FAR-583: the diff endpoint reassembles both runs' blobs through
+        # the repo reader — stub the two reads in call order (the mocked
+        # session cannot serve the real queries).
+        patch(
+            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            new=AsyncMock(
+                side_effect=[
+                    RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
+                    RunBlobs(outputs=run_b.outputs_json, telemetry=run_b.node_telemetry_json, markers=None),
+                ]
+            ),
+        ),
     ):
         mock_get_run.side_effect = [run_a, run_b]
         resp = client.post(
@@ -1539,6 +1605,18 @@ def test_diff_node_output_identical(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs.get_run") as mock_get_run,
         patch("modulo.api.routes.runs.set_rls_org"),
+        # FAR-583: the diff endpoint reassembles both runs' blobs through
+        # the repo reader — stub the two reads in call order (the mocked
+        # session cannot serve the real queries).
+        patch(
+            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            new=AsyncMock(
+                side_effect=[
+                    RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
+                    RunBlobs(outputs=run_b.outputs_json, telemetry=run_b.node_telemetry_json, markers=None),
+                ]
+            ),
+        ),
     ):
         mock_get_run.side_effect = [run_a, run_b]
         resp = client.post(
@@ -1597,6 +1675,18 @@ def test_diff_node_output_node_not_found(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs.get_run") as mock_get_run,
         patch("modulo.api.routes.runs.set_rls_org"),
+        # FAR-583: the diff endpoint reassembles both runs' blobs through
+        # the repo reader — stub the two reads in call order (the mocked
+        # session cannot serve the real queries).
+        patch(
+            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            new=AsyncMock(
+                side_effect=[
+                    RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
+                    RunBlobs(outputs=run_b.outputs_json, telemetry=run_b.node_telemetry_json, markers=None),
+                ]
+            ),
+        ),
     ):
         mock_get_run.side_effect = [run_a, run_b]
         resp = client.post(

@@ -50,6 +50,7 @@ from modulo.core.pipeline_engine.error_codes import class_for
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run_node_outputs import RunNodeOutput
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -544,7 +545,15 @@ class TestReasons:
 # ---------------------------------------------------------------------------
 
 
-_TABLES: list[Table] = cast(list[Table], [Run.__table__])
+_TABLES: list[Table] = cast(
+    list[Table],
+    [
+        Run.__table__,
+        # FAR-583: the classification hook's blob reads go through the
+        # run_node_outputs repo reader — the table must exist on this engine.
+        RunNodeOutput.__table__,
+    ],
+)
 
 
 @pytest.fixture

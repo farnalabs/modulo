@@ -82,6 +82,11 @@ from modulo.db.crud.run import (
 from modulo.db.crud.run import (
     list_runs as db_list_runs,
 )
+from modulo.db.crud.run_node_outputs import (
+    RunBlobs,
+    read_run_blobs_with_fallback,
+    read_run_markers_with_fallback,
+)
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.hitl_claim import HitlClaim
@@ -172,6 +177,27 @@ async def _do_get_run(
         if run is None:
             raise RunNotFoundError(run_id)
         return run
+
+
+async def _do_get_run_gate_fired(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> bool:
+    """Derive the run's FAR-228 gate-fired flag in its own short transaction.
+
+    The markers leg of the derivation reads through the ``run_node_outputs``
+    repo reader (FAR-583), which needs an open transaction — this helper
+    provides one (the run row itself was loaded by :func:`_do_get_run` in its
+    own transaction).
+    """
+    async with factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        stmt = select(Run).where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
+        run = (await session.execute(stmt)).scalar_one_or_none()
+        if run is None:
+            raise RunNotFoundError(run_id)
+        return await _run_gate_fired(session, run)
 
 
 async def _do_get_child_run_rollup(
@@ -698,13 +724,18 @@ class RunResponse(BaseModel):
     capacity: dict[str, Any] | None = None
 
 
-def _run_gate_fired(run: Any) -> bool:
+async def _run_gate_fired(session: AsyncSession, run: Any) -> bool:
     """Derive whether the FAR-228 idempotency gate fired for a run row.
 
     True when (a) the run's error_code is ``harness.idempotency_gate`` (guard B
     suppression), (b) the stored classification reason is ``email_delivered``,
     or (c) any raw-output marker carries ``delivery_done is True`` (guard A /
     success-path stamp / cancelled-retention). Never raises on non-dict columns.
+
+    FAR-583: the markers leg reads through the ``run_node_outputs`` repo
+    reader (explicit call — never a ``getattr`` on the legacy column), with
+    the empty/mismatch fallback to the legacy column. Must be called with
+    *session* inside an open transaction.
     """
     # The DB stores the RAW spelling for legacy rows (``idempotency_gate``) and
     # the dotted registry code (``harness.idempotency_gate``) for new writes, so
@@ -714,7 +745,9 @@ def _run_gate_fired(run: Any) -> bool:
     classification = getattr(run, "run_classification", None)
     if isinstance(classification, dict) and classification.get("reason") == REASON_DELIVERED_EMAIL:
         return True
-    markers = getattr(run, "raw_output_markers", None)
+    markers = await read_run_markers_with_fallback(
+        session, run_id=run.id, organisation_id=getattr(run, "organisation_id", None)
+    )
     return bool(_any_marker_delivery_done(markers))
 
 
@@ -779,8 +812,14 @@ def _resolve_trace_display(run: Any, otlp_endpoint: str | None) -> tuple[str | N
 def _build_run_response(
     run: Any,
     ctx: _RunDisplayContext | None = None,
+    *,
+    gate_fired: bool = False,
 ) -> RunResponse:
-    """Build a RunResponse from a Run ORM entity, populating derived fields."""
+    """Build a RunResponse from a Run ORM entity, populating derived fields.
+
+    *gate_fired* is derived by the caller via :func:`_run_gate_fired` (which
+    needs an open-transaction session for the FAR-583 markers read).
+    """
     ctx = ctx or _RunDisplayContext()
     token_consumption = _resolve_token_consumption(run)
     trace_id, trace_url = _resolve_trace_display(run, ctx.otlp_endpoint)
@@ -831,7 +870,7 @@ def _build_run_response(
         started_at=run.started_at,
         completed_at=run.completed_at,
         run_classification=run_classification,
-        gate_fired=_run_gate_fired(run),
+        gate_fired=gate_fired,
         blocked_partial_summary=blocked_partial_summary,
         guardrail_summary=_guardrail_summary_from_run(run),
         trigger_actor=ctx.trigger_actor,
@@ -1023,7 +1062,9 @@ async def trigger_run(
             # Build the response while the transaction is still open: the
             # run.pipeline relationship is lazy-loaded, and the session has
             # autobegin disabled, so a load outside a transaction would raise.
-            run_response = _build_run_response(run)
+            # gate_fired reads through the run_node_outputs repo reader in the
+            # SAME transaction (FAR-583).
+            run_response = _build_run_response(run, gate_fired=await _run_gate_fired(session, run))
     except IntegrityError:
         _log.exception(_CODE_RUNS_TRIGGER_RUN)
         raise HTTPException(
@@ -1164,6 +1205,7 @@ async def get_run_status(
 ) -> RunResponse:
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
+        gate_fired = await _run_with_retry(lambda: _do_get_run_gate_fired(factory, principal, run_id))
         child_cost, child_count = await _run_with_retry(lambda: _do_get_child_run_rollup(factory, principal, run_id))
         otlp_endpoint = await _do_get_otel_endpoint(factory, principal.organisation_id)
         trigger_actor, capacity, child_runs = await _run_with_retry(
@@ -1215,6 +1257,7 @@ async def get_run_status(
             child_runs=child_runs,
             capacity=capacity,
         ),
+        gate_fired=gate_fired,
     )
 
 
@@ -1418,15 +1461,19 @@ class FixtureExportResponse(BaseModel):
     fixture_map: dict[str, str]
 
 
-def _build_run_io_response(run: Run, node_labels: dict[str, str]) -> RunIOResponse:
+def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlobs) -> RunIOResponse:
     """Normalise, mask, and package a run's IO into a RunIOResponse.
 
     One shape for the frontend: node_return resolves the pure return (new
     rows) or the envelope verbatim (legacy rows); node_telemetry resolves
     the stored telemetry (new rows) or the inner output envelope (legacy).
+
+    *blobs* is the run's reassembled legacy-dict shape (FAR-583 read-switch:
+    the caller reassembles via the ``run_node_outputs`` repo reader inside
+    its transaction).
     """
-    outputs_json = run.outputs_json
-    telemetry_json = run.node_telemetry_json
+    outputs_json = blobs.outputs
+    telemetry_json = blobs.telemetry
     normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
     normalized_telemetry = _normalize_node_telemetry(telemetry_json, outputs_json)
 
@@ -1471,6 +1518,15 @@ async def get_run_io_endpoint(
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id, organisation_id=principal.organisation_id)
             snapshot = await _load_snapshot_for_run(session, run)
+            # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
+            # (one batched repo query + the legacy fallback SELECT).
+            blobs = (
+                None
+                if run is None
+                else await read_run_blobs_with_fallback(
+                    session, run_id=run_id, organisation_id=principal.organisation_id
+                )
+            )
     except IntegrityError:
         _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
@@ -1499,11 +1555,11 @@ async def get_run_io_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
-    if run is None:
+    if run is None or blobs is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
     node_labels = _build_node_labels(snapshot.graph_json if snapshot else None)
-    return _build_run_io_response(run, node_labels)
+    return _build_run_io_response(run, node_labels, blobs)
 
 
 @router.get("/{run_id}/export-fixture")
@@ -1526,6 +1582,11 @@ async def export_run_fixture(
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
             snapshot = await _load_snapshot_for_run(session, run)
+            # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
+            # (the response body is built after the tx closes).
+            blobs = await read_run_blobs_with_fallback(
+                session, run_id=run_id, organisation_id=principal.organisation_id
+            )
     except IntegrityError:
         _log.exception("runs.export_run_fixture")
         raise HTTPException(
@@ -1560,8 +1621,8 @@ async def export_run_fixture(
     # resolves each node's pure return for new-shape rows (telemetry present)
     # and returns the legacy envelope verbatim otherwise, so the exported
     # outputs_json mirrors GET /runs/{id}/io and legacy runs stay byte-identical.
-    outputs_json = run.outputs_json
-    telemetry_json = run.node_telemetry_json
+    outputs_json = blobs.outputs
+    telemetry_json = blobs.telemetry
     normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
 
     masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
@@ -1736,6 +1797,15 @@ async def get_run_node_output(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
+            # (one batched repo query + the legacy fallback SELECT).
+            blobs = (
+                None
+                if run is None
+                else await read_run_blobs_with_fallback(
+                    session, run_id=run_id, organisation_id=principal.organisation_id
+                )
+            )
     except IntegrityError:
         _log.exception("runs.get_run_node_output")
         raise HTTPException(
@@ -1764,11 +1834,11 @@ async def get_run_node_output(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
-    if run is None:
+    if run is None or blobs is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
 
-    outputs = run.outputs_json or {}
-    telemetry = run.node_telemetry_json or {}
+    outputs = blobs.outputs or {}
+    telemetry = blobs.telemetry or {}
     node_output = node_return(outputs, telemetry, node_id)
     if node_output is None:
         node_meta = node_telemetry(telemetry, outputs, node_id)
@@ -2617,12 +2687,18 @@ async def reveal_node_prompt(
                 fernet_key=settings.fernet_key,
             )
 
+            # FAR-583 read-switch: reassemble the prior-outputs blobs INSIDE
+            # the transaction (one batched repo query + the legacy fallback).
+            blobs = await read_run_blobs_with_fallback(
+                session, run_id=run_id, organisation_id=principal.organisation_id
+            )
+
         return _render_prompt_response(
             _build_messages(
                 agent,
                 _MessageContext(
                     input_payload=run.input_payload,
-                    outputs_json=run.outputs_json,
+                    outputs_json=blobs.outputs,
                     checkpoint_state=checkpoint_state,
                     node_id=node_id,
                 ),
@@ -2706,6 +2782,23 @@ async def diff_node_output(
             await set_rls_org(session, principal.organisation_id)
             run_a = await get_run(session, req.run_id_a, organisation_id=principal.organisation_id)
             run_b = await get_run(session, req.run_id_b, organisation_id=principal.organisation_id)
+            # FAR-583 read-switch: reassemble BOTH runs' blobs INSIDE the
+            # transaction (one batched repo query per run + the legacy
+            # fallback SELECT); the response body is built after the tx closes.
+            blobs_a = (
+                None
+                if run_a is None
+                else await read_run_blobs_with_fallback(
+                    session, run_id=req.run_id_a, organisation_id=principal.organisation_id
+                )
+            )
+            blobs_b = (
+                None
+                if run_b is None
+                else await read_run_blobs_with_fallback(
+                    session, run_id=req.run_id_b, organisation_id=principal.organisation_id
+                )
+            )
     except IntegrityError:
         _log.exception("runs.diff_node_output")
         raise HTTPException(
@@ -2735,19 +2828,19 @@ async def diff_node_output(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
-    if run_a is None:
+    if run_a is None or blobs_a is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run {req.run_id_a} not found",
         )
-    if run_b is None:
+    if run_b is None or blobs_b is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run {req.run_id_b} not found",
         )
 
-    masked_a, text_a = _node_output_for_diff(run_a, req.node_id_a, req.run_id_a)
-    masked_b, text_b = _node_output_for_diff(run_b, req.node_id_b, req.run_id_b)
+    masked_a, text_a = _node_output_for_diff(blobs_a.outputs, req.node_id_a, req.run_id_a)
+    masked_b, text_b = _node_output_for_diff(blobs_b.outputs, req.node_id_b, req.run_id_b)
 
     diff_lines, has_diff = _build_diff_lines(text_a, text_b)
 
@@ -2761,12 +2854,13 @@ async def diff_node_output(
     )
 
 
-def _node_output_for_diff(run: Run, node_id: str, run_label: str | uuid.UUID) -> tuple[Any, str]:
+def _node_output_for_diff(outputs: dict[str, Any] | None, node_id: str, run_label: str | uuid.UUID) -> tuple[Any, str]:
     """Return ``(masked_output, json_text)`` for one side of an output diff.
 
-    Raises 404 when the node is absent from the run's outputs.
+    Raises 404 when the node is absent from the run's outputs. *outputs* is
+    the run's reassembled outputs dict (FAR-583 read-switch).
     """
-    node_output = node_return(run.outputs_json or {}, None, node_id)
+    node_output = node_return(outputs or {}, None, node_id)
     if node_output is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
