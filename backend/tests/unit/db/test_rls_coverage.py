@@ -29,8 +29,18 @@ from pathlib import Path
 from modulo.db.models import Base
 
 # The root tenant entity is intentionally never row-level-secured: it is read
-# before an org context is established. This is the ONLY permitted exclusion.
-_EXCLUDED_TABLES = frozenset({"organisations"})
+# before an org context is established.
+#
+# ``invitations`` is also excluded on purpose (FAR-461): consumption happens on
+# the unauthenticated ``POST /api/v1/auth/accept-invite`` route *before* any
+# principal exists, so there is no caller org context to satisfy an RLS
+# predicate; enforcing RLS here would make self-enrollment impossible. Every
+# access path scopes by organisation explicitly (admin routes scope to the
+# caller's org; consumption routes by the unique pre-hashed token), and the
+# plaintext token has 256 bits of entropy so unscoped enumeration is not a
+# practical attack surface. This mirrors the existing ``organisations``
+# exclusion: a table that is intentionally read/written pre-org-context.
+_EXCLUDED_TABLES = frozenset({"organisations", "invitations"})
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -102,7 +112,12 @@ def test_organisations_table_is_the_only_exclusion() -> None:
     # Guards against silently expanding the exclusion set. If a new table is
     # legitimately unpoliced, this test (and its reviewers) must be updated
     # deliberately.
-    assert sorted(_EXCLUDED_TABLES) == ["organisations"]
+    #
+    # ``invitations`` is the only other permitted exclusion (FAR-461): it is read
+    # and written on the unauthenticated accept-invite route before any principal
+    # exists, so RLS cannot apply. See _EXCLUDED_TABLES above. If another table
+    # is added here, the rationale must be documented and this assertion updated.
+    assert sorted(_EXCLUDED_TABLES) == ["invitations", "organisations"]
 
 
 # ---------------------------------------------------------------------------

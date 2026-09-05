@@ -86,6 +86,20 @@ async def update_membership_role(
     return membership
 
 
+async def reactivate_membership(session: AsyncSession, membership: OrgMembership, role: str) -> OrgMembership:
+    """Re-activate a tombstoned (``deactivated_at`` set, gh-1794/FAR-533)
+    membership in place and set its role, preserving the row (history).
+
+    Used by the FAR-461 invite-acceptance flow: re-inviting a deactivated
+    member must revive their membership — not skip it — with the invitation's
+    org role.
+    """
+    membership.deactivated_at = None
+    membership.role = role
+    await session.flush()
+    return membership
+
+
 async def resolve_role_from_membership(session: AsyncSession, account_id: str, organisation_id: str) -> str | None:
     """Return the LIVE org role for the account in the org, or None if no active membership.
 

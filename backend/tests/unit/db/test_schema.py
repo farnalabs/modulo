@@ -28,6 +28,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "feature_flag_catalog",
         "feedback_records",
         "hitl_claims",
+        "invitations",
         "journeys",
         "library_primitives",
         "library_sync_state",
