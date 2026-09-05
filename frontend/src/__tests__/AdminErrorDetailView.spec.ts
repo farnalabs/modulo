@@ -222,9 +222,10 @@ describe('AdminErrorDetailView', () => {
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('Failed to load error group')
     expect(alert.text()).toContain('group gone')
-    // Known repo-wide ErrorAlert bug: the Retry button does not render for an
-    // absent `retryable` Boolean prop (characterised in AdminAuditView.spec.ts).
-    expect(alert.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
+    // ErrorAlert defaults `retryable` to true, so a load failure with an
+    // on-retry handler (loadDetail) offers the Retry action. Characterised in
+    // AdminAuditView.spec.ts (FAR-608 fix).
+    expect(alert.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
     wrapper.unmount()
   })
 

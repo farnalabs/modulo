@@ -123,9 +123,10 @@ describe('EnvironmentProfileList', () => {
     const alert = wrapper.find('.border-destructive\\/50')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('backend down')
-    // Known repo-wide ErrorAlert bug: the Retry button does not render for an
-    // absent `retryable` Boolean prop. Characterised in AdminAuditView.spec.ts.
-    expect(alert.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
+    // ErrorAlert defaults `retryable` to true, so a load failure with an
+    // on-retry handler (store.fetchProfiles) offers the Retry action.
+    // Characterised in AdminAuditView.spec.ts (FAR-608 fix).
+    expect(alert.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
     wrapper.unmount()
   })
 
