@@ -51,9 +51,15 @@ BACKEND_INCLUDE = "backend/src/**/*.py"
 FRONTEND_INCLUDE = "frontend/src/**"
 
 # Coverage-denominator exclusions: files that carry no unit-testable production
-# logic (or are auto-generated / type-only) must not drag the gate down. These
-# overlap with sonar.exclusions (notably **/schema.ts) but are curated
-# independently for the gate's denominator.
+# logic (or are auto-generated / type-only) must not drag the gate down. This
+# list is curated INDEPENDENTLY of SonarCloud's sonar.exclusions and is
+# intentionally broader — sonar.exclusions is only "**/schema.ts,**/locales/**,
+# backend/tests/**" (it does not cover backend migrations/scripts/tools or the
+# frontend __tests__/type-barrel/*.d.ts paths). Critically it MUST include the
+# generated frontend/src/lib/api/schema.ts: schema-freshness commits land it on
+# every API-touching PR and it has no executable lines, so without this
+# exclusion the unmeasured-file fallback would count it as 0% over ~36k lines
+# and fail the gate. Regression pin: test_main_type_only_changed_file_absent_from_lcov_passes.
 COVERAGE_EXCLUSION_PATTERNS = (
     "backend/src/modulo/db/migrations/**",
     "backend/scripts/**",
