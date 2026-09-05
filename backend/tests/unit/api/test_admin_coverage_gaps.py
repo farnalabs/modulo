@@ -928,16 +928,15 @@ def test_queue_metrics_redis_unavailable_503(monkeypatch: pytest.MonkeyPatch) ->
 # ── GET /billing/overview ──
 
 
-def test_billing_overview_org_missing_returns_503_bug(
+def test_billing_overview_org_missing_returns_404(
     api: tuple[TestClient, AsyncMock],
 ) -> None:
-    """BUG NOTE (FAR-573 report): a missing org is documented as 404 but the
-    bare ``except Exception`` remaps the HTTPException to 503. This locks the
-    CURRENT behaviour; fix the handler ordering, then update this test."""
+    """A missing org raises HTTPException(404), which must pass through the
+    handler's except clauses unremapped instead of being converted to 503."""
     client, session = api
     session.execute = AsyncMock(return_value=_result(scalar_one_or_none=None))
     resp = client.get("/api/v1/admin/billing/overview")
-    assert resp.status_code == 503
+    assert resp.status_code == 404
 
 
 def test_billing_overview_unexpected_error_503(
@@ -1423,14 +1422,13 @@ def test_update_retention_success(api: tuple[TestClient, AsyncMock]) -> None:
     assert org.settings_json["retention_days"] == 180
 
 
-def test_update_retention_org_missing_returns_500_bug(api: tuple[TestClient, AsyncMock]) -> None:
-    """BUG NOTE (FAR-573 report): a missing org is documented as 404 but the
-    bare ``except Exception`` remaps the HTTPException to 500. Locks CURRENT
-    behaviour; fix the handler ordering, then update this test."""
+def test_update_retention_org_missing_returns_404(api: tuple[TestClient, AsyncMock]) -> None:
+    """A missing org raises HTTPException(404), which must pass through the
+    handler's except clauses unremapped instead of being converted to 500."""
     client, session = api
     session.execute = AsyncMock(return_value=_result(scalar_one_or_none=None))
     resp = client.put("/api/v1/admin/runs/retention", json={"retention_days": 180})
-    assert resp.status_code == 500
+    assert resp.status_code == 404
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
@@ -1457,14 +1455,13 @@ def test_get_sandbox_concurrency_unexpected_error_500(
     assert resp.status_code == 500
 
 
-def test_update_sandbox_concurrency_org_missing_returns_500_bug(api: tuple[TestClient, AsyncMock]) -> None:
-    """BUG NOTE (FAR-573 report): a missing org is documented as 404 but the
-    bare ``except Exception`` remaps the HTTPException to 500. Locks CURRENT
-    behaviour; fix the handler ordering, then update this test."""
+def test_update_sandbox_concurrency_org_missing_returns_404(api: tuple[TestClient, AsyncMock]) -> None:
+    """A missing org raises HTTPException(404), which must pass through the
+    handler's except clauses unremapped instead of being converted to 500."""
     client, session = api
     session.execute = AsyncMock(return_value=_result(scalar_one_or_none=None))
     resp = client.put("/api/v1/admin/org/sandbox-concurrency", json={"sandbox_concurrency_limit": 4})
-    assert resp.status_code == 500
+    assert resp.status_code == 404
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
@@ -1488,14 +1485,13 @@ def test_get_run_concurrency_unexpected_error_500(
     assert resp.status_code == 500
 
 
-def test_update_run_concurrency_org_missing_returns_500_bug(api: tuple[TestClient, AsyncMock]) -> None:
-    """BUG NOTE (FAR-573 report): a missing org is documented as 404 but the
-    bare ``except Exception`` remaps the HTTPException to 500. Locks CURRENT
-    behaviour; fix the handler ordering, then update this test."""
+def test_update_run_concurrency_org_missing_returns_404(api: tuple[TestClient, AsyncMock]) -> None:
+    """A missing org raises HTTPException(404), which must pass through the
+    handler's except clauses unremapped instead of being converted to 500."""
     client, session = api
     session.execute = AsyncMock(return_value=_result(scalar_one_or_none=None))
     resp = client.put("/api/v1/admin/org/run-concurrency", json={"run_concurrency_limit": 4})
-    assert resp.status_code == 500
+    assert resp.status_code == 404
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
