@@ -8887,7 +8887,7 @@ export interface components {
          * AnalyticsStatus
          * @enum {string}
          */
-        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled" | "budget_exceeded" | "router_no_match";
+        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "hitl_parked" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled" | "budget_exceeded" | "router_no_match";
         /**
          * AnalyticsTriggerType
          * @enum {string}
