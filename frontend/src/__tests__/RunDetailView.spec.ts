@@ -11,6 +11,15 @@ let mockHeartbeatAt: string | null = null
 let mockWorkItemRefs: unknown = null
 let mockChildRuns: unknown = null
 let mockCapacity: unknown = null
+let mockPendingGates: Array<Record<string, unknown>> = []
+let mockWorkspaceLease: Record<string, unknown> | null = null
+let mockNodeLabels: Record<string, string> | null = null
+let mockClaimResult: Record<string, unknown> | null = null
+let mockClaimError: Record<string, unknown> | undefined
+let mockApproveResult: Record<string, unknown> | null = null
+let mockApproveError: Record<string, unknown> | undefined
+let mockRejectResult: Record<string, unknown> | null = null
+let mockRejectError: Record<string, unknown> | undefined
 
 vi.mock('../lib/api/client', () => {
   const mockPost = vi.fn().mockImplementation((url: string) => {
@@ -27,6 +36,18 @@ vi.mock('../lib/api/client', () => {
         },
         error: undefined
       })
+    }
+    if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/claim') {
+      if (mockClaimError) return Promise.resolve({ data: null, error: mockClaimError })
+      return Promise.resolve({ data: mockClaimResult, error: undefined })
+    }
+    if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve') {
+      if (mockApproveError) return Promise.resolve({ data: null, error: mockApproveError })
+      return Promise.resolve({ data: mockApproveResult, error: undefined })
+    }
+    if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/reject') {
+      if (mockRejectError) return Promise.resolve({ data: null, error: mockRejectError })
+      return Promise.resolve({ data: mockRejectResult, error: undefined })
     }
     return Promise.resolve({ data: null, error: undefined })
   })
@@ -58,6 +79,7 @@ vi.mock('../lib/api/client', () => {
             data: {
               outputs_json: { 'node-a': { input: { q: 'hello' }, output: 'response' } },
               input_payload: mockInputPayload,
+              node_labels: mockNodeLabels,
               node_telemetry: {
                 'node-a': {
                   status: 'complete',
@@ -73,6 +95,12 @@ vi.mock('../lib/api/client', () => {
             },
             error: undefined,
           })
+        }
+        if (url === '/api/v1/runs/{run_id}/hitl/pending') {
+          return Promise.resolve({ data: { gates: mockPendingGates }, error: undefined })
+        }
+        if (url === '/api/v1/runs/{run_id}/workspace-lease') {
+          return Promise.resolve({ data: mockWorkspaceLease, error: undefined })
         }
         return Promise.resolve({ data: null, error: undefined })
       }),
@@ -141,6 +169,15 @@ describe('RunDetailView', () => {
     mockWorkItemRefs = null
     mockChildRuns = null
     mockCapacity = null
+    mockPendingGates = []
+    mockWorkspaceLease = null
+    mockNodeLabels = null
+    mockClaimResult = null
+    mockClaimError = undefined
+    mockApproveResult = null
+    mockApproveError = undefined
+    mockRejectResult = null
+    mockRejectError = undefined
   })
 
   afterEach(() => {
@@ -1138,5 +1175,527 @@ describe('RunDetailView', () => {
       Object.assign(testRoute, { query: {} })
       Element.prototype.scrollIntoView = originalScroll
     }
+  })
+})
+
+// Module-level helpers for the appended describe blocks below (the original
+// describe block declares its own local copies of the same names).
+function baseDetail() {
+  return {
+    run_id: 'test-run-id',
+    pipeline_id: 'test-pipeline',
+    status: 'complete',
+    total_cost_usd: 1.23,
+    token_consumption: null,
+    node_token_usage: null,
+    trace_id: null,
+  }
+}
+
+function createWrapper() {
+  const div = document.createElement('div')
+  div.id = 'root'
+  document.body.appendChild(div)
+  return mount(RunDetailView, {
+    global: { plugins: [router] },
+    attachTo: div
+  })
+}
+
+// Reset the appended describes' shared mock state before every test in the
+// file (the original describe keeps its own equivalent beforeEach).
+beforeEach(() => {
+  mockPendingGates = []
+  mockWorkspaceLease = null
+  mockNodeLabels = null
+  mockClaimResult = null
+  mockClaimError = undefined
+  mockApproveResult = null
+  mockApproveError = undefined
+  mockRejectResult = null
+  mockRejectError = undefined
+})
+
+describe('RunDetailView HITL gates', () => {
+  function gate(overrides: Record<string, unknown> = {}) {
+    return {
+      gate_id: 'gate-1',
+      run_id: 'test-run-id',
+      label: 'Review the deploy plan',
+      claimed_by: null,
+      ...overrides,
+    }
+  }
+
+  async function mountAwaiting() {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: { ...baseDetail(), status: 'awaiting_human' }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') {
+        return Promise.resolve({ data: { gates: mockPendingGates }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    // Re-arm the HITL POST branches: earlier tests in the file replace the
+    // api.POST implementation wholesale (e.g. the cancel-error test), which
+    // would otherwise leak into these claim/approve/reject flows.
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/claim') {
+        if (mockClaimError) return Promise.resolve({ data: null, error: mockClaimError })
+        return Promise.resolve({ data: mockClaimResult, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve') {
+        if (mockApproveError) return Promise.resolve({ data: null, error: mockApproveError })
+        return Promise.resolve({ data: mockApproveResult, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/hitl/{gate_id}/reject') {
+        if (mockRejectError) return Promise.resolve({ data: null, error: mockRejectError })
+        return Promise.resolve({ data: mockRejectResult, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  it('renders the HITL gate section with the gate label and claim button', async () => {
+    mockPendingGates = [gate()]
+    const wrapper = await mountAwaiting()
+    expect(wrapper.text()).toContain('HITL Gate')
+    expect(wrapper.text()).toContain('Review the deploy plan')
+    const claimBtn = wrapper.find('[data-testid="run-detail-claim-gate"]')
+    expect(claimBtn.exists()).toBe(true)
+    expect(claimBtn.text()).toContain('Claim Gate')
+    wrapper.unmount()
+  })
+
+  it('claims a gate and reveals the approve/reject actions with notes', async () => {
+    mockPendingGates = [gate()]
+    mockClaimResult = { claim_token: 'ct-123' }
+    const { api } = await import('../lib/api/client')
+    const wrapper = await mountAwaiting()
+
+    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/claim')
+    expect(post).toBeTruthy()
+    expect((post as unknown[])[1]).toEqual({
+      params: { path: { run_id: 'test-run-id', gate_id: 'gate-1' } },
+      body: { expiry_minutes: 15 },
+    })
+
+    expect(wrapper.find('[data-testid="run-detail-approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-reject"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-hitl-notes"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows a claim failure message', async () => {
+    mockPendingGates = [gate()]
+    mockClaimError = { detail: 'gate_already_claimed' }
+    const wrapper = await mountAwaiting()
+
+    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Claim failed:')
+    expect(wrapper.text()).toContain('gate_already_claimed')
+    // still claimable
+    expect(wrapper.find('[data-testid="run-detail-claim-gate"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows the claimed-by banner when another reviewer holds the gate', async () => {
+    mockPendingGates = [gate({ claimed_by: 'ops@team' })]
+    const wrapper = await mountAwaiting()
+    expect(wrapper.text()).toContain('Claimed by ops@team')
+    expect(wrapper.find('[data-testid="run-detail-claim-gate"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('approves the gate and resumes the run', async () => {
+    mockPendingGates = [gate()]
+    mockClaimResult = { claim_token: 'ct-123' }
+    const { api } = await import('../lib/api/client')
+    const wrapper = await mountAwaiting()
+    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-hitl-notes"]').setValue('looks good')
+    await wrapper.find('[data-testid="run-detail-approve"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/approve')
+    expect((post as unknown[])[1]).toEqual({
+      params: { path: { run_id: 'test-run-id', gate_id: 'gate-1' } },
+      body: { claim_token: 'ct-123', notes: 'looks good' },
+    })
+    // the run flips to running and the gate section goes away
+    expect(wrapper.text()).toContain('running')
+    expect(wrapper.text()).not.toContain('HITL Gate')
+    // BUG characterisation: the approve success message ("Gate approved.
+    // Pipeline resuming.") is set inside approveGate() but rendered inside the
+    // per-gate v-for, which is emptied on success — the reviewer never sees
+    // positive feedback; the run-status flip is the only signal.
+    expect(wrapper.text()).not.toContain('Gate approved. Pipeline resuming.')
+    wrapper.unmount()
+  })
+
+  it('shows an approve failure message and keeps the actions', async () => {
+    mockPendingGates = [gate()]
+    mockClaimResult = { claim_token: 'ct-123' }
+    mockApproveError = { detail: 'claim_expired' }
+    const wrapper = await mountAwaiting()
+    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-approve"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Approve failed:')
+    expect(wrapper.text()).toContain('claim_expired')
+    expect(wrapper.find('[data-testid="run-detail-approve"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('rejects the gate and routes to the reject target', async () => {
+    mockPendingGates = [gate()]
+    mockClaimResult = { claim_token: 'ct-123' }
+    const { api } = await import('../lib/api/client')
+    const wrapper = await mountAwaiting()
+    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-reject"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const post = (api.POST as any).mock.calls.find((c: unknown[]) => c[0] === '/api/v1/runs/{run_id}/hitl/{gate_id}/reject')
+    expect((post as unknown[])[1]).toEqual({
+      params: { path: { run_id: 'test-run-id', gate_id: 'gate-1' } },
+      body: { claim_token: 'ct-123', reason: 'Rejected by reviewer' },
+    })
+    // Same BUG characterisation as the approve flow: the reject success
+    // message is rendered inside the emptied per-gate loop and is never seen.
+    expect(wrapper.text()).not.toContain('Gate rejected. Pipeline routed to reject target.')
+    expect(wrapper.text()).not.toContain('HITL Gate')
+    wrapper.unmount()
+  })
+
+  it('shows a reject failure message', async () => {
+    mockPendingGates = [gate()]
+    mockClaimResult = { claim_token: 'ct-123' }
+    mockRejectError = { detail: 'reject_target_missing' }
+    const wrapper = await mountAwaiting()
+    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-reject"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Reject failed:')
+    expect(wrapper.text()).toContain('reject_target_missing')
+    wrapper.unmount()
+  })
+})
+
+describe('RunDetailView guardrail override access', () => {
+  async function mountBlocked() {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            ...baseDetail(),
+            status: 'eval_failed',
+            error_code: 'eval_blocked',
+            guardrail_summary: { evaluated: 4, passed: 3, violated: 1 },
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  it('shows the operator-required note for a non-operator session', async () => {
+    // getAccessToken returns a non-JWT token in this spec, so readJwtPayload
+    // yields no org_role ? the override button is hidden.
+    const wrapper = await mountBlocked()
+    expect(wrapper.find('[data-testid="run-detail-guardrail-override-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-override-guardrail"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-override-role-note"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders guardrail buckets with their class variants', async () => {
+    const wrapper = await mountBlocked()
+    const buckets = wrapper.findAll('[data-testid="run-detail-guardrail-bucket"]')
+    expect(buckets.length).toBe(3)
+    const passed = buckets.find((b) => b.text().includes('Passed'))
+    expect(passed?.text()).toContain('3')
+    wrapper.unmount()
+  })
+})
+
+describe('RunDetailView rendering extras', () => {
+  async function mountWith(data: Record<string, unknown>, io: Record<string, unknown>) {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: io, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/workspace-lease') {
+        return Promise.resolve({ data: mockWorkspaceLease, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  it('renders the workspace lease section with status, sandbox, duration and error', async () => {
+    mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
+    const wrapper = await mountWith(baseDetail(), { outputs_json: null })
+    const ws = wrapper.text()
+    expect(ws).toContain('Workspace')
+    expect(ws).toContain('failed')
+    expect(ws).toContain('OOM killed')
+    expect(ws).toContain('1h 30m')
+    wrapper.unmount()
+  })
+
+  it('formats sub-minute and minute workspace durations', async () => {
+    mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
+    const wrapper = await mountWith(baseDetail(), { outputs_json: null })
+    expect(wrapper.text()).toContain('45s')
+    wrapper.unmount()
+
+    mockWorkspaceLease = { status: 'running', duration_seconds: 125 }
+    const wrapper2 = await mountWith(baseDetail(), { outputs_json: null })
+    expect(wrapper2.text()).toContain('2m 5s')
+    wrapper2.unmount()
+  })
+
+  it('copies the trace id to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = await mountWith({ ...baseDetail(), trace_id: 'trace-abc-123' }, { outputs_json: null })
+    const btn = wrapper.find('[data-testid="run-detail-copy-trace-id"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith('trace-abc-123')
+    expect(wrapper.find('[data-testid="run-detail-copy-trace-id"]').text()).toContain('Copied!')
+    wrapper.unmount()
+  })
+
+  it('copies the final output for a complete run', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = await mountWith(baseDetail(), {
+      outputs_json: { 'node-a': { output: { result: 'final answer' } } },
+    })
+    const btn = wrapper.find('[data-testid="run-detail-copy-output"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flushPromises()
+    expect(writeText.mock.calls[0][0]).toContain('final answer')
+    wrapper.unmount()
+  })
+
+  it('renders the cost clamped banner and the basis line for breakdown rows', async () => {
+    const wrapper = await mountWith(
+      {
+        ...baseDetail(),
+        total_cost_usd: '2.000000',
+        cost_breakdown: [
+          {
+            component: 'model_cost',
+            display_name: 'Model cost',
+            source: 'estimated',
+            amount_usd: '1.500000',
+            basis: { reported: '1.2', node_count: 3 },
+          },
+          {
+            component: 'eval_cost',
+            display_name: 'Eval cost',
+            source: 'estimated',
+            amount_usd: '0.000000',
+            error: 'eval_pricing_unavailable',
+          },
+        ],
+      },
+      { outputs_json: null },
+    )
+    expect(wrapper.find('[data-testid="run-detail-cost-clamped"]').exists()).toBe(false)
+    const rows = wrapper.findAll('tbody tr')
+    const modelRow = rows.find((r) => r.text().includes('Model cost'))!
+    expect(modelRow.text()).toContain('reported=1.2, node_count=3')
+    const evalRow = rows.find((r) => r.text().includes('Eval cost'))!
+    // zero-amount row with an error stays visible with the eval error badge
+    expect(evalRow.exists()).toBe(true)
+    expect(evalRow.text()).toContain('eval error')
+    expect(evalRow.text()).toContain('—')
+    wrapper.unmount()
+  })
+
+  it('renders the clamped banner when any entry is total_clamped', async () => {
+    const wrapper = await mountWith(
+      {
+        ...baseDetail(),
+        total_cost_usd: '9.000000',
+        cost_breakdown: [{ component: 'model_cost', amount_usd: '9.000000', total_clamped: true }],
+      },
+      { outputs_json: null },
+    )
+    expect(wrapper.find('[data-testid="run-detail-cost-clamped"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows a dash basis line when the entry carries no basis object', async () => {
+    const wrapper = await mountWith(
+      {
+        ...baseDetail(),
+        cost_breakdown: [{ component: 'model_cost', amount_usd: '1.000000', basis: null }],
+      },
+      { outputs_json: null },
+    )
+    const row = wrapper.findAll('tbody tr').find((r) => r.text().includes('model_cost'))!
+    expect(row.text()).toContain('—')
+    wrapper.unmount()
+  })
+
+  it('uses human node labels from node_labels when provided', async () => {
+    const wrapper = await mountWith(baseDetail(), {
+      outputs_json: { 'node-a': { output: 'ok' } },
+      node_labels: { 'node-a': 'Analyser' },
+    })
+    expect(wrapper.text()).toContain('Analyser')
+    wrapper.unmount()
+  })
+
+  it('notes truncated agent logs past the 20000 character display cap', async () => {
+    const bigStdout = 'x'.repeat(20001)
+    const wrapper = await mountWith(baseDetail(), {
+      outputs_json: null,
+      node_telemetry: { 'node-a': { status: 'complete', agent_stdout: bigStdout } },
+    })
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await nextTick()
+    const logRow = wrapper.find('[data-testid="run-detail-log-row"]')
+    expect(logRow.text()).toContain('Log truncated')
+    wrapper.unmount()
+  })
+
+  it('resolves a legacy artifacts envelope to the output key with the run-level input fallback', async () => {
+    const wrapper = await mountWith(baseDetail(), {
+      outputs_json: { 'node-a': { artifacts: ['a'], output: { answer: 'legacy' } } },
+      input_payload: { q: 'hi' },
+    })
+    const ioRow = wrapper.find('[data-testid="run-detail-io-row"]')
+    expect(ioRow.exists()).toBe(true)
+    const viewers = ioRow.findAll('[data-testid="json-viewer"]')
+    expect(viewers.length).toBe(2)
+    expect(viewers[0].text()).toContain('hi')
+    expect(viewers[1].text()).toContain('legacy')
+    wrapper.unmount()
+  })
+
+  it('treats a pure scalar node return as the output with the run input as input', async () => {
+    const wrapper = await mountWith(baseDetail(), {
+      outputs_json: { 'node-a': 'plain string return' },
+      input_payload: { q: 'hi' },
+    })
+    const ioRow = wrapper.find('[data-testid="run-detail-io-row"]')
+    const viewers = ioRow.findAll('[data-testid="json-viewer"]')
+    expect(viewers.length).toBe(2)
+    expect(viewers[0].text()).toContain('hi')
+    expect(viewers[1].text()).toContain('plain string return')
+    wrapper.unmount()
+  })
+
+  it('abbreviates token totals with k and M suffixes on the live cost line', async () => {
+    const wrapper = await mountWith(
+      {
+        ...baseDetail(),
+        status: 'running',
+        node_token_usage: { 'node-a': { input_tokens: 700, output_tokens: 800, total_tokens: 1500 } },
+      },
+      { outputs_json: null },
+    )
+    const line = wrapper.find('[data-testid="run-detail-live-cost"]')
+    expect(line.exists()).toBe(true)
+    expect(line.text()).toContain('1.5k')
+    wrapper.unmount()
+
+    const wrapper2 = await mountWith(
+      {
+        ...baseDetail(),
+        status: 'running',
+        node_token_usage: { 'node-a': { input_tokens: 1000000, output_tokens: 1000000, total_tokens: 2000000 } },
+      },
+      { outputs_json: null },
+    )
+    expect(wrapper2.find('[data-testid="run-detail-live-cost"]').text()).toContain('2M')
+    wrapper2.unmount()
+  })
+
+  it('renders created/started/completed timestamps and a dash for invalid dates', async () => {
+    const wrapper = await mountWith(
+      {
+        ...baseDetail(),
+        created_at: '2026-08-01T10:00:00Z',
+        started_at: '2026-08-01T10:00:05Z',
+        completed_at: '2026-08-01T10:05:00Z',
+      },
+      { outputs_json: null },
+    )
+    const tsRow = wrapper.text()
+    expect(tsRow).toContain('Created')
+    expect(tsRow).toContain('Started')
+    expect(tsRow).toContain('Completed')
+    wrapper.unmount()
+
+    const wrapper2 = await mountWith(
+      { ...baseDetail(), created_at: 'not-a-date' },
+      { outputs_json: null },
+    )
+    expect(wrapper2.text()).toContain('—')
+    wrapper2.unmount()
   })
 })
