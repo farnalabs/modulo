@@ -18,7 +18,7 @@ Remove either ``validate_outbound_url*`` call and the matching case here fails.
 
 import pytest
 
-import modulo.core.ssrf as ssrf
+from modulo.core import ssrf
 from modulo.model_backends.base import openai_compatible_health_check
 from modulo.model_backends.lm_studio import LmStudioBackend
 from modulo.model_backends.module import OpenAICompatibleBackend

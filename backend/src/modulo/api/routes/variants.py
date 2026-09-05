@@ -75,7 +75,8 @@ class CreateVariantGroupRequest(BaseModel):
     description: str | None = None
     variants: list[VariantDef] = Field(default_factory=list)
     selection_strategy: Literal["weighted", "single"] = "weighted"
-    max_concurrent_runs: int = 5
+    # ge=1 (FAR-604): 0 would permanently wedge the group's admission.
+    max_concurrent_runs: int = Field(default=5, ge=1)
     degraded_evals: bool = False
 
 

@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0164."""
+    """Exactly one migration chains off each predecessor, and the head is 0176."""
     import re
 
     revisions = {}
@@ -738,12 +738,16 @@ def test_single_migration_head() -> None:
     # 0174_per_org_last_admin_guard (FAR-539 per-org last-admin guard) chains off 0173.
     chaining_off_0173 = [p for p in revisions if parents[p] == "0173_per_org_deactivation"]
     assert [_basename(p) for p in chaining_off_0173] == ["0174_per_org_last_admin_guard.py"]
-    # 0176_case_insensitive_emails (FAR-584) chains off 0174; 0175_dedupe_soft_delete_names
-    # sits mid-chain (0155 -> 0175 -> 0156), so 0176 is the single linear head.
+    # 0176_trigger_event_validation_results (FAR-604, on main) chains off 0174.
+    # 0177_case_insensitive_emails (FAR-584, this PR) renumbers the former
+    # 0176_case_insensitive_emails and chains off 0176 -> 0177 is the single head.
     chaining_off_0174 = [p for p in revisions if parents[p] == "0174_per_org_last_admin_guard"]
-    assert [_basename(p) for p in chaining_off_0174] == ["0176_case_insensitive_emails.py"]
-    chaining_off_0176 = [p for p in revisions if parents[p] == "0176_case_insensitive_emails"]
-    assert not chaining_off_0176
+    assert [_basename(p) for p in chaining_off_0174] == ["0176_trigger_event_validation_results.py"]
+    # The FAR-584 migration chains off 0176 -> it is the single head.
+    chaining_off_0176 = [p for p in revisions if parents[p] == "0176_trigger_event_validation_results"]
+    assert [_basename(p) for p in chaining_off_0176] == ["0177_case_insensitive_emails.py"]
+    chaining_off_0177 = [p for p in revisions if parents[p] == "0177_case_insensitive_emails"]
+    assert not chaining_off_0177
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

@@ -504,7 +504,7 @@ class TestEdgeCases:
     def test_cache_expires_after_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import time
 
-        import modulo.auth.oidc_verify as oidc_verify
+        from modulo.auth import oidc_verify
 
         oidc_verify._cache_set("https://example.com/jwks", [{"kty": "RSA"}])
         future = time.time() + oidc_verify._JWKS_CACHE_TTL + 1

@@ -126,3 +126,24 @@ class ErrorEventListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class SchedulerStarvationItem(BaseModel):
+    """One pipeline with capacity-starved pending runs (FAR-604).
+
+    Surfaced on the error dashboard because pre-terminal pending runs never
+    produce error events (the dashboard keys off ingested errors), so a
+    pipeline stuck at its capacity cap is otherwise invisible.
+    """
+
+    pipeline_id: str
+    pipeline_name: str | None = None
+    pending_count: int
+    oldest_created_at: str
+    oldest_age_minutes: float
+
+
+class SchedulerStarvationResponse(BaseModel):
+    items: list[SchedulerStarvationItem]
+    total: int
+    threshold_minutes: int

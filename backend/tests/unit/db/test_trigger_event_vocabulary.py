@@ -10,18 +10,14 @@ constraint with the FULL 21-value vocabulary. This file asserts:
 
 * the model vocabulary (``VALIDATION_RESULT_VALUES``) contains
   ``auto_deactivated`` and the ORM CHECK constraint reflects it,
-* the reconciliation migration's hardcoded vocabulary stays in sync with the
+* the widening migration's hardcoded vocabulary stays in sync with the
   model (the single source of truth) — a value added to one side and not the
   other breaks the constraint/model contract,
-* the chain has a single linear head ``0110_schema_pipeline_runtime`` (the
-  FAR-213 ``0111_run_blocked_partial_summary``, FAR-210
-  ``0112_feedback_correction_state``, FAR-223
-  ``0113_guardrail_summary``, FAR-296 ``0114_org_api_keys_run_id``,
-  FAR-247 ``0115_notification_preferences``, FAR-309
-  ``0116_guardrail_trust_pr_b``, TOCTOU ``0117_toctou_hardening``,
-  batch-scoped variants ``0118_batch_scoped_variants``,
-  ``0119_analytics_batch_id``, and org-FK hardening ``0120_org_fk_hardening``
-  migrations chain on top of it).
+* the chain has a single linear head — ``0110_schema_pipeline_runtime``
+  owned the original 21-value constraint; FAR-604's
+  ``0176_trigger_event_validation_results`` widened it with ``coalesced`` /
+  ``backpressure_skipped`` and is now the constraint's owner and the chain
+  head.
 
 The old SQLite round-trip (which ran the migration's upgrade/downgrade against
 a mock ``op``) is obsolete: the reconciliation migration expresses the
@@ -40,17 +36,16 @@ from alembic.script import ScriptDirectory
 
 from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
 
-_MIGRATION_NAME = "0110_schema_pipeline_runtime"
+_MIGRATION_NAME = "0176_trigger_event_validation_results"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
-# The chain head after the FAR-210 feedback correction_state migration (0112),
-# now topped by the FAR-309 PR B trust-model migration (0116), the TOCTOU
-# hardening migration (0117), and the batch-scoped variants migration (0118),
-# the metrics_staging migration (0121), and the FAR-363 library_sync_state
-# (0122) + relax_registry_signature_check (0123) migrations.
-_CHAIN_HEAD_MIGRATION_NAME = "0176_case_insensitive_emails"
+# The chain head after the FAR-604 admission-healing migration widened the
+# ck_trigger_events_validation_result vocabulary (coalesced /
+# backpressure_skipped) on top of 0174_per_org_last_admin_guard, and the
+# FAR-584 case-insensitive-emails migration (0177) chained on top of it.
+_CHAIN_HEAD_MIGRATION_NAME = "0177_case_insensitive_emails"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
@@ -76,8 +71,13 @@ class TestModelVocabulary:
         # Folded in from main's 0106 (guardrail_blocked), now part of 0008.
         assert "guardrail_blocked" in VALIDATION_RESULT_VALUES
 
-    def test_model_vocabulary_is_21_values(self) -> None:
-        assert len(VALIDATION_RESULT_VALUES) == 21
+    def test_far604_values_in_model_vocabulary(self) -> None:
+        # FAR-604 admission healing: latest-wins coalescing + backpressure skip.
+        assert "coalesced" in VALIDATION_RESULT_VALUES
+        assert "backpressure_skipped" in VALIDATION_RESULT_VALUES
+
+    def test_model_vocabulary_is_23_values(self) -> None:
+        assert len(VALIDATION_RESULT_VALUES) == 23
         assert len(set(VALIDATION_RESULT_VALUES)) == len(VALIDATION_RESULT_VALUES)
 
     def test_orm_check_constraint_includes_auto_deactivated(self) -> None:
@@ -97,7 +97,7 @@ class TestReconciliationMigration:
         assert heads == [_CHAIN_HEAD_MIGRATION_NAME], f"expected a single head, got {heads}"
 
     def test_0008_owns_trigger_events_validation_constraint(self) -> None:
-        """The reconciliation migration must create the constraint with the
+        """The widening migration must create the constraint with the
         FULL model vocabulary — a value in the model but missing from the
         migration breaks the constraint on a fresh DB, and a value in the
         migration but not the model widens the constraint beyond the ORM."""
@@ -105,11 +105,37 @@ class TestReconciliationMigration:
         source = Path(_MIGRATION_PATH).read_text(encoding="utf-8")
         assert _CHECK_CONSTRAINT_NAME in source
         for value in VALIDATION_RESULT_VALUES:
-            assert f"'{value}'" in source, f"0008 constraint DDL missing {value!r}"
+            assert f"'{value}'" in source, f"widening constraint DDL missing {value!r}"
 
     def test_0008_constraint_guards_idempotency(self) -> None:
         """The constraint is added only when absent (pg_constraint guard), so
-        re-running the reconciliation migration is a no-op."""
+        re-running the widening migration is a no-op."""
         source = Path(_MIGRATION_PATH).read_text(encoding="utf-8")
         assert f"conname='{_CHECK_CONSTRAINT_NAME}'" in source
         assert f"ADD CONSTRAINT {_CHECK_CONSTRAINT_NAME} CHECK" in source
+
+    def test_0008_add_is_not_valid_then_validated(self) -> None:
+        """FAR-604 F5 — the widened CHECK is added NOT VALID (instant, no
+        full-table validation scan under ACCESS EXCLUSIVE on the hottest
+        insert table) and then validated in a separate guarded step (VALIDATE
+        CONSTRAINT takes SHARE UPDATE EXCLUSIVE — non-blocking for INSERTs).
+        The validation step is guarded on ``NOT convalidated`` so re-running
+        the reconciliation chain skips an already-validated constraint."""
+        source = Path(_MIGRATION_PATH).read_text(encoding="utf-8")
+        assert f"ADD CONSTRAINT {_CHECK_CONSTRAINT_NAME} CHECK" in source
+        assert "NOT VALID" in source
+        assert f"VALIDATE CONSTRAINT {_CHECK_CONSTRAINT_NAME}" in source
+        assert "NOT convalidated" in source
+
+    def test_0008_drop_guard_expected_def_is_whitespace_stripped(self) -> None:
+        """FAR-604 F5 — the drop guard compares the live definition against a
+        WHITESPACE-STRIPPED expected literal (it is compared against
+        ``regexp_replace(pg_get_constraintdef(oid), '\\s+', '', 'g')``). A
+        literal carrying the ``character varying`` space form never matches,
+        so the drop — and its ACCESS EXCLUSIVE lock — would fire on EVERY
+        re-run of the reconciliation chain (the 0110 guard pattern)."""
+        module = _load_migration()
+        drop_stmt: str = module._DROP_IF_DIFFERENT
+        assert "regexp_replace(pg_get_constraintdef(oid), '\\s+', '', 'g')" in drop_stmt
+        assert "::charactervarying" in drop_stmt
+        assert "character varying" not in drop_stmt

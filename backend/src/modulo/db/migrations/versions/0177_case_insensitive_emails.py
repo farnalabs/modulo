@@ -1,7 +1,7 @@
 """Case-insensitive emails: backfill + functional unique index on accounts.
 
-Revision ID: 0176_case_insensitive_emails
-Revises: 0174_per_org_last_admin_guard
+Revision ID: 0177_case_insensitive_emails
+Revises: 0176_trigger_event_validation_results
 Create Date: 2026-09-03
 
 FAR-584: email addresses are case-insensitive in the real world. This migration
@@ -53,8 +53,8 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
-revision: str = "0176_case_insensitive_emails"
-down_revision: str | None = "0174_per_org_last_admin_guard"
+revision: str = "0177_case_insensitive_emails"
+down_revision: str | None = "0176_trigger_event_validation_results"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
@@ -83,7 +83,7 @@ def upgrade() -> None:
     if collisions:
         colliding = ", ".join(f"{row['canonical_email']!r} x{row['rows']}" for row in collisions)
         raise RuntimeError(
-            "Migration 0176_case_insensitive_emails found existing accounts whose emails "
+            "Migration 0177_case_insensitive_emails found existing accounts whose emails "
             f"collide case-insensitively: {colliding}. Emails are now case-insensitive, so these "
             "accounts cannot coexist. Resolve BEFORE upgrading, outside the application — there "
             "is NO admin-UI rename for account emails: rename one of the colliding rows via SQL "
@@ -98,16 +98,16 @@ def upgrade() -> None:
     result = bind.execute(
         text("UPDATE public.accounts SET email = lower(trim(email)) WHERE email != lower(trim(email))")
     )
-    logger.info("0176 emails: canonicalised %d account email(s)", result.rowcount)
+    logger.info("0177 emails: canonicalised %d account email(s)", result.rowcount)
 
     # 3. Swap the case-sensitive unique constraint for the functional unique index.
     bind.execute(text(f"ALTER TABLE public.accounts DROP CONSTRAINT IF EXISTS {_ORIGINAL_CONSTRAINT}"))
     bind.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_email_lower ON public.accounts (LOWER(email));"))
-    logger.info("0176 emails: dropped %s, created %s on public.accounts", _ORIGINAL_CONSTRAINT, _FUNCTIONAL_INDEX)
+    logger.info("0177 emails: dropped %s, created %s on public.accounts", _ORIGINAL_CONSTRAINT, _FUNCTIONAL_INDEX)
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     bind.execute(text("DROP INDEX IF EXISTS uq_accounts_email_lower;"))
     bind.execute(text(f"ALTER TABLE public.accounts ADD CONSTRAINT {_ORIGINAL_CONSTRAINT} UNIQUE (email)"))
-    logger.info("0176 emails downgrade: restored %s (backfilled lowercasing is NOT reversed)", _ORIGINAL_CONSTRAINT)
+    logger.info("0177 emails downgrade: restored %s (backfilled lowercasing is NOT reversed)", _ORIGINAL_CONSTRAINT)

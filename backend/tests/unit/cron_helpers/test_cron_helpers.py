@@ -1591,6 +1591,10 @@ class TestFireCronTriggerSkips:
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "_log_event", new_callable=AsyncMock),
+            # FAR-604 backpressure gate: patched out — this test pins the
+            # spend-gate's side_effect sequence, and the gate adds its own
+            # session reads (pipeline cap + queue depth).
+            patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
         ):
             result = await ch.fire_cron_trigger(
                 trigger_id=TRIGGER_A,
@@ -2352,6 +2356,9 @@ class TestFirePollingTrigger:
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
+            # FAR-604 backpressure gate: patched out — the side_effect
+            # sequence here pins the spend-gate's session reads.
+            patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
         ):
             result = await ch.fire_polling_trigger(
                 trigger_id=trigger.id,
@@ -2381,6 +2388,9 @@ class TestFirePollingTrigger:
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
+            # FAR-604 backpressure gate: patched out — the side_effect
+            # sequence here pins the connector-lookup session reads.
+            patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
         ):
             result = await ch.fire_polling_trigger(
                 trigger_id=trigger.id,
@@ -2944,6 +2954,9 @@ class TestCatchupReviewFindings:
                 MagicMock(),
             ),
             patch.object(ch, "select"),
+            # FAR-604 backpressure gate: patched out — the side_effect
+            # sequence here pins the spend-gate's session reads.
+            patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
         ):
             result = await ch.fire_cron_trigger(
                 trigger_id=trigger.id,

@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.db.capacity import StorageExhaustedError
 
 _log = logging.getLogger(__name__)
@@ -47,8 +48,14 @@ def handle_db_errors(
                     status_code=status.HTTP_501_NOT_IMPLEMENTED,
                     detail="Feature is not available. Run database migrations to enable it.",
                 ) from None
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
                 _log.exception("%s.db_error", log_prefix)
+                log_service_unavailable(
+                    "db_transient",
+                    exc,
+                    route=log_prefix,
+                    detail="transient database error (handle_db_errors backstop)",
+                )
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Database temporarily unavailable.",

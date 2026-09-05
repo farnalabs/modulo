@@ -59,6 +59,24 @@ class PipelineHasActiveRunsError(Exception):
         super().__init__(f"{active_run_count} run(s) still in progress")
 
 
+def validate_max_concurrent_runs(value: int) -> int:
+    """Reject ``max_concurrent_runs`` values that permanently wedge admission (FAR-604).
+
+    0 (or a negative) admits nothing forever: the DB CHECK constraint would
+    reject it on PostgreSQL with a bare IntegrityError, but internal callers
+    (MCP, seeding, non-Postgres backends) bypass that guard. The dispatch gate
+    treats ``<= 0`` as "no cap" while every consumer reads the column as a
+    binding cap, so a 0 row silently wedges the pipeline. Raise a clear
+    validation error instead; pausing admission is the org triggers pause.
+    """
+    if value < 1:
+        raise ValueError(
+            f"max_concurrent_runs must be >= 1, got {value}. "
+            "0 or negative permanently wedges run admission; to pause admission use the org triggers pause."
+        )
+    return value
+
+
 async def create_pipeline(
     session: AsyncSession,
     *,
@@ -88,6 +106,7 @@ async def create_pipeline(
         )
         if folder.scalar_one_or_none() is None:
             raise ValueError(f"Folder not found in this organisation: {folder_id}")
+    max_concurrent_runs = validate_max_concurrent_runs(max_concurrent_runs)
     pipeline = Pipeline(
         organisation_id=org_id,
         name=name,
@@ -232,6 +251,8 @@ async def update_pipeline(
     pipeline = await get_pipeline(session, pipeline_id)
     if pipeline is None:
         return None
+    if updates.get("max_concurrent_runs") is not None:
+        validate_max_concurrent_runs(updates["max_concurrent_runs"])
     old_team_id = pipeline.owner_team_id
     apply_updates(pipeline, updates)
     new_team_id = pipeline.owner_team_id

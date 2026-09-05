@@ -135,6 +135,15 @@
         language: system
         files: ^frontend/src/(config/navigation\.ts|locales/en-US\.js)$
         pass_filenames: false
+      # TEMPORARY (FAR-588 / ADR 029 D3): forbids the retired "sandbox agent" /
+      # "external agent" user-facing terms in locales + views/components.
+      # Remove this hook (and scripts/run_check_vocabulary_sweep.py) at GA.
+      - id: check-vocabulary-sweep
+        name: forbid retired sandbox/external agent vocabulary (remove at GA)
+        entry: uv run --project backend --no-sync python scripts/run_check_vocabulary_sweep.py
+        language: system
+        files: ^frontend/src/(locales/.*\.js|views/.*\.vue|components/.*\.vue)$
+        pass_filenames: false
       - id: validate-pipeline-configs
         name: validate pipeline configs (agent_prompt, timeout_seconds, template_id)
         entry: uv run --directory backend --no-sync python ../scripts/validate_pipeline_configs.py

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import modulo.core.events.listeners as listeners
+from modulo.core.events import listeners
 from modulo.core.events.listeners import _make_listener, _safe_str_attr, register_listeners
 from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline import Pipeline
