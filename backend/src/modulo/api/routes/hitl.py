@@ -51,6 +51,8 @@ from modulo.core.pipeline_engine.executor import (
 from modulo.db.crud.hitl_gate_config import (
     edge_source_or_target,
     hitl_gate_exists_but_unresolved,
+    human_only_denial,
+    make_gate_id,
     resolve_hitl_gate_config,
 )
 from modulo.db.crud.run import get_run, update_run_status
@@ -211,31 +213,32 @@ async def _enforce_human_only_gate(
     HITL-approval wiring), enforcement is already in place. MCP approvals —
     the observed attack path — are denied outright for ``human_only`` gates in
     ``mcp_server._check_human_only_gate``.
+
+    Hot path (FAR-610 review): the first line short-circuits browser JWTs —
+    they are always allowed, so the resolver's 1-3 queries never run on the
+    common UI approve flow. The deny policy itself lives in the shared pure
+    verdict :func:`modulo.db.crud.hitl_gate_config.human_only_denial`; the
+    fail-closed claim lookup runs only when the config is unresolvable.
     """
+    if not principal.via_api_key:
+        return
     config = await resolve_hitl_gate_config(
         session,
         run_id=run_id,
         gate_id=gate_id,
         org_id=principal.organisation_id,
     )
-    if config is not None:
-        if not config.get("human_only", False) or not principal.via_api_key:
-            return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="human_only gate requires browser authentication; API-key clients cannot approve this gate",
+    gate_fired = False
+    if config is None:
+        gate_fired = await hitl_gate_exists_but_unresolved(
+            session,
+            run_id=run_id,
+            gate_id=gate_id,
+            org_id=principal.organisation_id,
         )
-    # Unresolvable — fail closed for API-key principals when the gate fired.
-    if principal.via_api_key and await hitl_gate_exists_but_unresolved(
-        session,
-        run_id=run_id,
-        gate_id=gate_id,
-        org_id=principal.organisation_id,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="HITL gate configuration could not be resolved; decision requires browser authentication",
-        )
+    verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
+    if verdict is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=verdict)
 
 
 # ---------------------------------------------------------------------------
@@ -945,7 +948,7 @@ def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
         source = edge_source_or_target(edge, "source")
         target = edge_source_or_target(edge, "target")
         if source and target:
-            gate_label_map[f"hitl_gate_{source}_{target}"] = str(label)
+            gate_label_map[make_gate_id(source, target)] = str(label)
     return gate_label_map
 
 

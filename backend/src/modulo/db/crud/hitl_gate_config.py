@@ -55,7 +55,18 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 
-_GATE_ID_PREFIX = "hitl_gate_"
+GATE_ID_PREFIX = "hitl_gate_"
+
+
+def make_gate_id(source: str, target: str) -> str:
+    """Derive a gate id from an edge's topology: ``hitl_gate_<source>_<target>``.
+
+    Byte-identical mirror of ``graph_cache._make_gate_id`` (the executor stamps
+    gate ids with that format). Single-source the derivation so enforcement
+    surfaces (REST + MCP) and label building construct the same id the
+    executor fired.
+    """
+    return f"{GATE_ID_PREFIX}{source}_{target}"
 
 
 def edge_source_or_target(edge: dict[str, Any], key: str) -> str | None:
@@ -78,9 +89,9 @@ def parse_hitl_gate_id(gate_id: str) -> tuple[str, str] | None:
     (e.g. manual-node ids), malformed ids, or node ids containing underscores
     (ambiguous — the snapshot primary path is authoritative for those).
     """
-    if not gate_id.startswith(_GATE_ID_PREFIX):
+    if not gate_id.startswith(GATE_ID_PREFIX):
         return None
-    parts = gate_id[len(_GATE_ID_PREFIX) :].rsplit("_", 2)
+    parts = gate_id[len(GATE_ID_PREFIX) :].rsplit("_", 2)
     if len(parts) != 2:
         return None
     source, target = parts
@@ -99,7 +110,7 @@ def _config_from_graph(graph_json: dict[str, Any], gate_id: str) -> dict[str, An
             continue
         source = edge_source_or_target(edge, "source")
         target = edge_source_or_target(edge, "target")
-        if source is not None and target is not None and f"{_GATE_ID_PREFIX}{source}_{target}" == gate_id:
+        if source is not None and target is not None and make_gate_id(source, target) == gate_id:
             return config
     return None
 
@@ -133,7 +144,7 @@ def _config_from_hitl_nodes(graph_json: dict[str, Any], gate_id: str) -> dict[st
                 continue
             source = edge_source_or_target(edge, "source")
             target = edge_source_or_target(edge, "target")
-            if source == node_id and target is not None and f"{_GATE_ID_PREFIX}{node_id}_{target}" == gate_id:
+            if source == node_id and target is not None and make_gate_id(node_id, target) == gate_id:
                 return dict(config)
     return None
 
@@ -292,3 +303,48 @@ async def hitl_gate_exists_but_unresolved(
         )
     ).scalar_one_or_none()
     return row is not None
+
+
+MSG_HUMAN_ONLY_DENY = "human_only gate requires browser authentication; API-key clients cannot approve this gate"
+MSG_HUMAN_ONLY_UNRESOLVED = "HITL gate configuration could not be resolved; decision requires browser authentication"
+
+
+def human_only_denial(
+    config: dict[str, Any] | None,
+    *,
+    non_browser_credential: bool,
+    gate_fired: bool,
+) -> str | None:
+    """Return the denial message for a human_only gate decision, or None to allow.
+
+    Pure verdict shared by the REST decision routes and the MCP ``review_hitl``
+    tool so both surfaces enforce the SAME policy with the SAME wording
+    (FAR-610 review: the policy was previously implemented twice with slightly
+    different messages). Callers resolve the gate config first and compute
+    ``gate_fired`` via :func:`hitl_gate_exists_but_unresolved` ONLY when the
+    config is None (the claim query is wasted when the config resolved).
+
+    Semantics:
+
+    - ``non_browser_credential`` False → None. Browser credentials are always
+      allowed — the UI is their enforcement surface, checked before any other
+      logic.
+    - ``config`` None → :data:`MSG_HUMAN_ONLY_UNRESOLVED` when ``gate_fired``
+      else None. Fail closed only for gates that actually FIRED (a claim row
+      exists): for those the policy cannot be verified, so non-browser
+      decisions are denied rather than silently allowed. Unfired/non-gate ids
+      stay allowed (manual delivery must not over-block).
+    - ``config`` dict with a truthy ``human_only`` →
+      :data:`MSG_HUMAN_ONLY_DENY` (the same ``config.get("human_only", False)``
+      truthiness rule the enforcement sites have always used).
+    - otherwise → None.
+    """
+    if not non_browser_credential:
+        return None
+    if config is None:
+        if gate_fired:
+            return MSG_HUMAN_ONLY_UNRESOLVED
+        return None
+    if config.get("human_only", False):
+        return MSG_HUMAN_ONLY_DENY
+    return None

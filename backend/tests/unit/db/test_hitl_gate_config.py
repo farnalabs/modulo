@@ -11,8 +11,12 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.db.crud.hitl_gate_config import (
+    MSG_HUMAN_ONLY_DENY,
+    MSG_HUMAN_ONLY_UNRESOLVED,
     edge_source_or_target,
     hitl_gate_exists_but_unresolved,
+    human_only_denial,
+    make_gate_id,
     parse_hitl_gate_id,
     resolve_hitl_gate_config,
 )
@@ -26,7 +30,17 @@ _TARGET_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
 
 
 def _gate_id() -> str:
-    return f"hitl_gate_{_SOURCE_ID}_{_TARGET_ID}"
+    return make_gate_id(str(_SOURCE_ID), str(_TARGET_ID))
+
+
+class TestMakeGateId:
+    def test_matches_executor_format(self) -> None:
+        # Byte-identical mirror of graph_cache._make_gate_id.
+        assert make_gate_id("a", "b") == f"hitl_gate_{'a'}_{'b'}"
+
+    def test_round_trips_with_parse(self) -> None:
+        source, target = str(_SOURCE_ID), str(_TARGET_ID)
+        assert parse_hitl_gate_id(make_gate_id(source, target)) == (source, target)
 
 
 def _make_session(
@@ -348,3 +362,30 @@ class TestHitlGateExistsButUnresolved:
         assert str(_RUN_ID) in bind_values
         assert _gate_id() in bind_values
         assert str(_ORG_ID) in bind_values
+
+
+class TestHumanOnlyDenial:
+    """Pure deny-policy verdict shared by the REST decision routes and the
+    MCP ``review_hitl`` tool (FAR-610 review) — browser credentials always
+    pass, ``human_only`` configs deny, unresolvable FIRED gates fail closed."""
+
+    def test_browser_credential_always_allowed(self) -> None:
+        # First check, no other logic: even a human_only config cannot block.
+        verdict = human_only_denial({"human_only": True}, non_browser_credential=False, gate_fired=True)
+        assert verdict is None
+
+    def test_api_key_denied_on_human_only(self) -> None:
+        verdict = human_only_denial({"human_only": True}, non_browser_credential=True, gate_fired=True)
+        assert verdict == MSG_HUMAN_ONLY_DENY
+
+    def test_api_key_allowed_on_non_human_only(self) -> None:
+        verdict = human_only_denial({"human_only": False}, non_browser_credential=True, gate_fired=True)
+        assert verdict is None
+
+    def test_unresolvable_fired_gate_fails_closed(self) -> None:
+        verdict = human_only_denial(None, non_browser_credential=True, gate_fired=True)
+        assert verdict == MSG_HUMAN_ONLY_UNRESOLVED
+
+    def test_unresolvable_not_fired_allows(self) -> None:
+        verdict = human_only_denial(None, non_browser_credential=True, gate_fired=False)
+        assert verdict is None

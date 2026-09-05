@@ -3384,23 +3384,25 @@ async def _check_human_only_gate(
     ``hitl_gate_exists_but_unresolved``), the human_only policy cannot be
     verified, so the decision is denied rather than silently allowed. The
     error reuses the ``human_only_gate`` code (clients already handle it)
-    with a detail naming the actual reason.
+    with a detail naming the actual reason. The verdict itself lives in the
+    shared pure function ``hitl_gate_config.human_only_denial`` so REST and
+    MCP enforce one policy with one wording (FAR-610 review); the claim
+    lookup runs only when the config is unresolvable.
     """
     from modulo.db.crud.hitl_gate_config import (
         hitl_gate_exists_but_unresolved,
+        human_only_denial,
         resolve_hitl_gate_config,
     )
 
     config = await resolve_hitl_gate_config(s, run_id=run.id, gate_id=gate_id, org_id=org_id, run=run)
-    if config is not None:
-        if config.get("human_only", False):
-            return {"error": "human_only_gate", "detail": "human_only gate requires browser auth"}
-        return None
-    if await hitl_gate_exists_but_unresolved(s, run_id=run.id, gate_id=gate_id, org_id=org_id):
-        return {
-            "error": "human_only_gate",
-            "detail": "gate configuration could not be resolved; decision requires browser authentication",
-        }
+    gate_fired = False
+    if config is None:
+        gate_fired = await hitl_gate_exists_but_unresolved(s, run_id=run.id, gate_id=gate_id, org_id=org_id)
+    # MCP callers authenticate with API keys — always a non-browser credential.
+    verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
+    if verdict is not None:
+        return {"error": "human_only_gate", "detail": verdict}
     return None
 
 
