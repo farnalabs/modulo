@@ -1385,10 +1385,12 @@ export interface paths {
          *     Reconstructs "how many runs were running / queued at any instant" from the
          *     retained fact instants (``[started_at, completed_at)`` overlap — a run
          *     spanning a bucket boundary counts in both). ``pool_reference`` is the
-         *     binding concurrency cap for the query scope: the org's
-         *     ``run_concurrency_limit``, or the single filtered pipeline's
-         *     ``max_concurrent_runs``. ``dimension``/``error_code`` are not surfaced —
-         *     there is no per-dimension concurrency split.
+         *     binding concurrency cap for the query scope: a single filtered pipeline's
+         *     ``max_concurrent_runs`` (or a shared cap across equally-capped filtered
+         *     pipelines), else the org's ``run_concurrency_limit`` — and when no org cap
+         *     is configured, the tightest pipeline cap in scope (FAR-604).
+         *     ``dimension``/``error_code`` are not surfaced — there is no per-dimension
+         *     concurrency split.
          */
         get: operations["analytics_concurrency_api_v1_analytics_concurrency_get"];
         put?: never;
@@ -7788,6 +7790,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/errors/scheduler-starvation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Scheduler Starvation
+         * @description Scheduler-starvation condition for the error dashboard (FAR-604).
+         *
+         *     Pipelines having unstarted runs (``status='pending'``, ``started_at IS
+         *     NULL``) with a capacity-marker ``error_code`` whose age anchor is older
+         *     than the starvation threshold (10 minutes). Declared BEFORE the
+         *     ``/{error_id}`` routes so the static path wins routing. Pre-terminal
+         *     pending runs never produce error events — the dashboard otherwise keys off
+         *     ingested errors from terminal failures — so a pipeline stuck at its
+         *     concurrency cap is invisible without this surface. Each item carries the
+         *     pipeline id/name, the count of starved pending runs, and the oldest run's
+         *     age anchor + age. The age anchor is the run's EARLIEST trigger-event
+         *     receipt (``MIN(trigger_events.received_at)``, falling back to
+         *     ``created_at`` when the run has no trigger event): a coalescing
+         *     re-delivery refreshes the pending run's ``created_at`` on the dispatcher's
+         *     short re-dispatch cadence, so a ``created_at``-keyed age would reset every
+         *     cycle and make a days-long wedge look minutes old. The aggregate is one
+         *     row per starved pipeline (bounded by the org's pipeline count), so no
+         *     pagination and ``total`` is the exact item count. Detection (the SQL
+         *     aggregate) lives in the crud layer
+         *     (:func:`modulo.db.crud.error_tracking.get_scheduler_starvation_pipelines`)
+         *     — the route keeps auth, RLS pinning and serialization only; the
+         *     ``handle_db_errors`` decorator owns the DB-error mapping (it re-raises
+         *     ``HTTPException`` untouched).
+         */
+        get: operations["get_scheduler_starvation_api_v1_errors_scheduler_starvation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/errors/{error_id}": {
         parameters: {
             query?: never;
@@ -8572,6 +8616,13 @@ export interface components {
              * @default 0
              */
             stall_count: number;
+            /**
+             * Capacity Failure Count
+             * @default 0
+             */
+            capacity_failure_count: number;
+            /** Avg Capacity Wait Ms */
+            avg_capacity_wait_ms?: number | null;
             /** Avg Queue Wait Ms */
             avg_queue_wait_ms?: number | null;
             /** Avg Final Idle Ms */
@@ -14745,6 +14796,35 @@ export interface components {
             description?: string | null;
             /** Selected Node Ids */
             selected_node_ids: string[];
+        };
+        /**
+         * SchedulerStarvationItem
+         * @description One pipeline with capacity-starved pending runs (FAR-604).
+         *
+         *     Surfaced on the error dashboard because pre-terminal pending runs never
+         *     produce error events (the dashboard keys off ingested errors), so a
+         *     pipeline stuck at its capacity cap is otherwise invisible.
+         */
+        SchedulerStarvationItem: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /** Pending Count */
+            pending_count: number;
+            /** Oldest Created At */
+            oldest_created_at: string;
+            /** Oldest Age Minutes */
+            oldest_age_minutes: number;
+        };
+        /** SchedulerStarvationResponse */
+        SchedulerStarvationResponse: {
+            /** Items */
+            items: components["schemas"]["SchedulerStarvationItem"][];
+            /** Total */
+            total: number;
+            /** Threshold Minutes */
+            threshold_minutes: number;
         };
         /** SchemaCountsResponse */
         SchemaCountsResponse: {
@@ -35619,6 +35699,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_scheduler_starvation_api_v1_errors_scheduler_starvation_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulerStarvationResponse"];
                 };
             };
             /** @description Validation Error */
