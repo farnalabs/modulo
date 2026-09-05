@@ -41,7 +41,11 @@ jobs:
           TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
           SCAN_TYPE="${{ github.event.inputs.scan_type || 'baseline' }}"
           mkdir -p zap-report
-          chmod 777 zap-report
+          # The zaproxy container runs as uid 1000 (the zap user). Grant write
+          # access ONLY to that uid (S2612: no world-writable dirs) - ZAP still
+          # writes its reports, and the runner user keeps read access for the
+          # upload-artifact step (ZAP emits 644 files under a 755 dir).
+          sudo chown 1000:1000 zap-report
           EXIT=0
           if [ "$SCAN_TYPE" = "full" ]; then
             docker run --rm -v "$PWD/zap-report:/zap/wrk/:rw" ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py -t "$TARGET" -r zap-report.html -J zap-report.json -a || EXIT=$?
