@@ -64,9 +64,14 @@ def _safe_float(value: object, default: float = 0.0) -> float:
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
 # Statuses that hold a slot without actively executing — surfaced as ``idle``.
+# ``hitl_parked`` (qa F11) belongs here: a parked run holds no PIPELINE slot
+# (FAR-604 D1) and is the awaiting_human state after expiry, so the dashboard
+# folds it into the same "idle" bucket — otherwise parked runs vanish from
+# every per-status view (they are neither ``running`` nor ``awaiting_human``
+# nor ``failed``) and drop out of the team totals.
 # ``waiting_for_lock`` was excised in migration 0074/0075 (rows backfilled to
 # ``pending``), so it must not appear here.
-_IDLE_STATUSES = ("pending", "claimed")
+_IDLE_STATUSES = ("pending", "claimed", "hitl_parked")
 
 # Allowed rolling-window sizes for the period-scoped summary (FAR-92) — any
 # 1..90 (matching /trends ge=1, le=90); enforced by the Query params and the

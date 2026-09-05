@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from sqlalchemy import (
     JSON,
@@ -58,7 +58,35 @@ TERMINAL_STATUSES: frozenset[str] = frozenset(
 # outcome could not be determined (e.g. the sandbox was lost) but it is not
 # finalised; it holds a slot until an operator re-runs it with the SAME persisted
 # run-level ``idempotency_key``, reconciling it to a terminal outcome.
-ACTIVE_RUN_STATUSES: frozenset[str] = frozenset({"pending", "running", "awaiting_human", "claimed", "unknown"})
+# ``hitl_parked`` (FAR-604 D2) is a NON-TERMINAL parked state: the run's HITL
+# gate expired unanswered past the grace window and the park sweep moved it out
+# of ``awaiting_human`` so it stops occupying review state. It is deliberately
+# kept in this set (not a terminal status) so every existing consumer that
+# treats ``awaiting_human`` as in-flight treats a parked run identically — the
+# ONE exception is the pipeline capacity gate below, which excludes both.
+ACTIVE_RUN_STATUSES: frozenset[str] = frozenset(
+    {"pending", "running", "awaiting_human", "claimed", "unknown", "hitl_parked"}
+)
+
+# The canonical status literal (FAR-604 qa F15): every write site that names the
+# parked status binds/compares against this constant so a rename or a typo can
+# never desynchronise the park sweep, the un-park transitions, and the guard.
+HITL_PARKED_STATUS: Final[str] = "hitl_parked"
+AWAITING_HUMAN_STATUS: Final[str] = "awaiting_human"
+
+# FAR-604 D1 (HITL capacity): statuses that hold a PIPELINE execution slot —
+# the set the pipeline-level ``max_concurrent_runs`` admission gate counts
+# (``count_active_runs_for_pipeline(..., include_pending=False)``).
+# ``awaiting_human`` and ``hitl_parked`` are DELIBERATELY EXCLUDED: a run parked
+# on a human decision is not executing (the 2026-09-04 incident: 20
+# awaiting_human runs consumed a 20-cap pipeline for 26h). The ORG-level
+# ``run_concurrency_limit`` gate still counts them (it uses
+# ``ACTIVE_RUN_STATUSES - {'pending'}``), so parked runs remain org-bounded.
+# Derived (qa F15): subtracting from ACTIVE_RUN_STATUSES keeps the two sets from
+# drifting apart when a status is added to the active vocabulary.
+PIPELINE_CAPACITY_STATUSES: frozenset[str] = frozenset(
+    ACTIVE_RUN_STATUSES - {"pending", AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS}
+)
 
 # In-flight run statuses for the ``ongoing`` trigger type (FAR-158). An ongoing
 # trigger keeps its pipeline topped up to ``max_concurrent_runs`` runs whose
@@ -108,7 +136,7 @@ class Run(OrgScoped):
             name="ck_runs_trigger_type",
         ),
         CheckConstraint(
-            "status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', "
+            "status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked', "
             "'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', "
             "'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed')",
             name="ck_runs_status",

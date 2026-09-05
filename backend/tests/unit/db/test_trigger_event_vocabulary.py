@@ -43,9 +43,12 @@ _MIGRATION_PATH = (
 
 # The chain head after the FAR-604 admission-healing migration widened the
 # ck_trigger_events_validation_result vocabulary (coalesced /
-# backpressure_skipped) on top of 0174_per_org_last_admin_guard, and the
-# FAR-461 in-app invite tokens migration (0177_invitations) chains off it.
-_CHAIN_HEAD_MIGRATION_NAME = "0177_invitations"
+# backpressure_skipped) on top of 0174_per_org_last_admin_guard, the
+# FAR-461 in-app invite tokens migration (0177_invitations) chained off it,
+# and the FAR-604 D2 HITL-capacity migration (0178_hitl_parked_status,
+# renumbered from 0177 after the invitations collision) re-parented onto
+# that.
+_CHAIN_HEAD_MIGRATION_NAME = "0178_hitl_parked_status"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

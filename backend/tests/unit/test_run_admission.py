@@ -909,3 +909,354 @@ class TestPipelineConfigGuard:
 
         req = CreateVariantGroupRequest(pipeline_id=PIPELINE_ID, name="g", max_concurrent_runs=1)
         assert req.max_concurrent_runs == 1
+
+
+# ---------------------------------------------------------------------------
+# D1 (HITL capacity) — pipeline capacity excludes human-waiting runs
+# ---------------------------------------------------------------------------
+
+
+def _status_values(stmt: Any) -> set[str]:
+    """Extract the bound status IN-list from a captured count statement."""
+    params = stmt.compile().params
+    for key, value in params.items():
+        if "status" in key and isinstance(value, (list, tuple, set, frozenset)):
+            return {str(v) for v in value}
+    raise AssertionError(f"no status IN-list found in params: {params}")
+
+
+class TestPipelineCapacityExcludesAwaitingHuman:
+    """FAR-604 D1: ``awaiting_human``/``hitl_parked`` runs must not consume a
+    PIPELINE slot (a human decision may take days), while the ORG-level gate
+    still counts them (the org-wide worker pool stays bounded)."""
+
+    def test_active_run_statuses_two_argument_contract(self) -> None:
+        """qa F14: the required ``scope`` kwarg is gone — the helper resolves
+        only on ``include_pending`` (the pipeline scoping lives in
+        ``_count_active_runs``), so plain two-argument callers work again."""
+        from modulo.db.crud.run import _active_run_statuses
+        from modulo.db.models.run import ACTIVE_RUN_STATUSES
+
+        assert _active_run_statuses(True) == set(ACTIVE_RUN_STATUSES)
+        assert _active_run_statuses(False) == set(ACTIVE_RUN_STATUSES - {"pending"})
+        assert "hitl_parked" in _active_run_statuses(False)
+        assert "awaiting_human" in _active_run_statuses(False)
+
+    def test_pipeline_capacity_statuses_exclude_human_waiting(self) -> None:
+        from modulo.db.models.run import PIPELINE_CAPACITY_STATUSES
+
+        assert "awaiting_human" not in PIPELINE_CAPACITY_STATUSES
+        assert "hitl_parked" not in PIPELINE_CAPACITY_STATUSES
+        assert "pending" not in PIPELINE_CAPACITY_STATUSES
+        assert {"running", "claimed", "unknown"} == PIPELINE_CAPACITY_STATUSES
+
+    async def test_pipeline_count_statement_excludes_human_waiting(self) -> None:
+        from modulo.db.crud.run import count_active_runs_for_pipeline
+
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = 0
+        session.execute = AsyncMock(return_value=result)
+        await count_active_runs_for_pipeline(session, PIPELINE_ID, include_pending=False)
+
+        stmt = session.execute.call_args[0][0]
+        assert _status_values(stmt) == {"running", "claimed", "unknown"}
+
+    async def test_org_count_statement_includes_human_waiting(self) -> None:
+        from modulo.db.crud.run import count_active_runs_for_org
+
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = 0
+        session.execute = AsyncMock(return_value=result)
+        await count_active_runs_for_org(session, ORG_ID, include_pending=False)
+
+        stmt = session.execute.call_args[0][0]
+        values = _status_values(stmt)
+        assert "awaiting_human" in values
+        assert "hitl_parked" in values
+        assert "pending" not in values
+
+
+# ---------------------------------------------------------------------------
+# D2 (HITL capacity) — park-on-expiry sweep
+# ---------------------------------------------------------------------------
+
+
+def _parked_row() -> Any:
+    return SimpleNamespace(
+        id=RUN_ID,
+        organisation_id=ORG_ID,
+        pipeline_id=PIPELINE_ID,
+    )
+
+
+class _ParkConn:
+    """Connection double: org enumeration + guarded park UPDATE.
+
+    The park UPDATE is the org transaction's ONLY write (qa F13 — the
+    parked_at stamp was dropped): the rows it RETURNs are the parked set.
+    """
+
+    def __init__(
+        self,
+        statements: list[str],
+        parked: list[Any],
+        orgs: list[uuid.UUID],
+        params_seen: list[dict[str, object]],
+        fail_on_park: bool = False,
+    ) -> None:
+        self._statements = statements
+        self._parked = parked
+        self._orgs = orgs
+        self.params_seen = params_seen
+        self._fail_on_park = fail_on_park
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> Self:
+        return self
+
+    async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+        sql = str(stmt)
+        self._statements.append(sql)
+        if params is not None:
+            self.params_seen.append(dict(params))
+        if "SELECT id FROM organisations" in sql:
+            return _AsyncResult(rows=[(org,) for org in self._orgs])
+        if "set_config" in sql:
+            return _AsyncResult()
+        if "UPDATE runs SET status" in sql:
+            if self._fail_on_park:
+                raise RuntimeError("db down")
+            return _AsyncResult(rows=list(self._parked))
+        return _AsyncResult()
+
+
+class _ParkEngine:
+    def __init__(self, statements: list[str], parked: list[Any], orgs: list[uuid.UUID] | None = None) -> None:
+        self._statements = statements
+        self._parked = parked
+        self._orgs = orgs or [ORG_ID]
+        self.params_seen: list[dict[str, object]] = []
+
+    def connect(self) -> _ParkConn:
+        return _ParkConn(self._statements, self._parked, self._orgs, self.params_seen)
+
+
+class TestParkExpiredHitlRuns:
+    def _settings(self, grace_seconds: int = 86400) -> MagicMock:
+        return MagicMock(hitl_park_grace_seconds=grace_seconds)
+
+    async def test_parks_expired_unclaimed_gate_run(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        statements: list[str] = []
+        engine = _ParkEngine(statements, [_parked_row()])
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with caplog.at_level("WARNING"):
+            result = await ra.park_expired_hitl_runs(engine)  # type: ignore[arg-type]
+
+        assert result == {"parked": 1}
+        park_stmts = [s for s in statements if "UPDATE runs SET status" in s]
+        assert len(park_stmts) == 1
+        # Predicate shape: only awaiting_human runs, past the grace window,
+        # with an expired UNCLAIMED undecided gate and no other open gate.
+        assert "runs.status = :awaiting_status" in park_stmts[0]
+        assert "cancellation_requested = false" in park_stmts[0]
+        assert "hc.expires_at < now() - (:grace_seconds * interval '1 second')" in park_stmts[0]
+        assert "hc.account_id IS NULL" in park_stmts[0]
+        assert "hc2.account_id IS NOT NULL" in park_stmts[0]
+        # qa F13: NO parked_at stamp exists anywhere — the run's hitl_parked
+        # STATUS is the parked signal; the gate row is untouched (the park
+        # UPDATE is the org transaction's ONLY write).
+        assert "parked_at" not in park_stmts[0]
+        assert not [s for s in statements if "UPDATE hitl_claims" in s]
+        # The status literals are bound from the shared constants (qa F15).
+        park_params = [p for p in engine.params_seen if "parked_status" in p]
+        assert park_params and park_params[0]["parked_status"] == "hitl_parked"
+        assert park_params[0]["awaiting_status"] == "awaiting_human"
+        # Loud structured event per parked run.
+        assert any("hitl_park.parked" in r.message for r in caplog.records)
+        # RLS org context was set per org.
+        assert "set_config('app.organisation_id'" in " ".join(statements)
+
+    async def test_unexpired_or_claimed_gates_never_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        statements: list[str] = []
+        engine = _ParkEngine(statements, [])
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        result = await ra.park_expired_hitl_runs(engine)  # type: ignore[arg-type]
+
+        assert result == {"parked": 0}
+        park_stmts = [s for s in statements if "UPDATE runs SET status" in s]
+        assert len(park_stmts) == 1
+        # Idempotency by construction (qa F13): a parked run no longer
+        # matches the source status, so a second tick can never re-park —
+        # the status predicate IS the idempotency marker.
+        assert "runs.status = :awaiting_status" in park_stmts[0]
+
+    async def test_explicit_grace_seconds_overrides_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        statements: list[str] = []
+        engine = _ParkEngine(statements, [])
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings(grace_seconds=999999))
+        await ra.park_expired_hitl_runs(engine, grace_seconds=60)  # type: ignore[arg-type]
+
+        park_stmts = [s for s in statements if "UPDATE runs SET status" in s]
+        assert park_stmts
+        park_params = [p for p in engine.params_seen if "grace_seconds" in p]
+        assert park_params and park_params[0]["grace_seconds"] == 60
+
+    async def test_sweep_failure_raises_with_partial_counts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        parked_row = _parked_row()
+        org2 = OTHER_ORG_ID
+
+        class _PartialParkConn(_ParkConn):
+            def __init__(self, fail_on_park: bool) -> None:
+                super().__init__([], [parked_row] if not fail_on_park else [], [ORG_ID, org2], [], fail_on_park)
+
+        class _PartialParkEngine:
+            def __init__(self) -> None:
+                # conn 1 = org enumeration, conn 2 = org 1, conn 3 = org 2.
+                self._n = 0
+
+            def connect(self) -> _PartialParkConn:
+                self._n += 1
+                return _PartialParkConn(fail_on_park=self._n > 2)
+
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with pytest.raises(ra.HitlParkError) as excinfo:
+            await ra.park_expired_hitl_runs(_PartialParkEngine())  # type: ignore[arg-type]
+
+        assert excinfo.value.parked == 1
+        assert str(excinfo.value.__cause__) == "db down"
+
+    async def test_failure_still_logs_already_parked_rows(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Parks achieved before a later org's failure are still logged."""
+        parked_row = _parked_row()
+        org2 = OTHER_ORG_ID
+
+        class _PartialParkConn(_ParkConn):
+            def __init__(self, fail_on_park: bool) -> None:
+                super().__init__([], [parked_row] if not fail_on_park else [], [ORG_ID, org2], [], fail_on_park)
+
+        class _PartialParkEngine:
+            def __init__(self) -> None:
+                self._n = 0
+
+            def connect(self) -> _PartialParkConn:
+                self._n += 1
+                return _PartialParkConn(fail_on_park=self._n > 2)
+
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with caplog.at_level("WARNING"), pytest.raises(ra.HitlParkError):
+            await ra.park_expired_hitl_runs(_PartialParkEngine())  # type: ignore[arg-type]
+
+        assert any("hitl_park.parked" in r.message for r in caplog.records)
+
+    async def test_no_phantom_park_when_org_update_fails(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """qa F6: the parked count/log is recorded only AFTER the org's park
+        UPDATE succeeds — a failing park UPDATE rolls the org's transaction
+        back, so its rows are neither parked nor counted: no phantom
+        ``hitl_park.parked`` events, ``exc.parked == 0``."""
+        org2 = OTHER_ORG_ID
+
+        class _FailFirstParkConn(_ParkConn):
+            def __init__(self) -> None:
+                super().__init__([], [], [ORG_ID, org2], [], fail_on_park=False)
+                self._first_park_seen = False
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                sql = str(stmt)
+                if "UPDATE runs SET status" in sql:
+                    # The FIRST org's park dies; the second org (never
+                    # reached) would have parked.
+                    if not self._first_park_seen:
+                        self._first_park_seen = True
+                        raise RuntimeError("park update down")
+                    return _AsyncResult(rows=[_parked_row()])
+                return await super().execute(stmt, params)
+
+        class _FailFirstParkEngine:
+            def __init__(self) -> None:
+                self.params_seen: list[dict[str, object]] = []
+
+            def connect(self) -> _FailFirstParkConn:
+                return _FailFirstParkConn()
+
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with caplog.at_level("WARNING"), pytest.raises(ra.HitlParkError) as excinfo:
+            await ra.park_expired_hitl_runs(_FailFirstParkEngine())  # type: ignore[arg-type]
+
+        assert excinfo.value.parked == 0
+        assert not any("hitl_park.parked" in r.message for r in caplog.records)
+
+    async def test_two_org_sweep_parks_each_orgs_own_rows(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """qa F12(b): a two-org pass parks each org's own expired runs and
+        never crosses the boundary — every bound ``oid`` is one of the
+        enumerated orgs, the org predicate is IN the statement itself
+        (``runs.organisation_id = :oid`` and the correlated
+        ``hc.organisation_id = runs.organisation_id``), and each org's park
+        event carries its own org id."""
+        org2 = OTHER_ORG_ID
+        run1 = _parked_row()
+        run2 = SimpleNamespace(
+            id=uuid.UUID("aaaaaaa1-0000-0000-0000-000000000001"),
+            organisation_id=org2,
+            pipeline_id=PIPELINE_ID,
+        )
+
+        class _TwoOrgParkConn(_ParkConn):
+            def __init__(self, statements: list[str], params_seen: list[dict[str, object]]) -> None:
+                super().__init__(statements, [], [ORG_ID, org2], params_seen)
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                sql = str(stmt)
+                if "UPDATE runs SET status" in sql and params is not None:
+                    # Record the statement + bound params BEFORE answering —
+                    # the parent execute (which normally records both) is
+                    # bypassed on this branch.
+                    self._statements.append(sql)
+                    self.params_seen.append(dict(params))
+                    oid = uuid.UUID(str(params.get("oid")))
+                    rows = [run1] if oid == ORG_ID else ([run2] if oid == org2 else [])
+                    return _AsyncResult(rows=rows)
+                return await super().execute(stmt, params)
+
+        class _TwoOrgParkEngine:
+            def __init__(self) -> None:
+                self._statements: list[str] = []
+                self.params_seen: list[dict[str, object]] = []
+
+            def connect(self) -> _TwoOrgParkConn:
+                return _TwoOrgParkConn(self._statements, self.params_seen)
+
+        engine = _TwoOrgParkEngine()
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with caplog.at_level("WARNING"):
+            result = await ra.park_expired_hitl_runs(engine)  # type: ignore[arg-type]
+
+        assert result == {"parked": 2}
+        bound_oids = [p["oid"] for p in engine.params_seen if "oid" in p]
+        assert bound_oids == [str(ORG_ID), str(org2)]
+        # The org predicate is defence-in-depth IN the statement (not just the
+        # GUC): the park's WHERE and the correlated gate EXISTS clauses carry it.
+        park_stmt = next(s for s in engine._statements if "UPDATE runs SET status" in s)
+        assert "runs.organisation_id = :oid" in park_stmt
+        assert "hc.organisation_id = runs.organisation_id" in park_stmt
+        assert "hc2.organisation_id = runs.organisation_id" in park_stmt
+        # Each parked event names its own org — org 2's rows are logged under
+        # org 2, never folded into org 1's pass (log args: id, pipeline, org).
+        parked_events = [r for r in caplog.records if "hitl_park.parked" in r.message]
+        assert len(parked_events) == 2
+        event_orgs = {str(r.args[2]) for r in parked_events}
+        assert event_orgs == {str(ORG_ID), str(org2)}

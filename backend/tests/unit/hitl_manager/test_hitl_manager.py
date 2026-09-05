@@ -2011,3 +2011,115 @@ async def test_hitl_gate_required_team_id_absent_is_none() -> None:
     """Gate without ``required_team_id`` still carries None (no restriction)."""
     payload = await _interrupt_payload({"gate_id": "review-step", "human_only": False})
     assert payload["required_team_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-604 D3 — un-park on decision
+# ---------------------------------------------------------------------------
+
+
+def _session_decide_capturing(
+    *,
+    update_returns_id: uuid.UUID | None,
+    session_get_gate: HitlClaim | None,
+) -> tuple[AsyncMock, list[Any]]:
+    """Session mock for _decide() that CAPTURES every issued statement.
+
+    Call sequence in _decide():
+      1. decision UPDATE … RETURNING id  (scalar_one_or_none → update_returns_id)
+      2. un-park UPDATE (guarded hitl_parked → awaiting_human)
+      3. session.get() → session_get_gate
+    """
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    stmts: list[Any] = []
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = update_returns_id
+    unpark_result = MagicMock()
+    unpark_result.rowcount = 1
+
+    async def _execute(stmt: Any) -> Any:
+        stmts.append(stmt)
+        if len(stmts) == 1:
+            return update_result
+        return unpark_result
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=session_get_gate)
+    return session, stmts
+
+
+def _bound_values(stmt: Any) -> set[str]:
+    return {str(v) for v in stmt.compile().params.values()}
+
+
+async def test_decide_unparks_parked_run():
+    """FAR-604 D3: a decision commits an un-park (``hitl_parked`` →
+    ``awaiting_human``) so the parked run re-enters normal admission — the
+    API route's executor.resume picks it up immediately; the MCP flow's
+    committed-decision reconcile path resumes it when a slot frees."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session, stmts = _session_decide_capturing(update_returns_id=gate.id, session_get_gate=gate_decided)
+    mgr = HITLManager()
+    result = await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
+    assert result.decision == "approved"
+    # The un-park is issued directly after the decision commit (before the
+    # audit append) and is guarded to parked runs only.
+    assert len(stmts) >= 2
+    unpark_values = _bound_values(stmts[1])
+    assert unpark_values == {"hitl_parked", "awaiting_human", str(_RUN), str(_ORG)}
+
+
+async def test_decide_unpark_is_guarded_to_parked_status():
+    """The un-park predicate matches ``status = 'hitl_parked'`` ONLY — a
+    running/claimed/awaiting_human run is never touched by the write."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="rejected")
+    session, stmts = _session_decide_capturing(update_returns_id=gate.id, session_get_gate=gate_decided)
+    mgr = HITLManager()
+    await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token", reason="no")
+    assert len(stmts) >= 2
+    unpark_values = _bound_values(stmts[1])
+    # The guard value (hitl_parked) and target (awaiting_human) are both
+    # bound — every other status is structurally excluded by the predicate.
+    assert unpark_values == {"hitl_parked", "awaiting_human", str(_RUN), str(_ORG)}
+
+
+async def test_decide_failure_does_not_unpark():
+    """A refused decision (expired token) never issues the un-park write."""
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    stmts: list[Any] = []
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = None
+    diag_result = MagicMock()
+    diag_result.scalar_one_or_none.return_value = gate
+
+    async def _execute(stmt: Any) -> Any:
+        stmts.append(stmt)
+        return update_result if len(stmts) == 1 else diag_result
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=None)
+    mgr = HITLManager()
+    with pytest.raises(ClaimTokenExpiredError):
+        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
+    # The decision UPDATE + the diagnosis SELECT ran — NO un-park write.
+    assert len(stmts) == 2
+    for stmt in stmts:
+        assert "hitl_parked" not in _bound_values(stmt)

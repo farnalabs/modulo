@@ -241,6 +241,15 @@ class Settings(BaseSettings):
     trigger_backpressure_max_age_seconds: int = Field(
         default=3600, alias="TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS", ge=60, le=86400
     )
+    # FAR-604 D2 (HITL capacity) park-on-expiry sweep: an open HITL gate whose
+    # ``expires_at`` passed MORE than this window ago (and whose run still
+    # waits ``awaiting_human``) gets its run parked to ``hitl_parked`` so it
+    # stops occupying review state; the gate row stays open and claimable.
+    # Default 24h — the 2026-09-04 incident class (20 awaiting_human runs
+    # waiting 26h) parks after roughly one working day of silence. The claim
+    # TTL itself stays independent (claims are reset by the claim-expiry
+    # sweep); the grace is the SECOND, much longer window after gate expiry.
+    hitl_park_grace_seconds: int = Field(default=86400, alias="HITL_PARK_GRACE_SECONDS", ge=60, le=604800)
     # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
     # least one node within this setup window or the execute_run zombie watchdog
     # fails it. Covers the pre-node hang window: checkpointer setup, graph

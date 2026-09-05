@@ -94,7 +94,8 @@
       </output>
 
       <!-- HITL Gate -->
-      <section v-if="run.status === 'awaiting_human' && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
+      <!-- qa F4: a parked run still shows its open (claimable) gate — the status changed, the review did not. -->
+      <section v-if="(run.status === 'awaiting_human' || run.status === 'hitl_parked') && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
         <h2 class="text-base font-semibold tracking-tight mb-4">HITL Gate</h2>
         <div v-for="gate in pendingGates" :key="gate.gate_id" class="space-y-3">
           <div class="flex items-center gap-2 text-sm">
@@ -1247,6 +1248,7 @@ function statusBadgeClassFor(status: string | undefined): string {
     cancelled: 'badge badge-status-warning',
     pending: 'badge badge-status-muted',
     awaiting_human: 'badge badge-status-pending',
+    hitl_parked: 'badge badge-status-pending',
   }
   return map[status ?? ''] ?? 'badge badge-context-slate'
 }
@@ -1822,7 +1824,7 @@ async function fetchRunData(runId: string) {
     })
     if (runData) {
       run.value = runData as unknown as RunResponse
-      if (run.value.status === 'awaiting_human') {
+      if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
         fetchHitlGates(runId)
       }
     }
@@ -1922,7 +1924,7 @@ const { loading, error } = useDataFetch<RunFetchResult>(
 
       if (runData) {
         run.value = runData as unknown as RunResponse
-        if (run.value.status === 'awaiting_human') {
+        if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
           fetchHitlGates(runId)
         }
       }
