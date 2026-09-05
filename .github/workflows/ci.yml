@@ -732,7 +732,6 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          TIMESTAMP=$(date +%s)
           # jq -n --arg/--argjson JSON-escapes every value, so a crafted branch
           # name (legal in git refnames, e.g. containing '"') cannot inject
           # keys or break the payload. See FAR-568.
@@ -742,10 +741,16 @@ jobs:
             --arg sha "${SHA}" \
             --arg ref "${BRANCH}" \
             '{action: "check_run", repository: {full_name: $repo}, pull_request: {number: $prNumber, head: {sha: $sha, ref: $ref}}}')
-          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
 
           # Retry with exponential backoff on 429/5xx (max 5 attempts, ~5 min total)
+          # TIMESTAMP and HMAC are recomputed PER ATTEMPT: the server enforces a
+          # +/-300s replay window on X-Modulo-Timestamp, so a signature computed
+          # once (before a slow attempt) would fall outside the window after a
+          # 429/5xx retry and be rejected as a replay — silently losing the
+          # review. Recomputing each iteration keeps every signature fresh.
           for i in 1 2 3 4 5; do
+            TIMESTAMP=$(date +%s)
+            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${MODULO_WEBHOOK_SECRET}" | sed 's/^.* //')
             RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${MODULO_WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
