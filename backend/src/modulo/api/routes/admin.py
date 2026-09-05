@@ -2343,6 +2343,8 @@ async def admin_billing_overview(
                     )
                 )
             ).scalar() or 0
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("billing.overview_failed")
         _raise_db_unavailable("Billing overview is temporarily unavailable.")
@@ -3570,6 +3572,8 @@ async def admin_update_retention(
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()
+    except HTTPException:
+        raise
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
 
@@ -3682,6 +3686,8 @@ async def admin_update_sandbox_concurrency(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
 
@@ -3844,6 +3850,8 @@ async def admin_update_run_concurrency(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
 
