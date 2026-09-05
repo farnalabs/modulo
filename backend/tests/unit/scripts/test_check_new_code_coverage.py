@@ -169,6 +169,17 @@ def test_is_coverage_excluded_matches_generated_and_type_only_paths():
     assert gate.is_coverage_excluded("backend/src/modulo/api/routes.py") is False
 
 
+def test_is_coverage_excluded_matches_frontend_type_barrels():
+    # The two type-only `*types.ts` barrels the reviewer named as the same
+    # false-failure trap (absent from the lcov) must be excluded from the
+    # denominator via the `frontend/src/**/*types.ts` pattern.
+    assert gate.is_coverage_excluded("frontend/src/lib/error-tracking/types.ts") is True
+    assert gate.is_coverage_excluded("frontend/src/monitor/types.ts") is True
+    assert gate.is_coverage_excluded("frontend/src/error-tracking/types.ts") is True
+    assert gate.is_coverage_excluded("frontend/src/components/Button.types.ts") is True
+    assert gate.is_coverage_excluded("frontend/src/stores/auth.ts") is False
+
+
 def test_main_does_not_gate_unmeasured_generated_schema_ts(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     _write_cobertura(
@@ -186,6 +197,32 @@ def test_main_does_not_gate_unmeasured_generated_schema_ts(tmp_path, monkeypatch
         assert gate.main([]) == 0
     out = capsys.readouterr().out
     assert "schema.ts" not in out
+
+
+def test_main_does_not_gate_unmeasured_type_barrels(tmp_path, monkeypatch, capsys):
+    # Regression: a PR touching only a type-only `*types.ts` barrel (absent
+    # from the lcov) must not be counted as 0% and blow up the denominator.
+    monkeypatch.chdir(tmp_path)
+    _write_cobertura(
+        tmp_path / "backend" / "coverage.xml",
+        [_class_xml("src/modulo/api/routes.py", [_line_xml(1, n) for n in range(1, 11)])],
+    )
+    _write_lcov(tmp_path / "frontend" / "coverage" / "lcov.info", [_lcov_record("src/stores/auth.ts", 10, 10)])
+    barrels = tmp_path / "frontend" / "src" / "lib" / "error-tracking"
+    barrels.mkdir(parents=True)
+    (barrels / "types.ts").write_text(
+        "\n".join(f"export type E{n} = {{ id: number }}" for n in range(40)) + "\n", encoding="utf-8"
+    )
+    changed = [
+        "backend/src/modulo/api/routes.py",
+        "frontend/src/stores/auth.ts",
+        "frontend/src/lib/error-tracking/types.ts",
+    ]
+    patch_merge_base, patch_changed = _patch_git(changed)
+    with patch_merge_base, patch_changed:
+        assert gate.main([]) == 0
+    out = capsys.readouterr().out
+    assert "types.ts" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +574,33 @@ def test_main_unmeasured_brand_new_file_fails_gate(tmp_path, monkeypatch, capsys
     out = capsys.readouterr().out
     assert "brand_new.py" in out
     assert "absent from coverage report" in out
+
+
+def test_main_type_only_changed_file_absent_from_lcov_passes(tmp_path, monkeypatch, capsys):
+    # Regression for the blocking review finding: a large type-only file (the
+    # generated API schema, ~36k lines) that is the only changed frontend file
+    # and is absent from the lcov must NOT be counted as 0% and blow up the
+    # denominator. With it excluded, the gate should pass on the covered files.
+    monkeypatch.chdir(tmp_path)
+    _write_cobertura(
+        tmp_path / "backend" / "coverage.xml",
+        [_class_xml("src/modulo/api/routes.py", [_line_xml(1, n) for n in range(1, 11)])],
+    )
+    _write_lcov(tmp_path / "frontend" / "coverage" / "lcov.info", [_lcov_record("src/stores/auth.ts", 10, 10)])
+    schema = tmp_path / "frontend" / "src" / "lib" / "api" / "schema.ts"
+    schema.parent.mkdir(parents=True)
+    schema.write_text("\n".join(f"export type T{n} = {{ id: number }}" for n in range(36826)) + "\n", encoding="utf-8")
+    changed = [
+        "backend/src/modulo/api/routes.py",
+        "frontend/src/stores/auth.ts",
+        "frontend/src/lib/api/schema.ts",
+    ]
+    patch_merge_base, patch_changed = _patch_git(changed)
+    with patch_merge_base, patch_changed:
+        assert gate.main([]) == 0
+    out = capsys.readouterr().out
+    assert "frontend 0.0%" not in out
+    assert "schema.ts" not in out
 
 
 def test_main_missing_backend_report_is_exempt_with_warning(tmp_path, monkeypatch, capsys):

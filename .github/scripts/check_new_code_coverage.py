@@ -63,6 +63,7 @@ COVERAGE_EXCLUSION_PATTERNS = (
     "*schema.ts",
     "frontend/src/types/**",
     "**/*.d.ts",
+    "frontend/src/**/*types.ts",
 )
 
 # cobertura condition-coverage attribute format: "50% (1/2)".
