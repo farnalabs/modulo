@@ -255,7 +255,7 @@ describe('useUiCommandExecutor command surface', () => {
     stubRequestAnimationFrame()
     // Reset the executor's module-level state between tests: unpause, drop
     // locks/abort controllers, and clear mock call history. The static import
-    // keeps ONE executor instance for the whole describe � never resetModules
+    // keeps ONE executor instance for the whole describe — never resetModules
     // here, which would sever the executor's router/spotlight bindings.
     abortUiCommands()
     setActionSpeed('lightning')
@@ -395,7 +395,7 @@ describe('useUiCommandExecutor command surface', () => {
     expect(toggled).toBe(true)
   })
 
-  it('fill types into a combobox trigger�s own command input', async () => {
+  it('fill types into a combobox trigger’s own command input', async () => {
     const trigger = document.createElement('div')
     trigger.setAttribute('role', 'combobox')
     trigger.dataset.testid = 'cb-fill'
