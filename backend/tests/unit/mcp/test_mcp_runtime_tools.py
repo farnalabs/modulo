@@ -762,7 +762,9 @@ class TestReviewHitl(_AuthContext):
         manager.deliver_manual = AsyncMock()
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
+        # 1: run lookup; 2: gate-config snapshot lookup (gate id "gate-1" is
+        # not a hitl_gate_* id, so the human_only check resolves None).
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -793,31 +795,170 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
+        """FAR-610: the gate config is resolved from the run's SNAPSHOT graph
+        by edge topology (hitl_gate_<source>_<target>), not from the first
+        edge of the pipeline in arbitrary order."""
         self._set_role_operator()
         manager = MagicMock()
         manager.approve = AsyncMock()
 
-        gate_row = MagicMock()
-        gate_row.pipeline_id = uuid.uuid4()
-        run_result = MagicMock()
-        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
-        gate_row_result = MagicMock()
-        gate_row_result.scalar_one_or_none.return_value = gate_row
-        edge = MagicMock()
-        edge.hitl_gate_config = {"human_only": True}
-        edge_result = MagicMock()
-        edge_result.scalars.return_value.first.return_value = edge
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+            ],
+        }
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_row_result, edge_result])
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(snapshot)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        run_id = str(uuid.uuid4())
-        result = await review_hitl(run_id=run_id, gate_id="gate-1", action="approve", claim_token="tok-123")
+        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
 
         assert result["error"] == "human_only_gate"
         manager.approve.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_approve_blocks_human_only_gate_when_first_edge_unconfigured(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-610 regression: the pipeline's FIRST edge has no
+        hitl_gate_config (the old ``.scalars().first()`` read exactly that edge
+        and allowed the approve); the gated edge elsewhere in the graph IS
+        human_only and must block."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                # First edge: no hitl_gate_config — the pre-FAR-610 bug read
+                # THIS edge's config and let the approve through.
+                {"source": "n1", "target": "n2"},
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+            ],
+        }
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(snapshot)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+
+        assert result["error"] == "human_only_gate"
+        manager.approve.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_deliver_manual_blocks_human_only_gate(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-610: deliver_manual is a decision like approve — human_only
+        gates block it on MCP too."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.deliver_manual = AsyncMock()
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+            ],
+        }
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(snapshot)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(
+            run_id=str(run.id),
+            gate_id=gate_id,
+            action="deliver_manual",
+            claim_token="tok-123",
+            output={"result": "ok"},
+        )
+
+        assert result["error"] == "human_only_gate"
+        manager.deliver_manual.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_reject_allowed_on_human_only_gate(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-610: reject is the safe direction — never blocked, even when
+        the gate is human_only."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.reject = AsyncMock()
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+            ],
+        }
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(snapshot)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(
+            run_id=str(run.id),
+            gate_id=gate_id,
+            action="reject",
+            claim_token="tok-123",
+            reason="not good",
+        )
+
+        assert result == {"status": "rejected", "gate_id": gate_id}
+        manager.reject.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")

@@ -4,8 +4,14 @@ All HITL operations are scoped to the authenticated user's organisation.
 Claim, approve, and reject require the run to be in ``awaiting_human`` status.
 
 Claim-token-based approve/reject require the token returned from a successful
-claim.  ``human_only`` gates additionally reject MCP-initiated approve requests
-(checked by the ViewModel layer — this route does not distinguish clients).
+claim.  ``human_only`` gates additionally reject decisions made with a
+non-browser credential: the resume routes (approve / approve-with-modification
+/ deliver-manual / submit-manual) resolve the gate's actual edge config and
+raise 403 for API-key principals (FAR-610 — the routes previously performed no
+``human_only`` check at all). ``reject_gate`` is deliberately exempt:
+rejection is the safe direction. The MCP surface (``mcp_server.py``) denies
+``human_only`` approve/deliver-manual outright — MCP clients authenticate with
+API keys and are never browser sessions.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ from modulo.core.pipeline_engine.executor import (
     SandboxCapacityExceededError,
     org_sandbox_capacity_free,
 )
+from modulo.db.crud.hitl_gate_config import edge_source_or_target, resolve_hitl_gate_config
 from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
@@ -160,6 +167,55 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
         )
 
 
+async def _enforce_human_only_gate(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    gate_id: str,
+) -> None:
+    """Raise ``403`` when a non-browser (API-key) principal decides a ``human_only`` gate.
+
+    FAR-610: the decision routes previously performed no ``human_only`` check.
+    The gate's config is resolved from the run's snapshot graph (falling back
+    to the live edges) via the shared resolver
+    (:func:`modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config`) — the
+    gate id maps to exactly one edge by topology, never by position. Runs
+    BEFORE the capacity check and the manager call so a denial has no side
+    effects (fail fast, gate left undecided).
+
+    Applied to the resume routes (approve / approve-with-modification /
+    deliver-manual / submit-manual). ``reject_gate`` is deliberately exempt:
+    rejection is the safe direction. Note ``submit_manual_output``'s ``gate_id``
+    is a manual-NODE id, not a ``hitl_gate_*`` id, so the resolver yields None
+    there and the check is a pass-through — manual nodes are not HITL gates.
+
+    Credential semantics (FAR-610 finding): REST resolves principals only from
+    browser-login JWTs today — org API keys (``mk_``) are accepted solely by
+    the MCP server and the few ``require_permission_any_credential`` routes.
+    JWTs carry no client-type claim (no amr / token-type / client_id marker),
+    so the principal's ``via_api_key`` credential-kind marker is the only
+    reliable signal available. Browser JWTs pass this check; if API keys are
+    ever wired into these routes (operator keys are reserved for
+    HITL-approval wiring), enforcement is already in place. MCP approvals —
+    the observed attack path — are denied outright for ``human_only`` gates in
+    ``mcp_server._check_human_only_gate``.
+    """
+    config = await resolve_hitl_gate_config(
+        session,
+        run_id=run_id,
+        gate_id=gate_id,
+        org_id=principal.organisation_id,
+    )
+    if config is None or not config.get("human_only", False):
+        return
+    if not principal.via_api_key:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="human_only gate requires browser authentication; API-key clients cannot approve this gate",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Claim
 # ---------------------------------------------------------------------------
@@ -268,6 +324,7 @@ async def approve_gate(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _enforce_human_only_gate(session, principal, run_id, gate_id)
             await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.approve(
@@ -369,6 +426,7 @@ async def approve_gate_with_modification(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _enforce_human_only_gate(session, principal, run_id, gate_id)
             await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.approve_with_modification(
@@ -559,6 +617,7 @@ async def deliver_manual_output(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _enforce_human_only_gate(session, principal, run_id, gate_id)
             await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.deliver_manual(
@@ -649,6 +708,7 @@ async def submit_manual_output(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _enforce_human_only_gate(session, principal, run_id, gate_id)
             await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
                 await mgr.approve(
@@ -840,23 +900,15 @@ async def list_org_pending_gates(
 # ---------------------------------------------------------------------------
 
 
-def _edge_source_or_target(edge: dict[str, Any], key: str) -> str | None:
-    """Resolve an edge's source/target node id (canonical + persisted keys).
-
-    Mirrors ``graph_cache._get_edge_val`` but returns None instead of raising
-    when the edge omits the field, so a malformed snapshot edge never breaks
-    gate-label resolution.
-    """
-    value = edge.get(key) or edge.get(f"{key}_node_id")
-    return str(value) if value is not None else None
-
-
 def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
     """Map gate_id -> human label from snapshot edges carrying hitl_gate_config.
 
     Gate id format is ``hitl_gate_<source>_<target>`` (see
     ``graph_cache._make_gate_id``). Edges without a ``label`` in their
     ``hitl_gate_config`` are omitted so the frontend falls back to shortId.
+    Node-key resolution uses the shared ``edge_source_or_target`` (canonical +
+    persisted key styles) — the same helper the FAR-610 gate-config resolver
+    uses, so labels and enforcement always agree on the gate id derivation.
     """
     gate_label_map: dict[str, str] = {}
     for edge in graph_json.get("edges", []):
@@ -868,8 +920,8 @@ def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
         label = hitl_config.get("label")
         if not label:
             continue
-        source = _edge_source_or_target(edge, "source")
-        target = _edge_source_or_target(edge, "target")
+        source = edge_source_or_target(edge, "source")
+        target = edge_source_or_target(edge, "target")
         if source and target:
             gate_label_map[f"hitl_gate_{source}_{target}"] = str(label)
     return gate_label_map
