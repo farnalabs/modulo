@@ -3371,19 +3371,36 @@ async def _check_human_only_gate(
     direction.
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
-    (falling back to the live pipeline edges) via the shared resolver
-    (``db.crud.hitl_gate_config.resolve_hitl_gate_config``). The previous
+    (falling back to the live pipeline edges, then the live HITL-node config)
+    via the shared resolver (``db.crud.hitl_gate_config``). The previous
     implementation selected the pipeline's edges with NO source/target filter
     and read ``.scalars().first()`` — the first edge in arbitrary order — and
     checked THAT edge's config, so on the PR Reviewer pipeline (first edge
     carried no ``hitl_gate_config``) MCP approvals were ALLOWED on a
     ``human_only`` gate elsewhere in the graph.
+
+    Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
+    gate actually fired (a claim row exists —
+    ``hitl_gate_exists_but_unresolved``), the human_only policy cannot be
+    verified, so the decision is denied rather than silently allowed. The
+    error reuses the ``human_only_gate`` code (clients already handle it)
+    with a detail naming the actual reason.
     """
-    from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
+    from modulo.db.crud.hitl_gate_config import (
+        hitl_gate_exists_but_unresolved,
+        resolve_hitl_gate_config,
+    )
 
     config = await resolve_hitl_gate_config(s, run_id=run.id, gate_id=gate_id, org_id=org_id, run=run)
-    if config is not None and config.get("human_only", False):
-        return {"error": "human_only_gate", "detail": "human_only gate requires browser auth"}
+    if config is not None:
+        if config.get("human_only", False):
+            return {"error": "human_only_gate", "detail": "human_only gate requires browser auth"}
+        return None
+    if await hitl_gate_exists_but_unresolved(s, run_id=run.id, gate_id=gate_id, org_id=org_id):
+        return {
+            "error": "human_only_gate",
+            "detail": "gate configuration could not be resolved; decision requires browser authentication",
+        }
     return None
 
 

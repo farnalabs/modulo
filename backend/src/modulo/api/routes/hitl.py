@@ -8,7 +8,9 @@ claim.  ``human_only`` gates additionally reject decisions made with a
 non-browser credential: the resume routes (approve / approve-with-modification
 / deliver-manual / submit-manual) resolve the gate's actual edge config and
 raise 403 for API-key principals (FAR-610 — the routes previously performed no
-``human_only`` check at all). ``reject_gate`` is deliberately exempt:
+``human_only`` check at all). When the config cannot be resolved but the gate
+fired (a claim row exists), API-key principals are denied too — fail closed,
+since the policy cannot be verified. ``reject_gate`` is deliberately exempt:
 rejection is the safe direction. The MCP surface (``mcp_server.py``) denies
 ``human_only`` approve/deliver-manual outright — MCP clients authenticate with
 API keys and are never browser sessions.
@@ -46,7 +48,11 @@ from modulo.core.pipeline_engine.executor import (
     SandboxCapacityExceededError,
     org_sandbox_capacity_free,
 )
-from modulo.db.crud.hitl_gate_config import edge_source_or_target, resolve_hitl_gate_config
+from modulo.db.crud.hitl_gate_config import (
+    edge_source_or_target,
+    hitl_gate_exists_but_unresolved,
+    resolve_hitl_gate_config,
+)
 from modulo.db.crud.run import get_run, update_run_status
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
@@ -177,17 +183,23 @@ async def _enforce_human_only_gate(
 
     FAR-610: the decision routes previously performed no ``human_only`` check.
     The gate's config is resolved from the run's snapshot graph (falling back
-    to the live edges) via the shared resolver
+    to the live edges / live HITL-node config) via the shared resolver
     (:func:`modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config`) — the
     gate id maps to exactly one edge by topology, never by position. Runs
     BEFORE the capacity check and the manager call so a denial has no side
     effects (fail fast, gate left undecided).
 
+    Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
+    gate actually fired (a claim row exists — see
+    :func:`modulo.db.crud.hitl_gate_config.hitl_gate_exists_but_unresolved`),
+    the human_only policy cannot be verified, so API-key principals are
+    denied rather than silently allowed. Browser JWTs pass either way (the
+    UI is their enforcement surface), and manual-node ids short-circuit
+    inside the helper, so ``submit_manual_output`` is unaffected.
+
     Applied to the resume routes (approve / approve-with-modification /
     deliver-manual / submit-manual). ``reject_gate`` is deliberately exempt:
-    rejection is the safe direction. Note ``submit_manual_output``'s ``gate_id``
-    is a manual-NODE id, not a ``hitl_gate_*`` id, so the resolver yields None
-    there and the check is a pass-through — manual nodes are not HITL gates.
+    rejection is the safe direction.
 
     Credential semantics (FAR-610 finding): REST resolves principals only from
     browser-login JWTs today — org API keys (``mk_``) are accepted solely by
@@ -206,14 +218,24 @@ async def _enforce_human_only_gate(
         gate_id=gate_id,
         org_id=principal.organisation_id,
     )
-    if config is None or not config.get("human_only", False):
-        return
-    if not principal.via_api_key:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="human_only gate requires browser authentication; API-key clients cannot approve this gate",
-    )
+    if config is not None:
+        if not config.get("human_only", False) or not principal.via_api_key:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="human_only gate requires browser authentication; API-key clients cannot approve this gate",
+        )
+    # Unresolvable — fail closed for API-key principals when the gate fired.
+    if principal.via_api_key and await hitl_gate_exists_but_unresolved(
+        session,
+        run_id=run_id,
+        gate_id=gate_id,
+        org_id=principal.organisation_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="HITL gate configuration could not be resolved; decision requires browser authentication",
+        )
 
 
 # ---------------------------------------------------------------------------

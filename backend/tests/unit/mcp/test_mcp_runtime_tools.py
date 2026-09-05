@@ -918,6 +918,101 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    async def test_approve_unresolvable_fired_gate_fails_closed(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-610 review: the gate FIRED (claim row exists) but its config is
+        unresolvable (no snapshot, no live edge, no live HITL-node config) —
+        the human_only policy cannot be verified, so the approve is denied
+        instead of silently allowed."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.owner_team_id = uuid.uuid4()  # team boundary check: no extra query
+        run.snapshot_id = None
+        run.pipeline_id = uuid.uuid4()
+
+        mock_sesh = AsyncMock()
+        # 1: run lookup; 2: live-edge miss; 3: live graph_nodes_json miss;
+        # 4: fail-closed claim lookup — the gate fired.
+        # _make_run_lookup_result cannot produce a None row (it always yields a
+        # truthy MagicMock), so the None results are built inline.
+        none_result = MagicMock()
+        none_result.scalar_one_or_none.return_value = None
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                none_result,
+                none_result,
+                _make_run_lookup_result(),  # truthy claim row
+            ]
+        )
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+
+        assert result["error"] == "human_only_gate"
+        assert "could not be resolved" in result["detail"]
+        manager.approve.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_approve_unresolvable_gate_without_claim_allowed(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """No claim row → the gate never fired; the fail-closed check passes
+        through and the manager validates the decision as before."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock(return_value=MagicMock(status="approved"))
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.owner_team_id = uuid.uuid4()  # team boundary check: no extra query
+        run.snapshot_id = None
+        run.pipeline_id = uuid.uuid4()
+
+        mock_sesh = AsyncMock()
+        # 1: run lookup; 2: live-edge miss; 3: live graph_nodes_json miss;
+        # 4: fail-closed claim lookup — no claim row.
+        none_result = MagicMock()
+        none_result.scalar_one_or_none.return_value = None
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                none_result,
+                none_result,
+                none_result,
+            ]
+        )
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+
+        assert result == {"status": "approved", "gate_id": gate_id}
+        manager.approve.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
     async def test_reject_allowed_on_human_only_gate(
         self,
         mock_session: AsyncMock,

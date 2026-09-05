@@ -464,6 +464,7 @@ class TestListRunPendingGatesLabelResolution:
 # ---------------------------------------------------------------------------
 
 _HUMAN_ONLY_DETAIL = "human_only gate requires browser authentication; API-key clients cannot approve this gate"
+_UNRESOLVABLE_DETAIL = "HITL gate configuration could not be resolved; decision requires browser authentication"
 _SRC_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _TGT_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
 _SNAPSHOT_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
@@ -480,10 +481,12 @@ def _hitl_session(
     run: MagicMock,
     snapshot: object = None,
     edge: object = None,
+    pipeline_nodes: object = None,
+    claim_row: object = None,
 ) -> AsyncMock:
-    """Session double stubbing the resolver's queries (runs/snapshots/edges)
-    plus the authz-kill-switch and RLS set_config reads that fire on every
-    request."""
+    """Session double stubbing the resolver's queries (runs/snapshots/edges/
+    pipelines) plus the fail-closed claim lookup and the authz-kill-switch and
+    RLS set_config reads that fire on every request."""
     mock_session = AsyncMock()
     configure_mock_session(mock_session)
     begin_cm = AsyncMock()
@@ -504,6 +507,10 @@ def _hitl_session(
             result.scalar_one_or_none.return_value = snapshot
         elif "pipeline_edges" in text:
             result.scalar_one_or_none.return_value = edge
+        elif "pipelines" in text:
+            result.scalar_one_or_none.return_value = pipeline_nodes
+        elif "hitl_claims" in text:
+            result.scalar_one_or_none.return_value = claim_row
         else:
             raise AssertionError(f"Unexpected query in HITL route flow: {text}")
         return result
@@ -551,8 +558,16 @@ class TestHumanOnlyRestEnforcement:
     browser JWTs pass. reject stays allowed for every client."""
 
     @staticmethod
-    def _install_session(run: MagicMock, snapshot: object = None, edge: object = None) -> None:
-        mock_session = _hitl_session(run, snapshot=snapshot, edge=edge)
+    def _install_session(
+        run: MagicMock,
+        snapshot: object = None,
+        edge: object = None,
+        pipeline_nodes: object = None,
+        claim_row: object = None,
+    ) -> None:
+        mock_session = _hitl_session(
+            run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row
+        )
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
@@ -623,6 +638,64 @@ class TestHumanOnlyRestEnforcement:
             mgr_cls.return_value.approve = approve
             _override_principal(via_api_key=True)
             self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot(human_only=False))
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+
+    def test_approve_unresolvable_fired_gate_api_key_returns_403(self, client: TestClient) -> None:
+        """Fail closed (FAR-610 review): the gate FIRED (claim row exists) but
+        its config is unresolvable — the policy cannot be verified, so the
+        API-key principal is denied instead of silently allowed."""
+        approve = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _UNRESOLVABLE_DETAIL
+        approve.assert_not_called()
+
+    def test_approve_unresolvable_gate_without_claim_api_key_allowed(self, client: TestClient) -> None:
+        """A parseable gate id with NO claim row never fired — the fail-closed
+        check passes it through (the manager 404s it later as before)."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=None)
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+
+    def test_approve_unresolvable_fired_gate_browser_jwt_allowed(self, client: TestClient) -> None:
+        """Browser JWTs pass the unresolvable case — the UI is their
+        enforcement surface, and the claim table is not even consulted."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=False)
+            self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
                 json={"claim_token": "tok"},

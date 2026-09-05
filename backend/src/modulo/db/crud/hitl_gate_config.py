@@ -22,16 +22,24 @@ add explicit ``organisation_id`` filters as defence in depth):
    ``source_node_id``/``target_node_id`` key styles), and return the config of
    the edge whose derived id equals the gate id. The snapshot is the graph the
    run actually executes, so it is authoritative for the gate that fired.
+   If no edge matches, walk the snapshot's NODES for a FAR-402 HITL node
+   whose outgoing edges derive the gate id — HITL nodes carry ``hitl_config``
+   on the NODE and the compiler injects it onto edges at build time only, so
+   node-level gates have no edge-level config in the persisted definition.
 2. FALLBACK — snapshot missing or legacy (gate config absent from the
    snapshot graph): parse source/target out of the gate id and look the edge
    up in the LIVE ``pipeline_edges`` table. Node ids are UUIDs (hyphens, no
    underscores), so the gate id splits from the RIGHT into exactly two
    segments; live edge node-id columns are UUIDs, so non-UUID node ids cannot
-   match and the fallback yields None.
+   match and the fallback yields None. If the live edge has no config either,
+   consult the live pipeline's ``graph_nodes_json`` for the FAR-402 HITL-node
+   config (same derivation as the snapshot node walk).
 
-Unresolvable gates return ``None`` (fail-open, preserving the historical
-behaviour for gates whose config cannot be located). Callers decide the
-enforcement policy.
+Unresolvable gates return ``None``. Callers enforce the human_only policy
+from the resolved config; for the residual unresolvable case they consult
+:func:`hitl_gate_exists_but_unresolved` so a gate that FIRED but whose
+config cannot be located is treated as policy-unverifiable (fail closed)
+rather than silently allowed.
 """
 
 import uuid
@@ -41,6 +49,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import get_run
+from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
@@ -94,6 +104,40 @@ def _config_from_graph(graph_json: dict[str, Any], gate_id: str) -> dict[str, An
     return None
 
 
+def _config_from_hitl_nodes(graph_json: dict[str, Any], gate_id: str) -> dict[str, Any] | None:
+    """Resolve a FAR-402 HITL-NODE gate's config from a graph's nodes.
+
+    HITL nodes carry ``hitl_config`` on the NODE; the compiler injects
+    ``{**hitl_config, "gate_id": ...}`` onto the node's outgoing edges at
+    build time only, so the persisted definition (snapshot ``graph_json`` and
+    live pipeline rows alike) has NO edge-level ``hitl_gate_config`` for
+    node-level gates. Mirror the compiler's derivation: a hitl node's gate
+    ids are ``hitl_gate_<node_id>_<target>`` over its outgoing edges. Only
+    ``node_type == "hitl"`` nodes are consulted — ``hitl_config`` on any other
+    node type is inert at runtime (the compiler ignores it), so honouring it
+    here could over-block.
+    """
+    edges = graph_json.get("edges", [])
+    for node in graph_json.get("nodes", []):
+        if not isinstance(node, dict) or node.get("node_type") != "hitl":
+            continue
+        config = node.get("hitl_config")
+        if not isinstance(config, dict):
+            continue
+        node_id = node.get("id")
+        if node_id is None:
+            continue
+        node_id = str(node_id)
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            source = edge_source_or_target(edge, "source")
+            target = edge_source_or_target(edge, "target")
+            if source == node_id and target is not None and f"{_GATE_ID_PREFIX}{node_id}_{target}" == gate_id:
+                return dict(config)
+    return None
+
+
 async def _config_from_live_edges(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
@@ -124,6 +168,43 @@ async def _config_from_live_edges(
     ).scalar_one_or_none()
     if edge is not None and isinstance(edge.hitl_gate_config, dict):
         return dict(edge.hitl_gate_config)
+    return None
+
+
+async def _config_from_live_nodes(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    gate_source: str,
+) -> dict[str, Any] | None:
+    """Look a FAR-402 HITL-node gate's config up in the LIVE pipeline graph.
+
+    The live ``pipelines.graph_nodes_json`` is consulted only after the live
+    edge missed, so this query runs solely on the node-gate fallback path.
+    The pipeline row is matched on id + organisation_id (RLS defence in
+    depth); the source node id was already parsed from the gate id by the
+    caller.
+    """
+    nodes = (
+        await session.execute(
+            select(Pipeline.graph_nodes_json).where(
+                Pipeline.id == pipeline_id,
+                Pipeline.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not isinstance(nodes, list):
+        return None
+    for node in nodes:
+        if (
+            isinstance(node, dict)
+            and node.get("node_type") == "hitl"
+            and node.get("id") is not None
+            and str(node["id"]) == gate_source
+        ):
+            config = node.get("hitl_config")
+            if isinstance(config, dict):
+                return dict(config)
     return None
 
 
@@ -159,7 +240,55 @@ async def resolve_hitl_gate_config(
         ).scalar_one_or_none()
         if snapshot is not None and isinstance(snapshot.graph_json, dict):
             config = _config_from_graph(snapshot.graph_json, gate_id)
+            if config is None:
+                # FAR-402 node-level gates carry their config on the NODE, not
+                # the edge — consult the snapshot's HITL nodes before falling
+                # back to the live definition.
+                config = _config_from_hitl_nodes(snapshot.graph_json, gate_id)
             if config is not None:
                 return config
 
-    return await _config_from_live_edges(session, run.pipeline_id, org_id, gate_id)
+    config = await _config_from_live_edges(session, run.pipeline_id, org_id, gate_id)
+    if config is not None:
+        return config
+    parsed = parse_hitl_gate_id(gate_id)
+    if parsed is None:
+        return None
+    return await _config_from_live_nodes(session, run.pipeline_id, org_id, parsed[0])
+
+
+async def hitl_gate_exists_but_unresolved(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    gate_id: str,
+    org_id: uuid.UUID,
+) -> bool:
+    """Return True when the gate FIRED but its config could not be resolved.
+
+    Fail-closed signal for decision enforcement (FAR-610 review): a fired
+    gate always has a ``hitl_claims`` row (created by the executor's interrupt
+    handler) and its id is always the topology-derived
+    ``hitl_gate_<source>_<target>`` (``graph_cache._make_gate_id`` — the
+    compiler stamps it, so user input cannot override). When the resolver
+    returns None for such a gate, the human_only policy cannot be verified
+    and callers deny non-browser decisions instead of allowing them.
+
+    Non-gate ids (manual-node ids on ``submit_manual``/``deliver_manual``)
+    can never have a claim row, so they short-circuit to False and the
+    fail-closed check cannot over-block manual output delivery. Callers
+    already set the RLS org context; the query adds an explicit
+    ``organisation_id`` filter as defence in depth.
+    """
+    if parse_hitl_gate_id(gate_id) is None:
+        return False
+    row = (
+        await session.execute(
+            select(HitlClaim.id).where(
+                HitlClaim.run_id == run_id,
+                HitlClaim.gate_id == gate_id,
+                HitlClaim.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None

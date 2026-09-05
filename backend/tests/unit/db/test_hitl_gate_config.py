@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from modulo.db.crud.hitl_gate_config import (
     edge_source_or_target,
+    hitl_gate_exists_but_unresolved,
     parse_hitl_gate_id,
     resolve_hitl_gate_config,
 )
@@ -32,6 +33,8 @@ def _make_session(
     *,
     snapshot: object = None,
     edge: object = None,
+    pipeline_nodes: object = None,
+    claim_row: object = None,
 ) -> AsyncMock:
     """Session double routing SELECTs by table name to the given rows."""
 
@@ -42,6 +45,10 @@ def _make_session(
             result.scalar_one_or_none.return_value = snapshot
         elif "pipeline_edges" in text:
             result.scalar_one_or_none.return_value = edge
+        elif "pipelines" in text:
+            result.scalar_one_or_none.return_value = pipeline_nodes
+        elif "hitl_claims" in text:
+            result.scalar_one_or_none.return_value = claim_row
         else:
             raise AssertionError(f"Unexpected query in resolver: {text}")
         return result
@@ -213,3 +220,131 @@ class TestResolveFallbacks:
         )
 
         assert result is None
+
+
+def _hitl_node_snapshot(*, node_type: str = "hitl", source_id: uuid.UUID = _SOURCE_ID) -> MagicMock:
+    """Snapshot whose graph holds a FAR-402 HITL NODE (config on the node) and
+    an unconfigured edge — exactly what the persisted definition looks like
+    for node-level gates (the compiler injects the config at build time)."""
+    snapshot = MagicMock()
+    snapshot.graph_json = {
+        "nodes": [
+            {
+                "id": str(source_id),
+                "node_type": node_type,
+                "hitl_config": {"human_only": True, "label": "Sign-off"},
+            }
+        ],
+        "edges": [{"source": str(source_id), "target": str(_TARGET_ID)}],
+    }
+    return snapshot
+
+
+class TestResolveFromHitlNodes:
+    """FAR-402 HITL nodes carry ``hitl_config`` on the NODE; the compiler
+    injects it onto outgoing edges at build time, so the persisted definition
+    (snapshot graph_json and live pipeline rows alike) has NO edge-level
+    ``hitl_gate_config`` for node-level gates. Without the node walk these
+    gates resolve None and human_only enforcement fails open."""
+
+    async def test_resolves_node_config_from_snapshot(self) -> None:
+        session = _make_session(snapshot=_hitl_node_snapshot())
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        )
+
+        assert result == {"human_only": True, "label": "Sign-off"}
+        assert session.execute.await_count == 1
+
+    async def test_ignores_inert_hitl_config_on_non_hitl_node(self) -> None:
+        """``hitl_config`` on a non-hitl node is ignored by the compiler —
+        honouring it here would over-block, so it must not resolve."""
+        session = _make_session(snapshot=_hitl_node_snapshot(node_type="agent"), edge=None)
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        )
+
+        assert result is None
+
+    async def test_ignores_node_with_mismatched_topology(self) -> None:
+        """The HITL node must be the gate id's SOURCE segment."""
+        other_source = uuid.UUID("00000000-0000-0000-0000-00000000000c")
+        session = _make_session(snapshot=_hitl_node_snapshot(source_id=other_source), edge=None)
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        )
+
+        assert result is None
+
+    async def test_falls_back_to_live_node_config(self) -> None:
+        """Snapshot missing entirely: the live pipeline's graph_nodes_json is
+        consulted for the HITL-node config."""
+        session = _make_session(
+            snapshot=None,
+            edge=None,
+            pipeline_nodes=[
+                {"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": {"human_only": True}},
+            ],
+        )
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        )
+
+        assert result == {"human_only": True}
+        assert session.execute.await_count == 2
+
+    async def test_live_node_lookup_filters_by_pipeline_and_org(self) -> None:
+        session = _make_session(snapshot=None, edge=None, pipeline_nodes=None)
+
+        await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        )
+
+        stmt = session.execute.await_args_list[1].args[0]
+        bind_values = [str(value) for value in stmt.compile().params.values()]
+        assert str(_PIPELINE_ID) in bind_values
+        assert str(_ORG_ID) in bind_values
+
+
+class TestHitlGateExistsButUnresolved:
+    """Fail-closed signal: True only when a fired gate (claim row) has an
+    unresolvable config. Non-gate ids (manual-node ids) short-circuit."""
+
+    async def test_true_when_claim_row_exists(self) -> None:
+        session = _make_session(claim_row=MagicMock())
+
+        result = await hitl_gate_exists_but_unresolved(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID)
+
+        assert result is True
+
+    async def test_false_when_no_claim_row(self) -> None:
+        session = _make_session(claim_row=None)
+
+        result = await hitl_gate_exists_but_unresolved(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID)
+
+        assert result is False
+
+    async def test_non_gate_id_short_circuits_without_query(self) -> None:
+        """Manual-node ids can never have a claim row — no query at all, so the
+        fail-closed check cannot over-block manual output delivery."""
+        session = _make_session(claim_row=MagicMock())
+
+        result = await hitl_gate_exists_but_unresolved(session, run_id=_RUN_ID, gate_id="node-1", org_id=_ORG_ID)
+
+        assert result is False
+        assert session.execute.await_count == 0
+
+    async def test_claim_query_filters_run_gate_and_org(self) -> None:
+        session = _make_session(claim_row=None)
+
+        await hitl_gate_exists_but_unresolved(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID)
+
+        stmt = session.execute.await_args.args[0]
+        bind_values = [str(value) for value in stmt.compile().params.values()]
+        assert str(_RUN_ID) in bind_values
+        assert _gate_id() in bind_values
+        assert str(_ORG_ID) in bind_values
