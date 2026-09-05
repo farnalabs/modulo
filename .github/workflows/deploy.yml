@@ -577,6 +577,7 @@ jobs:
           LAUNCH_INTERVAL_SEC=10
           launch_attempt=0
           RUN_OUTPUT=""
+          AMBIGUOUS_LAUNCH=0
           LAUNCH_RC=1
           while [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; do
             launch_attempt=$(( launch_attempt + 1 ))
@@ -595,6 +596,24 @@ jobs:
             if [ "$LAUNCH_RC" -eq 0 ]; then
               break
             fi
+            # FAR-486: even with --detach, flyctl can still exit non-zero with
+            # "machine failed to reach desired start state, and restart policy
+            # was set to no restart" while the one-off machine is in fact
+            # launching (a script machine signals no readiness - it sits in
+            # "starting" until its process exits, so flyctl's wait can lose
+            # the race). That error is AMBIGUOUS: the --detach creation may
+            # have succeeded, so do NOT retry (a retry could leak a duplicate
+            # machine). Set the flag and defer the verdict to the machine-ID
+            # parse + discovery + state poll below. This branch must sit
+            # BEFORE the manifest check's fail-fast break, which would
+            # otherwise swallow it (a wait-race error is not a manifest
+            # error).
+            if grep -qi 'failed to reach desired start state' \
+              /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              AMBIGUOUS_LAUNCH=1
+              echo "Launch call errored ambiguously (flyctl wait race, FAR-486): machine may still be starting - deferring to discovery + state poll"
+              break
+            fi
             # Case-insensitive and tolerant of flyctl wording drift
             # ("failed to get image manifest", which the literal
             # "failed to get manifest" does NOT match as a substring), and
@@ -610,7 +629,7 @@ jobs:
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
-          if [ "$LAUNCH_RC" -ne 0 ]; then
+          if [ "$LAUNCH_RC" -ne 0 ] && [ "${AMBIGUOUS_LAUNCH:-0}" != "1" ]; then
             echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
             exit 1
           fi
@@ -658,7 +677,15 @@ jobs:
             done
           fi
           if [ -z "$MID" ]; then
-            echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
+            if [ "${AMBIGUOUS_LAUNCH:-0}" = "1" ]; then
+              # FAR-486: the launch errored ambiguously but discovery never
+              # found the machine - it genuinely never launched. Fail with a
+              # specific message so this is not confused with the generic
+              # identification failure.
+              echo "::error::Launch errored ambiguously and no pre-migrate machine was found by discovery - treating as a genuine launch failure; aborting the deploy."
+            else
+              echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
+            fi
             exit 1
           fi
           echo "$MID" > /tmp/premigrate-machine-id.txt
@@ -1336,6 +1363,7 @@ jobs:
           LAUNCH_INTERVAL_SEC=10
           launch_attempt=0
           RUN_OUTPUT=""
+          AMBIGUOUS_LAUNCH=0
           LAUNCH_RC=1
           while [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; do
             launch_attempt=$(( launch_attempt + 1 ))
@@ -1354,6 +1382,24 @@ jobs:
             if [ "$LAUNCH_RC" -eq 0 ]; then
               break
             fi
+            # FAR-486: even with --detach, flyctl can still exit non-zero with
+            # "machine failed to reach desired start state, and restart policy
+            # was set to no restart" while the one-off machine is in fact
+            # launching (a script machine signals no readiness - it sits in
+            # "starting" until its process exits, so flyctl's wait can lose
+            # the race). That error is AMBIGUOUS: the --detach creation may
+            # have succeeded, so do NOT retry (a retry could leak a duplicate
+            # machine). Set the flag and defer the verdict to the machine-ID
+            # parse + discovery + state poll below. This branch must sit
+            # BEFORE the manifest check's fail-fast break, which would
+            # otherwise swallow it (a wait-race error is not a manifest
+            # error).
+            if grep -qi 'failed to reach desired start state' \
+              /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              AMBIGUOUS_LAUNCH=1
+              echo "Launch call errored ambiguously (flyctl wait race, FAR-486): machine may still be starting - deferring to discovery + state poll"
+              break
+            fi
             # Case-insensitive and tolerant of flyctl wording drift
             # ("failed to get image manifest", which the literal
             # "failed to get manifest" does NOT match as a substring), and
@@ -1369,7 +1415,7 @@ jobs:
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
-          if [ "$LAUNCH_RC" -ne 0 ]; then
+          if [ "$LAUNCH_RC" -ne 0 ] && [ "${AMBIGUOUS_LAUNCH:-0}" != "1" ]; then
             echo "::error::Pre-deploy migration machine failed to launch - failing the run so the deploy is aborted; fix the root cause (no silent fallback to release-command migration)."
             exit 1
           fi
@@ -1417,7 +1463,15 @@ jobs:
             done
           fi
           if [ -z "$MID" ]; then
-            echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
+            if [ "${AMBIGUOUS_LAUNCH:-0}" = "1" ]; then
+              # FAR-486: the launch errored ambiguously but discovery never
+              # found the machine - it genuinely never launched. Fail with a
+              # specific message so this is not confused with the generic
+              # identification failure.
+              echo "::error::Launch errored ambiguously and no pre-migrate machine was found by discovery - treating as a genuine launch failure; aborting the deploy."
+            else
+              echo "::error::Could not identify the pre-deploy migration machine after launch - failing the run so the deploy is aborted (migration completion cannot be verified before the swap)."
+            fi
             exit 1
           fi
           echo "$MID" > /tmp/premigrate-machine-id.txt
