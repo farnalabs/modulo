@@ -47,7 +47,7 @@ assume good faith.
 
 ### Required services
 
-The project needs a running PostgreSQL 16 and Redis 7 instance. Use Docker
+The project needs a running PostgreSQL 16 and Redis 8 instance. Use Docker
 Compose to start them:
 
 ```powershell
