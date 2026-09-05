@@ -663,8 +663,8 @@ async def test_gate_absent_node_def_forwards_none(monkeypatch: pytest.MonkeyPatc
 
 
 async def test_append_conformance_audit_summary_payload(monkeypatch: pytest.MonkeyPatch):
-    import modulo.core.audit_logger as audit_logger
-    import modulo.db.rls as rls
+    from modulo.core import audit_logger
+    from modulo.db import rls
 
     append_mock = AsyncMock()
     monkeypatch.setattr(audit_logger, "append_audit_event", append_mock)
@@ -699,7 +699,7 @@ async def test_append_conformance_audit_summary_payload(monkeypatch: pytest.Monk
 
 
 async def test_append_conformance_audit_never_raises(monkeypatch: pytest.MonkeyPatch):
-    import modulo.core.audit_logger as audit_logger
+    from modulo.core import audit_logger
 
     async def _boom(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("audit db down")

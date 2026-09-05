@@ -37,7 +37,7 @@ def saq_settings_env(saq_redis_url: str, migrated_db_url: str, monkeypatch: pyte
 
     # Force the module-level engines to rebuild against the test DB/Redis.
     import modulo.core.cron_helpers as ch
-    import modulo.core.dispatch as dispatch
+    from modulo.core import dispatch
 
     ch._ENGINE = None
     dispatch._ENGINE = None

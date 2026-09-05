@@ -835,6 +835,39 @@ async def _concurrency_limit_skip(
     }
 
 
+async def _backpressure_skip(
+    session: AsyncSession,
+    trigger: Any,
+    org_id: uuid.UUID,
+    reason: str,
+) -> dict[str, Any]:
+    """Log a backpressured fire and record the attempt (skip-not-defer, FAR-604).
+
+    Mirrors :func:`_concurrency_limit_skip`: the fire is CONSUMED
+    (``last_fired_at`` stamped) so the catch-up scan does not re-fire the
+    epoch every marker TTL while the pipeline's pending queue is over the
+    depth/age backpressure limits. The next NORMAL scheduled fire handles
+    the future; *reason* carries the observed depths for observability.
+    """
+    from sqlalchemy import update
+
+    from modulo.db.models.trigger import Trigger
+
+    await _log_event(
+        session,
+        trigger=trigger,
+        org_id=org_id,
+        result="backpressure_skipped",
+        error_detail=reason,
+    )
+    await session.execute(update(Trigger).where(Trigger.id == trigger.id).values(last_fired_at=datetime.now(UTC)))
+    return {
+        "status": "skipped",
+        "reason": "backpressure",
+        "detail": reason,
+    }
+
+
 async def _spend_limit_skip(
     session: AsyncSession,
     trigger: Any,
@@ -1171,6 +1204,15 @@ async def fire_cron_trigger(
         if active_count >= trigger.max_concurrent_runs:
             return await _concurrency_limit_skip(session, trigger, org_id, active_count)
 
+        # FAR-604 dispatcher backpressure: skip-not-defer when the pipeline's
+        # pending queue is over the depth/age limits (the queue can never
+        # drain onto a wedged admission gate; more rows only ratchet it).
+        from modulo.core.run_admission import evaluate_backpressure
+
+        backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
+        if backpressured:
+            return await _backpressure_skip(session, trigger, org_id, bp_reason)
+
         skip = await _cron_spend_gate_skip(session, trigger, org_id)
         if skip is not None:
             return skip
@@ -1281,6 +1323,21 @@ async def _polling_pre_fire_gate(
             error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
         )
         return None, {"status": "skipped", "reason": "concurrency_limit", "active_runs": active_count}
+
+    # FAR-604 dispatcher backpressure (mirrors fire_cron_trigger): refuse new
+    # rows while the pipeline's pending queue is over the depth/age limits.
+    from modulo.core.run_admission import evaluate_backpressure
+
+    backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=trigger.pipeline_id)
+    if backpressured:
+        await _log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="backpressure_skipped",
+            error_detail=bp_reason,
+        )
+        return None, {"status": "skipped", "reason": "backpressure", "detail": bp_reason}
 
     # Daily spend limit check (mirrors fire_cron_trigger) — run BEFORE the
     # connector query so an over-budget trigger stops polling the external

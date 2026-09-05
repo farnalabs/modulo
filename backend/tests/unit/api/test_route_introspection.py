@@ -63,6 +63,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     # me/*: the user's own profile (get_current_user is the correct gate).
     ("PUT", "/api/v1/me/settings"): "self-profile (get_current_user)",
     ("PUT", "/api/v1/me/password"): "self-profile (get_current_user)",
+    ("PUT", "/api/v1/me/hitl-email-preferences"): "self-profile (get_current_tenant_user)",
     ("POST", "/api/v1/me/remy/skills"): "self-profile (get_current_user)",
     ("PUT", "/api/v1/me/remy/skills/{skill_id}"): "self-profile (get_current_user)",
     ("DELETE", "/api/v1/me/remy/skills/{skill_id}"): "self-profile (get_current_user)",

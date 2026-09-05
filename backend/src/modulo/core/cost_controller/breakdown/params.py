@@ -27,6 +27,8 @@ from typing import Any, NamedTuple
 
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_USD_MIN,
+    RUN_WARNING_MISSING_SELF_REPORT,
+    RUN_WARNING_SEVERITY_WARNING,
 )
 
 _log = logging.getLogger(__name__)
@@ -40,6 +42,8 @@ __all__ = [
     "build_params",
     "build_telemetry",
     "coerce_reported_token",
+    "compute_run_warnings",
+    "compute_run_warnings_count",
 ]
 
 # The ONLY registered rate-fallback name. CRUD rejects any other name with a
@@ -505,3 +509,39 @@ def build_telemetry(
     _mark_missing_report_keys(telemetry, consuming)
 
     return telemetry, per_node_cost
+
+
+def compute_run_warnings(cost_breakdown: Any) -> list[dict[str, Any]]:
+    """Compute run-level warnings from a stored ``cost_breakdown``.
+
+    A ``cost_breakdown`` is a list of component snapshots (amounts as strings).
+    At minimum it emits a ``missing_self_report`` warning when a ``self_reported``
+    component has ``missing_self_report`` set (an eligible sandbox node existed
+    but the agent reported nothing) — the phantom ``$0.000000`` "reported" row
+    that confused cost reads. The returned shape is
+    ``{"code", "severity", "message"}``; the message is a plain fallback and the
+    frontend renders i18n keys keyed off ``code``.
+
+    ``cost_breakdown`` is NULL for pre-migration runs and a non-list means no
+    warnings. Never raises.
+    """
+    if not isinstance(cost_breakdown, list):
+        return []
+    warnings: list[dict[str, Any]] = []
+    for entry in cost_breakdown:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("source") == "self_reported" and entry.get("missing_self_report") is True:
+            warnings.append(
+                {
+                    "code": RUN_WARNING_MISSING_SELF_REPORT,
+                    "severity": RUN_WARNING_SEVERITY_WARNING,
+                    "message": "The agent did not report a model cost for this run.",
+                }
+            )
+    return warnings
+
+
+def compute_run_warnings_count(cost_breakdown: Any) -> int:
+    """The number of run-level warnings derived from a stored ``cost_breakdown``."""
+    return len(compute_run_warnings(cost_breakdown))

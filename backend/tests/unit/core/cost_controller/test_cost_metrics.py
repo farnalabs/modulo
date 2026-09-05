@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-import modulo.core.cost_controller.breakdown.metrics as metrics
+from modulo.core.cost_controller.breakdown import metrics
 
 
 class _FakeCounter:

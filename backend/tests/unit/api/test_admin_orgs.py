@@ -127,7 +127,7 @@ def client_tenant_member(mock_session):
 @pytest.mark.anyio
 async def test_create_org_success(client_system_admin, mock_session):
     """System admin can create an org with valid name and slug."""
-    import modulo.api.routes.admin_orgs as admin_orgs
+    from modulo.api.routes import admin_orgs
 
     original_get_slug = admin_orgs.get_organisation_by_slug
     admin_orgs.get_organisation_by_slug = AsyncMock(return_value=None)
@@ -194,7 +194,7 @@ async def test_create_org_invalid_slug(client_system_admin):
 @pytest.mark.anyio
 async def test_create_org_slug_collision(client_system_admin):
     """Duplicate slug returns 409."""
-    import modulo.api.routes.admin_orgs as admin_orgs
+    from modulo.api.routes import admin_orgs
 
     existing = Organisation(
         id=uuid4(),
@@ -219,7 +219,7 @@ async def test_create_org_slug_collision(client_system_admin):
 @pytest.mark.anyio
 async def test_create_org_duplicate_slug_orig(client_system_admin):
     """Duplicate slug returns 409 (alternate path)."""
-    import modulo.api.routes.admin_orgs as admin_orgs
+    from modulo.api.routes import admin_orgs
 
     existing_org = Organisation(
         id=uuid4(),
@@ -247,7 +247,7 @@ async def test_create_org_duplicate_slug_orig(client_system_admin):
 @pytest.mark.anyio
 async def test_create_org_user_success(client_system_admin):
     """System admin can create a user in a specified org."""
-    import modulo.api.routes.admin_orgs as admin_orgs
+    from modulo.api.routes import admin_orgs
     from modulo.db.models.account import Account
 
     target_org_id = uuid4()
@@ -334,7 +334,7 @@ async def test_create_org_user_admin_forbidden(client_admin):
 @pytest.mark.anyio
 async def test_create_org_user_org_not_found(client_system_admin):
     """Non-existent org returns 404."""
-    import modulo.api.routes.admin_orgs as admin_orgs
+    from modulo.api.routes import admin_orgs
 
     original = admin_orgs.get_organisation
     admin_orgs.get_organisation = AsyncMock(return_value=None)
@@ -390,7 +390,7 @@ async def test_create_org_user_invalid_role(client_system_admin):
 @pytest.mark.anyio
 async def test_org_member_reads_guardrails_kill_switch(client_tenant_member, mock_session):
     """Any org member (non-admin) can read the org's kill-switch state."""
-    import modulo.api.routes.org_settings as org_settings
+    from modulo.api.routes import org_settings
 
     original_get_org = org_settings.get_organisation
 
@@ -418,7 +418,7 @@ async def test_org_member_reads_guardrails_kill_switch(client_tenant_member, moc
 @pytest.mark.anyio
 async def test_org_member_reads_kill_switch_off(client_tenant_member, mock_session):
     """A non-admin org member sees the kill-switch OFF state too."""
-    import modulo.api.routes.org_settings as org_settings
+    from modulo.api.routes import org_settings
 
     original_get_org = org_settings.get_organisation
 
@@ -451,7 +451,7 @@ async def test_org_member_read_is_org_scoped(client_tenant_member, mock_session)
     (mirroring the org_settings precedent), so a caller cannot target another
     org's kill-switch state.
     """
-    import modulo.api.routes.org_settings as org_settings
+    from modulo.api.routes import org_settings
 
     captured: list = []
     original_set_rls = org_settings.set_rls_org
