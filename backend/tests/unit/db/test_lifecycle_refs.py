@@ -38,7 +38,10 @@ _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 class TestReservedInputPayloadKeys:
     def test_reserved_keys_are_exactly_the_system_injected_set(self) -> None:
-        assert frozenset({"_work_item_id", "_modulo.work_item", "_feedback_correction"}) == _RESERVED_INPUT_PAYLOAD_KEYS
+        assert (
+            frozenset({"_work_item_id", "_modulo.work_item", "_feedback_correction", "_coalesce_key"})
+            == _RESERVED_INPUT_PAYLOAD_KEYS
+        )
 
 
 class TestCanonicaliseKind:

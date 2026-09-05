@@ -1,9 +1,9 @@
-"""Unit tests for migration 0177_drop_workspace_leases (FAR-587 / ADR 029).
+"""Unit tests for migration 0179_drop_workspace_leases (FAR-587 / ADR 029).
 
 Structural: load the migration module and assert its contract without a
 database:
 
-* the chain is pinned (revision -> 0176_env_profiles_runner_docker);
+* the chain is pinned (revision -> 0178_env_profiles_runner_docker);
 * the upgrade REFUSES (RAISE EXCEPTION) when lease rows exist — a database
   that somehow acquired lease rows is never silently destroyed — and drops
   the table otherwise;
@@ -21,7 +21,7 @@ from pathlib import Path
 from types import ModuleType
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0177_drop_workspace_leases"
+_MIGRATION_NAME = "0179_drop_workspace_leases"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 
@@ -45,7 +45,7 @@ def _source_code() -> str:
 def test_metadata_pins_chain() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
-    assert module.down_revision == "0176_env_profiles_runner_docker"
+    assert module.down_revision == "0178_env_profiles_runner_docker"
     assert module.branch_labels is None
     assert module.depends_on is None
 

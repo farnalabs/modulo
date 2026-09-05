@@ -1,7 +1,7 @@
 """Widen env-profile provider_type CHECK with 'runner_docker' and drop the DB default (FAR-587).
 
-Revision ID: 0176_env_profiles_runner_docker
-Revises: 0174_per_org_last_admin_guard
+Revision ID: 0178_env_profiles_runner_docker
+Revises: 0176_trigger_event_validation_results
 Create Date: 2026-09-03
 
 What this revision changes
@@ -50,8 +50,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0176_env_profiles_runner_docker"
-down_revision: str | None = "0174_per_org_last_admin_guard"
+revision: str = "0178_env_profiles_runner_docker"
+down_revision: str | None = "0176_trigger_event_validation_results"
 branch_labels: str | None = None
 depends_on: str | None = None
 

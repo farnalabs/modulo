@@ -1,7 +1,7 @@
 """Drop the unused workspace_leases table (FAR-587 / ADR 029).
 
-Revision ID: 0177_drop_workspace_leases
-Revises: 0176_env_profiles_runner_docker
+Revision ID: 0179_drop_workspace_leases
+Revises: 0178_env_profiles_runner_docker
 Create Date: 2026-09-03
 
 Why
@@ -32,8 +32,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0177_drop_workspace_leases"
-down_revision: str | None = "0176_env_profiles_runner_docker"
+revision: str = "0179_drop_workspace_leases"
+down_revision: str | None = "0178_env_profiles_runner_docker"
 branch_labels: str | None = None
 depends_on: str | None = None
 

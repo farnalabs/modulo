@@ -358,7 +358,7 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
     checkout — the same pattern ``app_engine`` uses — restoring RLS for the SAQ
     scheduler/reconcile code paths.
     """
-    import modulo.core.cron_helpers as cron_helpers
+    from modulo.core import cron_helpers
 
     original_get_engine = cron_helpers._get_engine
     role = non_superuser_role

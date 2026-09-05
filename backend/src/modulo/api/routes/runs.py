@@ -6,7 +6,7 @@ import logging
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
@@ -35,6 +35,7 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.cost_controller.breakdown.params import compute_run_warnings, compute_run_warnings_count
 from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
 from modulo.core.guardrails import GuardrailSummary
@@ -68,6 +69,7 @@ from modulo.db.crud.run import (
     get_child_run_rollup,
     get_org_run_concurrency_limit,
     get_run,
+    get_run_cost_breakdowns,
     get_run_heatmap,
     get_run_stats,
     request_cancellation,
@@ -347,6 +349,10 @@ class _ListPageContext:
     trigger_labels: dict[uuid.UUID, str]
     active_count: int
     concurrency_limit: int | None
+    # Per-run run-level warning count, loaded via ONE awaited
+    # ``get_run_cost_breakdowns`` query (cost_breakdown is deferred) so the
+    # badge renders without N+1 and without reading the ORM attribute.
+    warnings_count: dict[uuid.UUID, int] = field(default_factory=dict)
 
 
 async def _load_account_labels(session: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
@@ -386,6 +392,7 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "concurrency_limit": ctx.concurrency_limit,
         "waiting": _is_capacity_waiting(run.status, ctx.active_count, ctx.concurrency_limit),
     }
+    warnings_count = ctx.warnings_count.get(run.id, 0)
     # FAR-490: snapshot_id must be a UUID/str or None; a MagicMock (e.g. in
     # test fakes) or any other non-UUID value must surface as None, never a 500.
     # Mirror the FAR-228/FAR-213 defensive coercion above.
@@ -415,6 +422,7 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "trigger_actor": trigger_actor,
         "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
         "capacity": capacity,
+        "warnings_count": warnings_count,
     }
 
 
@@ -445,6 +453,19 @@ async def _do_list_runs(
         if run_ids:
             child_rollup = await get_child_run_rollup(session, run_ids)
 
+        # Run-level warning count: ONE awaited load of the deferred
+        # ``cost_breakdown`` for the whole page, then derive the count in
+        # Python — never a per-row load (avoids N+1) and never a plain
+        # attribute read (a deferred column raises MissingGreenlet under
+        # asyncio even while the session is open).
+        warnings_count: dict[uuid.UUID, int] = {}
+        if run_ids:
+            breakdowns = await get_run_cost_breakdowns(session, run_ids)
+            warnings_count = {
+                uuid.UUID(str(run_id)): compute_run_warnings_count(breakdown)
+                for run_id, breakdown in breakdowns.items()
+            }
+
         # Active-run observability (FAR-307). Capacity is computed ONCE per
         # request (one active-count query + one limit read) and reused for
         # every item; `waiting` is derived per item from its own status. The
@@ -461,6 +482,7 @@ async def _do_list_runs(
             trigger_labels=trigger_labels,
             active_count=active_count,
             concurrency_limit=concurrency_limit,
+            warnings_count=warnings_count,
         )
         items = [_build_list_item(run, ctx) for run in result.items]
     return {
@@ -630,6 +652,10 @@ class RunResponse(BaseModel):
     # pre-migration runs; amounts ride the breakdown serializer which owns the
     # raw_reported display clamp. UNGATED (Free-tier orgs see their own).
     cost_breakdown: list[dict[str, Any]] | None = None
+    # Run-level cost warnings derived from ``cost_breakdown`` (empty when none).
+    # Shape: ``{"code", "severity", "message"}``. NULL for pre-migration runs;
+    # render-only, never an input to billing.
+    warnings: list[dict[str, Any]] | None = None
     # Child-run cost rollup. `total_cost_usd` stays own-run cost; these are
     # derived display fields (0.000000 when no children / all NULL) that never
     # touch the stored column.
@@ -814,6 +840,7 @@ def _build_run_response(
         work_item_refs=ctx.work_item_refs,
         child_runs=ctx.child_runs,
         capacity=ctx.capacity,
+        warnings=compute_run_warnings(run.cost_breakdown),
     )
 
 

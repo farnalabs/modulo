@@ -5314,6 +5314,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/hitl-email-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Hitl Email Preferences
+         * @description Return the CALLER's HITL email-alert preferences (absent = all off).
+         */
+        get: operations["get_hitl_email_preferences_api_v1_me_hitl_email_preferences_get"];
+        /**
+         * Update Hitl Email Preferences
+         * @description Persist the CALLER's HITL email-alert preferences under the
+         *     ``hitl_email`` key of ``Account.preferences`` (other keys untouched).
+         *
+         *     The row is fetched ``FOR UPDATE`` so concurrent writes via THIS endpoint
+         *     serialise per account. Known limitation (pre-existing, outside this
+         *     slice's allowlist): sibling preference writers (e.g. ``PUT /me/settings``
+         *     via the unlocked ``update_account_preferences`` read-merge-write helper)
+         *     overwrite the whole JSONB column without taking this lock, so a settings
+         *     write racing this one can still drop the other's key — closing that needs
+         *     ALL column writers to cooperate (row lock or per-key updates).
+         */
+        put: operations["update_hitl_email_preferences_api_v1_me_hitl_email_preferences_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/password": {
         parameters: {
             query?: never;
@@ -11253,6 +11286,43 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * HitlEmailPreferenceResponse
+         * @description Canonical view of the caller's HITL email-alert preferences.
+         *
+         *     Absent/malformed stored data normalises to the all-off default so the
+         *     response always matches what ``resolve_hitl_email_pref`` would resolve.
+         */
+        HitlEmailPreferenceResponse: {
+            /**
+             * Default
+             * @default false
+             */
+            default: boolean;
+            /** Pipeline Overrides */
+            pipeline_overrides?: {
+                [key: string]: boolean;
+            };
+        };
+        /**
+         * HitlEmailPreferenceUpdate
+         * @description PUT body for the caller's own HITL email-alert preferences.
+         *
+         *     ``pipeline_overrides`` keys are validated as pipeline UUIDs (stored
+         *     stringified) and both fields as strict booleans — emails are OFF by
+         *     default, overridable per pipeline.
+         */
+        HitlEmailPreferenceUpdate: {
+            /**
+             * Default
+             * @default false
+             */
+            default: boolean;
+            /** Pipeline Overrides */
+            pipeline_overrides?: {
+                [key: string]: boolean;
+            };
+        };
         /** HitlGateConfig */
         HitlGateConfig: {
             /** Label */
@@ -14632,6 +14702,10 @@ export interface components {
             } | null;
             /** Cost Breakdown */
             cost_breakdown?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Warnings */
+            warnings?: {
                 [key: string]: unknown;
             }[] | null;
             /**
@@ -29486,6 +29560,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_hitl_email_preferences_api_v1_me_hitl_email_preferences_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HitlEmailPreferenceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_hitl_email_preferences_api_v1_me_hitl_email_preferences_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HitlEmailPreferenceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HitlEmailPreferenceResponse"];
                 };
             };
             /** @description Validation Error */

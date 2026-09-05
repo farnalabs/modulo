@@ -1,10 +1,10 @@
-"""Unit tests for migration 0176_env_profiles_runner_docker (FAR-587).
+"""Unit tests for migration 0178_env_profiles_runner_docker (FAR-587).
 
 Structural: load the migration module and assert its contract without a
 database, and pin model/migration parity for the provider_type vocabulary:
 
-* the chain is pinned (revision -> 0174_per_org_last_admin_guard, the true
-  head — 0175 is spliced mid-chain);
+* the chain is pinned (revision -> 0176_trigger_event_validation_results,
+   main's head that 0175 is spliced into);
 * the upgrade widens ``ck_env_profiles_provider_type`` with 'runner_docker'
   (guarded ``DROP CONSTRAINT IF EXISTS`` + re-add) and drops the legacy
   ``'local_docker'`` server default (guarded: only when the default is the
@@ -21,7 +21,7 @@ from pathlib import Path
 from types import ModuleType
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0176_env_profiles_runner_docker"
+_MIGRATION_NAME = "0178_env_profiles_runner_docker"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 
@@ -45,7 +45,7 @@ def _source_code() -> str:
 def test_metadata_pins_chain() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
-    assert module.down_revision == "0174_per_org_last_admin_guard"
+    assert module.down_revision == "0176_trigger_event_validation_results"
     assert module.branch_labels is None
     assert module.depends_on is None
 

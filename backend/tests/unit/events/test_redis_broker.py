@@ -524,14 +524,14 @@ async def test_close_reraises_cancellation_during_sub_close() -> None:
 
 
 def test_module_getattr_exposes_redis_broker() -> None:
-    import modulo.core.events as events
+    from modulo.core import events
     from modulo.core.events.redis_broker import RedisEventBroker as BrokerClass
 
     assert events.RedisEventBroker is BrokerClass
 
 
 def test_module_getattr_unknown_attribute_raises() -> None:
-    import modulo.core.events as events
+    from modulo.core import events
 
     with pytest.raises(AttributeError, match="has no attribute"):
         events.__getattr__("DoesNotExist")

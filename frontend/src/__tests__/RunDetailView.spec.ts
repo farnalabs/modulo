@@ -1062,4 +1062,81 @@ describe('RunDetailView', () => {
     expect(link.exists()).toBe(true)
     wrapper.unmount()
   })
+
+  it('renders a dash (never a phantom $0.000000) for a missing self-report entry', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      cost_breakdown: [
+        {
+          component: 'model_cost',
+          display_name: 'Model cost',
+          source: 'self_reported',
+          amount_usd: '0.000000',
+          formula_applied: 'reported',
+          rate_usd: null,
+          basis: 'reported by agent',
+          missing_self_report: true,
+          missing_self_report_reason: 'agent_not_reported',
+        },
+      ],
+    })
+
+    // The not-reported chip must be present.
+    const chip = wrapper.find('[data-testid="run-detail-not-reported"]')
+    expect(chip.exists()).toBe(true)
+
+    // The amount cell for the missing-self-report row must render a dash, NEVER
+    // a phantom $0.000000 money value. (The string "$0.000000" legitimately
+    // appears elsewhere as a static note / sum-of-components, so scope to the row.)
+    const rows = wrapper.findAll('tbody tr')
+    const targetRow = rows.find((r) => r.text().includes('Model cost'))!
+    expect(targetRow.exists()).toBe(true)
+    const amountCell = targetRow.findAll('td')[1]
+    expect(amountCell.text()).toBe('—')
+    wrapper.unmount()
+  })
+
+  it('renders the #warnings section when the run carries warnings', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      warnings: [
+        { code: 'missing_self_report', severity: 'warning', message: 'No model cost was reported by the agent for this run.' },
+      ],
+    })
+
+    const section = wrapper.find('[data-testid="run-detail-warnings"]')
+    expect(section.exists()).toBe(true)
+    const warningItem = wrapper.find('[data-testid="run-detail-warning-missing_self_report-0"]')
+    expect(warningItem.exists()).toBe(true)
+    expect(wrapper.text()).toContain('No model cost was reported')
+    wrapper.unmount()
+  })
+
+  it('auto-scrolls to #warnings when arriving with ?warn=1', async () => {
+    const originalScroll = Element.prototype.scrollIntoView
+    const scrollSpy = vi.fn()
+    Element.prototype.scrollIntoView = scrollSpy
+
+    Object.assign(testRoute, { query: { warn: '1' } })
+    try {
+      const wrapper = await mountWithDetail({
+        ...baseDetail(),
+        warnings: [
+          { code: 'missing_self_report', severity: 'warning', message: 'No model cost was reported by the agent for this run.' },
+        ],
+      })
+      // Let the run load, the warnings section render, and the async scroll
+      // watcher (which awaits its own nextTick) fire.
+      await flushPromises()
+      await nextTick()
+      await flushPromises()
+      await nextTick()
+
+      expect(scrollSpy).toHaveBeenCalled()
+      wrapper.unmount()
+    } finally {
+      Object.assign(testRoute, { query: {} })
+      Element.prototype.scrollIntoView = originalScroll
+    }
+  })
 })

@@ -121,7 +121,7 @@ def _reset_test_send_limiter():
 
 class TestGetEmailSettings:
     async def test_get_settings_success(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -152,7 +152,7 @@ class TestGetEmailSettings:
             admin_email.get_organisation = original
 
     async def test_get_settings_empty(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
@@ -170,7 +170,7 @@ class TestGetEmailSettings:
             admin_email.get_organisation = original
 
     async def test_get_settings_includes_stored_timeout(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -189,7 +189,7 @@ class TestGetEmailSettings:
             admin_email.get_organisation = original
 
     async def test_get_settings_non_numeric_timeout_falls_back_to_default(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -208,7 +208,7 @@ class TestGetEmailSettings:
             admin_email.get_organisation = original
 
     async def test_get_settings_not_found(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -225,7 +225,7 @@ class TestGetEmailSettings:
 
 class TestPutEmailSettings:
     async def test_put_settings_success(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
@@ -264,7 +264,7 @@ class TestPutEmailSettings:
             admin_email.update_organisation = original_update
 
     async def test_put_settings_not_found(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -297,7 +297,7 @@ class TestPutEmailSettings:
         assert resp.status_code == 403
 
     async def test_put_settings_timeout_persisted(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
@@ -326,7 +326,7 @@ class TestPutEmailSettings:
             admin_email.update_organisation = original_update
 
     async def test_put_settings_timeout_too_low_422(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -347,7 +347,7 @@ class TestPutEmailSettings:
             admin_email.get_organisation = original
 
     async def test_put_settings_timeout_too_high_422(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -368,7 +368,7 @@ class TestPutEmailSettings:
             admin_email.get_organisation = original
 
     async def test_put_settings_password_too_long_422(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -390,7 +390,7 @@ class TestPutEmailSettings:
 
 class TestTestEmail:
     async def test_email_test_no_config(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
@@ -406,7 +406,7 @@ class TestTestEmail:
             admin_email.get_organisation = original
 
     async def test_email_test_not_found(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
 
         original = admin_email.get_organisation
         admin_email.get_organisation = AsyncMock(return_value=None)
@@ -427,7 +427,7 @@ class TestTestEmail:
         assert resp.status_code == 403
 
     async def test_email_test_success(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -452,7 +452,7 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_passes_configured_timeout(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -478,7 +478,7 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_smtp_failure_returns_descriptive_message(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.core.email_service import EmailSendingError
         from modulo.db.models.organisation import Organisation
 
@@ -504,7 +504,7 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_unexpected_exception_does_not_leak_internals(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -533,7 +533,7 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_invalid_recipient_422(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -559,7 +559,7 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_requires_email_shape(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -585,7 +585,7 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_rate_limited_429_with_retry_after(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(
@@ -613,7 +613,7 @@ class TestTestEmail:
             admin_email.send_email = original_send
 
     async def test_email_test_rate_limit_is_per_org(self, client_admin, mock_session):
-        import modulo.api.routes.admin_email as admin_email
+        from modulo.api.routes import admin_email
         from modulo.db.models.organisation import Organisation
 
         org = Organisation(

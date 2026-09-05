@@ -305,21 +305,42 @@ jobs:
         # remain the safety net for heavy mount+settle specs.
         run: pnpm exec vitest run src --pool=threads --maxWorkers=2
       - run: pnpm run build
-      - run: pnpm audit --audit-level=critical
+      - name: Audit dependencies (retry transient registry errors)
+        # pnpm audit hits the public npm registry; a transient network error
+        # (connection reset / timeout — observed as npm error 23) must not block
+        # a PR's frontend gate. Retry a few times, but still fail the gate on a
+        # genuine critical advisory.
+        run: |
+          AUDIT_OK=""
+          attempt=0
+          until [ "$attempt" -ge 3 ]; do
+            attempt=$((attempt + 1))
+            if pnpm audit --audit-level=critical; then
+              AUDIT_OK=1
+              break
+            fi
+            echo "pnpm audit attempt $attempt failed (likely transient registry network error); retrying in 15s..."
+            sleep 15
+          done
+          if [ -z "$AUDIT_OK" ]; then
+            echo "::error::pnpm audit failed after 3 attempts"
+            exit 1
+          fi
 
   sonarcloud-scan:
     name: SonarCloud scan (coverage import)
     # SonarCloud automatic analysis (the GitHub App) cannot import coverage
     # reports, so a CI-based scanner run is the only way the coverage measure
-    # (and the README coverage badge) exists. Gated to push-to-main to bound
-    # runner cost — the badge tracks main, not PRs. Reuses the coverage-report
-    # artifact backend-test already uploads instead of re-running the backend
-    # suite.
-    # workflow_dispatch is allowed so this otherwise push-to-main-only job can be
-    # validated manually BEFORE merge (a push-main-only job is invisible to PR CI,
-    # which is how the missing @vitest/coverage-v8 provider nearly shipped broken).
+    # (and the README coverage badge) exists. Originally gated to push-to-main
+    # to bound runner cost (the badge tracks main, not PRs), but the "SonarCloud
+    # scan (coverage import)" status check is REQUIRED for merge, so it must also
+    # run on pull_request — otherwise the check is never produced on a PR and the
+    # merge gate can never go green. Reuses the coverage-report artifact
+    # backend-test already uploads instead of re-running the backend suite.
+    # workflow_dispatch is allowed so this job can be validated manually.
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      github.event_name == 'pull_request'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
       || github.event_name == 'workflow_dispatch'
     needs: [backend-test]
     runs-on: ubicloud-standard-2

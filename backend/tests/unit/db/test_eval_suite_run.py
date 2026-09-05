@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0164."""
+    """Exactly one migration chains off each predecessor, and the head is 0176."""
     import re
 
     revisions = {}
@@ -738,15 +738,18 @@ def test_single_migration_head() -> None:
     # 0174_per_org_last_admin_guard (FAR-539 per-org last-admin guard) chains off 0173.
     chaining_off_0173 = [p for p in revisions if parents[p] == "0173_per_org_deactivation"]
     assert [_basename(p) for p in chaining_off_0173] == ["0174_per_org_last_admin_guard.py"]
-    # 0176_env_profiles_runner_docker (FAR-587 provider_type widen + default drop) chains off 0174.
+    # 0176_trigger_event_validation_results (FAR-604) chains off 0174.
     chaining_off_0174 = [p for p in revisions if parents[p] == "0174_per_org_last_admin_guard"]
-    assert [_basename(p) for p in chaining_off_0174] == ["0176_env_profiles_runner_docker.py"]
-    # 0177_drop_workspace_leases (FAR-587 workspace-lease removal) chains off 0176.
-    chaining_off_0176 = [p for p in revisions if parents[p] == "0176_env_profiles_runner_docker"]
-    assert [_basename(p) for p in chaining_off_0176] == ["0177_drop_workspace_leases.py"]
-    # Nothing chains off 0177 -> it is the single head.
-    chaining_off_0177 = [p for p in revisions if parents[p] == "0177_drop_workspace_leases"]
-    assert chaining_off_0177 == []
+    assert [_basename(p) for p in chaining_off_0174] == ["0176_trigger_event_validation_results.py"]
+    # 0178_env_profiles_runner_docker (FAR-587 provider_type widen + default drop) chains off 0176.
+    chaining_off_0176 = [p for p in revisions if parents[p] == "0176_trigger_event_validation_results"]
+    assert [_basename(p) for p in chaining_off_0176] == ["0178_env_profiles_runner_docker.py"]
+    # 0179_drop_workspace_leases (FAR-587 workspace-lease removal) chains off 0178.
+    chaining_off_0178 = [p for p in revisions if parents[p] == "0178_env_profiles_runner_docker"]
+    assert [_basename(p) for p in chaining_off_0178] == ["0179_drop_workspace_leases.py"]
+    # Nothing chains off 0179 -> it is the single head.
+    chaining_off_0179 = [p for p in revisions if parents[p] == "0179_drop_workspace_leases"]
+    assert chaining_off_0179 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
