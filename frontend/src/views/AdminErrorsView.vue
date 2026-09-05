@@ -147,7 +147,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed } from 'vue'
-import { watchDebounced } from '@vueuse/core'
+import { watchDebounced, useIntervalFn } from '@vueuse/core'
 import { useRouter } from 'vue-router'
 import { fetchErrorGroups, fetchSchedulerStarvation, type ErrorGroupSummary, type FetchErrorGroupsParams, type SchedulerStarvationResponse } from '../lib/api/errors'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -194,14 +194,19 @@ const total = computed(() => groupsData.value?.total ?? 0)
 // Scheduler-starvation banner (FAR-604): capacity-blocked pending runs never
 // produce error events, so without this surface a pipeline stuck at its
 // concurrency cap is invisible here. Fail-open: a starvation fetch failure
-// renders nothing — never blocks the error-group dashboard.
-const { data: starvationData } = useDataFetch<SchedulerStarvationResponse>(
+// renders nothing — never blocks the error-group dashboard. The banner must
+// track a LIVE incident, not a mount-time snapshot (an operator staring at
+// this page mid-wedge is exactly when fresh data matters), so the fetch is
+// re-polled every 60s — useDataFetch's staleTime would otherwise freeze the
+// data at the mount fetch (refetchOnWindowFocus is disabled app-wide).
+const { data: starvationData, load: loadStarvation } = useDataFetch<SchedulerStarvationResponse>(
   () => fetchSchedulerStarvation().then(
     d => ({ data: d }),
     e => ({ error: { detail: `Failed to load scheduler starvation: ${formatApiError(e)}` } }),
   ),
   { initialValue: { items: [], total: 0, threshold_minutes: 10 } },
 )
+useIntervalFn(loadStarvation, 60_000)
 
 const starvationItems = computed(() => starvationData.value?.items ?? [])
 const starvationThresholdMinutes = computed(() => starvationData.value?.threshold_minutes ?? 10)

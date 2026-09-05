@@ -455,17 +455,22 @@ async def _resolve_pool_reference(
     """Best-effort concurrency-cap reference for the response (FAR-134, FAR-604).
 
     Never raises — a failed reference degrades to ``None`` with a log, never a
-    failed query. Resolution order:
+    failed query. A run's enforced ceiling is the MINIMUM of every gate that
+    applies to it (its pipeline's ``max_concurrent_runs`` AND the org's
+    ``run_concurrency_limit``), so the reported reference must never name a cap
+    the runs do not actually bind at. Resolution order:
 
     * a SINGLE ``pipeline_id`` filter → that pipeline's ``max_concurrent_runs``
-      (the per-pipeline gate binds first for that pipeline; the column is NOT
-      NULL with a server default, so a present row always yields an int);
-    * multiple pipeline filters whose caps are all the SAME value → that shared
-      cap;
-    * otherwise (org-wide query, mixed caps, or a missing pipeline row) → the
-      org's ``run_concurrency_limit``;
-    * when the org cap is UNSET (``None`` = no org-level ceiling), the enforced
-      ceilings are the pipelines' own caps — the TIGHTEST (MIN)
+      when its row is present (the column is NOT NULL with a server default, so
+      a present row always yields an int); a missing pipeline row falls through
+      to the org limit;
+    * otherwise the org's ``run_concurrency_limit`` when set, MIN-ed with the
+      tightest pipeline cap in scope when pipelines exist — a uniform shared
+      pipeline cap does NOT bind before the org limit (two pipelines capped at
+      7 still block at an org limit of 5, and an org limit of 20 does not lift
+      a shared 7-cap);
+    * an UNSET org limit (``None`` = no org-level ceiling) leaves the
+      pipelines' own caps as the ceilings — the TIGHTEST (MIN)
       ``max_concurrent_runs`` in scope is reported as the single reference (the
       number most likely to explain starvation), and ``None`` only when the org
       has no pipelines at all.
@@ -497,16 +502,21 @@ async def _resolve_pool_reference(
                     scoped_caps: list[int] | None = None
                     if pipeline_ids:
                         scoped_caps = await _read_caps()
-                        if len(scoped_caps) == 1:
-                            # A single filtered pipeline, or compared pipelines
-                            # all enforcing the SAME cap: the per-pipeline gate
-                            # binds first for those pipelines, so their cap is
-                            # the reference regardless of any org cap.
+                        if len(pipeline_ids) == 1 and scoped_caps:
+                            # Exactly ONE filtered pipeline with a present row:
+                            # its own per-pipeline cap is the reference. A
+                            # missing row (empty read) falls through to the
+                            # org limit below.
                             return scoped_caps[0]
+                    # Every other shape (org-wide, mixed/uniform multi-pipeline
+                    # filters, missing single row): the org limit ALWAYS
+                    # participates — it gates every run in the org.
                     org_limit = await get_org_run_concurrency_limit(session, org_id)
-                    if org_limit is not None:
-                        return int(org_limit)
+                    # An org-wide query reads the WHOLE org's caps (the caps
+                    # statement scopes to sa.true() when no pipeline filter).
                     caps = scoped_caps if scoped_caps is not None else await _read_caps()
+                    if org_limit is not None:
+                        return min(int(org_limit), caps[0]) if caps else int(org_limit)
                     return caps[0] if caps else None
             except asyncio.CancelledError:
                 raise

@@ -124,6 +124,36 @@ describe('AdminErrorsView', () => {
     wrapper.unmount()
   })
 
+  it('re-polls the scheduler-starvation endpoint every 60 seconds', async () => {
+    // The banner monitors a LIVE incident — a mount-only fetch (staleTime 30s,
+    // refetchOnWindowFocus off) would freeze exactly during the long wedge it
+    // exists to surface. The view re-polls every 60s.
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors/scheduler-starvation') {
+        return { items: [], total: 0, threshold_minutes: 10 }
+      }
+      return { items: [], total: 0 }
+    })
+    vi.useFakeTimers()
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const starvationCalls = () =>
+      (api.GET as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([path]) => path === '/api/v1/errors/scheduler-starvation',
+      ).length
+    const before = starvationCalls()
+    expect(before).toBeGreaterThanOrEqual(1)
+
+    vi.advanceTimersByTime(60_000)
+    await flushPromises()
+    await nextTick()
+
+    expect(starvationCalls()).toBeGreaterThan(before)
+    wrapper.unmount()
+  })
+
   it('reloads error groups with the search term after typing (debounced), resetting to page 1', async () => {
     const wrapper = mountView()
     await flushPromises()

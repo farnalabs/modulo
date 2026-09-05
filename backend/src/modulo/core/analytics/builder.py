@@ -38,6 +38,7 @@ from modulo.core.pipeline_engine.error_codes import (
     known_error_codes,
     map_legacy_code,
 )
+from modulo.db.crud.run import CAPACITY_MARKERS, ERROR_CODE_CAPACITY_TIMEOUT
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run_daily_facts import RunDailyFact
@@ -77,13 +78,14 @@ _STALLED_STATUS = "stalled"
 STALL_ERROR_CODES: frozenset[str] = frozenset({"executor_stalled", "node_timeout", "TimeoutError"})
 
 # Raw error codes marking a failed run as CAPACITY-STARVATION rather than a real
-# agent failure (FAR-604). ``capacity_timeout`` is the stale-run sweep's TTL
-# terminalisation ("Waited in capacity queue past the TTL"); the raw dispatch
-# markers (``pipeline_capacity`` / ``org_capacity_limited``) can survive onto
-# terminal rows. These are counted SEPARATELY from the generic ``failure_count``
-# so scheduler starvation is never lumped into agent-failure rates — the same
-# raw spellings the capacity sweep / dispatcher reconcile key on.
-CAPACITY_ERROR_CODES: frozenset[str] = frozenset({"capacity_timeout", "pipeline_capacity", "org_capacity_limited"})
+# agent failure (FAR-604). Derived from the CANONICAL constants in
+# ``db.crud.run`` — the same spellings the capacity sweep / dispatcher reconcile
+# key on — plus the stale-run sweep's TTL terminalisation (``capacity_timeout``;
+# the raw dispatch markers can survive onto terminal rows). Re-spelling the
+# literals here would silently diverge the analytics sub-bucket from the sweep.
+# These are counted SEPARATELY from the generic ``failure_count`` so scheduler
+# starvation is never lumped into agent-failure rates.
+CAPACITY_ERROR_CODES: frozenset[str] = CAPACITY_MARKERS | {ERROR_CODE_CAPACITY_TIMEOUT}
 
 # Hour-granularity range cap: an EXPLICIT ``group_by=hour`` over a wider span
 # would materialise up to 24 buckets/day per dimension key before limit
@@ -743,8 +745,13 @@ def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
         bucket["duration_n"] += cnt
     avg_capacity_wait = getattr(row, "avg_capacity_wait_ms", None)
     if avg_capacity_wait is not None:
-        bucket["capacity_wait_sum"] += float(avg_capacity_wait) * cnt
-        bucket["capacity_wait_n"] += cnt
+        # The SQL avg is over CAPACITY-FAILED rows only, so the bucket
+        # weighting must use the capacity subset — never the bucket's total
+        # run count (a 500-run bucket with 2 capacity fails would otherwise
+        # dominate the mean; see the week-bucket test).
+        capacity_w = int(getattr(row, "capacity_failure_count", None) or 0)
+        bucket["capacity_wait_sum"] += float(avg_capacity_wait) * capacity_w
+        bucket["capacity_wait_n"] += capacity_w
     avg_queue_wait = getattr(row, "avg_queue_wait_ms", None)
     if avg_queue_wait is not None:
         bucket["queue_wait_sum"] += float(avg_queue_wait) * cnt

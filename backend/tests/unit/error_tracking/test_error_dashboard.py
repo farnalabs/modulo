@@ -274,3 +274,55 @@ class TestSchedulerStarvation:
             resp = client.get("/api/v1/errors/scheduler-starvation")
         assert resp.status_code == 200
         mock_rls.assert_awaited_once()
+
+    def test_age_anchor_keys_on_earliest_trigger_event_receipt(self):
+        # FAR-604: the starvation age must anchor on the run's EARLIEST
+        # trigger-event receipt (MIN(trigger_events.received_at), falling back
+        # to created_at) — never on created_at alone, which a coalescing
+        # re-delivery refreshes on the dispatcher's short re-dispatch cadence
+        # (a days-long wedge would read as minutes old and the banner would
+        # flap). Pin the SQL shape: the trigger_events correlation + coalesce
+        # fallback must be present in the emitted statement.
+        captured: dict = {}
+
+        async def _capture_execute(stmt, *args, **kwargs):
+            captured["sql"] = str(stmt.compile())
+            result = MagicMock()
+            result.all.return_value = []
+            return result
+
+        app = FastAPI()
+        app.include_router(errors_router)
+
+        async def _override_user():
+            return AuthenticatedPrincipal(
+                username="admin",
+                organisation_id=_ORG_ID,
+                account_id=uuid.uuid4(),
+                org_role="admin",
+            )
+
+        async def _override_db():
+            session = MagicMock()
+            cm = AsyncMock()
+            cm.__aenter__.return_value = session
+            cm.__aexit__.return_value = None
+            session.begin.return_value = cm
+            session.execute = _capture_execute
+            return session
+
+        from modulo.api.dependencies import get_db_session, get_plan_context
+        from modulo.auth.dependencies import get_current_user
+
+        app.dependency_overrides[get_current_user] = _override_user
+        app.dependency_overrides[get_db_session] = _override_db
+        app.dependency_overrides[get_plan_context] = lambda: all_features()
+
+        with patch("modulo.api.routes.errors.set_rls_org", AsyncMock()):
+            client = TestClient(app)
+            resp = client.get("/api/v1/errors/scheduler-starvation")
+        assert resp.status_code == 200
+        sql = captured["sql"]
+        assert "trigger_events" in sql, "the age anchor must correlate the run's trigger events"
+        assert "received_at" in sql, "the age anchor must key on the earliest event receipt"
+        assert "coalesce" in sql.lower(), "runs without a trigger event must fall back to created_at"
