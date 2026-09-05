@@ -5,18 +5,20 @@ import { nextTick as vueNextTick } from 'vue'
 
 async function nextTick() { await vueNextTick(); await flushPromises() }
 
-const { mockGet, mockPatch } = vi.hoisted(() => ({
+const { mockGet, mockPatch, mockPost, mockDelete } = vi.hoisted(() => ({
   mockGet: vi.fn().mockResolvedValue({ data: { items: [] }, error: undefined }),
   mockPatch: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+  mockPost: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+  mockDelete: vi.fn().mockResolvedValue({ response: { status: 204, ok: true }, error: undefined }),
 }))
 
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: mockGet,
-    POST: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    POST: mockPost,
     PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
     PATCH: mockPatch,
-    DELETE: vi.fn().mockResolvedValue({ response: { status: 204, ok: true }, error: undefined }),
+    DELETE: mockDelete,
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
@@ -476,5 +478,332 @@ describe('AdminConnectorsView', () => {
 
     await openEdit(wrapper, 'rest-1')
     expect(wrapper.find('[data-testid="rest-connector-legacy-auth-hint"]').exists()).toBe(false)
+  })
+})
+
+describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () => {
+  // ErrorAlert is captured (not stubbed blind) so load-failure + retry flows are assertable.
+  const capturingErrorAlert = {
+    props: ['message', 'onRetry'],
+    template:
+      '<div data-testid="error-alert"><button type="button" data-testid="error-retry" @click="onRetry && onRetry()">Retry</button>{{ message }}</div>',
+  }
+
+  function mountWithCapturingError() {
+    return mount(AdminConnectorsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: capturingErrorAlert,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    mockGet.mockResolvedValue({ data: { items: [] }, error: undefined })
+    mockPost.mockResolvedValue({ data: null, error: undefined })
+    mockPatch.mockResolvedValue({ data: null, error: undefined })
+    mockDelete.mockResolvedValue({ response: { status: 204, ok: true }, error: undefined })
+  })
+
+  it('shows the loading spinner while the initial GET is in flight', async () => {
+    mockGet.mockReturnValue(new Promise(() => {}))
+    const wrapper = mount(AdminConnectorsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await nextTick()
+    expect(wrapper.find('loading-spinner-stub').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('a failed connectors load renders the inline ErrorAlert and Retry re-fetches', async () => {
+    // Key the rejection to the connectors endpoint — planStore.fetchPlan also
+    // GETs on mount and must not swallow the rejection.
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/connectors') throw new Error('connectors backend down')
+      return { data: { items: [] }, error: undefined }
+    })
+    const wrapper = mountWithCapturingError()
+    await nextTick()
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="error-alert"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('connectors backend down')
+
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/connectors') {
+        return { data: { items: [{ id: 'c1', name: 'Recovered', connector_type: 'postgresql', description: null, tier: 'native' }] }, error: undefined }
+      }
+      return { data: { items: [] }, error: undefined }
+    })
+    await wrapper.find('[data-testid="error-retry"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Recovered')
+  })
+
+  it('empty list renders the no-connectors empty state', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('No connectors configured')
+    expect(wrapper.find('table').exists()).toBe(false)
+  })
+
+  it('add flow (generic connector): form opens, POST carries the JSON config, and the row is appended', async () => {
+    mockGet.mockResolvedValue({ data: { items: [] }, error: undefined })
+    mockPost.mockResolvedValue({
+      data: {
+        id: 'pg-new',
+        name: 'Postgres Prod',
+        connector_type_id: 'postgresql',
+        config_json: { description: 'Primary DB' },
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-connectors-add"]').trigger('click')
+    await nextTick()
+    expect(wrapper.text()).toContain('New Connector')
+
+    // Submit button is disabled while the name is empty.
+    expect(wrapper.find('[data-testid="admin-connectors-submit"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.find('[data-testid="admin-connectors-name-input"]').setValue('Postgres Prod')
+    await wrapper.find('[data-testid="admin-connectors-description-input"]').setValue('Primary DB')
+    await wrapper.find('[data-testid="admin-connectors-config-input"]').setValue('{ "host": "db.local" }')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPost).toHaveBeenCalledTimes(1)
+    const [url, options] = mockPost.mock.calls[0]
+    expect(url).toBe('/api/v1/connectors')
+    expect(options.body).toEqual({
+      name: 'Postgres Prod',
+      connector_type_id: '',
+      credentials: '{ "host": "db.local" }',
+      config_json: { description: 'Primary DB' },
+      allowed_operations: [],
+      visibility: 'org',
+      tier: 'native',
+    })
+
+    // Row appended, form closed.
+    expect(wrapper.find('[data-testid="connector-row-pg-new"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('New Connector')
+  })
+
+  it('add flow (REST connector): structured fields build the config_json and credentials payloads', async () => {
+    mockPost.mockResolvedValue({
+      data: { id: 'rest-new', name: 'REST New', connector_type_id: 'rest', config_json: {} },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-connectors-add"]').trigger('click')
+    await nextTick()
+    ;(wrapper.vm as unknown as { formData: { connector_type: string } }).formData.connector_type = 'rest'
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-connectors-name-input"]').setValue('REST New')
+    await wrapper.find('[data-testid="rest-connector-base-url"]').setValue('https://api.example.com')
+    await wrapper.find('[data-testid="rest-connector-token"]').setValue('tok_123')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPost).toHaveBeenCalledTimes(1)
+    const [, options] = mockPost.mock.calls[0]
+    expect(options.body.config_json.base_url).toBe('https://api.example.com')
+    expect(options.body.config_json.auth_mode).toBe('bearer')
+    expect(JSON.parse(options.body.credentials)).toEqual({ auth_mode: 'bearer', token: 'tok_123' })
+  })
+
+  it('add flow: a POST error payload surfaces the formatted error and keeps the form open', async () => {
+    mockPost.mockResolvedValue({ data: null, error: { detail: 'name already exists' } })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-connectors-add"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-connectors-name-input"]').setValue('Dup')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('name already exists')
+    expect(wrapper.find('[data-testid="admin-connectors-name-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="connector-row-dup"]').exists()).toBe(false)
+  })
+
+  it('add flow: cancel closes the form without calling the API', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-connectors-add"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-connectors-cancel"]').trigger('click')
+    await nextTick()
+
+    expect(mockPost).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="admin-connectors-name-input"]').exists()).toBe(false)
+  })
+
+  it('delete flow: confirm deletes via the API and removes the row', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'c1', name: 'Doomed Connector', connector_type: 'postgresql', description: null, tier: 'native' },
+        ],
+      },
+      error: undefined,
+    })
+    mockDelete.mockResolvedValue({ response: { status: 204, ok: true }, error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="connector-row-c1"]')
+    // TableActions renders Edit first, then Delete.
+    await row.findAll('button')[1].trigger('click')
+    await nextTick()
+    expect(wrapper.text()).toContain('This action cannot be undone')
+
+    await wrapper.find('[data-testid="admin-connectors-delete-confirm"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(mockDelete).toHaveBeenCalledTimes(1)
+    const [url, options] = mockDelete.mock.calls[0]
+    expect(url).toBe('/api/v1/connectors/{connector_id}')
+    expect(options.params.path.connector_id).toBe('c1')
+    expect(wrapper.find('[data-testid="connector-row-c1"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('No connectors configured')
+  })
+
+  it('delete flow: cancel dismisses the confirm panel without calling the API', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'c1', name: 'Kept Connector', connector_type: 'postgresql', description: null, tier: 'native' },
+        ],
+      },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="connector-row-c1"]').findAll('button')[1].trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-connectors-delete-cancel"]').trigger('click')
+    await nextTick()
+
+    expect(mockDelete).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="connector-row-c1"]').exists()).toBe(true)
+  })
+
+  it('delete flow: a DELETE error surfaces the delete error without removing the row', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'c1', name: 'Stuck Connector', connector_type: 'postgresql', description: null, tier: 'native' },
+        ],
+      },
+      error: undefined,
+    })
+    mockDelete.mockResolvedValue({ response: { status: 409, ok: false }, error: { detail: 'connector in use' } })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="connector-row-c1"]').findAll('button')[1].trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-connectors-delete-confirm"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('connector in use')
+    expect(wrapper.find('[data-testid="connector-row-c1"]').exists()).toBe(true)
+  })
+
+  it('edit flow (non-REST connector): PATCH sends name, null credentials and the description config', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          { id: 'pg-1', name: 'PG Old', connector_type: 'postgresql', description: 'old desc', tier: 'native' },
+        ],
+      },
+      error: undefined,
+    })
+    mockPatch.mockResolvedValue({
+      data: { id: 'pg-1', name: 'PG New', connector_type_id: 'postgresql', config_json: { description: 'new desc' } },
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="connector-row-pg-1"]').findAll('button')[0].trigger('click')
+    await nextTick()
+    // Non-REST targets use the JSON config textarea, not the REST structured form.
+    expect(wrapper.find('[data-testid="admin-connectors-edit-config"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="admin-connectors-edit-name"]').setValue('PG New')
+    await wrapper.find('[data-testid="admin-connectors-edit-description"]').setValue('new desc')
+    await wrapper.find('form').trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    expect(mockPatch).toHaveBeenCalledTimes(1)
+    const [url, options] = mockPatch.mock.calls[0]
+    expect(url).toBe('/api/v1/connectors/{connector_id}')
+    expect(options.params.path.connector_id).toBe('pg-1')
+    expect(options.body).toEqual({
+      name: 'PG New',
+      credentials: null,
+      config_json: { description: 'new desc' },
+    })
+    // The edited row is refreshed in place and the edit form closes.
+    expect(wrapper.text()).toContain('PG New')
+    expect(wrapper.find('[data-testid="admin-connectors-edit-name"]').exists()).toBe(false)
+  })
+
+  it('connector types are fetched on mount for the add-form dropdown', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/connectors/types') {
+        return { data: { items: [{ id: 'postgresql', display_name: 'PostgreSQL' }] }, error: undefined }
+      }
+      return { data: { items: [] }, error: undefined }
+    })
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/connectors/types')
+    const vm = wrapper.vm as unknown as { connectorTypes: Array<{ id: string }> }
+    expect(vm.connectorTypes).toEqual([{ id: 'postgresql', display_name: 'PostgreSQL' }])
   })
 })
