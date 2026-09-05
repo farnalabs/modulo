@@ -13,7 +13,11 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.runtime_provider import RuntimeProvider, WorkspaceSpec
+from modulo.core.runtime_provider import (
+    ProviderNotConfiguredError,
+    RuntimeProvider,
+    WorkspaceSpec,
+)
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -68,20 +72,6 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     return p
 
 
-def _fake_lease(**overrides: Any) -> MagicMock:
-    lease = MagicMock()
-    lease.id = overrides.get("id", uuid.uuid4())
-    lease.organisation_id = overrides.get("organisation_id", _ORG_ID)
-    lease.environment_profile_id = overrides.get("environment_profile_id", uuid.uuid4())
-    lease.run_id = overrides.get("run_id", uuid.uuid4())
-    lease.provider_ref = overrides.get("provider_ref", "local-ws-001")
-    lease.status = overrides.get("status", "pending")
-    lease.started_at = overrides.get("started_at")
-    lease.expires_at = overrides.get("expires_at")
-    lease.resource_usage_json = overrides.get("resource_usage")
-    return lease
-
-
 def _stub_provider() -> RuntimeProvider:
     p = MagicMock(spec=RuntimeProvider)
     p.create_workspace = AsyncMock(return_value="ws-ref-001")
@@ -105,11 +95,17 @@ def _stub_provider() -> RuntimeProvider:
 def valid_profile_payload(name: str, image: str, caps: str, egress: str, timeout: int, ctx):
     ctx["payload"] = {
         "name": name,
+        "provider_type": "e2b",
         "image_ref": image,
         "capabilities": json.loads(caps),
         "egress_policy": egress,
         "timeout_seconds": timeout,
     }
+
+
+@given("an invalid environment profile payload with missing provider_type")
+def invalid_profile_missing_provider_type(ctx):
+    ctx["payload"] = {"name": "no-provider", "image_ref": "python:3.12-slim"}
 
 
 @given(parsers.parse("an invalid environment profile payload with empty name"))
@@ -162,9 +158,7 @@ def org_has_no_profile(org: str, profile_id: str, ctx):
 def hub_with_providers(ctx):
     hub = RuntimeProviderHub()
     local = MagicMock(spec=RuntimeProvider)
-    local.supports = MagicMock(return_value=True)
     e2b = MagicMock(spec=RuntimeProvider)
-    e2b.supports = MagicMock(return_value=False)
     hub.register("local", local)
     hub.register("e2b", e2b)
     ctx["hub"] = hub
@@ -172,9 +166,25 @@ def hub_with_providers(ctx):
     ctx["e2b_provider"] = e2b
 
 
-@given('an environment profile with capabilities ["docker"] and no provider_hint')
-def profile_docker_no_hint(ctx):
-    ctx["resolve_profile"] = _fake_profile(capabilities=["docker"], name="docker-only", provider_type=None)
+@given('a RuntimeProviderHub with only the "local" provider registered')
+def hub_with_only_local(ctx):
+    hub = RuntimeProviderHub()
+    local = MagicMock(spec=RuntimeProvider)
+    local.matches_provider_type = MagicMock(return_value=False)
+    hub.register("local", local)
+    ctx["hub"] = hub
+    ctx["local_provider"] = local
+    ctx["e2b_provider"] = None
+
+
+@given('an environment profile with provider_type "local" and no provider_hint')
+def profile_typed_local(ctx):
+    ctx["resolve_profile"] = _fake_profile(capabilities=["docker"], name="local-only", provider_type="local")
+
+
+@given('an environment profile with provider_type "e2b" and no provider_hint')
+def profile_typed_e2b(ctx):
+    ctx["resolve_profile"] = _fake_profile(capabilities=["docker"], name="e2b-only", provider_type="e2b")
 
 
 @given(parsers.parse('an environment profile with provider_hint "{hint}"'))
@@ -182,22 +192,6 @@ def profile_with_hint(hint: str, ctx):
     p = _fake_profile(capabilities=["docker"], name="hinted-profile")
     p.provider_hint = hint
     ctx["resolve_profile"] = p
-
-
-@given(parsers.parse('a run with id "{run_id}"'))
-def run_with_id(run_id: str, ctx):
-    ctx["run_id"] = run_id
-
-
-@given(parsers.parse('a WorkspaceLease for run "{run_id}" referencing environment profile "{profile_id}"'))
-def lease_for_run(run_id: str, profile_id: str, ctx):
-    lease = _fake_lease(
-        run_id=uuid.uuid4(),
-        environment_profile_id=uuid.uuid4(),
-        status="pending",
-    )
-    ctx["lease"] = lease
-    ctx["run_id"] = run_id
 
 
 @given("a LocalRuntimeProvider")
@@ -229,7 +223,8 @@ def provider_with_active_workspace(ctx):
 def shell_connector_with_provider(ctx):
     from modulo.connectors.shell import ShellConnector
 
-    ctx["connector"] = ShellConnector(runtime_provider=ctx["provider"], allowed_commands=["echo"])
+    with pytest.warns(DeprecationWarning, match="ShellConnector is deprecated"):
+        ctx["connector"] = ShellConnector(runtime_provider=ctx["provider"], allowed_commands=["echo"])
 
 
 @given('an EnvironmentProfile with capabilities ["docker", "python3.12"]')
@@ -293,6 +288,7 @@ def post_create_profile(url: str, ctx, client):
     ):
         mock_create.return_value = _fake_profile(
             name=payload.get("name", "test"),
+            provider_type=payload.get("provider_type", "local_docker"),
             image_ref=payload.get("image_ref", "python:3.12-slim"),
             capabilities=payload.get("capabilities", []),
             egress_policy=payload.get("egress_policy"),
@@ -364,9 +360,13 @@ def delete_url(url: str, ctx, client):
 
 @when(parsers.parse("I POST {url}"))
 def post_url(url: str, ctx, client):
+    test_hub = RuntimeProviderHub()
+    test_hub.register(_fake_profile().provider_type, _stub_provider())
+
     with (
         patch("modulo.api.routes.environment_profiles.get_environment_profile") as mock_get,
         patch("modulo.api.routes.environment_profiles.set_rls_org"),
+        patch("modulo.api.routes.environment_profiles._get_hub", return_value=test_hub),
     ):
         profile = ctx.get("profile")
         profile_should_be_none = ctx.get("profile_should_be_none", False)
@@ -382,7 +382,14 @@ def post_url(url: str, ctx, client):
 def resolve_profile(ctx):
     hub: RuntimeProviderHub = ctx["hub"]
     profile = ctx["resolve_profile"]
-    result = hub.resolve(profile)
+    ctx["resolve_error"] = None
+    try:
+        result = hub.resolve(profile)
+    except ProviderNotConfiguredError as exc:
+        ctx["resolve_error"] = exc
+        ctx["resolved_provider"] = None
+        ctx["resolved_name"] = "unconfigured"
+        return
     ctx["resolved_provider"] = result
     if result is ctx["local_provider"]:
         ctx["resolved_name"] = "local"
@@ -390,32 +397,6 @@ def resolve_profile(ctx):
         ctx["resolved_name"] = "e2b"
     else:
         ctx["resolved_name"] = "unknown"
-
-
-@when("the run starts executing")
-def run_starts(ctx):
-    lease = ctx["lease"]
-    lease.status = "provisioning"
-    ctx["lease"] = lease
-
-
-@when("the workspace is created")
-def workspace_created(ctx):
-    lease = ctx["lease"]
-    lease.status = "active"
-    lease.provider_ref = "ws-provider-ref"
-    from datetime import UTC, datetime, timedelta
-
-    lease.started_at = datetime.now(UTC)
-    lease.expires_at = datetime.now(UTC) + timedelta(hours=1)
-    ctx["lease"] = lease
-
-
-@when("the run completes")
-def run_completes(ctx):
-    lease = ctx["lease"]
-    lease.status = "completed"
-    ctx["lease"] = lease
 
 
 @when(parsers.parse("I call create_workspace with a WorkspaceSpec derived from the profile"))
@@ -517,6 +498,14 @@ def response_contains_profile_id(profile_id: str, ctx):
         assert profile_id in str(data.get("id", "")), f"Expected id containing {profile_id}, got {data.get('id')}"
 
 
+@then(parsers.parse('the profile has provider_type "{expected}"'))
+def profile_has_provider_type(expected: str, ctx):
+    data = ctx["response"].json()
+    assert data.get("provider_type") == expected, (
+        f"Expected provider_type {expected!r}, got {data.get('provider_type')!r}"
+    )
+
+
 @then(parsers.parse('the profile has image_ref "{expected}"'))
 def profile_has_image(expected: str, ctx):
     data = ctx["response"].json()
@@ -616,23 +605,12 @@ def resolved_provider_is(expected: str, ctx):
     assert ctx.get("resolved_name") == expected, f"Expected resolved {expected!r}, got {ctx.get('resolved_name')!r}"
 
 
-@then(parsers.parse('the WorkspaceLease status transitions from "{old_status}" to "{new_status}"'))
-def lease_status_transition(old_status: str, new_status: str, ctx):
-    lease = ctx["lease"]
-    assert lease.status == new_status, f"Expected status {new_status!r}, got {lease.status!r}"
-
-
-@then(parsers.parse('the WorkspaceLease status is "{status}"'))
-def lease_status_is(status: str, ctx):
-    lease = ctx["lease"]
-    assert lease.status == status, f"Expected status {status!r}, got {lease.status!r}"
-
-
-@then("the lease has a provider_ref and expires_at set")
-def lease_has_provider_and_expiry(ctx):
-    lease = ctx["lease"]
-    assert lease.provider_ref is not None, "Expected provider_ref to be set"
-    assert lease.expires_at is not None, "Expected expires_at to be set"
+@then(parsers.parse('the resolve raises ProviderNotConfiguredError mentioning "{env_var}"'))
+def resolve_raises_not_configured(env_var: str, ctx):
+    error = ctx.get("resolve_error")
+    assert error is not None, "Expected ProviderNotConfiguredError, got a successful resolution"
+    assert isinstance(error, ProviderNotConfiguredError), f"Unexpected error type: {type(error).__name__}"
+    assert env_var in str(error), f"Expected {env_var!r} in error message: {error}"
 
 
 @then("a provider_ref is returned")

@@ -362,7 +362,7 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
         "/api/v1/environment-profiles",
         ProgrammingError,
         501,
-        {"name": "test", "image_ref": "python:3.12-slim"},
+        {"name": "test", "image_ref": "python:3.12-slim", "provider_type": "local_docker"},
         "database",
     ),
     (
@@ -371,7 +371,7 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
         "/api/v1/environment-profiles",
         SQLAlchemyError,
         503,
-        {"name": "test", "image_ref": "python:3.12-slim"},
+        {"name": "test", "image_ref": "python:3.12-slim", "provider_type": "local_docker"},
         "database",
     ),
     (
@@ -380,7 +380,7 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
         "/api/v1/environment-profiles",
         IntegrityError,
         409,
-        {"name": "test", "image_ref": "python:3.12-slim"},
+        {"name": "test", "image_ref": "python:3.12-slim", "provider_type": "local_docker"},
         "already exists",
     ),
     ("env_get_prog", "GET", f"/api/v1/environment-profiles/{_PROFILE_ID}", ProgrammingError, 501, None, "database"),

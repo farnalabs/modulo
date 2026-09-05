@@ -52,9 +52,6 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
         }),
       })
     })
-    await page.route('**/api/v1/runs/run-json-viewer/workspace-lease', (route) => {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'completed' }) })
-    })
     await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })
     })
@@ -146,9 +143,6 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
         }),
       })
     })
-    await page.route('**/api/v1/runs/run-json-viewer/workspace-lease', (route) => {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'completed' }) })
-    })
     await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })
     })
@@ -212,9 +206,6 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
         }),
       })
     })
-    await page.route('**/api/v1/runs/run-json-viewer/workspace-lease', (route) => {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'completed' }) })
-    })
     await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })
     })
@@ -253,9 +244,6 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
           node_token_usage: { format: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
         }),
       })
-    })
-    await page.route('**/api/v1/runs/run-json-viewer/workspace-lease', (route) => {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'completed' }) })
     })
     await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })

@@ -44,8 +44,9 @@ _MIGRATION_PATH = (
 # The chain head after the FAR-604 admission-healing migration widened the
 # ck_trigger_events_validation_result vocabulary (coalesced /
 # backpressure_skipped) on top of 0174_per_org_last_admin_guard, and the
-# FAR-461 in-app invite tokens migration (0177_invitations) chains off it.
-_CHAIN_HEAD_MIGRATION_NAME = "0177_invitations"
+# FAR-587 provider cleanup chain (0178_env_profiles_runner_docker ->
+# 0179_drop_workspace_leases) tops it.
+_CHAIN_HEAD_MIGRATION_NAME = "0179_drop_workspace_leases"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

@@ -145,6 +145,10 @@ forbidden_modules =
 ignore_imports =
     # Shell resolves workspace sessions via the DB layer.
     modulo.connectors.shell -> modulo.db.session
+    # FAR-587: shell's hub-resolution guard maps the hub's typed
+    # ProviderNotConfiguredError to the connector's fail-soft ValueError
+    # contract - a single exception-type import (no core behaviour flows in).
+    modulo.connectors.shell -> modulo.core.runtime_provider
     # The REST connector (FAR-408) binds its SSRF + output-injection port at the
     # composition root (connector_hub) and never imports ``modulo.core`` directly;
     # this contract enforces that the connector stays decoupled. Any attempt to
@@ -218,3 +222,24 @@ ignore_imports =
     modulo.connectors.shortcut -> modulo.core.ssrf
     modulo.connectors.snyk -> modulo.core.ssrf
     modulo.connectors.trello -> modulo.core.ssrf
+
+[importlinter:contract:no-concrete-runtime-provider-imports]
+name = Concrete runtime providers are only imported inside core/runtime_provider (FAR-587)
+type = forbidden
+source_modules =
+    modulo
+forbidden_modules =
+    modulo.core.runtime_provider.docker
+    modulo.core.runtime_provider.e2b
+    modulo.core.runtime_provider.local
+    modulo.core.runtime_provider.local_docker
+ignore_imports =
+    # The factory itself wires the concrete providers (build_hub lazy imports).
+    modulo.core.runtime_provider -> modulo.core.runtime_provider.docker
+    modulo.core.runtime_provider -> modulo.core.runtime_provider.e2b
+    modulo.core.runtime_provider -> modulo.core.runtime_provider.local
+    modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.docker
+    modulo.core.runtime_provider.hub -> modulo.core.runtime_provider.e2b
+    # The deprecated local_docker adapter (ADR 003) delegates to the canonical
+    # Docker provider; it stays inside the package and is out of D2 scope.
+    modulo.core.runtime_provider.local_docker -> modulo.core.runtime_provider.docker

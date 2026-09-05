@@ -89,7 +89,6 @@ def test_initial_schema_contains_required_tables() -> None:
         "webhook_dedup_hashes",
         "webhook_payloads",
         "web_vital_events",
-        "workspace_leases",
     }
 
     assert required == set(Base.metadata.tables)

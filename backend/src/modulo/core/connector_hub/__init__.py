@@ -980,6 +980,7 @@ def _build_connector(
                 runtime_provider_hub=runtime_provider_hub,
                 environment_profile_id=env_profile_id,
                 allowed_commands=allowed,
+                org_id=tenant_id,
             )
         case "jira":
             instance = config.get("instance", "")

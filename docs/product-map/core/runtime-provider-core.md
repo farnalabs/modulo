@@ -6,7 +6,6 @@ delivery-tasks: []
 code:
   - backend/src/modulo/core/runtime_provider/
   - backend/src/modulo/db/models/environment_profile.py
-  - backend/src/modulo/db/models/workspace_lease.py
   - backend/src/modulo/db/crud/environment_profile.py
   - backend/src/modulo/api/routes/environment_profiles.py
   - backend/src/modulo/core/graph_validator/__init__.py
@@ -31,23 +30,25 @@ status: covered
 # Runtime Provider Core
 
 Provider abstraction that executes `sandbox_agent` nodes and manages workspaces
-(ADR 003 — Agent Dispatch Model). Runtime providers (`local`, `local_docker`, `docker`,
-`e2b`) expose the same capability surface, gated per-environment via environment
-profiles and validated at graph-validation time. `ShellConnector` (the legacy command
-connector) is deprecated since ADR 003 and maps onto the same runtime-provider surface;
-its product-map entry carries the ADR 003 deprecation notice.
+(ADR 003 — Agent Dispatch Model). Runtime providers (`local`, `runner_docker` with
+`docker`/`local_docker` aliases, `e2b`) expose the same capability surface, gated
+per-environment via environment profiles and validated at graph-validation time.
+`ShellConnector` (the legacy command connector) is deprecated since ADR 003 and maps
+onto the same runtime-provider surface; its product-map entry carries the ADR 003
+deprecation notice. The WorkspaceLease scaffolding was removed in FAR-587 (ADR 029)
+— workspace state lives in `runs.sandbox_dispatch_state`.
 
 ## Behaviours
 
 - [x] Runtime provider base contract (`base.py`): lifecycle, health, execution, teardown
-- [x] Provider registry/hub resolves the configured provider by profile
-- [x] Built-in providers: `local`, `local_docker`, `docker`, `e2b`
+- [x] Provider registry/hub resolves the configured provider deterministically
+      (explicit provider_type/hint match; `ProviderNotConfiguredError` otherwise)
+- [x] Built-in providers: `local`, `runner_docker` (aliases `docker`, `local_docker`), `e2b`
 - [x] Environment profiles CRUD (`/api/v1/environment-profiles`): list, create, get,
       update, delete, restore, and `POST /{id}/test` (SSE sandbox connectivity check) —
       input-validated, org-scoped, gated on the `environment_profiles` feature
 - [x] Graph validator rejects pipelines whose nodes need a capability the profile lacks
       (`test_environment_capabilities`)
-- [x] Workspace leases are released/expired and reaped (`workspace_lease`)
 - [x] `sandbox_agent` node dispatch, crash-resume, and output-handling contracts
       (run model fields: node retry/resume markers)
 - [x] ShellConnector is deprecated (ADR 003, 2026-07-16) with a runtime

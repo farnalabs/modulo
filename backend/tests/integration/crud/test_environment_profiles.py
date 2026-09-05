@@ -40,6 +40,7 @@ async def test_create_environment_profile(
         organisation_id=test_org,
         name="test-env",
         description="A test environment",
+        provider_type="local_docker",
         image_ref="python:3.12-slim",
         capabilities_json=["docker", "network"],
         network_policy="outbound",
@@ -71,6 +72,7 @@ async def test_read_environment_profile(
         id=profile_id,
         organisation_id=test_org,
         name="readable-env",
+        provider_type="local_docker",
         image_ref="node:20-alpine",
         capabilities_json=["docker"],
         account_id=account_id,
@@ -95,6 +97,7 @@ async def test_update_environment_profile(
         id=profile_id,
         organisation_id=test_org,
         name="updatable-env",
+        provider_type="local_docker",
         image_ref="ubuntu:22.04",
         capabilities_json=["docker"],
         account_id=account_id,
@@ -124,6 +127,7 @@ async def test_create_with_minimal_fields(
         id=profile_id,
         organisation_id=test_org,
         name="minimal-env",
+        provider_type="local_docker",
         image_ref="alpine:latest",
         capabilities_json=[],
         account_id=account_id,
@@ -168,8 +172,9 @@ async def test_rls_isolation(db_engine: AsyncEngine, app_engine: AsyncEngine) ->
         await conn.execute(
             text(
                 "INSERT INTO environment_profiles "
-                "(id, organisation_id, name, image_ref, capabilities_json, secret_refs_json, config_json, account_id) "
-                "VALUES (:id, :org_id, :name, :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
+                "(id, organisation_id, name, provider_type, image_ref, capabilities_json, "
+                "secret_refs_json, config_json, account_id) "
+                "VALUES (:id, :org_id, :name, 'local_docker', :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -182,8 +187,9 @@ async def test_rls_isolation(db_engine: AsyncEngine, app_engine: AsyncEngine) ->
         await conn.execute(
             text(
                 "INSERT INTO environment_profiles "
-                "(id, organisation_id, name, image_ref, capabilities_json, secret_refs_json, config_json, account_id) "
-                "VALUES (:id, :org_id, :name, :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
+                "(id, organisation_id, name, provider_type, image_ref, capabilities_json, "
+                "secret_refs_json, config_json, account_id) "
+                "VALUES (:id, :org_id, :name, 'local_docker', :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
             ),
             {
                 "id": str(uuid.uuid4()),

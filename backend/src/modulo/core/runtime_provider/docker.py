@@ -19,6 +19,7 @@ _DEFAULT_IMAGE = "python:3.13-slim"
 _DEFAULT_MEMORY_MB = 512
 _WORKSPACE_PREFIX = "modulo-workspace-"
 _UUID_TRUNC_LEN = 12
+_CLOSE_DESTROY_TIMEOUT_S = 30
 
 
 class DockerRuntimeProvider(RuntimeProvider):
@@ -35,8 +36,8 @@ class DockerRuntimeProvider(RuntimeProvider):
     4. ``None`` (local socket — default)
     """
 
-    provider_id = "local_docker"
-    provider_aliases = frozenset({"docker"})
+    provider_id = "runner_docker"
+    provider_aliases = frozenset({"docker", "local_docker"})
 
     def __init__(
         self,
@@ -58,6 +59,11 @@ class DockerRuntimeProvider(RuntimeProvider):
     # ------------------------------------------------------------------
 
     def supports(self, profile: Any) -> bool:
+        """Best-effort auto-detection kept for the deprecated local_docker adapter.
+
+        Deterministic hub resolution (FAR-587) no longer consults supports();
+        the deprecated LocalDockerRuntimeProvider adapter still delegates here.
+        """
         hint = getattr(profile, "provider_hint", None) or ""
         if hint.lower() == "docker":
             return True
@@ -93,6 +99,11 @@ class DockerRuntimeProvider(RuntimeProvider):
             else:
                 env.append(entry)
 
+        # Provider-neutral workspace metadata maps to container Labels
+        # (deployment-identity / org / run correlation, ADR 029). This is
+        # separate from ``spec.labels``, which stays Env-var injection.
+        workspace_labels = dict(spec.workspace_metadata or {})
+
         try:
             container = await asyncio.wait_for(
                 client.containers.create(
@@ -100,6 +111,7 @@ class DockerRuntimeProvider(RuntimeProvider):
                         "Image": image,
                         "Cmd": ["sleep", "infinity"],
                         "Env": env,
+                        "Labels": workspace_labels,
                         "HostConfig": {
                             "AutoRemove": True,
                             "Memory": memory_mb * 1024 * 1024,
@@ -246,9 +258,40 @@ class DockerRuntimeProvider(RuntimeProvider):
         return container_id
 
     async def close(self) -> None:
-        """Close the underlying Docker client connection and clean up workspaces."""
+        """Close the underlying Docker client connection and clean up workspaces.
+
+        Each destroy is bounded by :meth:`asyncio.wait_for` (30s per workspace)
+        so a hung Docker daemon cannot stall teardown forever; on timeout the
+        workspace reference is force-dropped and teardown continues.
+        """
         for provider_ref in list(self._workspaces.keys()):
-            await self.destroy_workspace(provider_ref)
+            try:
+                await asyncio.wait_for(
+                    self.destroy_workspace(provider_ref),
+                    timeout=_CLOSE_DESTROY_TIMEOUT_S,
+                )
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                # destroy_workspace already popped the reference before its
+                # first await; a timeout mid-teardown means the id is now
+                # untracked (by design) - log and continue.
+                _log.warning(
+                    "Timed out destroying workspace %s during close(); force-dropping it",
+                    provider_ref,
+                )
+            except Exception:
+                _log.exception("Failed to destroy workspace %s during close()", provider_ref)
         if self._client is not None:
-            await self._client.close()
-            self._client = None
+            try:
+                await asyncio.wait_for(self._client.close(), timeout=_CLOSE_DESTROY_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                _log.warning("Timed out closing Docker client during close(); force-dropping it")
+                self._client = None
+            except Exception:
+                _log.exception("Failed to close Docker client during close()")
+                self._client = None
+            else:
+                self._client = None

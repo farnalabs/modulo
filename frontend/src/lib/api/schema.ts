@@ -3770,26 +3770,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/runs/{run_id}/workspace-lease": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Run Workspace Lease
-         * @description Return the WorkspaceLease associated with a run, if any.
-         */
-        get: operations["get_run_workspace_lease_api_v1_runs__run_id__workspace_lease_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/runs/{run_id}/workspace-events": {
         parameters: {
             query?: never;
@@ -13895,7 +13875,7 @@ export interface components {
             description?: string | null;
             /**
              * Provider Type
-             * @default local_docker
+             * @description One of: local_docker, e2b, local, runner_docker (the provider_type vocabulary).
              */
             provider_type: string;
             /** Image Ref */
@@ -13999,7 +13979,10 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
-            /** Provider Type */
+            /**
+             * Provider Type
+             * @description One of: local_docker, e2b, local, runner_docker (the provider_type vocabulary).
+             */
             provider_type?: string | null;
             /** Image Ref */
             image_ref?: string | null;
@@ -26460,41 +26443,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FixtureExportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_run_workspace_lease_api_v1_runs__run_id__workspace_lease_get: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    } | null;
                 };
             };
             /** @description Validation Error */
