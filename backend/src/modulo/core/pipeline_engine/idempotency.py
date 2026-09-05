@@ -69,7 +69,7 @@ _IDEMPOTENCY_NAMESPACE = "modulo"
 # the same samples so the mirror cannot drift from this definition.
 _RUN_REF_RE = re.compile(r"^[A-Za-z0-9_-]+:\d+$")
 
-# Design note (FAR-438, FAR-458): :func:`read_before_write_suppression` is
+# Design record (FAR-438/FAR-458): :func:`read_before_write_suppression` is
 # wired into the connector-write UNKNOWN-recovery path at the connector
 # node's write boundary (see the SCOPE note in the module docstring). The
 # sandbox single-node transient-recovery surface remains wired via the
