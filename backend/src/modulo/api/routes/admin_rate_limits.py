@@ -34,14 +34,6 @@ class RateLimitUpdateRequest(BaseModel):
     rules: list[RateLimitRuleUpdate]
 
 
-def _require_admin(principal: TenantPrincipal) -> None:
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can manage rate limits",
-        )
-
-
 @router.get("", dependencies=[require_feature("rate_limits")])
 async def get_rate_limits(
     _current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
