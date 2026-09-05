@@ -607,12 +607,12 @@ async function loadLibrary() {
   try {
     const { data, error: err } = await api.GET('/api/v1/libraries', { params: { query: { page: 1, page_size: 50 } } })
     if (err) {
-      libraryError.value = `${t('views.OnboardingWizard.failed_to_load_library')}: ${formatApiError(err)}`
+      libraryError.value = `${t('views.OnboardingWizard.failed_to_load_library')}${formatApiError(err)}`
     } else if (data) {
       libraryItems.value = data.items
     }
   } catch (e) {
-    libraryError.value = `${t('views.OnboardingWizard.failed_to_load_library')}: ${formatApiError(e)}`
+    libraryError.value = `${t('views.OnboardingWizard.failed_to_load_library')}${formatApiError(e)}`
   } finally {
     loadingLibrary.value = false
   }
@@ -637,13 +637,13 @@ async function createPipeline() {
       },
     })
     if (err) {
-      pipelineCreateError.value = `${t('views.OnboardingWizard.failed_to_create_pipeline')}: ${formatApiError(err)}`
+      pipelineCreateError.value = `${t('views.OnboardingWizard.failed_to_create_pipeline')}${formatApiError(err)}`
     } else if (data) {
       wizardState.createdPipelineId = data.id
       wizardState.createdPipelineName = data.name
     }
   } catch (e) {
-    pipelineCreateError.value = `${t('views.OnboardingWizard.failed_to_create_pipeline')}: ${formatApiError(e)}`
+    pipelineCreateError.value = `${t('views.OnboardingWizard.failed_to_create_pipeline')}${formatApiError(e)}`
   } finally {
     creatingPipeline.value = false
   }
@@ -669,12 +669,12 @@ async function runPipeline() {
       },
     })
     if (err) {
-      pipelineRunError.value = `${t('views.OnboardingWizard.failed_to_start_pipeline')}: ${formatApiError(err)}`
+      pipelineRunError.value = `${t('views.OnboardingWizard.failed_to_start_pipeline')}${formatApiError(err)}`
     } else {
       runResult.value = t('views.OnboardingWizard.pipeline_started')
     }
   } catch (e) {
-    pipelineRunError.value = `${t('views.OnboardingWizard.failed_to_start_pipeline')}: ${formatApiError(e)}`
+    pipelineRunError.value = `${t('views.OnboardingWizard.failed_to_start_pipeline')}${formatApiError(e)}`
   } finally {
     runningPipeline.value = false
   }
