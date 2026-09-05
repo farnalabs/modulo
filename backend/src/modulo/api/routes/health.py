@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
@@ -788,6 +789,13 @@ async def readiness(response: Response) -> ReadinessResponse:
     # aggregation — short staleness must never flip readiness.
     if "unavailable" in statuses or dr_check.status == "unavailable":
         overall: Literal["ok", "degraded", "unavailable"] = "unavailable"
+        unavailable_checks = sorted(name for name, check in checks.items() if check.status == "unavailable")
+        degraded_checks = sorted(name for name, check in checks.items() if check.status == "degraded")
+        log_service_unavailable(
+            "readiness_check_unavailable",
+            route="health.readiness",
+            detail=f"unavailable={unavailable_checks} degraded={degraded_checks}",
+        )
         response.status_code = 503
     elif "degraded" in statuses:
         overall = "degraded"

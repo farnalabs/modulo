@@ -38,11 +38,13 @@ from modulo.core.pipeline_engine.error_codes import (
     known_error_codes,
     map_legacy_code,
 )
+from modulo.db.crud.run import CAPACITY_MARKERS, ERROR_CODE_CAPACITY_TIMEOUT
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run_daily_facts import RunDailyFact
 
 __all__ = [
+    "CAPACITY_ERROR_CODES",
     "CONCURRENCY_MAX_RAW_ROWS",
     "HOUR_GROUPBY_MAX_RANGE_DAYS",
     "STALL_ERROR_CODES",
@@ -74,6 +76,16 @@ _STALLED_STATUS = "stalled"
 # Exception`` fallback in executor.py when the sandbox idle watchdog surfaces
 # the class name directly).
 STALL_ERROR_CODES: frozenset[str] = frozenset({"executor_stalled", "node_timeout", "TimeoutError"})
+
+# Raw error codes marking a failed run as CAPACITY-STARVATION rather than a real
+# agent failure (FAR-604). Derived from the CANONICAL constants in
+# ``db.crud.run`` — the same spellings the capacity sweep / dispatcher reconcile
+# key on — plus the stale-run sweep's TTL terminalisation (``capacity_timeout``;
+# the raw dispatch markers can survive onto terminal rows). Re-spelling the
+# literals here would silently diverge the analytics sub-bucket from the sweep.
+# These are counted SEPARATELY from the generic ``failure_count`` so scheduler
+# starvation is never lumped into agent-failure rates.
+CAPACITY_ERROR_CODES: frozenset[str] = CAPACITY_MARKERS | {ERROR_CODE_CAPACITY_TIMEOUT}
 
 # Hour-granularity range cap: an EXPLICIT ``group_by=hour`` over a wider span
 # would materialise up to 24 buckets/day per dimension key before limit
@@ -218,6 +230,10 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         RunDailyFact.status == _FAILED_STATUS,
         RunDailyFact.status == _STALLED_STATUS,
     )
+    capacity_failure_status = sa.and_(
+        failure_status,
+        RunDailyFact.error_code.in_(sa.bindparam("capacity_error_codes", type_=sa.String, expanding=True)),
+    )
     select_cols += [
         # Complete-run count for success_rate — a FILTER keeps it out of the
         # group key while staying computable at day granularity.
@@ -235,6 +251,26 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
             )
         )
         .label("stall_count"),
+        # FAR-604 capacity-starvation sub-bucket: failures whose error code is a
+        # capacity code, reported SEPARATELY from the generic failure_count, plus
+        # the queue-wait duration those runs endured (completed_at - created_at —
+        # a capacity-TTL failure never started, so the wait is creation →
+        # terminalisation). avg ignores the NULL else-branch, giving the mean
+        # over matching rows only.
+        sa.func.count(RunDailyFact.id).filter(capacity_failure_status).label("capacity_failure_count"),
+        sa.func.avg(
+            sa.case(
+                (
+                    sa.and_(
+                        capacity_failure_status,
+                        RunDailyFact.completed_at.is_not(None),
+                        RunDailyFact.created_at.is_not(None),
+                    ),
+                    sa.func.extract("epoch", RunDailyFact.completed_at - RunDailyFact.created_at) * 1000.0,
+                ),
+                else_=None,
+            )
+        ).label("avg_capacity_wait_ms"),
         sa.func.avg(RunDailyFact.queue_wait_ms).label("avg_queue_wait_ms"),
         sa.func.avg(RunDailyFact.final_idle_ms).label("avg_final_idle_ms"),
         sa.func.avg(RunDailyFact.output_bytes).label("avg_output_bytes"),
@@ -243,6 +279,7 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
     params: dict[str, Any] = {
         "org_id": query.org_id,
         "stall_error_codes": sorted(STALL_ERROR_CODES),
+        "capacity_error_codes": sorted(CAPACITY_ERROR_CODES),
     }
 
     if query.dimension is not None:
@@ -662,6 +699,9 @@ def _empty_bucket() -> dict[str, Any]:
         "duration_n": 0,
         "failure": 0,
         "stall": 0,
+        "capacity_failure": 0,
+        "capacity_wait_sum": 0.0,
+        "capacity_wait_n": 0,
         "queue_wait_sum": 0.0,
         "queue_wait_n": 0,
         "final_idle_sum": 0.0,
@@ -695,6 +735,7 @@ def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
     bucket["complete"] += int(getattr(row, "complete_count", None) or 0)
     bucket["failure"] += int(getattr(row, "failure_count", None) or 0)
     bucket["stall"] += int(getattr(row, "stall_count", None) or 0)
+    bucket["capacity_failure"] += int(getattr(row, "capacity_failure_count", None) or 0)
     if row.total_cost_usd is not None:
         bucket["cost"] = (bucket["cost"] or Decimal(0)) + Decimal(str(row.total_cost_usd))
     if row.total_tokens is not None:
@@ -702,6 +743,15 @@ def _accumulate_row(bucket: dict[str, Any], row: Any, cnt: int) -> None:
     if row.avg_duration_ms is not None:
         bucket["duration_sum"] += float(row.avg_duration_ms) * cnt
         bucket["duration_n"] += cnt
+    avg_capacity_wait = getattr(row, "avg_capacity_wait_ms", None)
+    if avg_capacity_wait is not None:
+        # The SQL avg is over CAPACITY-FAILED rows only, so the bucket
+        # weighting must use the capacity subset — never the bucket's total
+        # run count (a 500-run bucket with 2 capacity fails would otherwise
+        # dominate the mean; see the week-bucket test).
+        capacity_w = int(getattr(row, "capacity_failure_count", None) or 0)
+        bucket["capacity_wait_sum"] += float(avg_capacity_wait) * capacity_w
+        bucket["capacity_wait_n"] += capacity_w
     avg_queue_wait = getattr(row, "avg_queue_wait_ms", None)
     if avg_queue_wait is not None:
         bucket["queue_wait_sum"] += float(avg_queue_wait) * cnt
@@ -748,12 +798,13 @@ def _bucket_dim_keys(
 
 def _bucket_averages(
     b: dict[str, Any] | None,
-) -> tuple[float | None, float | None, float | None, float | None]:
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
     avg_dur = (b["duration_sum"] / b["duration_n"]) if b and b["duration_n"] else None
+    avg_capacity_wait = (b["capacity_wait_sum"] / b["capacity_wait_n"]) if b and b["capacity_wait_n"] else None
     avg_queue_wait = (b["queue_wait_sum"] / b["queue_wait_n"]) if b and b["queue_wait_n"] else None
     avg_final_idle = (b["final_idle_sum"] / b["final_idle_n"]) if b and b["final_idle_n"] else None
     avg_output_bytes = (b["output_bytes_sum"] / b["output_bytes_n"]) if b and b["output_bytes_n"] else None
-    return (avg_dur, avg_queue_wait, avg_final_idle, avg_output_bytes)
+    return (avg_dur, avg_capacity_wait, avg_queue_wait, avg_final_idle, avg_output_bytes)
 
 
 def _format_iso(tkey: date | datetime) -> str:
@@ -765,7 +816,7 @@ def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any 
     complete = b["complete"] if b else 0
     cost = float(b["cost"]) if b and b["cost"] is not None else None
     tokens = b["tokens"] if b else None
-    avg_dur, avg_queue_wait, avg_final_idle, avg_output_bytes = _bucket_averages(b)
+    avg_dur, avg_capacity_wait, avg_queue_wait, avg_final_idle, avg_output_bytes = _bucket_averages(b)
     success_rate = (complete / count) if count else None
     return {
         "date": _format_iso(tkey),
@@ -777,6 +828,8 @@ def _emit_bucket_row(b: dict[str, Any] | None, tkey: date | datetime, dkey: Any 
         "success_rate": round(success_rate, 4) if success_rate is not None else None,
         "failure_count": b["failure"] if b else 0,
         "stall_count": b["stall"] if b else 0,
+        "capacity_failure_count": b["capacity_failure"] if b else 0,
+        "avg_capacity_wait_ms": round(avg_capacity_wait, 1) if avg_capacity_wait is not None else None,
         "avg_queue_wait_ms": round(avg_queue_wait, 1) if avg_queue_wait is not None else None,
         "avg_final_idle_ms": round(avg_final_idle, 1) if avg_final_idle is not None else None,
         "avg_output_bytes": round(avg_output_bytes, 1) if avg_output_bytes is not None else None,

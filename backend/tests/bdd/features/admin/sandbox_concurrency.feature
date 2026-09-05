@@ -1,7 +1,7 @@
 Feature: Admin Sandbox Concurrency Limit
   As an admin user
   I want to read and configure the organisation's sandbox concurrency limit
-  So that concurrent sandbox agent runs can be capped per organisation
+  So that concurrent Runner runs can be capped per organisation
 
   Scenario: Admin reads the default sandbox concurrency limit
     Given I am authenticated as an admin

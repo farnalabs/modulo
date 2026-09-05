@@ -6,6 +6,11 @@ name: "Deploy staleness check (prod vs main)"
 # PRODUCTION app's build SHA (the same /api/v1/deployment endpoint the deploy
 # workflow's "Check deployed SHA" step verifies against) with origin/main HEAD
 # and fails loudly when prod has not caught up within the grace window.
+#
+# Division of labour: deploy-watchdog.yml (*/30) is the fly-level SELF-HEAL -
+# it compares the fly image tag vs main HEAD and re-dispatches deploy.yml to
+# heal WITHIN this check's 6h grace window. If this check's ::error:: fires,
+# the watchdog failed to heal - investigate the watchdog, not this check.
 
 on:
   schedule:

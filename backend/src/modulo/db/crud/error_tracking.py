@@ -13,8 +13,12 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.run import CAPACITY_MARKERS
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.run import Run
+from modulo.db.models.trigger_event import TriggerEvent
 
 
 async def create_error_event(
@@ -285,3 +289,65 @@ async def _mark_group_events_resolved(
         )
         .values(status="resolved", resolved_at=now)
     )
+
+
+def scheduler_starvation_age_anchor() -> Any:
+    """The per-run starvation age anchor expression (FAR-604).
+
+    ``COALESCE(MIN(trigger_events.received_at), runs.created_at)`` — the run's
+    EARLIEST trigger-event receipt, falling back to ``created_at`` when no
+    trigger event exists (manual runs). NOT ``created_at`` alone: a capacity
+    coalescing re-delivery refreshes the pending run's ``created_at`` on the
+    dispatcher's short re-dispatch cadence, which would reset a
+    ``created_at``-keyed age every cycle (a days-long wedge would read as
+    minutes old and the starvation banner would flap). Trigger-event receipts
+    are immutable per delivery, so ``MIN(received_at)`` is the true first-seen
+    instant.
+
+    Exposed as a module function so tests can pin the anchor's shape (the
+    trigger-event join must not regress to a ``created_at``-only key).
+    """
+    earliest_receipt = select(func.min(TriggerEvent.received_at)).where(TriggerEvent.run_id == Run.id).scalar_subquery()
+    return func.coalesce(earliest_receipt, Run.created_at)
+
+
+async def get_scheduler_starvation_pipelines(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    threshold: datetime,
+) -> list[Any]:
+    """Aggregate the org's capacity-starved pipelines (FAR-604).
+
+    A pipeline is starved when it has unstarted pending runs
+    (``status='pending'``, ``started_at IS NULL``) carrying a capacity marker
+    in ``error_code`` (the SAME canonical ``CAPACITY_MARKERS`` the capacity
+    sweep / dispatcher reconcile key on) whose age anchor is older than
+    *threshold*. The age anchor is the run's earliest trigger-event receipt
+    (see :func:`scheduler_starvation_age_anchor`) — ``created_at`` alone is
+    reset by coalescing re-deliveries. One row per starved pipeline (bounded
+    by the org's pipeline count); rows carry ``(pipeline_id, pipeline_name,
+    pending_count, oldest_anchor)``. The caller owns RLS pinning and error
+    mapping.
+    """
+    anchor = scheduler_starvation_age_anchor()
+    stmt = (
+        select(
+            Run.pipeline_id,
+            Pipeline.name.label("pipeline_name"),
+            func.count(Run.id).label("pending_count"),
+            func.min(anchor).label("oldest_created_at"),
+        )
+        .outerjoin(Pipeline, Pipeline.id == Run.pipeline_id)
+        .where(
+            Run.organisation_id == org_id,
+            Run.status == "pending",
+            Run.started_at.is_(None),
+            Run.error_code.in_(CAPACITY_MARKERS),
+            anchor < threshold,
+        )
+        .group_by(Run.pipeline_id, Pipeline.name)
+        .order_by(func.min(anchor).asc())
+    )
+    rows = (await session.execute(stmt)).all()
+    return list(rows)
