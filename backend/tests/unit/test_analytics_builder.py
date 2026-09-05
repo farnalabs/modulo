@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy.dialects import postgresql, sqlite
 
 from modulo.core.analytics.builder import (
+    CAPACITY_ERROR_CODES,
     CONCURRENCY_MAX_RAW_ROWS,
     HOUR_GROUPBY_MAX_RANGE_DAYS,
     AnalyticsDimension,
@@ -281,6 +282,13 @@ class TestFAR102Filters:
             assert code not in sql, f"stall error code {code!r} must be bound, never interpolated"
         assert set(params["stall_error_codes"]) == set(STALL_ERROR_CODES)
 
+    def test_capacity_error_codes_are_bound_not_interpolated(self) -> None:
+        stmt, params = build_facts_query(_query())
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        for code in CAPACITY_ERROR_CODES:
+            assert code not in sql, f"capacity error code {code!r} must be bound, never interpolated"
+        assert set(params["capacity_error_codes"]) == set(CAPACITY_ERROR_CODES)
+
 
 class TestFAR102Metrics:
     """The FAR-102 bucket metrics: failure/stall counts + queue/idle/output averages."""
@@ -387,6 +395,145 @@ class TestFAR102Metrics:
         assert "executor_stalled" in STALL_ERROR_CODES
         assert "node_timeout" in STALL_ERROR_CODES
         assert "TimeoutError" in STALL_ERROR_CODES
+
+    def test_capacity_error_codes_derived_from_canonical_constants(self) -> None:
+        # The analytics sub-bucket keys on the SAME canonical constants the
+        # capacity sweep / dispatcher reconcile key on (db.crud.run) — a
+        # re-spelled literal here would silently diverge the analytics
+        # capacity slice from the sweep's markers.
+        from modulo.db.crud.run import CAPACITY_MARKERS, ERROR_CODE_CAPACITY_TIMEOUT
+
+        assert CAPACITY_MARKERS | {ERROR_CODE_CAPACITY_TIMEOUT} == CAPACITY_ERROR_CODES
+
+    def test_capacity_bucket_metrics_aggregate_from_rows(self) -> None:
+        # FAR-604: capacity-code failures are their own sub-bucket alongside the
+        # generic failure_count — never lumped into agent-failure rates.
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=3,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                failure_count=3,
+                stall_count=0,
+                capacity_failure_count=2,
+                avg_capacity_wait_ms=780.0,
+                avg_queue_wait_ms=None,
+                avg_final_idle_ms=None,
+                avg_output_bytes=None,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        bucket = out[0]
+        assert bucket["failure_count"] == 3
+        assert bucket["capacity_failure_count"] == 2
+        assert bucket["avg_capacity_wait_ms"] == 780.0
+
+    def test_capacity_wait_weighted_average_uses_capacity_failure_count(self) -> None:
+        # The SQL avg_capacity_wait_ms is over CAPACITY-FAILED rows only, so
+        # the bucket weighting must use capacity_failure_count — never the
+        # bucket's total run count. Row 1: avg 100ms over 2 capacity fails of
+        # 5 total runs; row 2: avg 400ms over 5 capacity fails of 6 total runs
+        # → (100*2 + 400*5)/7 ≈ 314.3 (count-weighted would give 800/3 ≈ 266.7).
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=5,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                capacity_failure_count=2,
+                avg_capacity_wait_ms=100.0,
+            ),
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=6,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                capacity_failure_count=5,
+                avg_capacity_wait_ms=400.0,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["capacity_failure_count"] == 7
+        assert out[0]["avg_capacity_wait_ms"] == round((100.0 * 2 + 400.0 * 5) / 7, 1)
+
+    def test_capacity_wait_week_bucket_weights_by_capacity_subset_not_total_runs(self) -> None:
+        # FAR-604 repro (week bucket): Monday carried 500 runs with 2 capacity
+        # fails averaging 60 000 ms; Tuesday 10 runs with 5 fails averaging
+        # 1 000 ms. The SQL avg is over capacity-failed rows only, so the true
+        # weighted mean is (2*60000 + 5*1000)/7 ≈ 17 857.1 ms (~17.9s).
+        # Weighting by the bucket's TOTAL run count would report
+        # (60000*500 + 1000*10)/510 ≈ 58 843 ms (~59s) — a 3.3x overstatement.
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 3),
+                count=500,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                failure_count=2,
+                stall_count=0,
+                capacity_failure_count=2,
+                avg_capacity_wait_ms=60_000.0,
+            ),
+            SimpleNamespace(
+                run_date=date(2026, 8, 4),
+                count=10,
+                complete_count=0,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                failure_count=5,
+                stall_count=0,
+                capacity_failure_count=5,
+                avg_capacity_wait_ms=1_000.0,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.WEEK,
+            dimension=None,
+            date_from=date(2026, 8, 3),
+            date_to=date(2026, 8, 4),
+        )
+        assert out[0]["capacity_failure_count"] == 7
+        expected = round((2 * 60_000.0 + 5 * 1_000.0) / 7, 1)
+        assert out[0]["avg_capacity_wait_ms"] == expected
+        assert out[0]["avg_capacity_wait_ms"] < 20_000, (
+            "the capacity-wait mean must stay near the capacity subset's true mean, "
+            "not the total-run-count-weighted ~59s"
+        )
+
+    def test_zero_fill_capacity_metrics_are_null_safe(self) -> None:
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 1),
+        )
+        bucket = out[0]
+        assert bucket["capacity_failure_count"] == 0
+        assert bucket["avg_capacity_wait_ms"] is None
 
 
 class TestDimensionedSelect:
@@ -841,6 +988,9 @@ class TestExtractedBucketHelpers:
             "duration_n": 4,
             "failure": 1,
             "stall": 0,
+            "capacity_failure": 1,
+            "capacity_wait_sum": 200.0,
+            "capacity_wait_n": 1,
             "queue_wait_sum": 40.0,
             "queue_wait_n": 2,
             "final_idle_sum": 10.0,
@@ -856,6 +1006,8 @@ class TestExtractedBucketHelpers:
         assert out["avg_duration_ms"] == 200.0
         assert out["success_rate"] == 0.75
         assert out["failure_count"] == 1
+        assert out["capacity_failure_count"] == 1
+        assert out["avg_capacity_wait_ms"] == 200.0
         assert out["avg_queue_wait_ms"] == 20.0
         assert out["avg_final_idle_ms"] == 5.0
         assert out["avg_output_bytes"] == 1024.0
