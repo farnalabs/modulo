@@ -83,19 +83,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
         raw_status = raw.get("status", "") or ""
         raw_conclusion = raw.get("conclusion")
 
-        # PR-Reviewer CI gate contract (FAR-568): a `skipped` (or `neutral`)
-        # check-run conclusion must NOT block a merge. GitHub emits `skipped`
-        # for jobs whose `if:` evaluated false on the PR (e.g. the
-        # push-to-main-only SonarCloud coverage-import job before it was
-        # widened to `pull_request`). The gate's rule is "any non-success
-        # conclusion is a merge-blocking failure", so a `skipped` SonarCloud
-        # check would otherwise deadlock every PR indefinitely. Treat
-        # `skipped`/`neutral` as a non-blocking SUCCESS explicitly rather than
-        # relying solely on the lookup maps below, so this contract is
-        # unmissable and cannot regress.
-        if raw_conclusion in ("skipped", "neutral"):
-            status = CIRunStatus.SUCCESS
-        elif raw_conclusion and raw_conclusion in _CONCLUSION_STATUS_MAP:
+        if raw_conclusion and raw_conclusion in _CONCLUSION_STATUS_MAP:
             status = _CONCLUSION_STATUS_MAP[raw_conclusion]
         elif raw_status in _STATUS_MAP:
             status = _STATUS_MAP[raw_status]
