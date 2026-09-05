@@ -223,6 +223,10 @@ jobs:
           pnpm run type-check
           pnpm run test:unit
           pnpm run build
+          # NOTE: intentionally run BARE (not the CI outage-tolerant form). A
+          # release gate must fail closed on any critical advisory or registry
+          # error — an outage here blocks deploys rather than shipping an
+          # unverified frontend. This strictness is deliberate.
           pnpm audit --audit-level=critical
 
   integration-tests:

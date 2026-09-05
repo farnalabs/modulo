@@ -108,7 +108,7 @@ jobs:
             # stale body into the logs (control flow keys off HTTP_CODE, but
             # the echoed body should stay honest).
             : > "${RESPONSE_FILE}"
-            HTTP_CODE=$(curl -s -o "${RESPONSE_FILE}" -w '%{http_code}' -X POST "${MODULO_WEBHOOK_URL}" \
+            HTTP_CODE=$(curl -s --connect-timeout 10 --max-time 60 -o "${RESPONSE_FILE}" -w '%{http_code}' -X POST "${MODULO_WEBHOOK_URL}" \
               -H "Content-Type: application/json" \
               -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
               -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \

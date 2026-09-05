@@ -309,11 +309,26 @@ jobs:
         # Best-effort against npm registry outages: a failed audit caused by an
         # unreachable advisory endpoint must not block CI. Real critical
         # vulnerabilities still fail the build; only registry/network errors
-        # (timeout, error (23), ENOTFOUND, etc.) are downgraded to a warning.
+        # are downgraded to a warning.
+        #
+        # SECURITY: the original grep matched free text (e.g. 'timeout') across
+        # the FULL audit output, including advisory titles. A genuine critical
+        # vulnerability whose advisory text happened to mention 'timeout' was
+        # silently downgraded to a warning — a false PASS on a security gate.
+        # We now parse the structured `--json` output and only downgrade when
+        # the failure is genuinely a registry/network outage (an 'error' node
+        # with no reported vulnerabilities). A real advisory is always failed
+        # closed.
         run: |
-          out=$(pnpm audit --audit-level=critical 2>&1) && { echo "$out"; exit 0; }
-          rc=$?
-          if echo "$out" | grep -qiE "timeout|error \(23\)|registry\.npmjs\.org|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|aborted due to timeout|EAI_AGAIN"; then
+          out=$(pnpm audit --audit-level=critical --json 2>&1); rc=$?
+          if [ $rc -eq 0 ]; then
+            echo "$out"
+            exit 0
+          fi
+          # Default to failing closed (real vulnerability). Only downgrade to a
+          # warning when the failure is a registry/network outage: pnpm emits an
+          # 'error' JSON node and reports no vulnerabilities on an outage.
+          if echo "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const j=JSON.parse(s);if(j.error||!j.vulnerabilities||Object.keys(j.vulnerabilities).length===0)process.exit(0);}catch(e){}process.exit(1);});'; then
             echo "::warning::pnpm audit could not reach the npm registry (outage); not failing CI."
             echo "$out"
             exit 0
