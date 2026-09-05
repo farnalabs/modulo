@@ -102,7 +102,7 @@ jobs:
           # is visible rather than silently skipped (FAR-528 lesson).
           LATEST="$(gh api repos/superfly/flyctl/releases/latest --jq .tag_name 2>/dev/null || true)"
           if [ -z "$LATEST" ]; then
-            echo "::warning::gh api repos/superfly/flyctl/releases/latest failed - cannot determine the latest flyctl release this cycle. Failing the job instead of treating the pin as current: a silent skip would hide a stale pin indefinitely. Transient API failures resolve by the next weekly run."
+            echo "::error::gh api repos/superfly/flyctl/releases/latest failed - cannot determine the latest flyctl release this cycle. Failing the job instead of treating the pin as current: a silent skip would hide a stale pin indefinitely. Transient API failures resolve by the next weekly run."
             exit 1
           fi
 
@@ -170,7 +170,7 @@ jobs:
               if gh label create "$name" --repo "$GITHUB_REPOSITORY" --color "$color" --description "$desc"; then
                 echo "created missing label '${name}'"
               else
-                echo "::warning::could not create label '${name}' - the drift issue may be created without it."
+                echo "::warning::could not create label '${name}' - the subsequent 'gh issue create --label' hard-fails on a missing label, so this weekly run fails loud (no issue created) and retries on the next scheduled run."
               fi
             }
             ensure_label "infrastructure" "1D76DB" "Infrastructure and CI-workflow work"
