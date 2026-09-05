@@ -38,6 +38,8 @@ from modulo.db.bootstrap_role import (
     main,
 )
 
+_NOLOGIN_ROLE: str = "role_nologin_example"
+
 _BREAK_GLASS_COLS = ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
 
 
@@ -260,6 +262,28 @@ class TestCreateOrUpdateRole:
         assert escaped
         assert "p''word" in escaped[0]
 
+    async def test_alter_of_app_role_states_nobypassrls_explicitly(self, conn: _FakeConn) -> None:
+        """Regression: prod 2026-09-03.
+
+        ALTER ROLE ... WITH only sets the attributes it lists — emitting bare
+        LOGIN left an already-BYPASSRLS app role un-repaired, so the bootstrap
+        asserted a posture it could never enforce (release-time
+        "Break-glass role posture assertion FAILED" on every deploy).
+        """
+        conn.roles["modulo_app"] = True
+        await _create_or_update_role(conn, "modulo_app", login=True, password="pw", bypassrls=False)
+        assert any('ALTER ROLE "modulo_app" WITH LOGIN NOBYPASSRLS PASSWORD' in q for q in conn.executed)
+        assert not any('ALTER ROLE "modulo_app" WITH LOGIN PASSWORD' in q for q in conn.executed)
+
+    async def test_create_of_app_role_states_nobypassrls_explicitly(self, conn: _FakeConn) -> None:
+        await _create_or_update_role(conn, "modulo_app", login=True, password="pw", bypassrls=False)
+        assert any('CREATE ROLE "modulo_app" LOGIN NOBYPASSRLS PASSWORD' in q for q in conn.executed)
+
+    async def test_alter_of_nologin_role_without_bypassrls_states_nobypassrls_explicitly(self, conn: _FakeConn) -> None:
+        conn.roles[_NOLOGIN_ROLE] = True
+        await _create_or_update_role(conn, _NOLOGIN_ROLE, login=False, password=None, bypassrls=False)
+        assert any(f'ALTER ROLE "{_NOLOGIN_ROLE}" WITH NOSUPERUSER NOLOGIN NOBYPASSRLS' in q for q in conn.executed)
+
 
 # ---------------------------------------------------------------------------
 # _table_exists / _existing_columns
@@ -353,6 +377,16 @@ class TestGrantBreakGlass:
         assert "public.token_families" in joined
         assert "public.org_api_keys" in joined
         assert "public.organisations" in joined
+
+    async def test_grants_select_on_alembic_version_for_migration_triage(self, conn: _FakeConn) -> None:
+        """Regression: prod 2026-09-03 — break-glass recovery could not read alembic_version."""
+        conn.tables = {"alembic_version"}
+        await _grant_break_glass(conn, "modulo_breakglass")
+        assert any("GRANT SELECT ON public.alembic_version" in q for q in conn.executed)
+
+    async def test_skips_alembic_version_when_missing(self, conn: _FakeConn) -> None:
+        await _grant_break_glass(conn, "modulo_breakglass")
+        assert not any("alembic_version" in q for q in conn.executed)
 
     async def test_skips_missing_tables(self, conn: _FakeConn) -> None:
         await _grant_break_glass(conn, "modulo_breakglass")
@@ -504,7 +538,7 @@ class TestBootstrap:
             )
 
         joined = "\n".join(fake.executed)
-        assert "CREATE ROLE \"modulo_app\" LOGIN PASSWORD 'apppw'" in joined
+        assert "CREATE ROLE \"modulo_app\" LOGIN NOBYPASSRLS PASSWORD 'apppw'" in joined
         assert "CREATE ROLE \"modulo_app\" LOGIN BYPASSRLS PASSWORD 'apppw'" not in joined
         assert 'CREATE ROLE "modulo_migrate" NOSUPERUSER NOLOGIN BYPASSRLS' in joined
         assert 'GRANT CREATE ON SCHEMA public TO "modulo_migrate"' in joined

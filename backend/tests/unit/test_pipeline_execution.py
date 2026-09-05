@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 import uuid
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 import modulo.core.pipeline_execution as pe
+import modulo.core.run_terminal_advance as rta
 from modulo.db.models.run import Run
 
 # ---------------------------------------------------------------------------
@@ -938,8 +940,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch.object(pe, "_record_fact_for_terminal_failed_run", new=_record),
+            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new=_record),
         ):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
@@ -992,8 +994,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch.object(pe, "_record_fact_for_terminal_failed_run", new=_boom),
+            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new=_boom),
             patch.object(pe._log, "warning"),
         ):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
@@ -1040,8 +1042,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch.object(pe, "_record_fact_for_terminal_failed_run", new_callable=AsyncMock),
+            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new_callable=AsyncMock),
         ):
             await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
@@ -1333,6 +1335,7 @@ class TestSaqWorkerSettings:
             "webhook_dedup_cleanup",
             "trigger_events_cleanup",
             "stale_run_recovery",
+            "slot_reconciliation",
             "cost_probe",
             "check_missed_fire_alerts_cron",
             "journey_reconcile",
@@ -1591,6 +1594,240 @@ class TestRunExecutorWithWatchdog:
         fail.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_zombie_watchdog_bound_caps_worker_shutdown_reraise(self, caplog: pytest.LogCaptureFixture) -> None:
+        """FAR-603: a zombie watchdog must not delay the unclassified re-raise.
+
+        On worker shutdown the watchdog has no pending terminal write — its
+        exec target is already cancelled, so at grace expiry it stands down
+        without failing the run — yet it may still be sleeping out its setup
+        grace. The cancellation path must re-raise within
+        ``_WATCHDOG_AWAIT_BOUND_SECONDS`` (logging loudly) instead of waiting
+        out the watchdog's full remaining grace. The watchdog here never
+        settles at all, so an unbounded wait would hang forever and trip the
+        ``wait_for`` guard.
+        """
+        executor = MagicMock()
+        started = asyncio.Event()
+
+        async def _hang() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        async def _zombie_watchdog(*_a: Any, **_kw: Any) -> None:
+            await asyncio.Event().wait()
+
+        bound = pe._WATCHDOG_AWAIT_BOUND_SECONDS
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch.object(pe, "zombie_watchdog", _zombie_watchdog),
+            caplog.at_level(logging.WARNING),
+        ):
+            task = asyncio.create_task(
+                pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                    engine,
+                    run_id=str(uuid.uuid4()),
+                    org_id=str(uuid.uuid4()),
+                    executor=executor,
+                    job=None,
+                    execute_fn=_hang,
+                )
+            )
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=bound + 2)
+        # Worker shutdown is NOT a watchdog stall — the run is never terminal-failed.
+        fail.assert_not_awaited()
+        assert "watchdog_await_bound_exceeded" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_classified_stall_not_abandoned_at_watchdog_await_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-603: the bound must never abandon a classified watchdog write.
+
+        A watchdog whose cause is classified (``stall_requested`` set — which
+        precedes its ``fail_run_terminal``) keeps being awaited past the bound
+        so its terminal write always commits; only the unclassified zombie
+        wait is capped. The bound is zeroed so the bound expiry is instant,
+        making the classified continuation deterministic without wall-clock
+        sleeps.
+        """
+        monkeypatch.setattr(pe, "_WATCHDOG_AWAIT_BOUND_SECONDS", 0.0)
+        stall = asyncio.Event()
+        release_write = asyncio.Event()
+        committed: list[str] = []
+
+        async def _stalling_watchdog() -> None:
+            # zombie_watchdog's ordering: the stall signal precedes the write.
+            stall.set()
+            await release_write.wait()
+            committed.append("executor_stalled")
+
+        watchdog_task = asyncio.create_task(_stalling_watchdog())
+        node_deadline_task = asyncio.create_task(asyncio.sleep(0))
+        await node_deadline_task
+        outcome = asyncio.create_task(
+            pe._resolve_cancel_outcome(
+                watchdog_task=watchdog_task,
+                node_deadline_task=node_deadline_task,
+                stall_requested=stall,
+                health_failed=asyncio.Event(),
+                superseded=asyncio.Event(),
+                aeng=MagicMock(),  # type: ignore[arg-type]
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                claim_token=None,
+                rid=uuid.uuid4(),
+            )
+        )
+        # A zero bound expires within one event-loop tick; give the outcome
+        # task that tick, then prove it is still awaiting the classified write.
+        await asyncio.sleep(0.05)
+        assert not outcome.done()
+        release_write.set()
+        await asyncio.wait_for(outcome, timeout=5)
+        assert watchdog_task.done()
+        assert committed == ["executor_stalled"]
+
+    @pytest.mark.asyncio
+    async def test_unclassified_reraises_immediately_when_watchdog_settles(self) -> None:
+        """FAR-603: the common case (watchdog already settled) re-raises at once.
+
+        The bound only caps the zombie case — a settled watchdog must not add
+        any observable delay to the unclassified re-raise.
+        """
+        watchdog_task = asyncio.create_task(asyncio.sleep(0))
+        node_deadline_task = asyncio.create_task(asyncio.sleep(0))
+        await watchdog_task
+        await node_deadline_task
+        # A 1s wait_for guard: an immediate re-raise propagates the
+        # CancelledError; a bound-scale (5s) delay would surface as
+        # TimeoutError and fail the test.
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(
+                pe._resolve_cancel_outcome(
+                    watchdog_task=watchdog_task,
+                    node_deadline_task=node_deadline_task,
+                    stall_requested=asyncio.Event(),
+                    health_failed=asyncio.Event(),
+                    superseded=asyncio.Event(),
+                    aeng=MagicMock(),  # type: ignore[arg-type]
+                    run_id=str(uuid.uuid4()),
+                    org_id=str(uuid.uuid4()),
+                    claim_token=None,
+                    rid=uuid.uuid4(),
+                ),
+                timeout=1,
+            )
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_loss_cancellation_is_classified_not_propagated(self) -> None:
+        """S7497 contract pin (FAR-598): heartbeat-loss cancellation is swallowed.
+
+        The heartbeat loop fail-closes (``health_failed``) and the abort watcher
+        cancels the executor. The CancelledError handler must await the
+        watchdogs (so the terminal write commits), kill the sandbox,
+        terminal-fail with ``executor_heartbeat_lost`` and return
+        ``{"status": "failed"}``. The cancellation must NOT escape into the SAQ
+        worker: SAQ retries cancelled jobs (``job.retry("cancelled")``), which
+        would re-enqueue a job for an already-terminal run.
+        """
+        executor = MagicMock()
+
+        async def _hang() -> None:
+            await asyncio.sleep(999)
+
+        async def _fail_closed_health(*_a: object, health_failed: asyncio.Event | None = None, **_kw: object) -> None:
+            # Set the INTERNAL event run_executor_with_watchdog passed in —
+            # the abort watcher watches that instance, not a local one.
+            if health_failed is not None:
+                health_failed.set()
+
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock, side_effect=_fail_closed_health),
+            patch.object(pe, "_kill_sandbox_best_effort", new_callable=AsyncMock) as kill,
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="failed") as read_status,
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_hang,
+            )
+        assert result == {"status": "failed"}
+        kill.assert_awaited_once()
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "executor_heartbeat_lost"
+        read_status.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_supersession_cancellation_is_classified_not_propagated(self) -> None:
+        """S7497 contract pin (FAR-598): supersession cancellation is swallowed.
+
+        The heartbeat loop sets ``superseded`` (a successor re-claimed the run)
+        and the abort watcher cancels the executor. The CancelledError handler
+        must classify the cause and return without raising — the run row now
+        belongs to the successor, so no terminal write and no sandbox kill may
+        happen, and the cancellation must not leak into the SAQ worker (SAQ
+        would retry a job whose run is owned by another claim).
+        """
+        executor = MagicMock()
+
+        async def _hang() -> None:
+            await asyncio.sleep(999)
+
+        async def _superseding_heartbeat(*_a: object, superseded: asyncio.Event | None = None, **_kw: object) -> None:
+            # Set the INTERNAL event run_executor_with_watchdog passed in —
+            # the abort watcher watches that instance, not a local one.
+            if superseded is not None:
+                superseded.set()
+
+        engine = MagicMock()
+        with (
+            patch.object(
+                pe,
+                "get_settings",
+                return_value=MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
+            ),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock, side_effect=_superseding_heartbeat),
+            patch.object(pe, "_kill_sandbox_best_effort", new_callable=AsyncMock) as kill,
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            # The successor owns the row now — it is back to ``running``.
+            patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="running") as read_status,
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_hang,
+            )
+        # The successor's row is not complete/awaiting_human -> failed outcome;
+        # the successor's claim is untouched.
+        assert result == {"status": "failed"}
+        kill.assert_not_awaited()
+        fail.assert_not_awaited()
+        read_status.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_executor_exception_terminal_fails_with_executor_failed(self) -> None:
         """A generic executor exception is terminal-failed with
         ``executor_failed`` (token-guarded) and the outcome is ``failed`` — never
@@ -1724,9 +1961,11 @@ class TestRunExecutorWithWatchdog:
 
 
 class TestRecordFactForTerminalFailedRunHelper:
-    """The pipeline_execution wrapper opens its own RLS-scoped session AFTER a
-    raw terminal write commits, re-selects the Run ORM, and records the daily
-    fact via the shared analytics helper — None-guarded and fail-open."""
+    """The facts helper (pipeline_execution delegates to the shared
+    ``run_terminal_advance.record_terminal_failed_fact``, FAR-604 F4) opens
+    its own RLS-scoped session AFTER a raw terminal write commits, re-selects
+    the Run ORM, and records the daily fact via the shared analytics helper —
+    None-guarded and fail-open."""
 
     def _factory_and_session(self) -> tuple[MagicMock, AsyncMock]:
         session = AsyncMock()
@@ -1746,11 +1985,11 @@ class TestRecordFactForTerminalFailedRunHelper:
         fake_run = MagicMock()
         factory, session = self._factory_and_session()
         record_facts = AsyncMock()
-        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
-        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(rta, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(rta, "set_rls_org", AsyncMock())
         with (
             patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record_facts),
-            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=fake_run),
+            patch.object(rta, "get_run", new_callable=AsyncMock, return_value=fake_run),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
 
@@ -1762,11 +2001,11 @@ class TestRecordFactForTerminalFailedRunHelper:
         org_id = str(uuid.uuid4())
         factory, _session = self._factory_and_session()
         record_facts = AsyncMock()
-        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
-        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(rta, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(rta, "set_rls_org", AsyncMock())
         with (
             patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record_facts),
-            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=None),
+            patch.object(rta, "get_run", new_callable=AsyncMock, return_value=None),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
 
@@ -1780,20 +2019,20 @@ class TestRecordFactForTerminalFailedRunHelper:
         org_id = str(uuid.uuid4())
         fake_run = MagicMock()
         factory, _session = self._factory_and_session()
-        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
-        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(rta, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(rta, "set_rls_org", AsyncMock())
 
         async def _boom(_s: object, _r: object) -> None:
             raise RuntimeError("facts boom")
 
         with (
             patch("modulo.core.analytics.record_fact_for_terminal_failed_run", new=_boom),
-            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=fake_run),
-            caplog.at_level("WARNING", logger="modulo.core.pipeline_execution"),
+            patch.object(rta, "get_run", new_callable=AsyncMock, return_value=fake_run),
+            caplog.at_level("WARNING", logger="modulo.core.run_terminal_advance"),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
 
-        assert any("terminal_failed_facts_failed" in m for m in caplog.messages)
+        assert any("facts_advance_failed" in m for m in caplog.messages)
 
 
 class TestResumeRun:

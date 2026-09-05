@@ -549,12 +549,13 @@ class TestPredicateStrip:
         db_engine: AsyncEngine,
         org_a: uuid.UUID,
     ) -> None:
-        """The isolation invariant: modulo_app is BYPASSRLS and the ORM tenant
-        filter is not registered on Postgres — the explicit org predicate is the
-        only control. As a belt-and-braces check, a predicate-STRIPPED query run
-        as a genuinely NOBYPASSRLS role (app_engine = modulo_integration_app)
-        with NO org context must return ZERO rows (RLS confines even without the
-        predicate)."""
+        """The isolation invariant: modulo_app is NOBYPASSRLS by asserted
+        posture (the bootstrap self-heals the role attributes every boot), and
+        the ORM tenant filter is not registered on Postgres — RLS alone is the
+        control. As a belt-and-braces check, a predicate-STRIPPED query run as
+        a genuinely NOBYPASSRLS role (app_engine = modulo_integration_app) with
+        NO org context must return ZERO rows — i.e. RLS confines even without
+        the ORM predicate."""
         today = datetime.now(UTC).date()
         await _insert_fact(db_engine, org_id=org_a, run_id=uuid.uuid4(), run_date=today - timedelta(days=1))
 

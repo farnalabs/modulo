@@ -628,7 +628,7 @@
                     <span v-if="entry.missing_self_report" class="ml-1 inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" data-testid="run-detail-not-reported">{{ $t('views.RunDetailView.not_reported') }}</span>
                     <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
                   </td>
-                  <td class="py-2 pr-4 tabular-nums">{{ formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
+                  <td class="py-2 pr-4 tabular-nums">{{ entry.missing_self_report ? '—' : formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
                   <td class="py-2 pr-4">
                     <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
                       {{ entry.source === 'self_reported' ? $t('views.RunDetailView.reported') : $t('views.RunDetailView.estimated') }}
@@ -656,6 +656,20 @@
             {{ $t('views.RunDetailView.cost_accounting_migrated') }}
           </p>
         </template>
+      </section>
+
+      <!-- Run Warnings -->
+      <section
+        v-if="runWarnings.length > 0"
+        id="warnings"
+        data-testid="run-detail-warnings"
+        aria-live="polite"
+        class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning"
+      >
+        <h2 class="mb-3 flex items-center gap-2 text-base font-semibold tracking-tight">
+          {{ $t('views.RunDetailView.warnings', { count: runWarnings.length }) }}
+        </h2>
+        <RunWarningsList :warnings="runWarnings" />
       </section>
 
       <!-- Prompt Reveal Dialog -->
@@ -728,7 +742,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -740,6 +754,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
+import RunWarningsList, { type RunWarning } from '../components/shared/RunWarningsList.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
@@ -766,6 +781,8 @@ type RunResponse = components['schemas']['RunResponse'] & {
   work_item_refs?: WorkItemRef[] | null
   child_runs?: ChildRunRef[] | null
   capacity?: RunCapacity | null
+  warnings?: RunWarning[] | null
+  warnings_count?: number
 }
 type RunIOResponse = components['schemas']['RunIOResponse']
 
@@ -806,6 +823,7 @@ interface CostBreakdownEntry {
   rate_usd?: string | number | null
   basis?: Record<string, unknown>
   missing_self_report?: boolean
+  missing_self_report_reason?: string
   error?: string
   total_clamped?: boolean
 }
@@ -1271,6 +1289,41 @@ const breakdownPresent = computed(() => breakdownRaw.value.length > 0)
 
 const breakdownTotalClamped = computed(() => breakdownRaw.value.some((e) => e.total_clamped === true))
 
+const runWarnings = computed<RunWarning[]>(() =>
+  Array.isArray(run.value?.warnings) ? (run.value.warnings as RunWarning[]) : [],
+)
+
+// Whether to auto-scroll to the #warnings anchor. Set when arriving from the
+// runs list badge (``?warn=1``) or a deep-link hash (``#warnings``); a
+// scrollBehavior-driven hash navigation is handled by the router, so only the
+// query-intent path needs a programmatic scroll here.
+const shouldScrollToWarnings = computed(
+  () => route.query?.warn !== undefined || (typeof window !== 'undefined' && window.location.hash === '#warnings'),
+)
+let hasScrolledToWarnings = false
+
+watch(
+  runWarnings,
+  async (warnings) => {
+    if (hasScrolledToWarnings) return
+    if (!shouldScrollToWarnings.value || warnings.length === 0) return
+    // The warnings <section id="warnings"> may still be settling in the DOM on
+    // the reactive pass that populates ``runWarnings`` (deferred cost_breakdown
+    // load, async GET). Retry across a few ticks so a momentarily-missing target
+    // doesn't make the scroll silently no-op.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await nextTick()
+      const el = document.getElementById('warnings')
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        break
+      }
+    }
+    hasScrolledToWarnings = true
+  },
+  { immediate: true, flush: 'post' },
+)
+
 function parseBreakdownAmount(value: string | number | undefined): number {
   if (value == null || value === '') return 0
   const n = Number(value)
@@ -1282,6 +1335,12 @@ function formatBreakdownAmount(value: string | number | undefined): string {
 }
 
 function breakdownBasisLine(entry: CostBreakdownEntry): string {
+  // A missing self-report is a CLEAR non-billing state — never render the
+  // confusing ``reported=0, node_count=0`` numeric basis. Surface the human
+  // message instead (the fix for the phantom $0.000000 row).
+  if (entry.missing_self_report === true) {
+    return t('views.RunDetailView.no_model_cost_reported_basis')
+  }
   const basis = entry.basis
   if (!basis || typeof basis !== 'object') return '—'
   const parts = Object.entries(basis)

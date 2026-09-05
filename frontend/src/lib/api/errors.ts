@@ -7,6 +7,8 @@ export type ErrorGroupDetail = components['schemas']['ErrorGroupDetail']
 export type ErrorEventDetail = components['schemas']['ErrorEventDetail']
 export type ErrorListResponse = components['schemas']['ErrorListResponse']
 export type ErrorEventListResponse = components['schemas']['ErrorEventListResponse']
+export type SchedulerStarvationItem = components['schemas']['SchedulerStarvationItem']
+export type SchedulerStarvationResponse = components['schemas']['SchedulerStarvationResponse']
 
 export interface FetchErrorGroupsParams {
   status?: string
@@ -41,4 +43,8 @@ export async function fetchErrorGroupEvents(id: string, params: { limit?: number
   return throwOnError(await api.GET('/api/v1/errors/{error_id}/events', {
     params: { path: { error_id: id }, query: params as unknown as Record<string, unknown> },
   })) as ErrorEventListResponse
+}
+
+export async function fetchSchedulerStarvation(): Promise<SchedulerStarvationResponse> {
+  return throwOnError(await api.GET('/api/v1/errors/scheduler-starvation')) as SchedulerStarvationResponse
 }

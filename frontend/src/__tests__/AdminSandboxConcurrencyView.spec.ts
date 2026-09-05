@@ -52,7 +52,7 @@ describe('AdminSandboxConcurrencyView', () => {
     await nextTick()
 
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Max concurrent sandbox runs')
+    expect(wrapper.text()).toContain('Max concurrent Runner runs')
   })
 
   it('loads the current sandbox concurrency limit from the API', async () => {
@@ -125,7 +125,7 @@ describe('AdminSandboxConcurrencyView', () => {
     await wrapper.find('[data-testid="admin-sandbox-concurrency-save"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.text()).toContain('Sandbox concurrency limit updated.')
+    expect(wrapper.text()).toContain('Runner concurrency limit updated.')
   })
 
   it('shows an error when the API call fails', async () => {

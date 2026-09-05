@@ -17,8 +17,10 @@ Deliverable (A) of the break-glass admin recovery plan adds:
   * The ``accounts`` UPDATE ALLOW-LIST re-apply (REVOKE table-level UPDATE +
     GRANT the explicit writable columns) — guarded by to_regclass so the
     before-alembic boot run cannot fail on a not-yet-existing table/column.
-  * ``modulo_breakglass`` grants per plan §0(c) — SELECT on the read surfaces,
-    SELECT+INSERT on accounts/org_memberships, SELECT+INSERT on audit_events,
+  * ``modulo_breakglass`` grants per plan §0(c) — SELECT on the read surfaces
+    (org_memberships, token_families, org_api_keys, organisations, and
+    alembic_version for migration-state triage), SELECT+INSERT on
+    accounts/org_memberships, SELECT+INSERT on audit_events,
     SELECT+INSERT/UPDATE on audit_chain_heads, sequence USAGE. The three
     break-glass column UPDATE grants are deliverable (B) and are NOT applied
     here. ``modulo_app`` is NEVER granted membership in either role.
@@ -77,14 +79,22 @@ def _parse_password(url: str) -> str:
 
 
 def _role_attributes(*, login: bool, bypassrls: bool) -> str:
-    """Build the LOGIN/BYPASSRLS attribute clause shared by CREATE/ALTER ROLE."""
+    """Build the LOGIN/BYPASSRLS attribute clause shared by CREATE/ALTER ROLE.
+
+    ``NOBYPASSRLS`` is stated EXPLICITLY when ``bypassrls`` is False: ALTER ROLE
+    ... WITH only sets the attributes it lists, so a role that already carries
+    BYPASSRLS (e.g. provisioned before the posture existed) would keep it
+    forever and fail the boot-time posture assertion on every release —
+    observed on prod 2026-09-03 where ``modulo_app`` had ``rolbypassrls = true``
+    and the bootstrap asserted a posture it could never repair.
+    """
     if login and bypassrls:
         return "LOGIN BYPASSRLS"
     if login:
-        return "LOGIN"
+        return "LOGIN NOBYPASSRLS"
     if bypassrls:
         return "NOSUPERUSER NOLOGIN BYPASSRLS"
-    return "NOSUPERUSER NOLOGIN"
+    return "NOSUPERUSER NOLOGIN NOBYPASSRLS"
 
 
 async def _create_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str, bypassrls: bool) -> None:
@@ -155,8 +165,13 @@ async def _apply_accounts_allow_list(conn: asyncpg.Connection, app_user: str) ->
 
 
 async def _grant_break_glass(conn: asyncpg.Connection, bg_user: str) -> None:
-    """Grant modulo_breakglass the read/write surfaces it needs (plan §0(c), (A))."""
-    select_tables = ("org_memberships", "token_families", "org_api_keys", "organisations")
+    """Grant modulo_breakglass the read/write surfaces it needs (plan §0(c), (A)).
+
+    ``alembic_version`` is part of the read surfaces: break-glass recovery
+    triage must be able to read the migration state (permission denied there
+    blocked a live break-glass diagnostic on prod, 2026-09-03).
+    """
+    select_tables = ("org_memberships", "token_families", "org_api_keys", "organisations", "alembic_version")
     existing_select = [t for t in select_tables if await _table_exists(conn, t)]
     if existing_select:
         await conn.execute(f'GRANT SELECT ON {", ".join(f"public.{t}" for t in existing_select)} TO "{bg_user}"')

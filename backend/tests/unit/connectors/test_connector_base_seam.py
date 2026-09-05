@@ -22,7 +22,6 @@ from typing import Any
 
 import pytest
 
-import modulo.core.ssrf as ssrf
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -32,6 +31,7 @@ from modulo.connectors.base import (
     HealthResult,
 )
 from modulo.connectors.security import CredentialRedactor
+from modulo.core import ssrf
 
 _PUBLIC = "93.184.216.34"
 
