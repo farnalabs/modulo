@@ -1438,6 +1438,7 @@ async def _read_run_raw_output_markers_for_gate(
         _log.warning(
             "sandbox_agent.idempotency_gate_read_failed",
             extra={"node_id": node_id, "run_id": run_id},
+            exc_info=True,
         )
         return None
 
@@ -1527,6 +1528,7 @@ async def _read_connector_idempotency_gate_state(
         _log.warning(
             "connector.idempotency_gate_read_failed",
             extra={"node_id": node_id, "run_id": run_id},
+            exc_info=True,
         )
         return None, None
 
@@ -1689,6 +1691,7 @@ def _connector_on_unknown(connector: Any, resource: str) -> str:
         _log.warning(
             "connector.idempotency_gate.on_unknown_read_failed",
             extra={"resource": resource},
+            exc_info=True,
         )
         return DEFAULT_ON_UNKNOWN
     return mode if mode in ON_UNKNOWN_MODES else DEFAULT_ON_UNKNOWN
@@ -1951,6 +1954,7 @@ def _connector_gate_enabled(on_unknown: str, *, node_id: str | None = None, run_
         _log.warning(
             "connector.idempotency_gate_killswitch_check_failed",
             extra={"node_id": node_id, "run_id": run_id},
+            exc_info=True,
         )
         return False
 
@@ -1988,6 +1992,7 @@ def _connector_write_reported_failure(connector: Any, result: Any) -> bool:
         _log.warning(
             "connector.idempotency_gate.write_reported_failure_read_failed",
             extra={"connector_type": str(getattr(connector, "connector_type", ""))},
+            exc_info=True,
         )
         return False
 
@@ -4886,6 +4891,7 @@ class _SandboxWatchdog:
             _log.warning(
                 "sandbox_agent.resource_metrics_unavailable",
                 extra={"node_id": self._node_id, "run_id": self._run_id},
+                exc_info=True,
             )
             return False
         # get_metrics returns a LIST of SandboxMetrics samples —
@@ -5584,6 +5590,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _log.warning(
                 "sandbox_agent.idempotency_gate_killswitch_check_failed",
                 extra={"node_id": node_id, "run_id": run_id},
+                exc_info=True,
             )
         if _gate_enabled:
             _markers = await _read_run_raw_output_markers_for_gate(
@@ -5739,6 +5746,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     _log.warning(
                         "sandbox_agent.dispatch_capacity_check_failed",
                         extra={"run_id": run_id, "org_id": str(_org_uuid)},
+                        exc_info=True,
                     )
         # DB-atomic dispatch marker (dist/runtime-core A4) — replaces the
         # retired Redis SETNX E2B fence. Exactly ONE executor wins the

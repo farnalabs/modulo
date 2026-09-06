@@ -541,7 +541,7 @@ async def _fire_once_allowed(redis_client: Any, org_id: Any, run_group_id: Any, 
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("error_tracking.fire_once_redis_failed signal=%s", signal)
+            _log.warning("error_tracking.fire_once_redis_failed signal=%s", signal, exc_info=True)
             return True
     now = time.monotonic()
     if key in _fire_once_memory and now - _fire_once_memory[key] < _FIRE_ONCE_TTL_SECONDS:
@@ -948,7 +948,7 @@ async def _missed_fire_cooldown_ok(redis_client: Any, org_id: str, trigger_id: A
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("error_tracking.missed_fire_cooldown_redis_failed trigger=%s", trigger_id)
+        _log.warning("error_tracking.missed_fire_cooldown_redis_failed trigger=%s", trigger_id, exc_info=True)
         return True
 
 
@@ -1077,4 +1077,4 @@ async def check_missed_fire_alerts(
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("error_tracking.missed_fire_redis_close_failed")
+            _log.warning("error_tracking.missed_fire_redis_close_failed", exc_info=True)

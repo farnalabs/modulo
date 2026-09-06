@@ -433,7 +433,7 @@ async def execute_run(
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid)
+            _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid, exc_info=True)
 
     settings = get_settings()
     try:
@@ -1121,7 +1121,7 @@ async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("saq_worker.sweep_stats_persist_failed key=%s", key)
+        _log.warning("saq_worker.sweep_stats_persist_failed key=%s", key, exc_info=True)
 
 
 async def stale_run_recovery(_ctx: dict[str, Any]) -> dict[str, Any]:
