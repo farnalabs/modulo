@@ -14,6 +14,7 @@ correctness path.
 | `json_schema` | JSON Schema validation | **Shape / structure** of an object | No – shape only |
 | `custom_function` | User-supplied callable | Whatever the function checks | Depends on the function |
 | `llm_judge` | An LLM grades the output | **Soft** quality/similarity signal | No – circular + injection-prone |
+| `guardrail` | Deterministic data-safety check on input | **Input safety** (regex/json_schema on input payload) | N/A – not routed through EvalEngine |
 | `human_set` | A registered, versioned, **human-authored** assertion set | **Correctness** (semantic invariants + business rules) | **Yes** |
 
 ## Why evals must be non-circular

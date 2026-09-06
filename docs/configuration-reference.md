@@ -476,7 +476,7 @@ blocking readiness indefinitely.
 ## Break-glass Admin Recovery
 
 Operator-controlled emergency admin recovery for orgs whose only admin is
-locked out (see `docs/prd.md` §7.19 and
+locked out (see
 `docs/operations/break-glass-admin-recovery-runbook.md`). The CLI connects to
 the database as the dedicated `modulo_breakglass` role via
 `MODULO_BREAK_GLASS_DATABASE_URL` – never the application `DATABASE_URL`.
