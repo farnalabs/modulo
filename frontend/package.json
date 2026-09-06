@@ -23,12 +23,12 @@
         "postinstall": "node scripts/internationalized-date-patch.cjs"
     },
     "optionalDependencies": {
-        "@datadog/browser-logs": "^7.5.0",
-        "@datadog/browser-rum": "^7.5.0",
+        "@datadog/browser-logs": "^7.12.0",
+        "@datadog/browser-rum": "^7.12.0",
         "@grafana/faro-web-sdk": "^2.8.2"
     },
     "dependencies": {
-        "@lucide/vue": "^1.21.0",
+        "@lucide/vue": "^1.41.0",
         "@primeuix/styled": "^1.0.0",
         "@primeuix/themes": "^3.0.0",
         "@sentry/vue": "^10.65.0",
@@ -57,7 +57,7 @@
     },
     "devDependencies": {
         "@axe-core/playwright": "^4.12.1",
-        "@playwright/test": "^1.61.1",
+        "@playwright/test": "^1.63.0",
         "@rollup/plugin-yaml": "^5.0.0",
         "@stryker-mutator/core": "^10.0.0",
         "@stryker-mutator/vitest-runner": "^10.0.0",
@@ -71,7 +71,7 @@
         "@vue/test-utils": "^2.4.6",
         "autoprefixer": "^10.5.0",
         "cross-env": "^10.1.0",
-        "eslint": "^10.0.0",
+        "eslint": "^10.10.0",
         "eslint-plugin-vue": "^10.9.2",
         "eslint-plugin-vuejs-accessibility": "^2.5.0",
         "globals": "^15.15.0",
