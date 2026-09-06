@@ -93,6 +93,15 @@ _STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
 _SLOT_RECONCILIATION_STATS_KEY = "saq:cron:stats:slot_reconciliation"
 _SLOT_RECONCILIATION_STALE_SECONDS = 15 * 60
 
+# hitl_park_sweep (FAR-604 D2, qa F5): the HITL park-on-expiry sweep runs
+# every 5 min on the system worker and persists its outcome to this Redis
+# key. Same advisory contract as slot_reconciliation: parking is post-D1
+# hygiene (a parked run holds no pipeline slot), so a dead sweep does not
+# wedge admission — but the visibility half of the design silently stops, so
+# a missing or >15min-stale key warns without gating readiness.
+_HITL_PARK_SWEEP_STATS_KEY = "saq:cron:stats:hitl_park_sweep"
+_HITL_PARK_SWEEP_STALE_SECONDS = 15 * 60
+
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
 # 2x the cadence has a silently dead cron scheduler and fails readiness so Fly
@@ -657,6 +666,21 @@ async def _check_slot_reconciliation() -> CheckResult:
     )
 
 
+async def _check_hitl_park_sweep() -> CheckResult:
+    """ADVISORY — last hitl_park_sweep outcome (never gates readiness).
+
+    The FAR-604 D2 HITL park-on-expiry sweep (``saq_worker.hitl_park_sweep``)
+    runs in the SYSTEM WORKER process every 5 min and persists its outcome
+    (``parked`` + ``last_run_at``) to ``saq:cron:stats:hitl_park_sweep``
+    (qa F5). Parking is post-D1 hygiene (a parked run holds no pipeline
+    slot), so a dead sweep does not wedge admission — but the "expired —
+    parked" visibility silently stops, so a missing or >15min-stale key
+    reports "degraded" to alert operators while the app remains healthy.
+    Fail-open on Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(_HITL_PARK_SWEEP_STATS_KEY, _HITL_PARK_SWEEP_STALE_SECONDS, "parked")
+
+
 async def _check_fleet_system_crons() -> CheckResult:
     """Fleet-wide system-cron liveness for ``app`` machines (plan F8, PR dist/separate-workers).
 
@@ -790,6 +814,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         dr_check,
         srr_check,
         sr_check,
+        hps_check,
     ) = await asyncio.gather(
         _check_database(),
         _check_redis(),
@@ -800,6 +825,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_dispatcher_reconcile(),
         _check_stale_run_recovery(),
         _check_slot_reconciliation(),
+        _check_hitl_park_sweep(),
     )
     bg_check = _check_break_glass()
 
@@ -823,6 +849,10 @@ async def readiness(response: Response) -> ReadinessResponse:
         # FAR-604 F6: a silently dead slot-reconciliation sweep re-opens the
         # admission wedge invisibly, so it alerts here without gating.
         "slot_reconciliation": sr_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-604 D2 / qa F5: a dead park sweep only delays the "expired —
+        # parked" transition (no capacity wedge), so it stays alert-only.
+        "hitl_park_sweep": hps_check,
     }
 
     # Aggregate over the NON-advisory checks only.

@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -81,6 +82,157 @@ class SlotReconciliationError(RuntimeError):
         super().__init__(message)
         self.released = released
         self.per_pipeline = per_pipeline
+
+
+class HitlParkError(RuntimeError):
+    """HITL park sweep failed partway; carries the partial ``parked`` count.
+
+    The SAQ cron wrapper (``saq_worker.hitl_park_sweep``) persists the failure
+    + partial ``parked`` count to the shared Redis liveness key (so a silently
+    dead sweep is visible to /healthz/ready, mirroring the slot-reconciliation
+    contract) and re-raises so SAQ's ``retries=2`` engages. A sweep that
+    swallows its own failures re-opens the visibility gap invisibly — parking
+    is post-D1 hygiene (a parked run no longer consumes pipeline capacity),
+    so without the liveness key a dead sweep would delay the "expired —
+    parked" transition forever.
+    """
+
+    def __init__(self, message: str, *, parked: int) -> None:
+        super().__init__(message)
+        self.parked = parked
+
+
+# Guarded park UPDATE (FAR-604 D2). Re-validated at execution time so it is
+# atomic + idempotent:
+#   * ``status = :parked_status`` target, source ``status = :awaiting_status``
+#     — only a run actually waiting on a human is parked (never running/
+#     claimed rows; a second tick finds no rows — the status-based idempotency,
+#     qa F13).
+#   * ``cancellation_requested = false`` — a cancellation-requested run is
+#     being cancelled; the cancel path owns its status.
+#   * EXISTS an expired UNCLAIMED undecided gate past the grace window — the
+#     incident predicate (gate open + unanswered + well past its TTL).
+#   * NOT EXISTS any undecided gate that is CLAIMED or still inside the grace
+#     window — a run must only park when EVERY one of its open gates is
+#     expired-unclaimed (multi-gate runs are never parked on a stale orphan).
+# The gate row itself is NOT touched here (park ≠ decide — the sweep must
+# never write ``decision``; see Linear FAR-609): it stays open and claimable.
+# The status literals are bound params (qa F15) so every write site names the
+# same constants.
+_PARK_RUNS_SQL = text(
+    "UPDATE runs SET status = :parked_status "
+    "WHERE runs.organisation_id = :oid "
+    "AND runs.status = :awaiting_status "
+    "AND runs.cancellation_requested = false "
+    "AND EXISTS ("
+    "  SELECT 1 FROM hitl_claims hc "
+    "  WHERE hc.organisation_id = runs.organisation_id "
+    "  AND hc.run_id = runs.id "
+    "  AND hc.decision IS NULL "
+    "  AND hc.account_id IS NULL "
+    "  AND hc.expires_at < now() - (:grace_seconds * interval '1 second')) "
+    "AND NOT EXISTS ("
+    "  SELECT 1 FROM hitl_claims hc2 "
+    "  WHERE hc2.organisation_id = runs.organisation_id "
+    "  AND hc2.run_id = runs.id "
+    "  AND hc2.decision IS NULL "
+    "  AND (hc2.account_id IS NOT NULL "
+    "       OR hc2.expires_at >= now() - (:grace_seconds * interval '1 second'))) "
+    "RETURNING runs.id, runs.pipeline_id, runs.organisation_id"
+)
+
+
+async def park_expired_hitl_runs(
+    async_engine: AsyncEngine,
+    *,
+    grace_seconds: int | None = None,
+) -> dict[str, Any]:
+    """Park runs whose HITL gate expired unanswered past the grace window (D2).
+
+    The HITL-capacity half of the FAR-604 design: a run waiting at a gate the
+    human never answered used to sit ``awaiting_human`` forever (the
+    2026-09-04 incident: 20 awaiting_human runs held a 20-cap pipeline for
+    26h). The D1 capacity exclusion already stops that count; this sweep is
+    the VISIBILITY + lifecycle half — it moves each such run to the dedicated
+    non-terminal ``hitl_parked`` status (still in ACTIVE_RUN_STATUSES, so
+    every consumer that treats awaiting_human as in-flight treats a parked
+    run identically) once ALL of the run's open gates are unclaimed AND past
+    ``expires_at + grace`` (settings ``HITL_PARK_GRACE_SECONDS``, default
+    24h).
+
+    PARK ≠ DECIDE: the gate row is never touched here — ``decision`` stays
+    NULL and the gate stays OPEN AND CLAIMABLE (a claim on an expired gate
+    takes a fresh TTL; the decision-time un-park in ``HITLManager._decide``
+    re-enters the run into normal admission). The ``hitl_parked`` STATUS
+    itself is the parked signal (qa F13 — the proposed ``hitl_claims
+    .parked_at`` column was dropped: it duplicated the status, went stale on
+    a re-park, and added schema + phantom-count surface).
+
+    Per org (RLS-scoped), one guarded UPDATE parks and RETURNs the parked
+    rows; every park is logged loudly (``hitl_park.parked``). Re-running is a
+    no-op (a parked run no longer matches the source status — idempotency by
+    the status predicate itself, qa F13). The org's count is accumulated only
+    after its UPDATE succeeds (qa F6 — a failure can never log a phantom
+    park: the failed org's transaction rolled back, so its rows are neither
+    parked nor counted).
+    Failure contract: raises :class:`HitlParkError` (with the partial
+    ``parked`` count) so the SAQ cron's ``retries=2`` engages — never a
+    swallowed error dict; the wrapper persists the outcome to the shared
+    Redis liveness key first (F5).
+
+    Returns ``{"parked": int}``.
+    """
+    settings = get_settings()
+    window = grace_seconds if grace_seconds is not None else settings.hitl_park_grace_seconds
+    parked: list[Any] = []
+    sweep_error: BaseException | None = None
+    try:
+        async with async_engine.connect() as conn, conn.begin():
+            org_result = await conn.execute(text("SELECT id FROM organisations"))
+            org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
+
+        for org_id in org_ids:
+            async with async_engine.connect() as conn, conn.begin():
+                await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
+                result = await conn.execute(
+                    _PARK_RUNS_SQL,
+                    {
+                        "oid": str(org_id),
+                        "grace_seconds": window,
+                        "parked_status": HITL_PARKED_STATUS,
+                        "awaiting_status": AWAITING_HUMAN_STATUS,
+                    },
+                )
+                rows = result.all()
+                if not rows:
+                    continue
+                # qa F6: the count/log is recorded only after the park UPDATE
+                # succeeded — the single write of the org transaction, so a
+                # failure here rolls the park back BEFORE the rows are ever
+                # counted (no phantom "hitl_park.parked" events).
+                parked.extend(rows)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        sweep_error = exc
+        _log.exception("hitl_park.sweep_failed")
+    finally:
+        # Loud per-run event — the parked run left review state; operators
+        # must see every park (the incident class this prevents is silent).
+        for row in parked:
+            _log.warning(
+                "hitl_park.parked run=%s pipeline=%s org=%s (gate expired unanswered past %ss grace)",
+                row.id,
+                row.pipeline_id,
+                row.organisation_id,
+                window,
+            )
+        if parked:
+            _log.warning("hitl_park.swept parked=%d", len(parked))
+
+    if sweep_error is not None:
+        raise HitlParkError("HITL park sweep failed", parked=len(parked)) from sweep_error
+    return {"parked": len(parked)}
 
 
 async def reconcile_pipeline_slots(

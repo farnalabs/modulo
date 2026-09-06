@@ -1624,28 +1624,20 @@ describe('RunDetailView rendering extras', () => {
     return wrapper
   }
 
-  it('renders run detail content and does not surface a workspace-lease section', async () => {
+  it('does not render a workspace lease section (lease scaffolding deleted in #25)', async () => {
     mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    // Core run detail content still renders.
-    expect(wrapper.find('[data-testid="run-detail-share-summary"]').exists()).toBe(true)
-    // The workspace-lease section is not surfaced on this view.
-    expect(wrapper.text()).not.toContain('Workspace')
+    const ws = wrapper.text()
+    expect(ws).not.toContain('Workspace')
+    expect(ws).not.toContain('OOM killed')
     wrapper.unmount()
   })
 
-  it('renders run detail without a workspace-lease duration block', async () => {
+  it('does not render workspace lease durations (lease scaffolding deleted in #25)', async () => {
     mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper.find('[data-testid="run-detail-share-summary"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('45s')
     wrapper.unmount()
-
-    mockWorkspaceLease = { status: 'running', duration_seconds: 125 }
-    const wrapper2 = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper2.find('[data-testid="run-detail-share-summary"]').exists()).toBe(true)
-    expect(wrapper2.text()).not.toContain('2m 5s')
-    wrapper2.unmount()
   })
 
   it('copies the trace id to the clipboard', async () => {
