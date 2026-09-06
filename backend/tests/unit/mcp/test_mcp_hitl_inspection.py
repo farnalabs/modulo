@@ -9,7 +9,12 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy.exc import ProgrammingError
+
 from modulo.api.mcp_server import (
+    _TEAM_SCOPE_ERROR,
+    MCPAuthorizationError,
+    _ctx_team_id,
     _get_hitl_gate_impl,
     _get_pipeline_gates_impl,
     _list_hitl_gates_impl,
@@ -396,3 +401,189 @@ class TestReadOnlyGuarantee(_AuthContext):
         ]
         for needle in forbidden:
             assert needle not in joined
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage for the FAR-641 inspection tools (team-scoping, boundary
+# errors, absent config, and the wrapper exception handlers).
+# ---------------------------------------------------------------------------
+
+
+class TestHitlInspectionBranches(_AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_team_scoped_key_appends_team_clause(
+        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
+    ) -> None:
+        self.setup_method()
+        team_id = uuid.uuid4()
+        _ctx_team_id.set(team_id)
+        try:
+            session = AsyncMock()
+            result = MagicMock()
+            result.all.return_value = []
+            session.execute = AsyncMock(return_value=result)
+            mock_session.return_value = _make_session_context(session)
+
+            out = await list_hitl_gates()
+
+            assert out["limit"] == 20
+            # The team-scoped key must add a team boundary clause to the query.
+            assert session.execute.called
+        finally:
+            _ctx_team_id.set(None)
+            self.teardown_method()
+
+    @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=MCPAuthorizationError("no scope"))
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_scope_error_returns_insufficient_scope(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await list_hitl_gates()
+        assert out["error"] == "insufficient_scope"
+        assert "no scope" in out["detail"]
+
+    @patch(
+        "modulo.api.mcp_server._check_agent_tool_scope",
+        side_effect=ProgrammingError("relation missing", "detail", None),
+    )
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_programming_error_returns_migration_required(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await list_hitl_gates()
+        assert out["error"] == "migration_required"
+
+    @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_generic_error_returns_tool_error(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await list_hitl_gates()
+        assert out["error"] == "internal_error"
+
+    @patch("modulo.api.mcp_server._load_hitl_run", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_gate_run_team_scope_error(
+        self,
+        mock_validate_auth: AsyncMock,
+        mock_session: AsyncMock,
+        mock_load_run: AsyncMock,
+    ) -> None:
+        mock_load_run.return_value = _TEAM_SCOPE_ERROR
+        mock_session.return_value = _make_session_context(AsyncMock())
+        rid = str(uuid.uuid4())
+        out = await get_hitl_gate(run_id=rid, gate_id="hitl_gate_a_b")
+        assert out["error"] == "team_boundary_violation"
+
+    @patch("modulo.db.crud.hitl_gate_config.resolve_hitl_gate_config", new_callable=AsyncMock, return_value=None)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_gate_config_none_surfaced(
+        self,
+        mock_validate_auth: AsyncMock,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_hitl_manager: MagicMock,
+        mock_resolve_config: AsyncMock,
+    ) -> None:
+        run = _make_run()
+        gate = _make_gate()
+        manager = MagicMock()
+        manager.get_gate = AsyncMock(return_value=gate)
+        mock_hitl_manager.return_value = manager
+        mock_get_run.return_value = run
+        mock_session.return_value = _make_session_context(AsyncMock())
+
+        out = await get_hitl_gate(run_id=str(run.id), gate_id="hitl_gate_a_b")
+
+        assert out["gate_config"] is None
+        assert out["gate_fired"] is True
+
+    @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=MCPAuthorizationError("no scope"))
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_gate_scope_error_returns_insufficient_scope(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await get_hitl_gate(run_id=str(uuid.uuid4()), gate_id="hitl_gate_a_b")
+        assert out["error"] == "insufficient_scope"
+
+    @patch(
+        "modulo.api.mcp_server._check_agent_tool_scope",
+        side_effect=ProgrammingError("relation missing", "detail", None),
+    )
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_gate_programming_error_returns_migration_required(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await get_hitl_gate(run_id=str(uuid.uuid4()), gate_id="hitl_gate_a_b")
+        assert out["error"] == "migration_required"
+
+    @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_gate_generic_error_returns_tool_error(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await get_hitl_gate(run_id=str(uuid.uuid4()), gate_id="hitl_gate_a_b")
+        assert out["error"] == "internal_error"
+
+    @patch("modulo.api.mcp_server._pipeline_owner_team_id", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_pipeline_gates_team_scope_mismatch(
+        self,
+        mock_validate_auth: AsyncMock,
+        mock_session: AsyncMock,
+        mock_owner_team: AsyncMock,
+    ) -> None:
+        self.setup_method()
+        key_team = uuid.uuid4()
+        _ctx_team_id.set(key_team)
+        try:
+            pid = uuid.uuid4()
+            # Owner team differs from the team-scoped key -> boundary violation.
+            mock_owner_team.return_value = uuid.uuid4()
+            mock_session.return_value = _make_session_context(AsyncMock())
+
+            out = await get_pipeline_gates(pipeline_id=str(pid))
+
+            assert out["error"] == "team_boundary_violation"
+        finally:
+            _ctx_team_id.set(None)
+            self.teardown_method()
+
+    @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=MCPAuthorizationError("no scope"))
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_pipeline_gates_scope_error_returns_insufficient_scope(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await get_pipeline_gates(pipeline_id=str(uuid.uuid4()))
+        assert out["error"] == "insufficient_scope"
+
+    @patch(
+        "modulo.api.mcp_server._check_agent_tool_scope",
+        side_effect=ProgrammingError("relation missing", "detail", None),
+    )
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_pipeline_gates_programming_error_returns_migration_required(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await get_pipeline_gates(pipeline_id=str(uuid.uuid4()))
+        assert out["error"] == "migration_required"
+
+    @patch("modulo.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_pipeline_gates_generic_error_returns_tool_error(
+        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
+    ) -> None:
+        out = await get_pipeline_gates(pipeline_id=str(uuid.uuid4()))
+        assert out["error"] == "internal_error"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_pipeline_gates_invalid_uuid_returns_invalid_id(self, mock_validate_auth: AsyncMock) -> None:
+        out = await get_pipeline_gates(pipeline_id="not-a-uuid")
+        assert out["error"] == "invalid_id"
+        assert out["field"] == "pipeline_id"
