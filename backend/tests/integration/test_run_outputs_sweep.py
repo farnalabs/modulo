@@ -5,7 +5,7 @@ Drives the sweep leg wired into ``dispatcher_reconcile``'s per-org loop
 per-org failure isolation) and the repo backfill helper behind it, against
 the real migration-0176 table on testcontainers Postgres.
 
-Covers (design §CATCH-UP SWEEP):
+Covers (design §CATCH-UP SWEEP + qa iteration 1):
 
 * the periodic ENTRYPOINT (``dispatcher_reconcile``) heals un-healed terminal
   runs and reports the counters (a sweep with no production caller is a
@@ -13,9 +13,15 @@ Covers (design §CATCH-UP SWEEP):
 * the interleaving matrix — sweep→dual-write, dual-write→sweep, sweep-twice,
   dual-write-twice;
 * scoping properties — non-terminal runs untouched, the per-tick cap bounds
-  work, the high-water mark advances (and skips already-swept runs);
-* per-org error isolation (a sweep failure bumps ``outputs_sweep_org_failed``
-  and never raises past the sweep leg).
+  work, the drain advances tick-over-tick WITHOUT a high-water filter
+  (qa M20: the NOT-EXISTS trigger legs drive the selection);
+* qa M1 — jsonb-native OBJECT trigger legs (a jsonb array/scalar side is
+  never selected on Postgres), sentinel marker keys / anomalies QUARANTINED
+  (run_node_outputs_quarantine row + never re-selected);
+* the migration-0176 SQL leg round-trips (qa C1/C2): the backfill legs'
+  SQL twins — the 1-indexed substr marker parser vs the Python twin, the
+  COALESCE'd metadata flags vs the strict meta-shape CHECK, and the
+  quarantine leg — executed against real Postgres.
 
 Each test gets its OWN organisation (``runs`` carries
 ``UNIQUE(organisation_id, run_number)``; the suite runs with ``-n 2`` in the
@@ -24,19 +30,25 @@ pre-deploy gate) — xdist-safe.
 
 from __future__ import annotations
 
+import importlib.util
+import itertools
 import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core import cron_helpers as ch
 from modulo.db.crud.run import update_run_status
+from modulo.db.crud.run_node_outputs import parse_marker_node_id
 from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
@@ -189,6 +201,41 @@ async def _seed_terminal_run(
 def _marker_key(run_id: uuid.UUID, node_id: str, suffix: str = "1") -> str:
     """A grammar-valid attempt key (node_runner shape) for *run_id*."""
     return f"run:{run_id}:node:{node_id}:{suffix}"
+
+
+def _load_migration_module() -> ModuleType:
+    """Load migration 0176 by file path (migrations are not a package import
+    surface) — the same loader the structural unit tests use."""
+    migration_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "modulo"
+        / "db"
+        / "migrations"
+        / "versions"
+        / "0176_run_node_outputs.py"
+    )
+    assert migration_path.exists(), f"Migration file missing: {migration_path}"
+    spec = importlib.util.spec_from_file_location("migration_0176_run_node_outputs", migration_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The migration leg round-trips bound their chunk window to run ids with a
+# fixed high prefix (0xFFFFF0...) so the shared testcontainer's OTHER
+# orgs' runs can never fall inside the id range (uuid4's top bits are random;
+# the window below is ~2^-24 of the uuid space per foreign run).
+_LEG_ID_PREFIX = 0xFFFFF000000000000000000000000000
+_LEG_LAST_ID = uuid.UUID(int=_LEG_ID_PREFIX - 1)  # just below the window
+_LEG_UPPER_ID = uuid.UUID(int=(1 << 128) - 1)
+_LEG_IDS = itertools.count(1)
+
+
+def _next_leg_id() -> uuid.UUID:
+    return uuid.UUID(int=_LEG_ID_PREFIX + next(_LEG_IDS))
 
 
 async def _fetch_new_table_rows(db_engine: AsyncEngine, run_id: uuid.UUID) -> list[tuple[str, str, Any, Any, Any]]:
@@ -408,10 +455,11 @@ async def test_non_terminal_run_untouched(db_engine: AsyncEngine, sweep_tenant: 
 
 
 @pytest.mark.asyncio
-async def test_cap_bounds_work_and_high_water_advances(
+async def test_cap_bounds_work_across_ticks_without_high_water(
     db_engine: AsyncEngine, sweep_tenant: _Tenant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Per-tick cap bounds the drain; the high-water mark skips healed runs."""
+    """Per-tick cap bounds the drain; the trigger legs (NOT the high-water
+    filter — qa M20 removed it) drive the tick-over-tick advancement."""
     run_a = await _seed_terminal_run(
         db_engine, sweep_tenant, run_number=1, outputs={"a": {"v": 1}}, completed_offset_hours=3
     )
@@ -430,11 +478,20 @@ async def test_cap_bounds_work_and_high_water_advances(
     assert not await _fetch_new_table_rows(db_engine, run_b)
     assert not await _fetch_new_table_rows(db_engine, run_c)
 
-    # The next tick's high-water mark skips the healed run and advances.
+    # The NEXT tick heals the next-oldest: the healed run is excluded by the
+    # NOT-EXISTS trigger, no high-water mark involved.
     summary2 = await _run_sweep(sweep_tenant)
     assert summary2["outputs_sweep_healed"] == 1
     assert await _fetch_new_table_rows(db_engine, run_b)
     assert not await _fetch_new_table_rows(db_engine, run_c)
+
+    summary3 = await _run_sweep(sweep_tenant)
+    assert summary3["outputs_sweep_healed"] == 1
+    assert await _fetch_new_table_rows(db_engine, run_c)
+
+    # Steady state: the drained org heals nothing.
+    summary4 = await _run_sweep(sweep_tenant)
+    assert summary4["outputs_sweep_healed"] == 0
 
 
 @pytest.mark.asyncio
@@ -474,3 +531,258 @@ async def test_sweep_selects_oldest_first(
     assert summary["outputs_sweep_healed"] == 1
     assert await _fetch_new_table_rows(db_engine, older)
     assert not await _fetch_new_table_rows(db_engine, newer)
+
+
+# ---------------------------------------------------------------------------
+# qa M1: jsonb-native trigger legs + quarantine on real Postgres
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_quarantine_row(db_engine: AsyncEngine, run_id: uuid.UUID) -> dict[str, Any] | None:
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT legacy_outputs_json, legacy_node_telemetry_json, legacy_raw_output_markers "
+                    "FROM run_node_outputs_quarantine WHERE run_id = :rid"
+                ),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    return None if row is None else {"outputs": row[0], "telemetry": row[1], "markers": row[2]}
+
+
+@pytest.mark.asyncio
+async def test_json_array_blob_side_is_never_selected_on_postgres(
+    db_engine: AsyncEngine, sweep_tenant: _Tenant
+) -> None:
+    """qa M1a prove-the-fix: a jsonb ARRAY side is NOT a representable blob.
+    The OLD text-cast trigger selected such a run on every tick (writing zero
+    rows — the cap-starvation zombie). The Postgres trigger requires a JSON
+    OBJECT: the run is never selected, never quarantined, and the org heals
+    nothing. (The direct selection-level proof lives in
+    test_selection_excludes_json_array_sides_via_repo_helper.)"""
+    run_id = await _seed_terminal_run(
+        db_engine,
+        sweep_tenant,
+        run_number=1,
+        markers=["not", "a", "dict"],  # type: ignore[arg-type]
+    )
+    summary = await _run_sweep(sweep_tenant)
+    assert summary["outputs_sweep_healed"] == 0
+    assert not await _fetch_new_table_rows(db_engine, run_id)
+    assert await _fetch_quarantine_row(db_engine, run_id) is None
+
+
+@pytest.mark.asyncio
+async def test_selection_excludes_json_array_sides_via_repo_helper(
+    db_engine: AsyncEngine, sweep_tenant: _Tenant
+) -> None:
+    """qa M1a (direct): the batched helper selects ZERO runs for an org whose
+    only blob is a jsonb array (the old text-cast heuristic selected it every
+    tick). The object-shaped control run IS selected."""
+    from modulo.db.crud.run_node_outputs import backfill_run_node_outputs_batch
+
+    await _seed_terminal_run(db_engine, sweep_tenant, run_number=1, outputs={"ctrl": {"v": 1}})
+    run_array = await _seed_terminal_run(db_engine, sweep_tenant, run_number=2)
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE runs SET raw_output_markers = '[1, 2, 3]'::jsonb WHERE id = :rid"),
+            {"rid": str(run_array)},
+        )
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, sweep_tenant.org_id)
+        result = await backfill_run_node_outputs_batch(session, organisation_id=sweep_tenant.org_id, cap=100)
+    assert result["runs_selected"] == 1  # only the object-shaped control run
+    assert result["runs_backfilled"] == 1
+    assert result["runs_quarantined"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sentinel_marker_key_run_quarantined_once_never_reselected(
+    db_engine: AsyncEngine, sweep_tenant: _Tenant
+) -> None:
+    """qa M1b/c: a '__'-prefixed marker attempt key quarantines the run (the
+    blobs are copied to the side table AS-IS); the run is healed zero times
+    and NEVER re-selected on a later tick (the old code silently dropped the
+    key every tick, keeping the run re-selectable forever)."""
+    run_id = uuid.uuid4()
+    await _seed_terminal_run(
+        db_engine,
+        sweep_tenant,
+        run_number=1,
+        markers={"__final__": {"raw": "squat"}},
+        run_id=run_id,
+    )
+    summary = await _run_sweep(sweep_tenant)
+    assert summary["outputs_sweep_healed"] == 0
+    assert not await _fetch_new_table_rows(db_engine, run_id)
+    quarantined = await _fetch_quarantine_row(db_engine, run_id)
+    assert quarantined is not None
+    assert quarantined["markers"] == {"__final__": {"raw": "squat"}}
+
+    summary2 = await _run_sweep(sweep_tenant)
+    assert summary2["outputs_sweep_healed"] == 0
+    # Exactly ONE quarantine row — idempotent, never re-inserted.
+    async with db_engine.connect() as conn:
+        count = (
+            await conn.execute(
+                text("SELECT count(*) FROM run_node_outputs_quarantine WHERE run_id = :rid"),
+                {"rid": str(run_id)},
+            )
+        ).scalar_one()
+    assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# qa C1/C2: migration-0176 SQL leg round-trips (real Postgres)
+# ---------------------------------------------------------------------------
+
+
+class TestMigrationLegRoundTrip:
+    """The migration's backfill legs executed against real Postgres, seeding
+    runs inside a surgical id window (see _LEG_ID_PREFIX) so the shared
+    testcontainer's other orgs are untouched."""
+
+    @pytest.fixture
+    def migration(self) -> ModuleType:
+        return _load_migration_module()
+
+    async def _exec_leg(
+        self,
+        db_engine: AsyncEngine,
+        sql: str,
+        params: dict[str, Any],
+    ) -> None:
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text(sql), params)
+
+    def _leg_params(self) -> dict[str, Any]:
+        return {
+            "last_id": _LEG_LAST_ID,
+            "upper_id": _LEG_UPPER_ID,
+            "window_days": 30,
+            "marker_re": _load_migration_module()._MARKER_KEY_RE,
+        }
+
+    @pytest.mark.asyncio
+    async def test_markers_leg_matches_python_twin_exactly(
+        self, db_engine: AsyncEngine, sweep_tenant: _Tenant, migration: ModuleType
+    ) -> None:
+        """qa C2 round-trip: every backfilled marker row's (node_id,
+        attempt_key) matches the Python twin EXACTLY — grammar-valid keys,
+        colon-containing node ids, an empty node id ('::1' -> __unknown__),
+        and an unparseable key."""
+        run_id = _next_leg_id()
+        keys = {
+            _marker_key(run_id, "node1"): {"raw": "a"},
+            _marker_key(run_id, "my:weird:node", "7"): {"raw": "b"},
+            f"run:{run_id}:node::1": {"raw": "empty-node"},
+            f"junk-{run_id.hex[:8]}": {"raw": "unparseable"},
+        }
+        await _seed_terminal_run(db_engine, sweep_tenant, run_number=1, markers=keys, run_id=run_id)
+        await self._exec_leg(db_engine, migration._markers_leg_sql(migration._TERMINAL_WINDOW_SQL), self._leg_params())
+
+        rows = await _fetch_new_table_rows(db_engine, run_id)
+        by_key = {r[1]: r[0] for r in rows}
+        assert set(by_key) == set(keys)
+        for key in keys:
+            assert by_key[key] == parse_marker_node_id(key), key
+
+    @pytest.mark.asyncio
+    async def test_markers_leg_parses_colon_and_unknown_node_ids(
+        self, db_engine: AsyncEngine, sweep_tenant: _Tenant, migration: ModuleType
+    ) -> None:
+        """The off-by-one probe: with the OLD substr(key, 46) the remainder
+        gained a LEADING ':' — every grammar-valid key landed on
+        '__unknown__' (the CASE's colon-position window rejects the shifted
+        remainder). The fixed legs parse grammar-valid keys to their real
+        node ids."""
+        run_id = _next_leg_id()
+        keys = {
+            _marker_key(run_id, "probe-node"): {"raw": "a"},
+            _marker_key(run_id, "with:colons", "3"): {"raw": "b"},
+        }
+        await _seed_terminal_run(db_engine, sweep_tenant, run_number=1, markers=keys, run_id=run_id)
+        await self._exec_leg(db_engine, migration._markers_leg_sql(migration._TERMINAL_WINDOW_SQL), self._leg_params())
+
+        rows = await _fetch_new_table_rows(db_engine, run_id)
+        by_key = {r[1]: r[0] for r in rows}
+        assert by_key[_marker_key(run_id, "probe-node")] == "probe-node"
+        assert by_key[_marker_key(run_id, "with:colons", "3")] == "with:colons"
+        # The Python twin agrees, byte for byte.
+        for key, node_id in by_key.items():
+            assert node_id == parse_marker_node_id(key)
+
+    @pytest.mark.asyncio
+    async def test_quarantine_leg_copies_blobs_and_leg_skips_quarantined(
+        self, db_engine: AsyncEngine, sweep_tenant: _Tenant, migration: ModuleType
+    ) -> None:
+        """The quarantine SQL leg copies the run's blobs AS-IS; the markers
+        leg then SKIPS the quarantined run (NOT-EXISTS predicate)."""
+        run_id = _next_leg_id()
+        await _seed_terminal_run(
+            db_engine,
+            sweep_tenant,
+            run_number=1,
+            outputs={"a": {"v": 1}},
+            markers={"__sneaky__": {"raw": "squat"}},
+            run_id=run_id,
+        )
+        params = self._leg_params()
+        await self._exec_leg(db_engine, migration._QUARANTINE_TERMINAL_SQL, params)
+        quarantined = await _fetch_quarantine_row(db_engine, run_id)
+        assert quarantined is not None
+        assert quarantined["outputs"] == {"a": {"v": 1}}
+        assert quarantined["markers"] == {"__sneaky__": {"raw": "squat"}}
+        # Idempotent: a second quarantine pass inserts nothing new.
+        await self._exec_leg(db_engine, migration._QUARANTINE_TERMINAL_SQL, params)
+        async with db_engine.connect() as conn:
+            count = (
+                await conn.execute(
+                    text("SELECT count(*) FROM run_node_outputs_quarantine WHERE run_id = :rid"),
+                    {"rid": str(run_id)},
+                )
+            ).scalar_one()
+        assert count == 1
+        # The backfill legs skip the quarantined run entirely.
+        await self._exec_leg(db_engine, migration._OUTPUTS_TELEMETRY_LEG_SQL, params)
+        await self._exec_leg(db_engine, migration._METADATA_LEG_SQL, params)
+        await self._exec_leg(db_engine, migration._markers_leg_sql(migration._TERMINAL_WINDOW_SQL), params)
+        assert not await _fetch_new_table_rows(db_engine, run_id)
+
+    @pytest.mark.asyncio
+    async def test_metadata_flags_coalesced_satisfy_the_strict_check(
+        self, db_engine: AsyncEngine, sweep_tenant: _Tenant, migration: ModuleType
+    ) -> None:
+        """qa C1 round-trip: a run with outputs='{}' and a SQL-NULL telemetry
+        side must backfill with flags {true, false} and satisfy
+        ck_run_node_outputs_meta_shape. The UN-coalesced expression (the
+        pre-fix SQL) is executed first and MUST raise the CHECK violation —
+        the exact production abort this fix removes."""
+        run_id = _next_leg_id()
+        await _seed_terminal_run(db_engine, sweep_tenant, run_number=1, outputs={}, telemetry=None, run_id=run_id)
+        # The seed helper writes the JSON null VALUE for a None side; the C1
+        # scenario needs a TRUE SQL NULL side (three-valued logic is what
+        # turns the flag comparison into SQL NULL).
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text("UPDATE runs SET node_telemetry_json = NULL WHERE id = :rid"), {"rid": str(run_id)})
+        params = self._leg_params()
+        un_coalesced = migration._METADATA_LEG_SQL.replace(
+            "COALESCE((r.outputs_json = '{}'::jsonb), false)", "(r.outputs_json = '{}'::jsonb)"
+        ).replace("COALESCE((r.node_telemetry_json = '{}'::jsonb), false)", "(r.node_telemetry_json = '{}'::jsonb)")
+        assert un_coalesced != migration._METADATA_LEG_SQL
+        # Old form: jsonb_build_object maps the SQL NULL flag to a JSON null
+        # member -> the strict CHECK rejects the insert -> the transaction
+        # aborts (the whole one-transaction migration aborted pre-fix).
+        async with db_engine.connect() as conn, conn.begin():
+            with pytest.raises(DBAPIError):
+                await conn.execute(text(un_coalesced), params)
+        # Fixed form: the metadata row lands with boolean flags.
+        await self._exec_leg(db_engine, migration._METADATA_LEG_SQL, params)
+        rows = await _fetch_new_table_rows(db_engine, run_id)
+        meta_rows = [r for r in rows if r[0] == "__run_meta__"]
+        assert len(meta_rows) == 1
+        assert meta_rows[0][2] == {"empty_outputs": True, "empty_telemetry": False}

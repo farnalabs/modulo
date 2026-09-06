@@ -8,8 +8,9 @@ default=str)``, are byte-identical to the legacy bytes — across the full
 representation matrix: outputs-only / telemetry-only / both / per-node JSON
 null / column-level NULL sides / ``{}`` (both + mixed) / NULL / colon node
 ids / sentinel-named ids / ``__unknown__`` keys / multi-attempt markers /
-order-hostile key ordering / shrinking REPLACE / fallback semantics /
-high-water backfill selection.
+order-hostile key ordering / shrinking REPLACE / DIRECTION-AWARE fallback
+semantics / quarantined backfill selection / the fenced markers reader /
+malformed-metadata fail-open / inherited-sentinel filtering.
 """
 
 import itertools
@@ -20,12 +21,13 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run_node_outputs import (
     FINAL_ATTEMPT_KEY,
     META_NODE_ID,
+    QUARANTINE_TABLE,
     UNKNOWN_NODE_ID,
     OutputsSentinelViolation,
     RunBlobs,
@@ -35,6 +37,7 @@ from modulo.db.crud.run_node_outputs import (
     parse_marker_node_id,
     read_node_output_blob_bytes,
     read_run_blobs_with_fallback,
+    read_run_markers_fenced,
     read_run_node_outputs_raw,
     replace_run_node_outputs,
     write_run_markers,
@@ -53,6 +56,9 @@ _RUN_NUMBER = itertools.count(1)
 
 _RUN_ID = "01234567-89ab-cdef-0123-456789abcdef"
 
+# "leave this column untouched" sentinel for the legacy-blob rewrite helper.
+_UNSET: Any = object()
+
 
 @pytest.fixture
 async def engine() -> AsyncGenerator[AsyncEngine, None]:
@@ -60,6 +66,10 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         tables = [t for t in Base.metadata.sorted_tables if t.name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        # The quarantine side table has NO ORM model (migration-0176-owned,
+        # Core-only in the repo module) — created here so the sweep's
+        # quarantine exclusion + INSERT run against the real schema.
+        await conn.run_sync(lambda sync_conn: QUARANTINE_TABLE.create(sync_conn, checkfirst=True))
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -78,6 +88,7 @@ async def _seed_run(
     organisation_id: uuid.UUID = _ORG_A,
     status: str = "complete",
     completed_at: datetime | None = None,
+    claim_token: str | None = None,
     outputs: dict[str, Any] | None = None,
     telemetry: dict[str, Any] | None = None,
     markers: dict[str, Any] | None = None,
@@ -92,6 +103,7 @@ async def _seed_run(
         langgraph_thread_id="thread-" + uuid.uuid4().hex,
         status=status,
         completed_at=completed_at,
+        claim_token=claim_token,
         outputs_json=outputs,
         node_telemetry_json=telemetry,
         raw_output_markers=markers,
@@ -100,6 +112,39 @@ async def _seed_run(
         session.add(run)
         await session.flush()
     return run
+
+
+async def _set_legacy_blobs(
+    session: AsyncSession,
+    run: Run,
+    *,
+    outputs: Any = _UNSET,
+    telemetry: Any = _UNSET,
+    markers: Any = _UNSET,
+) -> None:
+    """Directly rewrite the run's legacy blob columns (simulating a
+    kill-switch-OFF legacy-only write or the frozen-at-B1 legacy state)."""
+    from sqlalchemy import update
+
+    values: dict[str, Any] = {}
+    if outputs is not _UNSET:
+        values["outputs_json"] = outputs
+    if telemetry is not _UNSET:
+        values["node_telemetry_json"] = telemetry
+    if markers is not _UNSET:
+        values["raw_output_markers"] = markers
+    if not values:
+        return
+    async with session.begin():
+        await session.execute(update(Run).where(Run.id == run.id).values(**values))
+
+
+async def _quarantine_row_count(session: AsyncSession, run_id: uuid.UUID) -> int:
+    async with session.begin():
+        rows = (
+            await session.execute(select(QUARANTINE_TABLE.c.run_id).where(QUARANTINE_TABLE.c.run_id == run_id))
+        ).all()
+    return len(rows)
 
 
 def _canonical(mapping: dict[str, Any]) -> dict[str, Any]:
@@ -425,6 +470,348 @@ class TestFallback:
         _assert_bytes_round_trip(blobs.outputs, {"fresh": {"v": 1}})
 
 
+class TestDirectionAwareFallback:
+    """qa M2/M3: the fallback compares LEGACY vs REASSEMBLED key sets by
+    subset direction — legacy ⊆ new serves NEW, new ⊂ legacy serves LEGACY
+    (truncation guard), divergent serves NEW with a warning."""
+
+    async def test_kill_switch_off_legacy_write_is_not_shadowed_outputs(self, session: AsyncSession) -> None:
+        """A kill-switch-OFF legacy-only write to an already-represented run
+        makes legacy the SUPERSET — the old absence-only fallback served the
+        stale NEW dict forever; the direction rule serves LEGACY (fresher)."""
+        run = await _seed_run(session)
+        await _replace(session, run, outputs={"a": {"v": 1}, "b": {"v": 2}}, telemetry=None)
+        await _set_legacy_blobs(session, run, outputs={"a": {"v": 1}, "b": {"v": 2}, "c": {"v": 3}})
+        blobs = await _read_blobs(session, run)
+        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}, "b": {"v": 2}, "c": {"v": 3}})
+
+    async def test_b1_legacy_frozen_new_grows_serves_new_outputs(self, session: AsyncSession) -> None:
+        """B1 simulation: legacy frozen at {a, b}; the new table grows to
+        {a, b, c} — legacy ⊆ new → serve NEW (not the stale subset)."""
+        run = await _seed_run(session, outputs={"a": {"v": 0}, "b": {"v": 0}})
+        await _replace(session, run, outputs={"a": {"v": 1}, "b": {"v": 1}, "c": {"v": 2}}, telemetry=None)
+        await _set_legacy_blobs(session, run, outputs={"a": {"v": 0}, "b": {"v": 0}})
+        blobs = await _read_blobs(session, run)
+        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}, "b": {"v": 1}, "c": {"v": 2}})
+
+    async def test_divergent_key_sets_serve_new_with_warning(
+        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        run = await _seed_run(session, outputs={"a": {"v": 0}, "c": {"v": 0}})
+        await _replace(session, run, outputs={"a": {"v": 1}, "b": {"v": 1}}, telemetry=None)
+        await _set_legacy_blobs(session, run, outputs={"a": {"v": 0}, "c": {"v": 0}})
+        with caplog.at_level("WARNING"):
+            blobs = await _read_blobs(session, run)
+        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}, "b": {"v": 1}})
+        assert any("diverge" in record.getMessage() for record in caplog.records)
+
+    async def test_kill_switch_off_legacy_write_is_not_shadowed_markers(self, session: AsyncSession) -> None:
+        """The markers leg: legacy gains a key the new table lacks (legacy
+        superset) → LEGACY served — the old any-mismatch rule happened to do
+        this; the subset rule pins it direction-correctly."""
+        run = await _seed_run(session, markers={"k1": {"raw": "a"}})
+        await _write_markers(session, run, {"k1": {"raw": "a"}})
+        await _set_legacy_blobs(session, run, markers={"k1": {"raw": "a"}, "k2": {"raw": "b"}})
+        blobs = await _read_blobs(session, run)
+        assert set(blobs.markers.keys()) == {"k1", "k2"}
+
+    async def test_b1_legacy_frozen_new_grows_serves_new_markers(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, markers={"k1": {"raw": "old"}})
+        await _write_markers(session, run, {"k1": {"raw": "old"}, "k2": {"raw": "new"}})
+        # Legacy frozen at {k1}; the new table carries {k1, k2} — legacy ⊆ new.
+        await _set_legacy_blobs(session, run, markers={"k1": {"raw": "old"}})
+        blobs = await _read_blobs(session, run)
+        assert blobs.markers == {"k1": {"raw": "old"}, "k2": {"raw": "new"}}
+
+    async def test_telemetry_side_is_direction_aware_too(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, telemetry={"a": {"ms": 1}})
+        await _replace(session, run, outputs=None, telemetry={"a": {"ms": 1}, "b": {"ms": 2}})
+        await _set_legacy_blobs(session, run, telemetry={"a": {"ms": 1}, "b": {"ms": 2}, "c": {"ms": 3}})
+        blobs = await _read_blobs(session, run)
+        _assert_bytes_round_trip(blobs.telemetry, {"a": {"ms": 1}, "b": {"ms": 2}, "c": {"ms": 3}})
+
+
+class TestFencedMarkersReader:
+    """qa M4/M5: ONE fenced statement (runs row under the fence predicates,
+    LEFT-JOINed to the marker rows) reassembling flat, with the same
+    direction-aware legacy fallback — the legacy column is selected from the
+    SAME fenced joined row, so the fallback re-checks the fence by
+    construction. ``for_update`` renders FOR UPDATE OF runs on Postgres and
+    is a no-op on SQLite."""
+
+    async def _seed_running_run(
+        self,
+        session: AsyncSession,
+        *,
+        status: str = "running",
+        claim_token: str | None = "tok-1",
+        markers: dict[str, Any] | None = None,
+    ) -> Run:
+        return await _seed_run(
+            session,
+            status=status,
+            claim_token=claim_token,
+            markers=markers,
+        )
+
+    async def test_fenced_read_serves_reassembled_markers(self, session: AsyncSession) -> None:
+        run = await self._seed_running_run(session)
+        markers = {f"run:{run.id}:node:n1:0": {"raw": "first"}, "junk-key": {"raw": "keep"}}
+        await _write_markers(session, run, markers)
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                claim_token="tok-1",
+            )
+        assert served == markers
+
+    async def test_wrong_claim_token_reads_none(self, session: AsyncSession) -> None:
+        """Fence miss (superseded executor's token) — the same visibility the
+        predicate-fenced gate read had: NOTHING is served, legacy included."""
+        run = await self._seed_running_run(session, claim_token="tok-real")
+        await _write_markers(session, run, {"k1": {"raw": "a"}})
+        await _set_legacy_blobs(session, run, markers={"k1": {"raw": "a"}})
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                claim_token="tok-stale",
+            )
+        assert served is None
+
+    async def test_non_running_status_reads_none(self, session: AsyncSession) -> None:
+        run = await self._seed_running_run(session, status="complete")
+        await _write_markers(session, run, {"k1": {"raw": "a"}})
+        await _set_legacy_blobs(session, run, markers={"k1": {"raw": "a"}})
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                claim_token=None,
+            )
+        assert served is None
+
+    async def test_no_marker_rows_serves_fenced_legacy_column(self, session: AsyncSession) -> None:
+        """Absence fallback within the fence: zero marker rows -> the legacy
+        column (read from the SAME fenced joined row) is served."""
+        run = await self._seed_running_run(session, markers={"legacy-k": {"raw": "x"}})
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                claim_token="tok-1",
+            )
+        assert served == {"legacy-k": {"raw": "x"}}
+
+    async def test_truncated_rows_fall_back_to_legacy_within_the_fence(self, session: AsyncSession) -> None:
+        run = await self._seed_running_run(session, markers={"k1": {"raw": "a"}, "k2": {"raw": "b"}})
+        await _write_markers(session, run, {"k1": {"raw": "a"}})
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                claim_token="tok-1",
+            )
+        assert served == {"k1": {"raw": "a"}, "k2": {"raw": "b"}}
+
+    async def test_for_update_true_is_accepted(self, session: AsyncSession) -> None:
+        run = await self._seed_running_run(session)
+        await _write_markers(session, run, {"k1": {"raw": "a"}})
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                claim_token="tok-1",
+                for_update=True,
+            )
+        assert served == {"k1": {"raw": "a"}}
+
+    async def test_single_statement_read(self, engine: AsyncEngine) -> None:
+        """The fence + reassembly + legacy fallback compose into ONE SQL
+        statement (statement counter on the engine)."""
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        statements: list[str] = []
+
+        def _count(conn: Any, cursor: Any, statement: Any, parameters: Any, context: Any, executemany: Any) -> None:
+            statements.append(str(statement)[:120])
+
+        event.listen(engine.sync_engine, "before_cursor_execute", _count)
+        try:
+            async with maker() as sess:
+                async with sess.begin():
+                    run = Run(
+                        organisation_id=_ORG_A,
+                        pipeline_id=uuid.uuid4(),
+                        snapshot_id=uuid.uuid4(),
+                        trigger_type="manual",
+                        run_number=next(_RUN_NUMBER),
+                        input_hash="a" * 64,
+                        langgraph_thread_id="thread-" + uuid.uuid4().hex,
+                        status="running",
+                        claim_token="tok-1",
+                        raw_output_markers={"legacy-k": {"raw": "x"}},
+                    )
+                    sess.add(run)
+                    await sess.flush()
+                run_id = run.id
+            before = len(statements)
+            async with maker() as sess, sess.begin():
+                await set_rls_org(sess, _ORG_A)
+                served = await read_run_markers_fenced(
+                    sess,
+                    run_id=run_id,
+                    organisation_id=_ORG_A,
+                    claim_token="tok-1",
+                )
+            assert served == {"legacy-k": {"raw": "x"}}
+            # Exactly ONE statement for the fenced read itself (set_rls_org on
+            # SQLite is a session.info write, not SQL).
+            assert len(statements) - before == 1, statements[before:]
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", _count)
+
+
+class TestMalformedMetadataFailOpen:
+    """qa M21: a corrupt metadata row must not brick every reader for the
+    run — treated as ABSENT on read paths (the write side keeps validating
+    strictly)."""
+
+    async def test_corrupt_meta_row_reads_node_rows_without_raising(
+        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        run = await _seed_run(session)
+        # The metadata row only exists when a side is '{}' (explicit empty):
+        # outputs={} + populated telemetry is the mixed case.
+        await _replace(session, run, outputs={}, telemetry={"a": {"ms": 1}})
+        async with session.begin():
+            meta = (
+                await session.execute(
+                    select(RunNodeOutput).where(
+                        RunNodeOutput.run_id == run.id,
+                        RunNodeOutput.node_id == META_NODE_ID,
+                    )
+                )
+            ).scalar_one()
+            meta.outputs_json = {"empty_outputs": "corrupt"}
+            await session.flush()
+        with caplog.at_level("WARNING"):
+            blobs = await _read_blobs(session, run)
+        _assert_bytes_round_trip(blobs.telemetry, {"a": {"ms": 1}})
+        assert any("malformed metadata" in record.getMessage() for record in caplog.records)
+
+    async def test_corrupt_meta_row_with_no_node_rows_falls_back_to_legacy(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, outputs={"legacy": {"v": 9}})
+        async with session.begin():
+            session.add(
+                RunNodeOutput(
+                    run_id=run.id,
+                    organisation_id=run.organisation_id,
+                    node_id=META_NODE_ID,
+                    attempt_key=FINAL_ATTEMPT_KEY,
+                    outputs_json={"bogus": True},
+                )
+            )
+            await session.flush()
+        blobs = await _read_blobs(session, run)
+        _assert_bytes_round_trip(blobs.outputs, {"legacy": {"v": 9}})
+
+
+class TestInheritedSentinelFiltering:
+    """qa M19: inherited '__'-prefixed keys (pre-0176 legacy data) are
+    FILTERED from the new-table REPLACE write (kept on the legacy column)
+    instead of raising and permanently wedging the run; NEWLY introduced
+    sentinel keys still raise."""
+
+    async def test_inherited_sentinel_key_is_filtered_and_counted(self, session: AsyncSession) -> None:
+        legacy_outputs: dict[str, Any] = {"__sneaky__": {"v": 0}, "a": {"v": 1}}
+        run = await _seed_run(session, outputs=legacy_outputs)
+        incoming = {"__sneaky__": {"v": 0}, "a": {"v": 2}, "b": {"v": 3}}
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            counts = await replace_run_node_outputs(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                outputs=incoming,
+                telemetry=None,
+                inherited_outputs=legacy_outputs,
+            )
+        assert counts["outputs_dual_write_sentinel_filtered"] == 1
+        # The new table carries only the non-sentinel keys.
+        blobs = await _read_blobs(session, run, raw=True)
+        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 2}, "b": {"v": 3}})
+        # The caller's legacy write retains the inherited key (simulated):
+        await _set_legacy_blobs(session, run, outputs=incoming)
+        fallback_blobs = await _read_blobs(session, run)
+        # The legacy superset (sentinel key included) is served via the
+        # truncation guard — evidence preserved until B2b.
+        assert "__sneaky__" in (fallback_blobs.outputs or {})
+
+    async def test_newly_introduced_sentinel_key_still_raises(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, outputs={"a": {"v": 1}})
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            with pytest.raises(OutputsSentinelViolation):
+                await replace_run_node_outputs(
+                    session,
+                    run_id=run.id,
+                    organisation_id=run.organisation_id,
+                    outputs={"a": {"v": 1}, "__fresh__": {"v": 2}},
+                    telemetry=None,
+                    inherited_outputs={"a": {"v": 1}},
+                )
+
+    async def test_uncaptured_inherited_state_fails_closed(self, session: AsyncSession) -> None:
+        """inherited_outputs=None (caller captured nothing) — every
+        '__'-prefixed incoming key raises (fail-closed)."""
+        run = await _seed_run(session)
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            with pytest.raises(OutputsSentinelViolation):
+                await replace_run_node_outputs(
+                    session,
+                    run_id=run.id,
+                    organisation_id=run.organisation_id,
+                    outputs={"__sneaky__": {"v": 1}},
+                    telemetry=None,
+                )
+
+    async def test_derived_sentinel_marker_node_id_raises(self, session: AsyncSession) -> None:
+        """qa M19b: a parseable marker key deriving a '__'-prefixed node id
+        squats the reserved namespace through the grammar — rejected."""
+        run = await _seed_run(session)
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            with pytest.raises(OutputsSentinelViolation):
+                await write_run_markers(
+                    session,
+                    run_id=run.id,
+                    organisation_id=run.organisation_id,
+                    markers={f"run:{_RUN_ID}:node:__sneaky__:1": {"raw": "x"}},
+                )
+
+    async def test_unparseable_marker_keys_still_accepted(self, session: AsyncSession) -> None:
+        """The allowed sentinel row (__unknown__) is untouched: unparseable
+        keys still write as evidence rows (FAR-188)."""
+        run = await _seed_run(session)
+        await _write_markers(session, run, {"weird-legacy-key": {"raw": "keep"}})
+        blobs = await _read_blobs(session, run, raw=True)
+        assert blobs.markers == {"weird-legacy-key": {"raw": "keep"}}
+
+
 class TestBackfill:
     async def test_full_representation_and_idempotency(self, session: AsyncSession) -> None:
         run = await _seed_run(
@@ -485,14 +872,103 @@ class TestBackfill:
         assert result["runs_backfilled"] == 0
         blobs = await _read_blobs(session, run, raw=True)
         assert blobs == RunBlobs(outputs=None, telemetry=None, markers=None)
+        # qa M1b: the quarantine row lands and the run is NEVER re-selected
+        # (the old code skipped it in-body only — it stayed re-selectable
+        # on every tick, consuming the cap).
+        assert await _quarantine_row_count(session, run.id) == 1
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            second = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert second["runs_selected"] == 0
+        assert second["runs_backfilled"] == 0
 
-    async def test_high_water_advances_and_bounds_selection(self, session: AsyncSession) -> None:
+    async def test_non_dict_blob_anomaly_is_quarantined_never_reselected(self, session: AsyncSession) -> None:
+        """qa M1c: a jsonb ARRAY in a blob side is junk — on SQLite the
+        text-cast trigger still selects it (the jsonb-native OBJECT predicate
+        that excludes it on Postgres is dialect-branched); the body must
+        QUARANTINE the run, not silently continue (the old silent continue
+        left the run re-selected on EVERY tick, starving the cap)."""
+        run = await _seed_run(
+            session,
+            status="complete",
+            completed_at=datetime(2026, 9, 3, 6, 0, 0),
+        )
+        await _set_legacy_blobs(session, run, markers=["not", "a", "dict"])
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert first["runs_quarantined"] == 1
+        assert first["runs_backfilled"] == 0
+        assert await _quarantine_row_count(session, run.id) == 1
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            second = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert second["runs_selected"] == 0
+
+    async def test_sentinel_marker_attempt_key_quarantines_the_run(self, session: AsyncSession) -> None:
+        """qa M1c: a '__'-prefixed marker attempt key (e.g. '__final__') used
+        to be silently dropped key-by-key — the run stayed re-selectable
+        forever with its marker evidence unrepresented. Now the run is
+        quarantined (evidence preserved on the side table)."""
+        run = await _seed_run(
+            session,
+            status="complete",
+            completed_at=datetime(2026, 9, 3, 6, 0, 0),
+            markers={FINAL_ATTEMPT_KEY: {"raw": "squat"}},
+        )
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert result["runs_quarantined"] == 1
+        assert result["runs_backfilled"] == 0
+        assert await _quarantine_row_count(session, run.id) == 1
+
+    async def test_backdated_unhealed_run_is_still_selected(self, session: AsyncSession) -> None:
+        """qa M20 prove-the-fix: the OLD selection filtered
+        ``completed_at > high_water_mark`` — a run terminalizing with an
+        EARLIER completed_at than the current mark (its terminalizing
+        transaction started before the mark advanced) was permanently
+        missed. Without the filter, the trigger legs pick it up."""
+        run_old = await _seed_run(
+            session, status="complete", completed_at=datetime(2026, 8, 1, 0, 0, 0), outputs={"old": {}}
+        )
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=10)
+        assert first["runs_backfilled"] == 1
+        # A BACKDATED un-healed run appears AFTER the mark advanced past
+        # 2026-08-01 (e.g. an old machine's terminalizing transaction).
+        run_backdated = await _seed_run(
+            session, status="failed", completed_at=datetime(2026, 7, 15, 0, 0, 0), outputs={"late": {}}
+        )
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            second = await backfill_run_node_outputs_batch(
+                session,
+                organisation_id=_ORG_A,
+                high_water_mark=first["new_high_water"],  # accepted, IGNORED for selection
+                cap=10,
+            )
+        assert second["runs_selected"] == 1
+        assert second["runs_backfilled"] == 1
+        blobs = await _read_blobs(session, run_backdated, raw=True)
+        _assert_bytes_round_trip(blobs.outputs, {"late": {}})
+        # The healed run stays healed (the trigger excludes it).
+        blobs_old = await _read_blobs(session, run_old, raw=True)
+        _assert_bytes_round_trip(blobs_old.outputs, {"old": {}})
+
+    async def test_cap_bounds_selection_across_ticks_without_high_water(self, session: AsyncSession) -> None:
+        """The per-tick cap + ORDER BY completed_at ASC + trigger legs bound
+        the drain with NO high-water filter: each tick heals the oldest
+        un-healed run; the mark-less steady state selects nothing."""
         await _seed_run(session, status="complete", completed_at=datetime(2026, 8, 1, 0, 0, 0), outputs={"a": {}})
         await _seed_run(session, status="complete", completed_at=datetime(2026, 8, 2, 0, 0, 0), outputs={"b": {}})
+        await _seed_run(session, status="complete", completed_at=datetime(2026, 8, 3, 0, 0, 0), outputs={"c": {}})
         async with session.begin():
             await set_rls_org(session, _ORG_A)
             first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=1)
         assert first["runs_selected"] == 1
+        assert first["runs_backfilled"] == 1
         assert first["new_high_water"] == datetime(2026, 8, 1, 0, 0, 0)
 
         async with session.begin():
@@ -502,6 +978,16 @@ class TestBackfill:
             )
         assert second["runs_selected"] == 1
         assert second["new_high_water"] == datetime(2026, 8, 2, 0, 0, 0)
+
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            third = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=1)
+        assert third["runs_selected"] == 1
+
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            drained = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=1)
+        assert drained["runs_selected"] == 0
 
     async def test_non_terminal_runs_are_untouched(self, session: AsyncSession) -> None:
         await _seed_run(session, status="running", outputs={"a": {"v": 1}})

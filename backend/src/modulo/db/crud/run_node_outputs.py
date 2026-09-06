@@ -19,12 +19,21 @@ module. It provides:
   server-side ``ORDER BY length(key), key COLLATE "C"`` is PG-only, so the
   ordering happens in Python — dialect-neutral);
 * EMPTY/MISMATCH read-fallback helpers: a raw parameterised SELECT of the
-  legacy ``runs`` columns, served when the reassembly yields nothing for a
-  blob side (pre-sweep stragglers, kill-switch-off mode) or — for markers —
-  when the new-table key set mismatches the legacy key set (partial-row
-  truncation hole). Removed at B2b together with the columns;
-* the batched backfill helper with high-water selection on ``completed_at``
-  that the catch-up sweep (dispatcher_reconcile wiring, pass 2) reuses.
+  legacy ``runs`` columns, served per the DIRECTION-AWARE subset rule
+  (see :func:`read_run_blobs_with_fallback`); removed at B2b together with
+  the columns. B1 NOTE (design-doc addendum): these fallback readers read the
+  legacy columns via ORM attributes — B1 MUST convert them to raw
+  parameterised SQL BEFORE dropping the model columns, so the fallback
+  survives until B2b;
+* the batched backfill helper (the catch-up sweep body) whose selection is
+  driven by the NOT-EXISTS trigger legs + jsonb-native object predicates on
+  Postgres, the per-tick cap, and ``ORDER BY completed_at ASC`` — NO
+  high-water filter (qa M20: ``completed_at > mark`` could permanently miss
+  runs whose terminalizing transaction STARTED before the mark advanced;
+  ``completed_at`` is transaction-start ``now()``). The mark is still
+  accepted/returned for observability. A partial index on
+  ``(organisation_id, completed_at) WHERE status IN (terminal)`` is the
+  documented post-deploy ops step backing the selection.
 
 Representation invariants (the lossless mapping):
 
@@ -56,8 +65,8 @@ attempt_key=<original key>)`` — evidence kept, never dropped (FAR-188).
 
 from __future__ import annotations
 
-import asyncio
 import json
+import logging
 import re
 import uuid
 from collections.abc import Sequence
@@ -66,7 +75,25 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, NamedTuple
 
-from sqlalchemy import JSON, String, and_, cast, delete, exists, func, null, or_, select, update
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    MetaData,
+    String,
+    Table,
+    Uuid,
+    and_,
+    cast,
+    delete,
+    exists,
+    func,
+    null,
+    or_,
+    select,
+    update,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,8 +104,11 @@ from modulo.db.models.run_node_outputs import (
     META_NODE_ID,
     UNKNOWN_NODE_ID,
     RunNodeOutput,
+    json_bytes,
 )
 from modulo.db.rls import OutputsRlsMismatch, read_rls_org
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "DualWriteError",
@@ -88,6 +118,7 @@ __all__ = [
     "parse_marker_node_id",
     "read_node_output_blob_bytes",
     "read_run_blobs_with_fallback",
+    "read_run_markers_fenced",
     "read_run_markers_with_fallback",
     "read_run_node_outputs_raw",
     "read_run_outputs_with_fallback",
@@ -194,16 +225,6 @@ def _jsonb_canonical_key(key: str) -> tuple[int, bytes]:
     return (len(encoded), encoded)
 
 
-def _json_bytes(value: Any) -> int:
-    """Byte size of a JSON-serialisable value — mirrors run_retention._json_bytes."""
-    if value is None:
-        return 0
-    try:
-        return len(json.dumps(value, default=str))
-    except (TypeError, ValueError):
-        return 0
-
-
 # Sentinel for "this side is NOT being written" — an omitted side is SQL NULL
 # on insert and untouched on conflict. Distinct from a written ``None`` VALUE
 # (explicit JSON null).
@@ -270,11 +291,30 @@ def _markers_present(column: Any) -> Any:
     return and_(_side_present(column), cast(column, String) != _MARKERS_EMPTY_TEXT)
 
 
-async def _resolve_dialect(session: AsyncSession) -> str:
-    bind = session.get_bind()
-    if asyncio.iscoroutine(bind):  # AsyncSession get_bind is sync in SA 2.x; defensive
-        bind = await bind
-    return bind.dialect.name
+# Postgres-native "object side" predicates (qa M1a): the sweep's trigger
+# requires a side to be a JSON OBJECT (a jsonb array or scalar is not a
+# representable blob — selecting one writes zero rows forever). The text-cast
+# heuristic above counts arrays/scalars as present (their text is not 'null'),
+# so on Postgres the trigger uses jsonb_typeof instead. jsonb_typeof(SQL NULL)
+# is SQL NULL -> the comparison is NULL -> excluded by the WHERE, so no
+# explicit IS NOT NULL is needed. The markers side additionally excludes '{}'
+# ("no markers" is not representable).
+_JSONB_OBJECT = "object"
+
+
+def _pg_side_object(column: Any) -> Any:
+    return func.jsonb_typeof(column) == _JSONB_OBJECT
+
+
+def _pg_markers_object_nonempty(column: Any) -> Any:
+    return and_(_pg_side_object(column), cast(column, String) != _MARKERS_EMPTY_TEXT)
+
+
+def _resolve_dialect(session: AsyncSession) -> str:
+    """The bind's dialect name (SQLAlchemy 2.x ``AsyncSession.get_bind`` is
+    sync — the defensive iscoroutine dance the 1.x habits suggested is dead
+    code and was removed)."""
+    return session.get_bind().dialect.name
 
 
 def _dialect_insert(dialect: str) -> Any:
@@ -292,7 +332,100 @@ def _dialect_insert(dialect: str) -> Any:
     )
 
 
-def _validate_sentinel_keys(mapping: dict[str, Any] | None, *, kind: str) -> None:
+# The quarantine side table (migration 0176) as a CORE-ONLY Table —
+# deliberately NOT an ORM model (ops/remediation surface: written by the
+# migration + this sweep body, read by ops SQL only). Column set matches
+# migration 0176's DDL exactly (JSONB on Postgres via the variant, generic
+# JSON elsewhere).
+_QUARANTINE_METADATA = MetaData()
+QUARANTINE_TABLE = Table(
+    "run_node_outputs_quarantine",
+    _QUARANTINE_METADATA,
+    Column("run_id", Uuid(), primary_key=True),
+    Column("organisation_id", Uuid(), nullable=False),
+    Column("legacy_outputs_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
+    Column("legacy_node_telemetry_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
+    Column("legacy_raw_output_markers", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
+    Column("quarantined_at", DateTime(timezone=True), nullable=False),
+)
+
+
+def _decode_blob_side(raw: Any) -> tuple[dict[str, Any] | None, bool]:
+    """Decode one legacy blob column value for the sweep body.
+
+    Returns ``(dict_or_None, is_anomaly)``: a SQL NULL / JSON-null VALUE /
+    ``'null'``-text side decodes to ``(None, False)`` (ABSENT); a dict-shaped
+    side decodes to ``(dict, False)``; anything else (a jsonb array or
+    scalar — legacy junk the writers never produce) decodes to
+    ``(None, True)``. qa M1c: junk sides are QUARANTINED by the sweep body,
+    never silently treated as absent (which would re-select the run on every
+    tick — the cap-starvation bug).
+    """
+    if raw is None:
+        return None, False
+    value: Any = raw
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None, True
+    if value is None:
+        return None, False  # explicit JSON null value = absent side
+    if isinstance(value, dict):
+        return value, False
+    return None, True
+
+
+async def _quarantine_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    legacy_outputs: Any,
+    legacy_telemetry: Any,
+    legacy_markers: Any,
+    reason: str,
+) -> None:
+    """Copy a run's legacy blobs to the quarantine side table (idempotent).
+
+    Mirrors migration 0176's quarantine step for data the sweep encounters
+    post-deploy: the blobs are preserved AS-IS (evidence), the run is
+    EXCLUDED from all future sweep selections (the NOT-EXISTS trigger leg on
+    ``run_node_outputs_quarantine``), and the reason is logged — data
+    anomalies never abort the sweep, and never silently re-select forever.
+    """
+    insert_factory = _dialect_insert(_resolve_dialect(session))
+    stmt = (
+        insert_factory(QUARANTINE_TABLE)
+        .values(
+            run_id=run_id,
+            organisation_id=organisation_id,
+            legacy_outputs_json=legacy_outputs,
+            legacy_node_telemetry_json=legacy_telemetry,
+            legacy_raw_output_markers=legacy_markers,
+            quarantined_at=func.now(),
+        )
+        .on_conflict_do_nothing(index_elements=["run_id"])
+    )
+    await session.execute(stmt)
+    _log.warning("run_node_outputs.sweep_quarantined run=%s org=%s reason=%s", run_id, organisation_id, reason)
+
+
+def _validate_sentinel_keys(
+    mapping: dict[str, Any] | None,
+    *,
+    kind: str,
+    attempt_keys: bool = False,
+) -> None:
+    """Reject sentinel-namespace squatting in an incoming write.
+
+    * Every key starting with ``__`` is rejected for both kinds.
+    * ``attempt_keys=True`` (markers): a PARSEABLE key whose DERIVED node id
+      is ``__``-prefixed is also rejected (qa M19b — sentinel squatting via
+      the grammar: ``run:<uuid>:node:__sneaky__:1`` would land on the
+      reserved node-id namespace). Unparseable keys map to ``__unknown__``,
+      which is the ALLOWED sentinel row (evidence preserved, FAR-188).
+    """
     if not mapping:
         return
     for key in mapping:
@@ -301,6 +434,12 @@ def _validate_sentinel_keys(mapping: dict[str, Any] | None, *, kind: str) -> Non
                 f"{kind} key {key!r} squats the reserved '__' sentinel namespace "
                 "(run_node_outputs metadata/unknown sentinels)"
             )
+        if attempt_keys:
+            node_id = parse_marker_node_id(key)
+            if node_id != UNKNOWN_NODE_ID and node_id.startswith("__"):
+                raise OutputsSentinelViolation(
+                    f"{kind} key {key!r} derives node id {node_id!r}, squatting the reserved '__' sentinel namespace"
+                )
 
 
 async def _assert_write_org(session: AsyncSession, organisation_id: uuid.UUID | None) -> None:
@@ -350,7 +489,7 @@ async def _upsert_rows(
     """
     if not rows:
         return
-    insert_factory = _dialect_insert(await _resolve_dialect(session))
+    insert_factory = _dialect_insert(_resolve_dialect(session))
     groups: dict[tuple[bool, bool, bool], list[NodeOutputWrite]] = {}
     for row in rows:
         flags = (
@@ -441,7 +580,9 @@ async def replace_run_node_outputs(
     organisation_id: uuid.UUID,
     outputs: dict[str, Any] | None,
     telemetry: dict[str, Any] | None,
-) -> None:
+    inherited_outputs: dict[str, Any] | None = None,
+    inherited_telemetry: dict[str, Any] | None = None,
+) -> dict[str, int]:
     """REPLACE-write the '__final__' + metadata rows for one run.
 
     Mirrors the legacy column semantics losslessly: a non-None dict fully
@@ -452,13 +593,28 @@ async def replace_run_node_outputs(
     its flag from the incoming dict; an untouched (None) side keeps the flag
     already stored (``False`` when no metadata row exists — that side is
     populated-or-NULL, never ``{}``).
+
+    INHERITED SENTINEL KEYS (qa M19): the incoming dicts may still carry
+    ``__``-prefixed node ids INHERITED from the already-stored legacy state
+    (pre-0176 legacy data) — without special handling every such REPLACE
+    would raise and leave the run permanently un-finalizable. Keys present
+    in *inherited_outputs* / *inherited_telemetry* (the caller-captured
+    PRE-WRITE legacy dicts) are FILTERED from the new-table write — the
+    caller's legacy write retains them — and counted in the returned
+    ``outputs_dual_write_sentinel_filtered`` (the core orchestrator wires the
+    counter). A ``__``-prefixed key NOT already stored (newly introduced by
+    the caller) still raises :class:`OutputsSentinelViolation`; when the
+    caller captured no legacy dict (``None``), every ``__``-prefixed key
+    raises (fail-closed — nothing proves it was inherited).
+
+    Returns ``{"outputs_dual_write_sentinel_filtered": <int>}``.
     """
-    _validate_sentinel_keys(outputs, kind="outputs node id")
-    _validate_sentinel_keys(telemetry, kind="telemetry node id")
+    filtered = _split_inherited_sentinel_keys(outputs, inherited_outputs, kind="outputs node id")
+    filtered |= _split_inherited_sentinel_keys(telemetry, inherited_telemetry, kind="telemetry node id")
     await _assert_write_org(session, organisation_id)
 
-    outputs_map: dict[str, Any] = outputs if outputs is not None else {}
-    telemetry_map: dict[str, Any] = telemetry if telemetry is not None else {}
+    outputs_map: dict[str, Any] = {k: v for k, v in (outputs or {}).items() if k not in filtered}
+    telemetry_map: dict[str, Any] = {k: v for k, v in (telemetry or {}).items() if k not in filtered}
 
     rows: list[NodeOutputWrite] = []
     for node_id in sorted(set(outputs_map) | set(telemetry_map)):
@@ -472,12 +628,16 @@ async def replace_run_node_outputs(
         await _upsert_rows(session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=False)
 
     # Delete-absent AFTER upserts (design order): blank shrinking sides, then
-    # drop rows left with no value at all.
+    # drop rows left with no value at all. The blanking key sets are the
+    # FILTERED maps — the new table only ever holds non-sentinel keys.
     if outputs is not None:
         await _blank_absent_side(session, run_id=run_id, side="outputs_json", keys=set(outputs_map))
     if telemetry is not None:
         await _blank_absent_side(session, run_id=run_id, side="node_telemetry_json", keys=set(telemetry_map))
     await _drop_dead_final_rows(session, run_id=run_id)
+    # Metadata flags derive from the FULL incoming dicts (pre-filter): the
+    # flags describe the run state the legacy column now holds, and an
+    # inherited-sentinel key makes a side non-empty either way.
     await _refresh_metadata_row(
         session,
         run_id=run_id,
@@ -485,6 +645,37 @@ async def replace_run_node_outputs(
         outputs=outputs,
         telemetry=telemetry,
     )
+    return {"outputs_dual_write_sentinel_filtered": len(filtered)}
+
+
+def _split_inherited_sentinel_keys(
+    incoming: dict[str, Any] | None,
+    inherited: dict[str, Any] | None,
+    *,
+    kind: str,
+) -> set[str]:
+    """Validate the incoming dict's sentinel keys and return the inherited ones.
+
+    A ``__``-prefixed key that was ALREADY STORED in the legacy dict
+    (*inherited*) is returned for filtering; one that is NOT in *inherited*
+    (or when *inherited* is None — nothing captured) raises
+    :class:`OutputsSentinelViolation`. Non-sentinel keys are untouched.
+    """
+    if not incoming:
+        return set()
+    inherited_keys = set(inherited) if inherited else set()
+    filtered: set[str] = set()
+    for key in incoming:
+        if not key.startswith("__"):
+            continue
+        if inherited_keys and key in inherited_keys:
+            filtered.add(key)
+            continue
+        raise OutputsSentinelViolation(
+            f"{kind} key {key!r} squats the reserved '__' sentinel namespace "
+            "(run_node_outputs metadata/unknown sentinels)"
+        )
+    return filtered
 
 
 async def _refresh_metadata_row(
@@ -555,7 +746,7 @@ async def write_run_markers(
     ``('__unknown__', <full key>)`` rows. Absent keys are deleted AFTER the
     upserts (delete-absent ordering).
     """
-    _validate_sentinel_keys(markers, kind="marker attempt key")
+    _validate_sentinel_keys(markers, kind="marker attempt key", attempt_keys=True)
     await _assert_write_org(session, organisation_id)
 
     rows = [
@@ -606,13 +797,22 @@ def _assemble(rows: Sequence[Any]) -> tuple[RunBlobs, _AssemblyInfo]:
 
     for r in rows:
         if r.attempt_key == FINAL_ATTEMPT_KEY and r.node_id == META_NODE_ID:
-            info.meta_exists = True
             flags = r.outputs_json
             if not isinstance(flags, dict) or "empty_outputs" not in flags or "empty_telemetry" not in flags:
-                raise OutputsSentinelViolation(
-                    "run_node_outputs metadata row has a malformed flags payload "
-                    f"(expected empty_outputs/empty_telemetry booleans, got {flags!r})"
+                # qa M21 — READ paths FAIL OPEN: a malformed metadata row is
+                # treated as ABSENT (the run's node rows / legacy fallback
+                # still serve); raising here would brick every reader for the
+                # run. The WRITE side keeps validating strictly
+                # (_validate_sentinel_keys + the writer's own flag payload),
+                # so a malformed row can only be corruption — logged, never
+                # fatal on read.
+                _log.warning(
+                    "run_node_outputs malformed metadata row treated as absent "
+                    "(expected empty_outputs/empty_telemetry booleans, got %r)",
+                    flags,
                 )
+                continue
+            info.meta_exists = True
             meta_flags = flags
             continue
         if r.attempt_key == FINAL_ATTEMPT_KEY:
@@ -715,25 +915,81 @@ async def _read_legacy_run_blobs(session: AsyncSession, run_id: uuid.UUID) -> Ru
     )
 
 
+def _direction_aware_side(
+    new_value: dict[str, Any] | None,
+    legacy_value: dict[str, Any] | None,
+    *,
+    side: str,
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """DIRECTION-AWARE legacy fallback decision for one blob side (qa M2/M3).
+
+    Compares the LEGACY key set with the REASSEMBLED key set:
+
+    * legacy ⊆ new (incl. equal, incl. legacy empty) → serve NEW — the legacy
+      column is a stale subset (kill-switch-OFF write to an already-
+      represented run is NOT shadowed; legacy is only ever behind);
+    * new ⊂ legacy (proper) → serve LEGACY — the truncation guard: the new
+      table is missing rows the legacy column has (partial sweep / partial
+      write), legacy is the more complete store;
+    * divergent (neither subset) → serve NEW + a warning log (neither store
+      is a superset; the new table is the forward-looking authority and the
+      divergence is reported for remediation);
+    * legacy empty + new non-empty → serve NEW (the existing truncation-hole
+      guard: an empty legacy column carries no truth to fall back to).
+
+    Empty-legacy + new empty → equal sets → serve NEW (both carry nothing).
+    """
+    legacy_keys = set(legacy_value) if legacy_value else set()
+    new_keys = set(new_value) if new_value is not None else set()
+    if not legacy_keys:
+        return new_value
+    if legacy_keys <= new_keys:
+        return new_value
+    if new_keys < legacy_keys:
+        _log.info(
+            "run_node_outputs fallback: %s served from the legacy column (new table truncated) run=%s",
+            side,
+            run_id,
+        )
+        return legacy_value
+    _log.warning(
+        "run_node_outputs fallback: %s key sets diverge between the legacy column and "
+        "the new table (serving the new table) run=%s legacy_only=%s new_only=%s",
+        side,
+        run_id,
+        sorted(legacy_keys - new_keys),
+        sorted(new_keys - legacy_keys),
+    )
+    return new_value
+
+
 async def read_run_blobs_with_fallback(
     session: AsyncSession,
     *,
     run_id: uuid.UUID,
     organisation_id: uuid.UUID | None = None,
 ) -> RunBlobs:
-    """Reassemble with the EMPTY/MISMATCH legacy fallback applied.
+    """Reassemble with the DIRECTION-AWARE legacy fallback applied (qa M2/M3).
 
-    outputs/telemetry: the legacy column is served only when the reassembly
-    yields NOTHING for the side (no node rows AND no metadata row) — pre-sweep
-    stragglers / kill-switch-off mode. (When the metadata row exists, the
-    backfill/writer invariants guarantee the reassembled value already
-    matches the legacy column, including the ``{}``-vs-``None`` distinction.)
-    markers: the fallback triggers on ABSENCE of rows, or on a key-set
-    MISMATCH while the legacy column actually holds markers (per-run
-    comparison — closing the partial-row truncation hole). A legacy column
-    that is NULL/``{}`` is NOT authoritative over present rows: serving it
-    would destroy the just-written markers. The legacy read is one extra
+    Per side: when the new table holds NO representation for the side at all
+    (no node rows AND no metadata row) the legacy column is served verbatim
+    (pre-sweep stragglers / kill-switch-off mode). When the new table DOES
+    represent the side, the subset-direction rule
+    (:func:`_direction_aware_side`) decides between the reassembled dict and
+    the legacy column by key-set containment — legacy ⊆ new serves NEW (a
+    kill-switch-OFF legacy-only write to an already-represented run is NOT
+    shadowed forever), new ⊂ legacy serves LEGACY (truncation guard), a
+    divergent key set serves NEW with a warning.
+
+    (When the metadata row exists, the backfill/writer invariants guarantee
+    the reassembled value already matches the legacy column, including the
+    ``{}``-vs-``None`` distinction.) The legacy read is one extra
     parameterised SELECT per call; B2b removes it together with the columns.
+
+    B1 NOTE: this reader (and the fenced markers reader) reads the legacy
+    columns via ORM attributes — B1 MUST convert these to raw parameterised
+    SQL BEFORE dropping the model columns (design-doc addendum).
     """
     rows = await _fetch_output_rows(session, run_id)
     session_org = await read_rls_org(session)
@@ -741,21 +997,20 @@ async def read_run_blobs_with_fallback(
     blobs, info = _assemble(rows)
     legacy = await _read_legacy_run_blobs(session, run_id)
 
-    outputs = blobs.outputs if (info.out_present or info.meta_exists) else legacy.outputs
-    telemetry = blobs.telemetry if (info.telemetry_present or info.meta_exists) else legacy.telemetry
+    # No new-table representation for a side -> serve the legacy column
+    # verbatim (pre-sweep stragglers / kill-switch-off mode); a represented
+    # side goes through the subset-direction rule.
+    outputs = legacy.outputs
+    telemetry = legacy.telemetry
+    if info.out_present or info.meta_exists:
+        outputs = _direction_aware_side(blobs.outputs, legacy.outputs, side="outputs", run_id=run_id)
+    if info.telemetry_present or info.meta_exists:
+        telemetry = _direction_aware_side(blobs.telemetry, legacy.telemetry, side="telemetry", run_id=run_id)
 
     if not info.markers_present:
         markers = legacy.markers
     else:
-        # Truncation hole: fall back to legacy ONLY when legacy actually
-        # holds markers whose key set differs from the rows. A legacy column
-        # that is NULL/`{}` carries no truth to fall back to — serving it
-        # over present rows would destroy the just-written markers.
-        legacy_markers = legacy.markers
-        reassembled_keys = set(blobs.markers) if blobs.markers is not None else set()
-        legacy_keys = set(legacy_markers) if legacy_markers else set()
-        truncated = bool(legacy_keys) and legacy_keys != reassembled_keys
-        markers = legacy_markers if truncated else blobs.markers
+        markers = _direction_aware_side(blobs.markers, legacy.markers, side="markers", run_id=run_id)
 
     return RunBlobs(outputs=outputs, telemetry=telemetry, markers=markers)
 
@@ -790,6 +1045,83 @@ async def read_run_markers_with_fallback(
     return (await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=organisation_id)).markers
 
 
+_FENCED_RUNNING_STATUS = "running"
+
+
+async def read_run_markers_fenced(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    claim_token: str | None,
+    for_update: bool = False,
+) -> dict[str, Any] | None:
+    """Fenced, single-statement markers read (qa M4/M5).
+
+    ONE statement: the ``runs`` row is fetched under the fence predicates
+    (``id``, ``organisation_id``, ``claim_token`` when given,
+    ``status = 'running'``) and LEFT-JOINed to the run's marker rows
+    (``attempt_key != '__final__'`` AND ``raw_output_markers IS NOT NULL``);
+    the markers reassemble flat in the same Python pass. A fence miss (wrong
+    claim token / wrong status / missing run) yields ZERO rows — the caller
+    gets ``None``, byte-for-byte the same visibility the fenced single-column
+    gate read had (FAR-228 predicate-fenced gate).
+
+    ``for_update=True`` adds ``FOR UPDATE OF runs`` (Postgres) so the
+    connector-caller's gate decision serialises on the run row exactly like
+    its previous raw ``SELECT ... FOR UPDATE``; SQLite renders no FOR UPDATE
+    (no-op — matching every other generic-backend read).
+
+    The DIRECTION-AWARE legacy fallback (qa M2/M3) is part of the contract:
+    the legacy ``runs.raw_output_markers`` column is selected FROM THE SAME
+    FENCED JOINED ROW — the fence predicates apply to the runs row, and the
+    fallback read therefore re-checks the fence by construction (a fence-miss
+    can never serve legacy markers either). Reassembly uses the same
+    subset-direction rule as :func:`read_run_blobs_with_fallback`.
+
+    ``claim_token=None`` skips the token predicate (the ``:tok IS NULL OR
+    claim_token = :tok`` fence idiom) — a caller that fences by other means
+    (e.g. the connector gate's plain run-row FOR UPDATE) passes None.
+    """
+    fence: list[Any] = [
+        Run.id == run_id,
+        Run.organisation_id == organisation_id,
+        Run.status == _FENCED_RUNNING_STATUS,
+    ]
+    if claim_token is not None:
+        fence.append(Run.claim_token == claim_token)
+
+    stmt = (
+        select(Run.raw_output_markers, RunNodeOutput.attempt_key, RunNodeOutput.raw_output_markers)
+        .join(
+            RunNodeOutput,
+            and_(
+                RunNodeOutput.run_id == Run.id,
+                RunNodeOutput.attempt_key != FINAL_ATTEMPT_KEY,
+                RunNodeOutput.raw_output_markers.is_not(None),
+            ),
+            isouter=True,
+        )
+        .where(and_(*fence))
+    )
+    if for_update:
+        # FOR UPDATE OF runs — Postgres-only; SQLite ignores FOR UPDATE.
+        stmt = stmt.with_for_update(of=Run)
+
+    session_org = await read_rls_org(session)
+    _assert_read_org(session_org, organisation_id, run_id)
+    joined = (await session.execute(stmt)).all()
+    if not joined:
+        return None  # fence miss — nothing is visible, legacy included
+
+    legacy = _ensure_dict(joined[0][0])
+    marker_items = [(row[1], row[2]) for row in joined if row[1] is not None]
+    if not marker_items:
+        return legacy
+    reassembled: dict[str, Any] | None = dict(sorted(marker_items, key=lambda item: _jsonb_canonical_key(item[0])))
+    return _direction_aware_side(reassembled, legacy, side="markers", run_id=run_id)
+
+
 async def read_node_output_blob_bytes(
     session: AsyncSession,
     run_ids: Sequence[uuid.UUID],
@@ -797,7 +1129,8 @@ async def read_node_output_blob_bytes(
     """Per-run summed blob bytes for retention accounting — EXCLUDES metadata
     rows (the flags payload overhead would skew the accounting). One batched
     query; Python-side ``len(json.dumps(value, default=str))`` per present
-    side (the ``run_retention._json_bytes`` formula)."""
+    side (the shared :func:`modulo.db.models.run_node_outputs.json_bytes`
+    formula, also used by ``crud.run_retention``)."""
     if not run_ids:
         return {}
     rows = (await session.execute(select(*_ROW_COLUMNS).where(RunNodeOutput.run_id.in_(list(run_ids))))).all()
@@ -807,9 +1140,9 @@ async def read_node_output_blob_bytes(
             continue
         run_key = uuid.UUID(str(r.run_id))
         total = totals.get(run_key, 0)
-        total += 0 if r.outputs_absent else _json_bytes(r.outputs_json)
-        total += 0 if r.telemetry_absent else _json_bytes(r.node_telemetry_json)
-        total += 0 if r.markers_absent else _json_bytes(r.raw_output_markers)
+        total += 0 if r.outputs_absent else json_bytes(r.outputs_json)
+        total += 0 if r.telemetry_absent else json_bytes(r.node_telemetry_json)
+        total += 0 if r.markers_absent else json_bytes(r.raw_output_markers)
         totals[run_key] = total
     return totals
 
@@ -868,28 +1201,54 @@ async def backfill_run_node_outputs_batch(
 ) -> dict[str, Any]:
     """Backfill one org's TERMINAL runs into the new table (sweep body).
 
-    Selection (high-water): ``organisation_id == :org AND status IN
-    (TERMINAL_STATUSES) AND completed_at > :mark ORDER BY completed_at ASC
-    LIMIT :cap`` — the mark advances to the max ``completed_at`` in the
-    batch. Two NOT-EXISTS trigger legs keep already-healed runs out of the
-    batch entirely (the design's trigger predicate, SQL-side so a drained
-    org re-scans almost nothing on the steady-state tick):
+    Selection: ``organisation_id == :org AND status IN (TERMINAL_STATUSES)
+    ORDER BY completed_at ASC LIMIT :cap``, gated by three SQL-side trigger
+    legs so a drained org re-scans almost nothing on the steady-state tick:
 
-    * blobs leg — any legacy blob non-NULL AND no ``__final__`` row for the
-      run (the writers are all-or-nothing per run inside one transaction, so
-      a ``__final__`` row's presence proves the outputs/telemetry/metadata
-      representation was written);
-    * markers leg — markers non-NULL AND no attempt-keyed marker row for the
-      run.
+    * blobs leg — a meaningful legacy blob side AND no ``__final__`` row for
+      the run (the writers are all-or-nothing per run inside one
+      transaction, so a ``__final__`` row's presence proves the
+      outputs/telemetry/metadata representation was written);
+    * markers leg — a meaningful markers side AND no attempt-keyed marker
+      row for the run;
+    * quarantine exclusion — the run is not in
+      ``run_node_outputs_quarantine`` (quarantined anomalies are never
+      re-selected — qa M1b).
+
+    "Meaningful side" is DIALECT-BRANCHED (qa M1a): on Postgres the trigger
+    requires a JSON OBJECT (``jsonb_typeof(col) = 'object'``, markers
+    additionally ``<> '{}'``) — a jsonb array or scalar is NOT a
+    representable blob and is never selected; on SQLite the portable
+    text-cast heuristic stands (a junk side is then caught and quarantined
+    by the body below).
+
+    NO HIGH-WATER FILTER (qa M20): ``completed_at > mark`` could
+    permanently miss runs whose terminalizing transaction STARTED before
+    the mark advanced (``completed_at`` is transaction-start ``now()``) —
+    the trigger legs + the per-tick cap + ``ORDER BY completed_at ASC``
+    bound the work instead. *high_water_mark* is still accepted (call-site
+    contract compatibility) and ``new_high_water`` is still returned (the
+    max ``completed_at`` in the batch — observability only). A partial
+    index on ``(organisation_id, completed_at) WHERE status IN (terminal)``
+    is the documented post-deploy ops step backing this selection.
 
     Per run the FULL representation is written idempotently (``ON CONFLICT
     DO NOTHING``): per-node ``__final__`` rows from the UNION of both dicts
     (values as-is; per-side SQL NULL when a side lacks the key), the
     metadata row when either side is ``{}``, and one marker row per legacy
     markers key (node id via the twin parser; unparseable keys kept as
-    ``__unknown__`` rows). Runs whose legacy dicts carry ``__``-prefixed
-    node ids are SKIPPED and counted (migration 0176 quarantines them to the
-    side table; the sweep never touches them), never aborting on data.
+    ``__unknown__`` rows).
+
+    QUARANTINE, never silent drops (qa M1c/d): a run whose decoded sides
+    are junk (non-dict JSON — array/scalar), whose node ids or DERIVED
+    marker node ids squat the ``__`` sentinel namespace, whose marker
+    attempt keys are ``__``-prefixed, or which would otherwise produce ZERO
+    rows is copied to ``run_node_outputs_quarantine`` (idempotently, blobs
+    preserved AS-IS, reason logged), counted in ``runs_quarantined``, and —
+    via the selection exclusion — never re-selected on a later tick. There
+    are no silent-continue paths left in the body: every selected run ends
+    backfilled, ghost-skipped (a concurrent writer owns it), healed-skip
+    (already fully represented), or quarantined.
 
     Re-terminalization ghost protection (FAR-583): immediately before the
     INSERT batch the run's new-table ``max(updated_at)`` is re-checked
@@ -899,14 +1258,12 @@ async def backfill_run_node_outputs_batch(
 
     Returns ``{"runs_selected", "runs_backfilled", "runs_skipped_healed",
     "runs_skipped_ghost", "runs_quarantined", "rows_written",
-    "unknown_marker_keys", "new_high_water"}`` — the last is a ``datetime``
-    (or the unchanged mark). The ``status='unknown'`` markers leg lives in
-    migration 0176 only: the sweep heals TERMINAL runs, whose markers are
-    complete. Ties at the same ``completed_at`` are consumed by the strict
-    ``> mark`` advance one batch at a time; a batch boundary inside a tie
-    skips the remainder of that tie until the next mark-less pass.
+    "unknown_marker_keys", "new_high_water"}``. The ``status='unknown'``
+    markers leg lives in migration 0176 only: the sweep heals TERMINAL
+    runs, whose markers are complete.
     """
     await _assert_write_org(session, organisation_id)
+    dialect = _resolve_dialect(session)
 
     # The __final__ row kind carries the outputs/telemetry/metadata
     # representation; the marker rows carry non-__final__ attempt keys. The
@@ -919,6 +1276,7 @@ async def backfill_run_node_outputs_batch(
         RunNodeOutput.run_id == Run.id,
         RunNodeOutput.attempt_key != FINAL_ATTEMPT_KEY,
     )
+    quarantined_exists = exists().where(QUARANTINE_TABLE.c.run_id == Run.id)
 
     run_stmt = (
         select(Run.id, Run.outputs_json, Run.node_telemetry_json, Run.raw_output_markers, Run.completed_at)
@@ -929,26 +1287,32 @@ async def backfill_run_node_outputs_batch(
         .order_by(Run.completed_at.asc())
         .limit(cap)
     )
-    if high_water_mark is not None:
-        run_stmt = run_stmt.where(Run.completed_at > high_water_mark)
     # Trigger predicate: only runs the sweep can actually heal enter the
     # batch (absent representation OR absent marker rows) — a drained org
-    # selects nothing on the steady-state tick. A side counts as PRESENT only
-    # when it holds a real JSON value (see _side_present); the MARKERS side
-    # additionally excludes '{}' ("no markers" is not representable — see
-    # _markers_present).
+    # selects nothing on the steady-state tick. Postgres branches to the
+    # jsonb-native OBJECT predicates (a jsonb array/scalar is never a
+    # representable blob side); SQLite keeps the portable text-cast
+    # heuristic (junk sides are quarantined by the body).
+    if dialect == "postgresql":
+        side_meaningful = or_(
+            _pg_side_object(Run.outputs_json),
+            _pg_side_object(Run.node_telemetry_json),
+            _pg_markers_object_nonempty(Run.raw_output_markers),
+        )
+        markers_meaningful = _pg_markers_object_nonempty(Run.raw_output_markers)
+    else:
+        side_meaningful = or_(
+            _side_present(Run.outputs_json),
+            _side_present(Run.node_telemetry_json),
+            _markers_present(Run.raw_output_markers),
+        )
+        markers_meaningful = _markers_present(Run.raw_output_markers)
     run_stmt = run_stmt.where(
         or_(
-            and_(
-                or_(
-                    _side_present(Run.outputs_json),
-                    _side_present(Run.node_telemetry_json),
-                    _markers_present(Run.raw_output_markers),
-                ),
-                ~final_row_exists,
-            ),
-            and_(_markers_present(Run.raw_output_markers), ~marker_row_exists),
-        )
+            and_(side_meaningful, ~final_row_exists),
+            and_(markers_meaningful, ~marker_row_exists),
+        ),
+        ~quarantined_exists,
     )
     batch = (await session.execute(run_stmt)).all()
 
@@ -962,7 +1326,7 @@ async def backfill_run_node_outputs_batch(
         "unknown_marker_keys": 0,
         "new_high_water": high_water_mark,
     }
-    max_completed: datetime | None = high_water_mark
+    max_completed: datetime | None = None
 
     if not batch:
         return counts
@@ -993,23 +1357,43 @@ async def backfill_run_node_outputs_batch(
 
     for run_row in batch:
         run_id: uuid.UUID = run_row.id
-        outputs = _ensure_dict(run_row.outputs_json)
-        telemetry = _ensure_dict(run_row.node_telemetry_json)
-        markers = _ensure_dict(run_row.raw_output_markers)
+        outputs, outputs_junk = _decode_blob_side(run_row.outputs_json)
+        telemetry, telemetry_junk = _decode_blob_side(run_row.node_telemetry_json)
+        markers, markers_junk = _decode_blob_side(run_row.raw_output_markers)
         completed_at = run_row.completed_at
         if max_completed is None or (completed_at is not None and completed_at > max_completed):
             max_completed = completed_at
 
+        # Quarantine (qa M1c): junk (non-dict) blob sides, sentinel-namespace
+        # node ids, __-prefixed marker attempt keys, and parseable marker
+        # keys deriving __-prefixed node ids all copy the run's blobs aside
+        # and remove it from every future selection. Never silently dropped,
+        # never re-selected forever, never aborting on data.
+        blob_anomaly = outputs_junk or telemetry_junk or markers_junk
+        marker_keys_sentinel = markers is not None and any(key.startswith("__") for key in markers)
         if (
-            _has_sentinel_node_id(outputs)
+            blob_anomaly
+            or marker_keys_sentinel
+            or _has_sentinel_node_id(outputs)
             or _has_sentinel_node_id(telemetry)
             or _markers_have_sentinel_node_id(markers)
         ):
+            if blob_anomaly:
+                reason = "non-dict legacy blob side (jsonb array/scalar)"
+            elif marker_keys_sentinel:
+                reason = "'__'-prefixed marker attempt key"
+            else:
+                reason = "'__'-prefixed node id in a legacy blob dict"
+            await _quarantine_run(
+                session,
+                run_id=run_id,
+                organisation_id=organisation_id,
+                legacy_outputs=run_row.outputs_json,
+                legacy_telemetry=run_row.node_telemetry_json,
+                legacy_markers=run_row.raw_output_markers,
+                reason=reason,
+            )
             counts["runs_quarantined"] += 1
-            continue
-
-        if outputs is None and telemetry is None and not (isinstance(markers, dict) and markers):
-            # No meaningful legacy blob — nothing to represent.
             continue
 
         rows: list[NodeOutputWrite] = []
@@ -1029,15 +1413,28 @@ async def backfill_run_node_outputs_batch(
 
         if markers:
             for key, value in markers.items():
-                if key.startswith("__"):
-                    # Sentinel-namespace attempt key — '__final__' would also
-                    # violate ck_run_node_outputs_final_no_markers. Skipped,
-                    # never aborting the sweep (data never aborts).
-                    continue
                 node_id = parse_marker_node_id(key)
                 rows.append(NodeOutputWrite(node_id=node_id, attempt_key=key, markers=value))
                 if node_id == UNKNOWN_NODE_ID:
                     counts["unknown_marker_keys"] += 1
+
+        if not rows:
+            # Defensive: nothing representable at all (unreachable by the
+            # trigger's construction — an object side always yields at least
+            # the metadata row). Quarantined rather than silently continued:
+            # a silent continue would leave the run re-selectable forever
+            # (the cap-starvation zombie qa M1 targets).
+            await _quarantine_run(
+                session,
+                run_id=run_id,
+                organisation_id=organisation_id,
+                legacy_outputs=run_row.outputs_json,
+                legacy_telemetry=run_row.node_telemetry_json,
+                legacy_markers=run_row.raw_output_markers,
+                reason="no representable blob content",
+            )
+            counts["runs_quarantined"] += 1
+            continue
 
         # Already-healed skip: every row this pass would write is already
         # present (ON CONFLICT DO NOTHING would no-op) — skip without

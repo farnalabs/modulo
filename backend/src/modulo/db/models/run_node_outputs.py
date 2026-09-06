@@ -51,6 +51,7 @@ core imports db freely and the reverse is forbidden by importlinter.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -62,6 +63,25 @@ from modulo.db.models.base import Base, TimestampMixin
 FINAL_ATTEMPT_KEY = "__final__"
 META_NODE_ID = "__run_meta__"
 UNKNOWN_NODE_ID = "__unknown__"
+
+
+def json_bytes(value: Any) -> int:
+    """Byte size of a JSON-serialisable value — ``len(json.dumps(value, default=str))``.
+
+    The single shared estimator for run-blob accounting: the retention
+    row-size estimate (``crud.run_retention._run_row_bytes``) and the
+    ``run_node_outputs`` per-run blob-byte totals (``crud.run_node_outputs.
+    read_node_output_blob_bytes``) both use this formula. Hoisted here (qa
+    rider: it was duplicated as ``crud.run_retention._json_bytes`` and
+    ``crud.run_node_outputs._json_bytes``); this model module is a leaf, so
+    both consumers import it without a cycle.
+    """
+    if value is None:
+        return 0
+    try:
+        return len(json.dumps(value, default=str))
+    except (TypeError, ValueError):
+        return 0
 
 
 class RunNodeOutput(Base, TimestampMixin):

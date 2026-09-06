@@ -2005,6 +2005,8 @@ async def dual_write_run_node_outputs(
     telemetry: dict[str, Any] | None,
     claim_token: str | None = None,
     origin: str = "update_run_status",
+    inherited_outputs: dict[str, Any] | None = None,
+    inherited_telemetry: dict[str, Any] | None = None,
 ) -> None:
     """Kill-switch-gated same-transaction REPLACE dual-write of the new table.
 
@@ -2019,7 +2021,10 @@ async def dual_write_run_node_outputs(
     * ON → the ``run_node_outputs`` REPLACE write
       (:func:`replace_run_node_outputs` — upsert ``__final__``/metadata rows
       + delete-absent ordered AFTER upserts, metadata flags re-derived) in a
-      SAVEPOINT inside the caller's transaction.
+      SAVEPOINT inside the caller's transaction. *inherited_outputs* /
+      *inherited_telemetry* carry the caller-captured PRE-WRITE legacy
+      dicts so qa-M19 inherited ``__``-prefixed keys are filtered from the
+      new-table leg instead of raising (kept on the legacy column).
     * On new-table failure: ONE bounded in-session retry for the retryable
       SQLSTATEs; a hard error (or a second failure) raises
       :class:`DualWriteError` with the savepoint rolled back — the caller's
@@ -2069,6 +2074,8 @@ async def dual_write_run_node_outputs(
                     organisation_id=organisation_id,
                     outputs=outputs,
                     telemetry=telemetry,
+                    inherited_outputs=inherited_outputs,
+                    inherited_telemetry=inherited_telemetry,
                 )
             return
         except asyncio.CancelledError:
@@ -2145,6 +2152,13 @@ async def update_run_status(
         )
         return run
     run.status = status
+    # FAR-583 qa-M19: capture the PRE-WRITE legacy blob dicts BEFORE the
+    # assignments below — the REPLACE dual-write filters inherited
+    # ``__``-prefixed keys against exactly these (kept on the legacy column,
+    # filtered from the new table) so a legacy-carried sentinel id can never
+    # wedge the run's terminalization.
+    pre_write_outputs: Any = run.outputs_json
+    pre_write_telemetry: Any = run.node_telemetry_json
     _apply_run_claim_fields(run, status, update)
     _apply_run_error_fields(run, update)
     _apply_run_cost_fields(run, update)
@@ -2167,6 +2181,8 @@ async def update_run_status(
         telemetry=update.node_telemetry_json,
         claim_token=update.claim_token,
         origin="update_run_status.orm",
+        inherited_outputs=pre_write_outputs if isinstance(pre_write_outputs, dict) else None,
+        inherited_telemetry=pre_write_telemetry if isinstance(pre_write_telemetry, dict) else None,
     )
     if run.status in TERMINAL_STATUSES:
         await _classify_terminal_run(session, run)
@@ -2227,6 +2243,20 @@ async def _update_run_status_fenced(
     guards rejected the write (superseded / wrong source state /
     cancelled-and-not-a-cancel-write / missing).
     """
+    # FAR-583 qa-M19: capture the PRE-WRITE legacy blob dicts BEFORE the
+    # fenced UPDATE overwrites them (the dual-write's inherited-key filter
+    # compares against exactly these). One extra SELECT, only when the
+    # payload actually carries blobs — a fenced write without outputs/
+    # telemetry never needs the pre-state.
+    pre_write_outputs: Any = None
+    pre_write_telemetry: Any = None
+    if update.outputs_json is not None or update.node_telemetry_json is not None:
+        pre_row = (
+            await session.execute(select(Run.outputs_json, Run.node_telemetry_json).where(Run.id == run_id))
+        ).first()
+        if pre_row is not None:
+            pre_write_outputs = pre_row[0]
+            pre_write_telemetry = pre_row[1]
     result = await session.execute(
         _UPDATE_STATUS_FENCED_SQL,
         {
@@ -2279,6 +2309,8 @@ async def _update_run_status_fenced(
         telemetry=update.node_telemetry_json,
         claim_token=update.claim_token,
         origin="update_run_status.fenced",
+        inherited_outputs=pre_write_outputs if isinstance(pre_write_outputs, dict) else None,
+        inherited_telemetry=pre_write_telemetry if isinstance(pre_write_telemetry, dict) else None,
     )
     if refreshed_run.status in TERMINAL_STATUSES:
         await _classify_terminal_run(session, refreshed_run)

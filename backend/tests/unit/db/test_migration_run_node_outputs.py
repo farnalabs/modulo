@@ -1,21 +1,33 @@
 """Structural unit tests for migration 0176_run_node_outputs (FAR-583).
 
 These run WITHOUT a database. They pin the migration's data contract: the
-inlined terminal-status literal (migrations cannot import app constants), the
-anchored marker-key twin parser (Python twin + the bound regex shared with the
-repo module), the quarantine behaviour markers in the SQL, the jsonb
-invariant assertion (the documented NO-NUL-PRE-SCAN deviation guard), the
-0066/0131 ownership-ceremony grants (including the FIRST-ever
-``GRANT REFERENCES ON public.runs``), and the 30-day recent-window +
-idempotency SQL shape. The live-Postgres behaviour (ceremony, backfill
-round-trip, quarantine) is covered by the testcontainers integration suite.
+inlined terminal-status literal (migrations cannot import app constants) AND
+its assembled SQL twin (built FROM the tuple — single source of truth), the
+anchored marker-key twin parser (the Python twin lives ONLY in
+``crud.run_node_outputs`` — the regex and prefix-length constants are pinned
+identical, and the migration's substr offset is pinned to prefix_len + 1 to
+match Postgres' 1-indexed substr), the metadata flags COALESCE guard
+(qa C1: an SQL-NULL side must not produce a JSON-null flag member), the
+coverage-check started-at exclusion (qa C4), the quarantine behaviour markers
+in the SQL, the jsonb invariant assertion (the documented NO-NUL-PRE-SCAN
+deviation guard), the 0066/0131 ownership-ceremony grants (including the
+FIRST-ever ``GRANT REFERENCES ON public.runs``), and the 30-day recent-window
++ idempotency SQL shape. The live-Postgres behaviour (ceremony, backfill
+round-trip incl. the substr/parser parity, quarantine, metadata flags) is
+covered by the testcontainers integration suite.
 """
 
 import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from modulo.db.crud.run_node_outputs import _MARKER_KEY_RE as REPO_MARKER_KEY_RE
+from modulo.db.crud.run_node_outputs import (
+    _MARKER_KEY_PREFIX_LEN as REPO_MARKER_KEY_PREFIX_LEN,
+)
+from modulo.db.crud.run_node_outputs import (
+    _MARKER_KEY_RE as REPO_MARKER_KEY_RE,
+)
+from modulo.db.crud.run_node_outputs import parse_marker_node_id
 from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.models.run_node_outputs import UNKNOWN_NODE_ID
 
@@ -68,47 +80,102 @@ def test_terminal_literal_equals_sorted_app_constant() -> None:
     assert migration_literal == tuple(sorted(TERMINAL_STATUSES))
 
 
-def test_marker_regex_is_identical_to_repo_module() -> None:
+def test_terminal_status_sql_is_built_from_the_status_tuple() -> None:
+    """qa M8: the SQL twin is ASSEMBLED from the status tuple (single source
+    of truth) — every literal present, and byte-equal to the assembly."""
+    module = _load_migration()
+    expected = "(" + ", ".join(f"'{status}'" for status in module._TERMINAL_RUN_STATUSES) + ")"
+    assert expected == module._TERMINAL_STATUS_SQL
+    for status in module._TERMINAL_RUN_STATUSES:
+        assert f"'{status}'" in module._TERMINAL_STATUS_SQL
+
+
+def test_marker_regex_and_prefix_len_are_identical_to_repo_module() -> None:
     """The SQL-side regex is bound as a parameter from this constant; it must
-    stay byte-identical to crud.run_node_outputs._MARKER_KEY_RE or the twin
-    parsers diverge silently."""
+    stay byte-identical to crud.run_node_outputs._MARKER_KEY_RE, and the
+    prefix length must match the repo twin's (the substr offset derives from
+    it) or the twin parsers diverge silently."""
     module = _load_migration()
     assert module._MARKER_KEY_RE == REPO_MARKER_KEY_RE
+    assert module._MARKER_KEY_PREFIX_LEN == REPO_MARKER_KEY_PREFIX_LEN
+    assert module._MARKER_KEY_PREFIX_LEN == 46
 
 
-def _assert_parses(module: ModuleType, attempt_key: str, expected_node_id: str) -> None:
-    assert module._parse_marker_node_id(attempt_key) == expected_node_id
+def test_marker_substr_offset_is_prefix_len_plus_one() -> None:
+    """qa C2: Postgres substr is 1-indexed (substr(key, N) == key[N-1:]) while
+    the Python twin slices key[46:] — the SQL offset MUST be prefix_len + 1.
+    The old constant passed 46, shifting every backfilled node id by one
+    character (leading ':') and breaking the marker-row PKs."""
+    module = _load_migration()
+    assert "substr(mk.key, 46)" not in module._MARKER_REMAINDER_SQL
+    assert f"substr(mk.key, {module._MARKER_KEY_PREFIX_LEN + 1})" in module._MARKER_REMAINDER_SQL
+
+
+def _assert_parses(attempt_key: str, expected_node_id: str) -> None:
+    """The live Python twin (repo module) — the migration's SQL twin is
+    round-tripped against it by the testcontainers integration tests."""
+    assert parse_marker_node_id(attempt_key) == expected_node_id
 
 
 def test_twin_parser_round_trips_plain_and_colon_node_ids() -> None:
-    module = _load_migration()
     run_id = "01234567-89ab-cdef-0123-456789abcdef"
-    _assert_parses(module, f"run:{run_id}:node:node1:3", "node1")
+    _assert_parses(f"run:{run_id}:node:node1:3", "node1")
     # Colon-containing node ids are safe: the split is on the LAST colon.
-    _assert_parses(module, f"run:{run_id}:node:my:weird:node:7", "my:weird:node")
-    _assert_parses(module, f"run:{run_id}:node:n:{run_id}", "n")
-    _assert_parses(module, f"run:{run_id}:node:a:b:claim-unknown", "a:b")
-    _assert_parses(module, f"run:{run_id}:node:x:0123abcd", "x")
+    _assert_parses(f"run:{run_id}:node:my:weird:node:7", "my:weird:node")
+    _assert_parses(f"run:{run_id}:node:n:{run_id}", "n")
+    _assert_parses(f"run:{run_id}:node:a:b:claim-unknown", "a:b")
+    _assert_parses(f"run:{run_id}:node:x:0123abcd", "x")
 
 
 def test_twin_parser_maps_unparseable_keys_to_unknown_sentinel() -> None:
-    module = _load_migration()
     run_id = "01234567-89ab-cdef-0123-456789abcdef"
-    _assert_parses(module, "junk", UNKNOWN_NODE_ID)
-    _assert_parses(module, "run:not-a-uuid:node:x:1", UNKNOWN_NODE_ID)
-    _assert_parses(module, f"run:{run_id}:node:nosuffix", UNKNOWN_NODE_ID)
-    _assert_parses(module, f"run:{run_id}:node:", UNKNOWN_NODE_ID)
-    _assert_parses(module, f"run:{run_id}:node::suffix", UNKNOWN_NODE_ID)
-    _assert_parses(module, f"run:{run_id}:node:x:", UNKNOWN_NODE_ID)
+    _assert_parses("junk", UNKNOWN_NODE_ID)
+    _assert_parses("run:not-a-uuid:node:x:1", UNKNOWN_NODE_ID)
+    _assert_parses(f"run:{run_id}:node:nosuffix", UNKNOWN_NODE_ID)
+    _assert_parses(f"run:{run_id}:node:", UNKNOWN_NODE_ID)
+    _assert_parses(f"run:{run_id}:node::suffix", UNKNOWN_NODE_ID)
+    _assert_parses(f"run:{run_id}:node:x:", UNKNOWN_NODE_ID)
 
 
 def test_twin_parser_keeps_sentinel_named_node_ids_parseable() -> None:
     """Sentinel-NAMED ids still parse (they are valid grammar); the
     quarantine step — not the parser — is what keeps those runs out."""
-    module = _load_migration()
     run_id = "01234567-89ab-cdef-0123-456789abcdef"
-    _assert_parses(module, f"run:{run_id}:node:__run_meta__:1", "__run_meta__")
-    _assert_parses(module, f"run:{run_id}:node:__weird__:fallback", "__weird__")
+    _assert_parses(f"run:{run_id}:node:__run_meta__:1", "__run_meta__")
+    _assert_parses(f"run:{run_id}:node:__weird__:fallback", "__weird__")
+
+
+def test_migration_has_no_dead_python_twin_parser() -> None:
+    """qa C2: the migration's local Python twin is DELETED — the single live
+    parser is crud.run_node_outputs.parse_marker_node_id (the stub existed
+    only so old tests passed, never executed by the migration)."""
+    module = _load_migration()
+    assert not hasattr(module, "_parse_marker_node_id")
+
+
+def test_metadata_flags_are_coalesced_against_sql_null_sides() -> None:
+    """qa C1: a SQL-NULL side makes `(col = '{}'::jsonb)` evaluate to SQL
+    NULL; jsonb_build_object maps NULL to a JSON null member, which violates
+    ck_run_node_outputs_meta_shape and would abort the whole one-transaction
+    migration. Both flag expressions MUST be COALESCE'd to false."""
+    module = _load_migration()
+    sql = module._METADATA_LEG_SQL
+    assert "COALESCE((r.outputs_json = '{}'::jsonb), false)" in sql
+    assert "COALESCE((r.node_telemetry_json = '{}'::jsonb), false)" in sql
+    # No bare (un-coalesced) flag expression remains.
+    assert "jsonb_build_object('empty_outputs', (r.outputs_json" not in sql
+    assert "'empty_telemetry', (r.node_telemetry_json" not in sql
+
+
+def test_coverage_check_excludes_runs_terminalized_after_migration_start() -> None:
+    """qa C4: the end-of-migration coverage check must exclude runs whose
+    COALESCE(completed_at, updated_at) >= the migration-start timestamp — an
+    old machine terminalizing a run after its id-chunk was scanned must not
+    abort the chain (the catch-up sweep owns it)."""
+    module = _load_migration()
+    exclusion = "COALESCE(r.completed_at, r.updated_at) < :migration_started_at"
+    assert exclusion in module._TERMINAL_COVERAGE_SQL
+    assert exclusion in module._UNKNOWN_COVERAGE_SQL
 
 
 def test_tables_constant_exposes_rls_table_to_coverage_scanner() -> None:

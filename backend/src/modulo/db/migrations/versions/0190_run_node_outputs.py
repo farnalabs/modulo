@@ -113,13 +113,15 @@ columns were somehow lost):
     --  metadata-row flags for '{}' sides, markers keyed by attempt_key)
 
 SQLite path: plain-JSON table creation only (parity) — no ceremony, no
-quarantine table, no backfill, no RLS.
+backfill, no RLS. The quarantine side table IS created on SQLite too: the
+catch-up sweep's quarantine exclusion (NOT EXISTS against it) and the
+sweep-body quarantine INSERT run on every backend, so the table must exist
+everywhere the sweep can run.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from collections.abc import Sequence
 
@@ -162,12 +164,10 @@ _TERMINAL_RUN_STATUSES = (
     "stalled",
 )
 
-# Pure-literal SQL twin of the tuple above — the unit test asserts every
-# status literal is present so the two cannot drift apart.
-_TERMINAL_STATUS_SQL = (
-    "('budget_exceeded', 'cancelled', 'compensation_failed', 'complete', "
-    "'cost_ceiling_exceeded', 'eval_failed', 'failed', 'router_no_match', 'stalled')"
-)
+# Pure-literal SQL twin assembled FROM the tuple above (single source of
+# truth — the two cannot drift apart by construction; the unit test still
+# asserts every status literal is present in the assembled SQL).
+_TERMINAL_STATUS_SQL = "(" + ", ".join(f"'{status}'" for status in _TERMINAL_RUN_STATUSES) + ")"
 
 _WINDOW_DAYS = 30
 _CHUNK_SIZE = 1000
@@ -178,14 +178,14 @@ _CHUNK_SIZE = 1000
 _MARKER_KEY_RE = r"^run:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:node:.+$"
 
 # The literal prefix "run:" + 36 uuid chars + ":node:" — everything after it is
-# "<node_id>:<suffix>".
+# "<node_id>:<suffix>". len("run:") + len(uuid) + len(":node:") = 4 + 36 + 6.
 _MARKER_KEY_PREFIX_LEN = 46
 
 # ---------------------------------------------------------------------------
 # SQL fragments and statements. EVERY statement below is a module-level
 # constant: pure literals or f-strings over other module constants only.
-# Bound parameters (:last_id, :upper_id, :window_days, :marker_re) are passed
-# per execution.
+# Bound parameters (:last_id, :upper_id, :window_days, :marker_re,
+# :migration_started_at) are passed per execution.
 # ---------------------------------------------------------------------------
 
 # "meaningful blob" = jsonb object on at least one of the three columns. JSON
@@ -200,10 +200,17 @@ _ANY_BLOB_OBJECT_SQL = (
 _WINDOW_PREDICATE_SQL = "COALESCE(r.completed_at, r.updated_at) >= now() - make_interval(days => :window_days)"
 _NOT_QUARANTINED_SQL = f"NOT EXISTS (SELECT 1 FROM {_QUARANTINE_TABLE} q WHERE q.run_id = r.id)"  # noqa: S608  # nosec B608 - interpolates module constants only, never caller data
 
-_MARKER_REMAINDER_SQL = f"substr(mk.key, {_MARKER_KEY_PREFIX_LEN})"
+# Postgres substr is 1-INDEXED: substr(key, N) returns the key FROM character
+# N (inclusive) — the exact twin of Python's key[N - 1:]. The Python twin
+# (crud.run_node_outputs.parse_marker_node_id) slices [_MARKER_KEY_PREFIX_LEN:],
+# so the SQL offset is the prefix length PLUS ONE. An off-by-one here shifts
+# every backfilled node id by one character (leading ':') and breaks the
+# marker-row PKs — pinned by the unit test.
+_MARKER_REMAINDER_SQL = f"substr(mk.key, {_MARKER_KEY_PREFIX_LEN + 1})"
 _MARKER_LAST_COLON_SQL = f"position(':' IN reverse({_MARKER_REMAINDER_SQL}))"
 
-# SQL twin of crud.run_node_outputs.parse_marker_node_id: parseable iff the
+# SQL twin of crud.run_node_outputs.parse_marker_node_id (the Python twin
+# lives ONLY in the repo module — pinned by the unit test): parseable iff the
 # anchored regex matches (:marker_re is BOUND at execution time) AND the
 # remainder's LAST colon leaves a non-empty suffix (colon not the last char
 # => position-from-end >= 2) AND a non-empty node id (colon not at position
@@ -286,13 +293,20 @@ _OUTPUTS_TELEMETRY_LEG_SQL = (
     f"ON CONFLICT DO NOTHING"
 )
 
-# One metadata row per run where a side is '{}' (non-NULL empty).
+# One metadata row per run where a side is '{}' (non-NULL empty). The flag
+# expressions are wrapped in COALESCE(..., false): a side that is SQL NULL
+# makes `(col = '{}'::jsonb)` evaluate to SQL NULL (three-valued logic), and
+# jsonb_build_object maps a NULL argument to a JSON *null* member — which
+# violates ck_run_node_outputs_meta_shape (both flags must be JSON booleans)
+# and would abort the whole one-transaction migration. A NULL side co-occurs
+# freely with the OTHER side being '{}' (the mixed case this row exists for),
+# so the guard is on the happy path, not an edge case.
 _METADATA_LEG_SQL = (
     f"INSERT INTO {_TABLE} "  # noqa: S608  # nosec B608 - interpolates module constants only, never caller data
     f"(run_id, node_id, attempt_key, organisation_id, outputs_json, created_at, updated_at) "
     f"SELECT r.id, '{_META_NODE_ID}', '{_FINAL_ATTEMPT_KEY}', r.organisation_id, "
-    "jsonb_build_object('empty_outputs', (r.outputs_json = '{}'::jsonb), "
-    "'empty_telemetry', (r.node_telemetry_json = '{}'::jsonb)), "
+    "jsonb_build_object('empty_outputs', COALESCE((r.outputs_json = '{}'::jsonb), false), "
+    "'empty_telemetry', COALESCE((r.node_telemetry_json = '{}'::jsonb), false)), "
     f"now(), now() "
     f"FROM runs r "
     f"WHERE {_TERMINAL_WINDOW_SQL} "
@@ -350,11 +364,20 @@ _ANOMALY_COUNT_SQL = (
 )
 
 # Post-conditions: every in-window run with a meaningful blob (and not
-# quarantined) must have at least one new-table row.
+# quarantined) must have at least one new-table row — EXCLUDING runs that
+# terminalized at/after the migration's own start (C4): the chunk scan sees
+# READ COMMITTED per-statement snapshots, so a run an old machine
+# terminalizes AFTER its id-chunk was scanned would otherwise RAISE here and
+# abort the whole chain (release.sh re-races -> wedged deploy). Such runs
+# land in the catch-up sweep instead; the exclusion predicate keys on
+# COALESCE(completed_at, updated_at) >= :migration_started_at — now() is
+# transaction-start, constant for the whole one-transaction chain.
+_STARTED_AT_EXCLUSION_SQL = "COALESCE(r.completed_at, r.updated_at) < :migration_started_at"
 _TERMINAL_COVERAGE_SQL = (
     f"SELECT count(*) FROM runs r WHERE {_TERMINAL_FILTER_SQL} "  # noqa: S608  # nosec B608 - interpolates module constants only, never caller data
     f"AND {_ANY_BLOB_OBJECT_SQL} "
     f"AND {_NOT_QUARANTINED_SQL} "
+    f"AND {_STARTED_AT_EXCLUSION_SQL} "
     f"AND NOT EXISTS (SELECT 1 FROM {_TABLE} n WHERE n.run_id = r.id)"
 )
 _UNKNOWN_COVERAGE_SQL = (
@@ -362,6 +385,7 @@ _UNKNOWN_COVERAGE_SQL = (
     f"AND jsonb_typeof(r.raw_output_markers) = 'object' "
     "AND r.raw_output_markers <> '{}'::jsonb "
     f"AND {_NOT_QUARANTINED_SQL} "
+    f"AND {_STARTED_AT_EXCLUSION_SQL} "
     f"AND NOT EXISTS (SELECT 1 FROM {_TABLE} n WHERE n.run_id = r.id)"
 )
 
@@ -403,22 +427,6 @@ def _assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
             f"{table} owner is {owner!r}, expected '{_MIGRATE_ROLE}' "
             "(the app role must NOT own run_node_outputs — owner bypasses RLS)"
         )
-
-
-def _parse_marker_node_id(attempt_key: str) -> str:
-    """Python twin of _MARKER_NODE_ID_SQL (kept in lockstep; pinned by tests).
-
-    Parseable iff the anchored regex matches AND the remainder's LAST colon
-    leaves a non-empty node id AND a non-empty suffix; unparseable keys map
-    to the __unknown__ sentinel (the caller keeps the FULL original key).
-    """
-    if re.match(_MARKER_KEY_RE, attempt_key) is None:
-        return _UNKNOWN_NODE_ID
-    remainder = attempt_key[_MARKER_KEY_PREFIX_LEN:]
-    node_id, sep, suffix = remainder.rpartition(":")
-    if not sep or not node_id or not suffix:
-        return _UNKNOWN_NODE_ID
-    return node_id
 
 
 def _count(bind: sa.Connection, sql: str, params: dict[str, object] | None = None) -> int:
@@ -485,7 +493,10 @@ def _create_quarantine_table() -> None:
 
     No FKs (quarantined evidence survives run deletion for audit) and no
     app-role grant (default REVOKE keeps modulo_app out; written by
-    migrations, read by ops SQL during remediation).
+    migrations, read by ops SQL during remediation). On Postgres this runs
+    AFTER the SET ROLE ceremony (never owned by ``modulo_migrate``); on the
+    SQLite parity path it is created plainly — the sweep's quarantine
+    exclusion + INSERT run on every backend.
     """
     blob_type = sa.JSON().with_variant(JSONB(), "postgresql")
     op.create_table(
@@ -598,16 +609,19 @@ def _backfill_markers_chunk(bind: sa.Connection, *, terminal: bool, last_id: uui
     )
 
 
-def _verify_window_coverage(bind: sa.Connection) -> None:
+def _verify_window_coverage(bind: sa.Connection, migration_started_at: object) -> None:
     """RAISE if any in-window run with a meaningful blob has zero rows.
 
-    Quarantined runs are excluded (they are deliberately unrepresented).
-    env.py wraps the whole chain in one transaction, so the raise aborts the
-    entire migration — which is exactly the contract: this fires on
-    infrastructure failure only, never on a data outcome.
+    Quarantined runs are excluded (they are deliberately unrepresented), and
+    runs terminalized at/after the migration's own start are excluded (C4 —
+    the catch-up sweep owns them; see _STARTED_AT_EXCLUSION_SQL). env.py
+    wraps the whole chain in one transaction, so the raise aborts the entire
+    migration — which is exactly the contract: this fires on infrastructure
+    failure only, never on a data outcome.
     """
-    terminal_missing = _count(bind, _TERMINAL_COVERAGE_SQL, {"window_days": _WINDOW_DAYS})
-    unknown_missing = _count(bind, _UNKNOWN_COVERAGE_SQL, {"window_days": _WINDOW_DAYS})
+    params = {"window_days": _WINDOW_DAYS, "migration_started_at": migration_started_at}
+    terminal_missing = _count(bind, _TERMINAL_COVERAGE_SQL, params)
+    unknown_missing = _count(bind, _UNKNOWN_COVERAGE_SQL, params)
     if terminal_missing > 0 or unknown_missing > 0:
         raise RuntimeError(
             "FAR-583 backfill coverage violation: "
@@ -673,12 +687,22 @@ def upgrade() -> None:
 
     if not pg:
         # SQLite parity path: plain-JSON table creation only (no ceremony, no
-        # quarantine table, no backfill, no RLS).
+        # backfill, no RLS). The quarantine side table IS created — the
+        # sweep's quarantine exclusion + INSERT run on every backend.
         _create_tables(postgres_types=False)
         op.create_index("ix_run_node_outputs_organisation_id", _TABLE, ["organisation_id"])
+        _create_quarantine_table()
         return
 
     op.execute("SET search_path TO public")
+    # C4: the migration-start timestamp (transaction-start now() — constant
+    # for the whole one-transaction chain). The end-of-migration coverage
+    # check excludes runs terminalized at/after this instant: an old machine
+    # can terminalize a run AFTER its id-chunk was scanned (READ COMMITTED
+    # per-statement snapshots); aborting the chain on it would wedge the
+    # deploy. Those runs land in the catch-up sweep instead.
+    migration_started_at = bind.execute(sa.text("SELECT now()")).scalar_one()
+
     migrate_role = _role_exists(bind, _MIGRATE_ROLE)
     app_role = _role_exists(bind, _APP_ROLE)
 
@@ -704,7 +728,7 @@ def upgrade() -> None:
     _assert_runs_blob_columns_are_jsonb(bind)
     _backfill_window(bind, terminal=True)
     _backfill_window(bind, terminal=False)
-    _verify_window_coverage(bind)
+    _verify_window_coverage(bind, migration_started_at)
 
     # RLS last: ENABLE + FORCE + strict fail-closed policy (0162/0163 style —
     # NO null-context allow branch), then the app-role DML grant.

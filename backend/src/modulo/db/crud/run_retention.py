@@ -56,6 +56,12 @@ from modulo.db.crud.run_node_outputs import (
 )
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+
+# qa rider (FAR-583): the byte-size estimator was duplicated here and in the
+# run_node_outputs repo module — the single shared copy now lives on the leaf
+# model module; imported under the historical private name so existing
+# callers/tests are untouched.
+from modulo.db.models.run_node_outputs import json_bytes as _json_bytes
 from modulo.db.models.trigger_event import TriggerEvent
 
 _log = logging.getLogger(__name__)
@@ -114,17 +120,6 @@ _CHECKPOINT_DELETE_SQL: dict[str, str] = {
 # Appended to a template ONLY when org_id is in scope; the org value is a bound
 # parameter (:org), never string-interpolated.
 _ORG_CLAUSE = " AND organisation_id = :org"
-
-
-def _json_bytes(value: Any) -> int:
-    """Approximate byte size of a JSON-serialisable column value."""
-
-    if value is None:
-        return 0
-    try:
-        return len(json.dumps(value, default=str))
-    except (TypeError, ValueError):
-        return 0
 
 
 def _run_row_bytes(run: Run, node_output_bytes: int = 0) -> int:
