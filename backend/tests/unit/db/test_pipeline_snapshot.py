@@ -259,6 +259,52 @@ async def test_snapshot_carries_condition_expression_for_conditional_edge() -> N
     session.flush.assert_awaited_once()
 
 
+@pytest.mark.parametrize("autonomy", ["fully_autonomous", "notify_on_complete", None])
+async def test_snapshot_carries_pipeline_default_autonomy_level(autonomy: str | None) -> None:
+    """The pipeline-level autonomy setting must be frozen into the run
+    snapshot so the executor can seed ``_pipeline_default_autonomy`` for HITL
+    gate nodes. Legacy pipelines with a NULL setting keep snapshotting NULL.
+    """
+    pipeline_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+
+    pipeline = MagicMock()
+    pipeline.id = pipeline_id
+    pipeline.organisation_id = uuid.uuid4()
+    pipeline.graph_nodes_json = [
+        {"id": str(source_id), "agent_id": None, "connector_binding": None},
+        {"id": str(target_id), "agent_id": None, "connector_binding": None},
+    ]
+    pipeline.run_context_defaults = {"branch": "main"}
+    pipeline.default_autonomy_level = autonomy
+
+    edge = MagicMock()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = source_id
+    edge.target_node_id = target_id
+    edge.edge_type = "normal"
+    edge.hitl_gate_config = None
+    edge.condition_expression = None
+
+    session = AsyncMock(spec=AsyncSession)
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+    session.execute.side_effect = [
+        lock_result,
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        _scalar_result(1),
+        _scalars_result([]),
+        MagicMock(),
+    ]
+
+    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    assert snapshot.default_autonomy_level == autonomy
+
+
 def _lock_attempt_result(acquired: bool) -> MagicMock:
     result = MagicMock()
     result.scalar_one.return_value = acquired
