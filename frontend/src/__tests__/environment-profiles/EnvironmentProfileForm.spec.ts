@@ -100,6 +100,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'local_docker'
+
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('python-dev')
     await wrapper.find('[data-testid="envprofile-form-description"]').setValue('  dev sandbox  ')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue('python:3.12-slim')
@@ -127,6 +130,8 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
+    ;(wrapper.vm as unknown as { form: { provider_type: string } }).form.provider_type = 'local_docker'
+
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('cap-profile')
     expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(6)
 
@@ -149,7 +154,8 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
-    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(true)
+    // No tier badge is shown until a provider with a runner tier is selected.
+    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(false)
 
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'e2b'
@@ -164,6 +170,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     postMock.mockRejectedValue(new Error('quota exhausted'))
     const wrapper = mountForm()
     await flush()
+
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'local_docker'
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
     await wrapper.find('form').trigger('submit')
