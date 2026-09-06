@@ -1876,9 +1876,11 @@ class TestCountActiveRuns:
         assert count == 4
         sql = str(session.executed[0][0])
         assert "cancellation_requested" in sql
-        # Every active status must be counted, never re-dispatched away.
+        # Every active status must be counted, never re-dispatched away
+        # (``hitl_parked`` — FAR-604 D2 — is in ACTIVE_RUN_STATUSES like
+        # awaiting_human: it only drops out of the PIPELINE capacity gate).
         statuses = session.executed[0][0].compile().params["status_1"]
-        assert set(statuses) == {"running", "pending", "awaiting_human", "claimed", "unknown"}
+        assert set(statuses) == {"running", "pending", "awaiting_human", "claimed", "unknown", "hitl_parked"}
 
 
 class TestLogEvent:

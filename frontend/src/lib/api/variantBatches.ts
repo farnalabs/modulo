@@ -22,6 +22,7 @@ export type VariantRunStatus =
   | 'running'
   | 'awaiting_human'
   | 'claimed'
+  | 'hitl_parked'
   | 'complete'
   | 'failed'
   | 'cancelled'

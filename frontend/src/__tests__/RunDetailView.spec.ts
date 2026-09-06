@@ -1624,6 +1624,22 @@ describe('RunDetailView rendering extras', () => {
     return wrapper
   }
 
+  it('does not render a workspace lease section (lease scaffolding deleted in #25)', async () => {
+    mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
+    const wrapper = await mountWith(baseDetail(), { outputs_json: null })
+    const ws = wrapper.text()
+    expect(ws).not.toContain('Workspace')
+    expect(ws).not.toContain('OOM killed')
+    wrapper.unmount()
+  })
+
+  it('does not render workspace lease durations (lease scaffolding deleted in #25)', async () => {
+    mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
+    const wrapper = await mountWith(baseDetail(), { outputs_json: null })
+    expect(wrapper.text()).not.toContain('45s')
+    wrapper.unmount()
+  })
+
   it('copies the trace id to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
