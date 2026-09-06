@@ -162,11 +162,21 @@
           >
             {{ claimLoading ? 'Claiming...' : 'Claim Gate' }}
           </button>
-          <div v-if="hitlMessage" class="text-sm" :class="hitlMessage.type === 'error' ? 'text-destructive' : 'text-success'">
-            {{ hitlMessage.text }}
-          </div>
         </div>
       </section>
+
+      <!-- HITL action feedback. Hoisted outside the per-gate loop AND outside
+           the section gate (FAR-631): approve/reject empties pendingGates and
+           flips the run status, unmounting the section — a message rendered
+           inside it could never be seen. -->
+      <div
+        v-if="hitlMessage"
+        data-testid="run-detail-hitl-message"
+        class="mb-4 text-sm"
+        :class="hitlMessage.type === 'error' ? 'text-destructive' : 'text-success'"
+      >
+        {{ hitlMessage.text }}
+      </div>
 
       <!-- Timestamps -->
       <div v-if="runTimestamps" class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
