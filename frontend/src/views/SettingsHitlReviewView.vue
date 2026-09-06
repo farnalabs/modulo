@@ -165,7 +165,7 @@
                       {{ claiming[expandKey(gate)] ? $t('views.SettingsHitlReviewView.claiming') : $t('views.SettingsHitlReviewView.claim_gate') }}
                     </Button>
                   </div>
-                  <div v-if="gateStatus(gate) === 'claimed'">
+                  <div v-if="gateStatus(gate) === 'claimed' && claimTokens[expandKey(gate)]">
                     <div class="space-y-2">
                       <textarea :aria-label="$t('views.SettingsHitlReviewView.review_notes')"
                         v-model="reviewNotes[expandKey(gate)]"
@@ -195,6 +195,11 @@
                         </button>
                       </div>
                     </div>
+                  </div>
+                  <!-- FAR-612: claimed by another session (no local claim token) is read-only —
+                       its approve/reject buttons could only ever fail with "no claim token". -->
+                  <div v-else-if="gateStatus(gate) === 'claimed'" data-testid="hitl-review-claimed-other" class="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+                    {{ $t('views.SettingsHitlReviewView.claimed_by_other', { user: gate.claimed_by, time: formatDate(gate.claimed_at) }) }}
                   </div>
                   <div v-if="gateStatus(gate) === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success">
                     {{ $t('views.SettingsHitlReviewView.approved_banner') }}
@@ -382,6 +387,23 @@ const filteredGates = computed(() => {
     matchesStatus(gate) && matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
 })
 
+function claimFailureMessage(err: unknown): string {
+  // FAR-612: map the backend's claim-failure detail to a specific message so
+  // the operator knows what actually happened (conflict shapes from the claim
+  // endpoint: already claimed / already decided / run not awaiting).
+  const detail = formatApiError(err)
+  if (detail.includes('already claimed')) {
+    return t('views.SettingsHitlReviewView.claim_failed_already_claimed')
+  }
+  if (detail.includes('already has a decision')) {
+    return t('views.SettingsHitlReviewView.claim_failed_already_decided')
+  }
+  if (detail.includes('not awaiting a human decision')) {
+    return t('views.SettingsHitlReviewView.claim_failed_run_not_awaiting', { reason: detail })
+  }
+  return `${t('views.SettingsHitlReviewView.claim_failed')} ${detail}`
+}
+
 async function claimGate(gate: GateItem) {
   const key = expandKey(gate)
   claiming.value[key] = true
@@ -394,8 +416,12 @@ async function claimGate(gate: GateItem) {
     if (err) {
       actionMessage.value[key] = {
         type: 'error',
-        text: `${t('views.SettingsHitlReviewView.claim_failed')} ${formatApiError(err)}`,
+        text: claimFailureMessage(err),
       }
+      // The row on screen is stale after a failed claim (another reviewer took
+      // it, the run moved on, the gate was decided). Re-fetch immediately so
+      // the list reflects reality instead of waiting for the 30s auto-refresh.
+      await loadGates()
     } else if (data) {
       const d = data as any
       claimTokens.value[key] = d.claim_token

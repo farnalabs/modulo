@@ -122,6 +122,7 @@ from modulo.core.hitl_manager import (
     GateNotFoundError,
     HITLManager,
     NotTeamMemberError,
+    RunNotAwaitingError,
 )
 from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
@@ -3595,6 +3596,8 @@ def _hitl_error_response(exc: BaseException, run_id: str, gate_id: str) -> dict[
         return {"error": "claim_token_expired", "detail": "Re-claim the gate"}
     if isinstance(exc, GateAlreadyDecidedError):
         return {"error": "already_decided", "detail": "Gate already has a final decision"}
+    if isinstance(exc, RunNotAwaitingError):
+        return {"error": "run_not_awaiting", "detail": str(exc)}
     if isinstance(exc, DecisionPayloadError):
         # FAR-541 (iteration 4): ``_decide`` refusals surface as the MCP error
         # shape (mirroring the HTTP API's 422) instead of an unhandled
@@ -3660,6 +3663,7 @@ async def _review_hitl_impl(
             ClaimTokenExpiredError,
             GateAlreadyDecidedError,
             DecisionPayloadError,
+            RunNotAwaitingError,
             ProgrammingError,
         ) as exc:
             return _hitl_error_response(exc, run_id, gate_id)

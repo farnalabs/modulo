@@ -14,7 +14,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.hitl_manager import NotTeamMemberError
+from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -121,6 +121,26 @@ class TestClaimGateNotTeamMemberError:
             json={"expiry_minutes": 15},
         )
         assert resp.status_code == 403
+
+
+class TestClaimGateRunNotAwaitingError:
+    """FAR-612: a gate whose run is not awaiting_human must 409 with the run's
+    actual status -- a terminal run is never flipped to "claimed" by a stale
+    gate claim."""
+
+    @patch(
+        "modulo.api.routes.hitl.HITLManager.claim",
+        new=AsyncMock(side_effect=RunNotAwaitingError(_RUN_ID, "complete")),
+    )
+    def test_claim_gate_returns_409_when_run_not_awaiting(self, client: TestClient) -> None:
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+            json={"expiry_minutes": 15},
+        )
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "not awaiting a human decision" in detail
+        assert "status: complete" in detail
 
 
 class TestApproveGateSQLAlchemyError:

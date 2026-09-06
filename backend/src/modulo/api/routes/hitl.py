@@ -41,6 +41,7 @@ from modulo.core.hitl_manager import (
     GateNotFoundError,
     HITLManager,
     NotTeamMemberError,
+    RunNotAwaitingError,
 )
 from modulo.core.notifier import Notifier
 from modulo.core.pipeline_engine.executor import (
@@ -275,6 +276,11 @@ async def claim_gate(
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except AlreadyClaimedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except RunNotAwaitingError as exc:
+                # FAR-612: a terminal/still-executing run must never be flipped
+                # to "claimed" by a stale gate claim -- 409 with the run's
+                # actual status so the operator sees why.
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
             except NotTeamMemberError as exc:
                 logger.warning("hitl.claim_gate.team_access_denied: %s", exc)
@@ -885,7 +891,12 @@ async def list_org_pending_gates(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("hitl.list"),
 ) -> PendingGatesResponse:
-    """List all pending HITL gates across the organisation."""
+    """List pending HITL gates across the organisation.
+
+    Gates on terminal runs are excluded (they are data rot, not pending work):
+    the manager joins ``runs`` and keeps only undecided gates whose run is in
+    ``awaiting_human`` or ``claimed`` status (FAR-612).
+    """
     mgr = HITLManager()
     try:
         async with session.begin():

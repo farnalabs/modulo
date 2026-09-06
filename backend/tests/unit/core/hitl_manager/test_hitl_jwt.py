@@ -77,7 +77,11 @@ def _session_claim(
     pre_check_gate: HitlClaim | None = None,
     claimed_gate: HitlClaim | None = None,
 ) -> AsyncMock:
-    """Session mock for claim(): pre-check SELECT, UPDATE RETURNING, post-check SELECT."""
+    """Session mock for claim(): pre-check SELECT, run-status SELECT, UPDATE RETURNING, post-check SELECT.
+
+    The run-status SELECT (FAR-612) is dispatched by statement shape so the
+    gate sequencing is unaffected.
+    """
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -92,14 +96,22 @@ def _session_claim(
     post_result = MagicMock()
     post_result.scalar_one_or_none.return_value = claimed_gate
 
-    call_count = 0
+    run_result = MagicMock()
+    run_mock = MagicMock()
+    run_mock.status = "awaiting_human"
+    run_result.scalar_one_or_none.return_value = run_mock
+
+    gate_call_count = 0
 
     async def _execute(stmt: Any) -> Any:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
+        nonlocal gate_call_count
+        sql = str(stmt)
+        if "runs" in sql and "hitl_claims" not in sql:
+            return run_result
+        gate_call_count += 1
+        if gate_call_count == 1:
             return pre_result
-        if call_count == 2:
+        if gate_call_count == 2:
             return update_result
         return post_result
 
@@ -185,12 +197,15 @@ async def test_claim_with_secret_key_writes_jwt_to_db() -> None:
     captured: list[Any] = []
     session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=unclaimed_gate)
     orig_execute = session.execute
-    call_no = 0
+    gate_call_no = 0
 
     async def _capture_execute(stmt: Any) -> Any:
-        nonlocal call_no
-        call_no += 1
-        if call_no == 2:
+        nonlocal gate_call_no
+        sql = str(stmt)
+        if "runs" in sql and "hitl_claims" not in sql:
+            return await orig_execute(stmt)
+        gate_call_no += 1
+        if gate_call_no == 2:
             captured.append(stmt)
         return await orig_execute(stmt)
 
@@ -236,12 +251,15 @@ async def test_claim_without_secret_key_generates_opaque_token() -> None:
     captured: list[Any] = []
     session = _session_claim(pre_check_gate=unclaimed_gate, claimed_gate=unclaimed_gate)
     orig_execute = session.execute
-    call_no = 0
+    gate_call_no = 0
 
     async def _capture_execute(stmt: Any) -> Any:
-        nonlocal call_no
-        call_no += 1
-        if call_no == 2:
+        nonlocal gate_call_no
+        sql = str(stmt)
+        if "runs" in sql and "hitl_claims" not in sql:
+            return await orig_execute(stmt)
+        gate_call_no += 1
+        if gate_call_no == 2:
             captured.append(stmt)
         return await orig_execute(stmt)
 

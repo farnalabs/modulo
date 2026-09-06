@@ -45,6 +45,7 @@ from modulo.core import hitl_email_alerts
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.run import unpark_parked_run
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.run import Run
 from modulo.db.models.team_membership import TeamMembership
 
 _log = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ __all__: tuple[str, ...] = (
     "HITLError",
     "HITLManager",
     "NotTeamMemberError",
+    "RunNotAwaitingError",
 )
 
 # ---------------------------------------------------------------------------
@@ -131,6 +133,20 @@ class NotTeamMemberError(HITLError, PermissionError):
         self.user_id = user_id
 
 
+class RunNotAwaitingError(HITLError, RuntimeError):
+    """The gate's run is not in ``awaiting_human`` status, so it cannot be claimed.
+
+    Claiming a gate on a terminal (or still-executing) run would flip that run
+    to ``claimed`` via the claim route's ``update_run_status`` -- corrupting a
+    finished run. FAR-612.
+    """
+
+    def __init__(self, run_id: uuid.UUID, status: str) -> None:
+        super().__init__(f"Run {run_id} is not awaiting a human decision (status: {status})")
+        self.run_id = run_id
+        self.status = status
+
+
 class GateVanishedError(HITLError, RuntimeError):
     """Claim acquired/decided but the gate row disappeared before we could read it."""
 
@@ -157,6 +173,12 @@ _DECISION_DELIVER_MANUAL = "deliver_manual"
 # Bounded decision payload at write (B1): refuse payloads over this size with a
 # clear 422 instead of silently truncating a human's manual output.
 _DECISION_PAYLOAD_MAX_BYTES = 256 * 1024
+
+# Run statuses whose undecided gates are actionable work (FAR-612):
+# ``awaiting_human`` gates are claimable now; ``claimed`` gates are held by a
+# reviewer and legitimately render as claimed. Every other run status makes an
+# undecided gate data rot, not pending work.
+_ACTIONABLE_RUN_STATUSES: frozenset[str] = frozenset({"awaiting_human", "claimed"})
 
 
 class HITLManager:
@@ -269,6 +291,17 @@ class HITLManager:
             raise GateAlreadyDecidedError(run_id, gate_id)
         if gate_check.account_id is not None:
             raise AlreadyClaimedError(run_id, gate_id)
+        # FAR-612: the run itself must be waiting for a human. An undecided
+        # gate on any other status is data rot (e.g. orphaned rows left by the
+        # since-fixed auto-approve bug) -- claiming it would flip a terminal
+        # run to "claimed" via the route's update_run_status. Org-scoped so a
+        # foreign run id can never be probed through this check.
+        run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
+        run = run_result.scalar_one_or_none()
+        if run is None:
+            raise GateNotFoundError(run_id, gate_id)
+        if run.status != "awaiting_human":
+            raise RunNotAwaitingError(run_id, run.status)
         if gate_check.required_team_id is not None:
             # Lock the gate row so the team check is serialised with the UPDATE.
             locked_result = await session.execute(
@@ -625,12 +658,21 @@ class HITLManager:
         session: AsyncSession,
         org_id: uuid.UUID,
     ) -> list[HitlClaim]:
-        """All unclaimed, undecided gates for the org (run is awaiting_human)."""
+        """All undecided gates for the org whose run is still actionable.
+
+        Joined to ``runs`` and filtered to runs in ``awaiting_human`` or
+        ``claimed`` status (FAR-612): an undecided gate on any other run
+        status is data rot (e.g. orphaned rows left by the since-fixed
+        auto-approve bug), not pending work. Held (claimed) gates are
+        included so consumers can render the claimed state.
+        """
         result = await session.execute(
-            select(HitlClaim).where(
+            select(HitlClaim)
+            .join(Run, HitlClaim.run_id == Run.id)
+            .where(
                 HitlClaim.organisation_id == org_id,
-                HitlClaim.account_id.is_(None),
                 HitlClaim.decision.is_(None),
+                Run.status.in_(_ACTIONABLE_RUN_STATUSES),
             )
         )
         return list(result.scalars())
