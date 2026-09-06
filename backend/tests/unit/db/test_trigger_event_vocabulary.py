@@ -43,10 +43,14 @@ _MIGRATION_PATH = (
 
 # The chain head after the FAR-604 admission-healing migration widened the
 # ck_trigger_events_validation_result vocabulary (coalesced /
-# backpressure_skipped) on top of 0174_per_org_last_admin_guard, and the
-# FAR-587 provider cleanup chain (0178_env_profiles_runner_docker ->
-# 0179_drop_workspace_leases) tops it.
-_CHAIN_HEAD_MIGRATION_NAME = "0179_drop_workspace_leases"
+# backpressure_skipped) on top of 0174_per_org_last_admin_guard, the
+# FAR-461 in-app invite tokens migration (0177_invitations) chained off it,
+# the FAR-587 provider cleanup chain (0178_env_profiles_runner_docker ->
+# 0179_drop_workspace_leases) continued off that, and the FAR-604 D2 HITL-capacity
+# migration (0180_hitl_parked_status, renumbered from 0177 after the invitations
+# collision and again from 0178 after the env_profiles_runner_docker collision)
+# re-parented onto 0179_drop_workspace_leases as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0180_hitl_parked_status"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
