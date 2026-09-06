@@ -9,8 +9,11 @@ describe('SvgIcon', () => {
     vi.restoreAllMocks()
   })
 
-  // ~10s isolated, 20s+ under full-suite load; zero margin at the 15s default
-  // caused flakes (FAR-632), so give this scan a wide 120s budget.
+  // This test scans the entire manifest icon registry: duration scales with
+  // the icon/route count and the Vite transform cache state — ~10s isolated,
+  // 20s+ under full-suite load (FAR-632), 15s+ cold on Windows (FAR-639) —
+  // so zero margin at the 15s global default caused flakes. Give this scan a
+  // wide 120s budget (same mechanism as app-bootstrap.spec.ts).
   it('registers every icon referenced by manifest navigation', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const iconNames = new Set(
