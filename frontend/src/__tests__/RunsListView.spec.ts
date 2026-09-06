@@ -1,6 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { formatHeartbeatAge } from '../utils/runUtils'
+
+describe('formatHeartbeatAge (shared heartbeat humanizer, FAR-624)', () => {
+  it('humanizes exact-unit and compound-unit boundaries — list + detail stay in sync', () => {
+    expect(formatHeartbeatAge(null)).toBe('—')
+    expect(formatHeartbeatAge(0)).toBe('just now')
+    expect(formatHeartbeatAge(10)).toBe('10s ago')
+    expect(formatHeartbeatAge(45)).toBe('45s ago')
+    expect(formatHeartbeatAge(59)).toBe('59s ago')
+    expect(formatHeartbeatAge(60)).toBe('1m 00s ago')
+    expect(formatHeartbeatAge(61)).toBe('1m 01s ago')
+    expect(formatHeartbeatAge(185)).toBe('3m 05s ago')
+    expect(formatHeartbeatAge(3599)).toBe('59m 59s ago')
+    expect(formatHeartbeatAge(3600)).toBe('1h 00m ago')
+    expect(formatHeartbeatAge(7800)).toBe('2h 10m ago')
+    expect(formatHeartbeatAge(86399)).toBe('23h 59m ago')
+    expect(formatHeartbeatAge(86400)).toBe('1d 0h ago')
+    expect(formatHeartbeatAge(97344)).toBe('1d 3h ago')
+    expect(formatHeartbeatAge(172799)).toBe('1d 23h ago')
+    expect(formatHeartbeatAge(172800)).toBe('2d 0h ago')
+  })
+})
 
 const mockResponses: Record<string, unknown> = {
   default: { items: [], total: 0, page: 1, page_size: 20, next_cursor: null, has_more: false },
@@ -760,17 +782,27 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('renders the heartbeat column as Xs ago for a running run with a recent heartbeat', async () => {
-    const heartbeatAt = new Date(Date.now() - 5000).toISOString() // nosemgrep: new-date-without-guard
+  it('renders the heartbeat column humanized rather than raw seconds', async () => {
+    const justNowAt = new Date(Date.now() - 5000).toISOString() // nosemgrep: new-date-without-guard
+    const fortyFiveSecondsAgoAt = new Date(Date.now() - 45_000).toISOString() // nosemgrep: new-date-without-guard
     mockResponses['/api/v1/runs'] = listWith([
-      { ...baseRun, status: 'running', completed_at: null, heartbeat_at: heartbeatAt },
+      { ...baseRun, status: 'running', completed_at: null, heartbeat_at: justNowAt },
+    ])
+    const justNowWrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(justNowWrapper.find('[data-testid="runs-list-heartbeat-run1"]').text()).toBe('just now')
+    justNowWrapper.unmount()
+
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'running', completed_at: null, heartbeat_at: fortyFiveSecondsAgoAt },
     ])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
     const cell = wrapper.find('[data-testid="runs-list-heartbeat-run1"]')
     expect(cell.exists()).toBe(true)
-    expect(cell.text()).toMatch(/^\d+s ago$/)
+    expect(cell.text()).toBe('45s ago')
     wrapper.unmount()
   })
 

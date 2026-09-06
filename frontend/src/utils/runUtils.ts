@@ -97,13 +97,26 @@ export function isHeartbeatStale(age: number | null): boolean {
   return age != null && age > HEARTBEAT_STALE_AFTER_SECONDS
 }
 
-export function formatHeartbeatAge(
-  age: number | null,
-  t: (key: string, named?: Record<string, unknown>) => string,
-  key = 'views.RunDetailView.ago',
-): string {
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+/**
+ * Humanized heartbeat age (FAR-624). Single shared formatter so the runs list
+ * and run detail never drift: "just now" for <10s, seconds below a minute,
+ * then zero-padded compound units ("3m 05s ago", "2h 05m ago", "1d 3h ago").
+ */
+export function formatHeartbeatAge(age: number | null): string {
   if (age == null) return '—'
-  return t(key, { s: age })
+  if (age < 10) return 'just now'
+  if (age < 60) return `${age}s ago`
+  const seconds = age % 60
+  const totalMinutes = Math.floor(age / 60)
+  const days = Math.floor(age / 86400)
+  const hours = Math.floor((age % 86400) / 3600)
+  if (days >= 1) return `${days}d ${hours}h ago`
+  if (totalMinutes >= 60) return `${hours}h ${pad2(totalMinutes % 60)}m ago`
+  return `${totalMinutes}m ${pad2(seconds)}s ago`
 }
 
 /** Human-readable label for a dotted run error code (e.g. `agent.stall` →

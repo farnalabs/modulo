@@ -1291,6 +1291,23 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('renders "Last heartbeat" with a visible label gap and humanized stale age', async () => {
+    const staleHeartbeatAt = new Date(Date.now() - 7800_000).toISOString() // nosemgrep: new-date-without-guard
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'running',
+      heartbeat_at: staleHeartbeatAt,
+    })
+
+    const el = wrapper.find('[data-testid="run-detail-heartbeat"]')
+    // The label/value whitespace must be an explicit, same-line space: newline
+    // separation is stripped by Vue's whitespace condensing (FAR-624).
+    expect(el.text()).toContain('Last heartbeat')
+    expect(el.text()).toContain('Last heartbeat 2h 10m ago')
+    expect(el.text()).toContain('(stale)')
+    wrapper.unmount()
+  })
+
   it('shows multiple strip entries together when several warning conditions exist', async () => {
     const staleHeartbeatAt = new Date(Date.now() - 120_000).toISOString() // nosemgrep: new-date-without-guard
     const wrapper = await mountWithDetail({
