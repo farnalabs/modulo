@@ -10,16 +10,24 @@ How matching works (and its limitations):
 
 - Route paths are extracted with the ``path: '([^']+)'`` regex from the router
   source. The catch-all ``/:pathMatch(.*)*`` is ignored entirely.
-- Normalisation strips ``:param`` segments (everything from the first
-  param onwards is dropped) and trailing slashes, yielding the route's static
-  prefix, e.g. ``/pipelines/:id/editor`` -> ``/pipelines/editor`` and
-  ``/runs/:id`` -> ``/runs``.
+- Normalisation drops ``:param`` segments (including optional ones like
+  ``:id?``) but keeps any static segments that follow a param, yielding the
+  route's static prefix. Trailing slashes are stripped. Examples:
+  ``/pipelines/:id/editor`` -> ``/pipelines/editor`` (static segment kept
+  after the param) and ``/runs/:id`` -> ``/runs`` (nothing after the param).
 - A route is "covered" when any spec file CONTAINS its static prefix as a
   plain substring. This is deliberately simple: a spec mentioning
   ``/runs/diff`` also covers ``/runs/:id``, and a spec containing
   ``/admin/costs/components`` also covers ``/admin/costs``. The gate is a
   rot-detector (does anything reference this route at all), not a proof that
   the route's behaviour is asserted.
+
+  Fill-work trap (for FAR-638): matching is substring-on-the-static-prefix, so
+  a spec that navigates ``/pipelines/<uuid>/editor`` does NOT satisfy
+  ``/pipelines/editor`` and the route stays UNCOVERED even when exercised. The
+  FAR-638 specs must include the literal static prefix (e.g. reference
+  ``/pipelines/editor`` as a string, or reach the page via client-side
+  navigation from a spec that does) or the gate stays red after the fill.
 
 Verdict: exit 0 when every non-allowlisted route is referenced by at least one
 spec; exit 1 with a ``::error::`` annotation listing the uncovered routes
@@ -124,6 +132,8 @@ def build_coverage(routes: list[str], specs: dict[str, str]) -> tuple[list[tuple
 
 
 def render_table(rows: list[tuple[str, str, str | None]]) -> str:
+    if not rows:
+        return "(no routes to display)"
     width = max(len(route) for route, _, _ in rows)
     lines = [f"{'route'.ljust(width)}  normalised prefix        covered by"]
     for route, key, covering in rows:
