@@ -3359,39 +3359,50 @@ async def _load_hitl_run(
 async def _check_human_only_gate(
     s: AsyncSession,
     org_id: uuid.UUID,
-    rid: uuid.UUID,
+    run: Any,
     gate_id: str,
 ) -> dict[str, Any] | None:
     """Return an error dict when the gate is human_only, else ``None``.
 
-    Only called for the ``approve`` action: a ``human_only`` gate can only be
-    approved by a browser-authenticated human, never by an API key.
-    """
-    from sqlalchemy import select
+    Called for the ``approve`` and ``deliver_manual`` actions: a ``human_only``
+    gate can only be decided by a browser-authenticated human, never by an
+    API-key/MCP client (MCP clients authenticate with API keys — they are
+    never browser sessions). ``reject`` stays allowed: rejection is the safe
+    direction.
 
-    gate_row = (
-        await s.execute(
-            select(HitlClaim).where(
-                HitlClaim.run_id == rid,
-                HitlClaim.gate_id == gate_id,
-                HitlClaim.organisation_id == org_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if gate_row is not None:
-        edge = (
-            (
-                await s.execute(
-                    select(PipelineEdge).where(
-                        PipelineEdge.pipeline_id == gate_row.pipeline_id,
-                    )
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if edge and edge.hitl_gate_config and edge.hitl_gate_config.get("human_only", False):
-            return {"error": "human_only_gate", "detail": "human_only gate requires browser auth"}
+    FAR-610: the gate's config is resolved from the RUN's snapshot graph
+    (falling back to the live pipeline edges, then the live HITL-node config)
+    via the shared resolver (``db.crud.hitl_gate_config``). The previous
+    implementation selected the pipeline's edges with NO source/target filter
+    and read ``.scalars().first()`` — the first edge in arbitrary order — and
+    checked THAT edge's config, so on the PR Reviewer pipeline (first edge
+    carried no ``hitl_gate_config``) MCP approvals were ALLOWED on a
+    ``human_only`` gate elsewhere in the graph.
+
+    Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
+    gate actually fired (a claim row exists —
+    ``hitl_gate_exists_but_unresolved``), the human_only policy cannot be
+    verified, so the decision is denied rather than silently allowed. The
+    error reuses the ``human_only_gate`` code (clients already handle it)
+    with a detail naming the actual reason. The verdict itself lives in the
+    shared pure function ``hitl_gate_config.human_only_denial`` so REST and
+    MCP enforce one policy with one wording (FAR-610 review); the claim
+    lookup runs only when the config is unresolvable.
+    """
+    from modulo.db.crud.hitl_gate_config import (
+        hitl_gate_exists_but_unresolved,
+        human_only_denial,
+        resolve_hitl_gate_config,
+    )
+
+    config = await resolve_hitl_gate_config(s, run_id=run.id, gate_id=gate_id, org_id=org_id, run=run)
+    gate_fired = False
+    if config is None:
+        gate_fired = await hitl_gate_exists_but_unresolved(s, run_id=run.id, gate_id=gate_id, org_id=org_id)
+    # MCP callers authenticate with API keys — always a non-browser credential.
+    verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
+    if verdict is not None:
+        return {"error": "human_only_gate", "detail": verdict}
     return None
 
 
@@ -3525,8 +3536,11 @@ async def _review_hitl_impl(
         if run is None:
             return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
 
-        if action == "approve":
-            human_only_err = await _check_human_only_gate(s, org_id, rid, gate_id)
+        if action in ("approve", "deliver_manual"):
+            # FAR-610: deliver_manual is a decision exactly like approve — a
+            # human_only gate must not be decided by an API-key/MCP client.
+            # reject stays allowed (safe direction).
+            human_only_err = await _check_human_only_gate(s, org_id, run, gate_id)
             if human_only_err:
                 return human_only_err
 
@@ -3555,7 +3569,8 @@ async def _review_hitl_impl(
         "Step 1: call with action='claim' to get a claim_token. "
         "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
         "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
-        "human_only gates return 403 on approve — only a browser-authenticated human can approve."
+        "human_only gates return 403 on approve and deliver_manual — "
+        "only a browser-authenticated human can decide them."
     ),
 )
 @_RETRY_DB
