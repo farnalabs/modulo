@@ -23,6 +23,7 @@ from modulo.core.hitl_manager import (
     GateAlreadyDecidedError,
     GateNotFoundError,
     NotTeamMemberError,
+    RunNotAwaitingError,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
@@ -1196,6 +1197,32 @@ class TestReviewHitl(_AuthContext):
         result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok")
 
         assert result["error"] == "already_decided"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_run_not_awaiting(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-612: claiming a gate whose run is not ``awaiting_human`` surfaces
+        as the MCP error shape ``run_not_awaiting`` with the run's actual status
+        in the detail, mirroring the HTTP route's 409."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.claim = AsyncMock(side_effect=RunNotAwaitingError(uuid.uuid4(), "complete"))
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+
+        assert result["error"] == "run_not_awaiting"
+        assert "complete" in result["detail"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
