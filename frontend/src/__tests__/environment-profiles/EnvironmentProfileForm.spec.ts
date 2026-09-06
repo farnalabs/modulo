@@ -107,10 +107,8 @@ describe('EnvironmentProfileForm — create mode', () => {
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('python-dev')
     await wrapper.find('[data-testid="envprofile-form-description"]').setValue('  dev sandbox  ')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue('python:3.12-slim')
-    // FAR-587 made provider_type a required field with no default, so select it
-    // explicitly before submitting (the create payload expects local_docker).
-    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
-    vm.form.provider_type = 'local_docker'
+    // FAR-587 made provider_type a required field with no default, so it is
+    // selected explicitly above (provider_type = 'local_docker') before submit.
     await wrapper.find('form').trigger('submit')
     await flush()
 
