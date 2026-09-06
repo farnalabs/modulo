@@ -1385,7 +1385,6 @@ async def test_process_one_due_polling_row_not_advanced_and_enqueue_failure():
 
 
 async def test_polling_missing_connector_logs_event_and_advances():
-    datetime.now(UTC)
     row = SimpleNamespace(id=TRIGGER_A, pipeline_id=PIPELINE)
     session = _MockSession()
     summary: dict[str, Any] = {"polling_due": 0}
@@ -1395,7 +1394,6 @@ async def test_polling_missing_connector_logs_event_and_advances():
 
 
 async def test_polling_missing_connector_swallows_failure(caplog):
-    datetime.now(UTC)
     row = SimpleNamespace(id=TRIGGER_A, pipeline_id=PIPELINE)
     session = _MockSession()
     session.execute = AsyncMock(side_effect=RuntimeError("db down"))
@@ -1406,7 +1404,6 @@ async def test_polling_missing_connector_swallows_failure(caplog):
 
 
 async def test_polling_missing_connector_reraises_cancellation():
-    datetime.now(UTC)
     row = SimpleNamespace(id=TRIGGER_A, pipeline_id=PIPELINE)
     session = _MockSession()
     session.execute = AsyncMock(side_effect=asyncio.CancelledError())
@@ -1580,7 +1577,6 @@ async def test_process_one_ongoing_row_enqueue_variants():
 
 
 def test_is_nodeless_zombie_row_rejects_missing_started_at():
-    datetime.now(UTC)
     row = SimpleNamespace(status="running", node_token_usage=None, outputs_json=None, started_at=None)
     assert ch._is_nodeless_zombie_row(row, 20) is False
 
