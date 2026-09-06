@@ -1,3 +1,4 @@
+# 2026-09-06 validation PR: comment-only touch to exercise the dormant HITL gate skip path (autonomy=fully_autonomous). No behavioural change to this registry.
 # High-risk paths requiring a human HITL gate before merge.
 # READ FROM main ONLY by the PR Reviewer router — never from the PR branch.
 #
