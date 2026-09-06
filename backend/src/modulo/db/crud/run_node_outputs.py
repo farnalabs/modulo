@@ -257,6 +257,19 @@ def _side_present(column: Any) -> Any:
     return cast(column, String) != _JSON_NULL_TEXT
 
 
+# A side holds '{}': an explicit EMPTY dict. For outputs/telemetry that is
+# meaningful (it produces the metadata row); for MARKERS it means "no
+# markers" and is NOT representable (the same definition as migration 0176's
+# _ANY_BLOB_OBJECT_SQL, which excludes markers = '{}'). Selecting a
+# '{}'-markers-only run would write zero rows every pass — an un-healable
+# zombie the sweep would re-select on every tick.
+_MARKERS_EMPTY_TEXT = "{}"
+
+
+def _markers_present(column: Any) -> Any:
+    return and_(_side_present(column), cast(column, String) != _MARKERS_EMPTY_TEXT)
+
+
 async def _resolve_dialect(session: AsyncSession) -> str:
     bind = session.get_bind()
     if asyncio.iscoroutine(bind):  # AsyncSession get_bind is sync in SA 2.x; defensive
@@ -921,18 +934,20 @@ async def backfill_run_node_outputs_batch(
     # Trigger predicate: only runs the sweep can actually heal enter the
     # batch (absent representation OR absent marker rows) — a drained org
     # selects nothing on the steady-state tick. A side counts as PRESENT only
-    # when it holds a real JSON value (see _side_present).
+    # when it holds a real JSON value (see _side_present); the MARKERS side
+    # additionally excludes '{}' ("no markers" is not representable — see
+    # _markers_present).
     run_stmt = run_stmt.where(
         or_(
             and_(
                 or_(
                     _side_present(Run.outputs_json),
                     _side_present(Run.node_telemetry_json),
-                    _side_present(Run.raw_output_markers),
+                    _markers_present(Run.raw_output_markers),
                 ),
                 ~final_row_exists,
             ),
-            and_(_side_present(Run.raw_output_markers), ~marker_row_exists),
+            and_(_markers_present(Run.raw_output_markers), ~marker_row_exists),
         )
     )
     batch = (await session.execute(run_stmt)).all()

@@ -361,7 +361,12 @@ async def guard_dual_write(session: AsyncSession) -> AsyncIterator[None]:
         yield
     except DualWriteError as exc:
         try:
-            await session.rollback()
+            # Full-transaction rollback is deliberate (fail-closed): the caller's
+            # entire txn must abort and release the run-row lock so the
+            # terminalize path's separate session can proceed. A savepoint
+            # (begin_nested) would keep the outer txn alive, contradicting the
+            # fail-closed design.
+            await session.rollback()  # nosemgrep: session-rollback-abuse
         except asyncio.CancelledError:
             raise
         except Exception:

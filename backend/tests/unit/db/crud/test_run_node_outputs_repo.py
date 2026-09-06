@@ -547,6 +547,24 @@ class TestBackfill:
         assert result["runs_selected"] == 1
         assert result["unknown_marker_keys"] == 1
 
+    async def test_empty_markers_dict_run_is_never_selected(self, session: AsyncSession) -> None:
+        """A run whose ONLY blob is markers = '{}' (explicit empty dict) is
+        never selected: '{}' markers mean "no markers" and are not
+        representable (migration 0176's _ANY_BLOB_OBJECT_SQL excludes them).
+        Selecting such a run would write zero rows every pass — an
+        un-healable zombie re-selected on every sweep tick."""
+        await _seed_run(
+            session,
+            completed_at=datetime(2026, 9, 1, 12, 0, 0),
+            markers={},
+        )
+        async with session.begin():
+            await set_rls_org(session, _ORG_A)
+            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
+        assert result["runs_selected"] == 0
+        assert result["runs_backfilled"] == 0
+        assert result["rows_written"] == 0
+
     async def test_ghost_moved_rows_skip_the_insert(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
