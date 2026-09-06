@@ -1724,10 +1724,19 @@ async def stale_run_recovery_sweep(
 # ---------------------------------------------------------------------------
 
 
+# Claimable resume statuses: 'awaiting_human'/'claimed' (F6a) plus 'hitl_parked'
+# (FAR-604). The parked status literal matches db.models.run:HITL_PARKED_STATUS —
+# it cannot be interpolated into these templates (raw-sql-fstring), so keep the
+# two in sync by hand; the runs status CHECK constraint (ck_runs_status) pins the
+# vocabulary. Parked rows are claimable UNCONDITIONALLY of heartbeat freshness:
+# nothing heartbeats a parked run (no worker owns it), so a heartbeat gate would
+# strand it forever. Atomicity fences concurrent claims instead: the first
+# claimer moves the row to 'running', a concurrent claimer then sees a fresh
+# heartbeat and loses.
 _RESUME_CLAIM_UPDATE_SQL = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
     "WHERE id=:rid AND organisation_id=:oid "
-    "AND (status IN ('awaiting_human', 'claimed') "
+    "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
     "RETURNING id"
@@ -1736,7 +1745,7 @@ _RESUME_CLAIM_UPDATE_SQL = text(
 _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok "
     "WHERE id=:rid AND organisation_id=:oid "
-    "AND (status IN ('awaiting_human', 'claimed') "
+    "AND (status IN ('awaiting_human', 'claimed', 'hitl_parked') "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
     "RETURNING id"
@@ -1751,10 +1760,16 @@ def build_resume_claim_update(
 ) -> Any:
     """Build the atomic claim UPDATE for a resumed HITL run.
 
-    Claimable rows (plan F6a):
+    Claimable rows (plan F6a + FAR-604):
 
-      * ``status IN ('awaiting_human', 'claimed')`` — the gate decision has
-        already been committed by the caller, the run is waiting to resume.
+      * ``status IN ('awaiting_human', 'claimed', 'hitl_parked')`` — the gate
+        decision has already been committed by the caller, the run is waiting
+        to resume. ``hitl_parked`` (FAR-604) is the parked counterpart of
+        ``awaiting_human``: the reconcile loop re-enqueues ``resume_run`` for a
+        parked run whose decision committed after the park sweep moved it out
+        of review state, and the claim must match it or the resume is a silent
+        no-op that re-enqueues forever. Literal ``'hitl_parked'`` mirrors
+        ``db.models.run.HITL_PARKED_STATUS`` (see the template comment).
       * ``status = 'running'`` with a stale heartbeat — a mid-resume crash left
         the run running but the worker died.
 
@@ -1795,7 +1810,7 @@ async def claim_resume_run_async(
     *,
     claim_cap: int | None = None,
 ) -> str | None:
-    """Claim an awaiting_human/claimed (or stale-running) run for resume.
+    """Claim an awaiting_human/claimed/hitl_parked (or stale-running) run for resume.
 
     Idempotent: a second claimer finds the row already ``running`` with a fresh
     heartbeat and loses the atomic UPDATE. The gate decision itself is committed
