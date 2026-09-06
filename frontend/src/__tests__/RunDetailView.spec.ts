@@ -1484,11 +1484,11 @@ describe('RunDetailView HITL gates', () => {
     // the run flips to running and the gate section goes away
     expect(wrapper.text()).toContain('running')
     expect(wrapper.text()).not.toContain('HITL Gate')
-    // BUG characterisation: the approve success message ("Gate approved.
-    // Pipeline resuming.") is set inside approveGate() but rendered inside the
-    // per-gate v-for, which is emptied on success — the reviewer never sees
-    // positive feedback; the run-status flip is the only signal.
-    expect(wrapper.text()).not.toContain('Gate approved. Pipeline resuming.')
+    // FAR-631: the success message is hoisted outside the per-gate section,
+    // so the reviewer sees positive feedback even after the gate section
+    // unmounts (previously it rendered inside the emptied v-for and was lost).
+    expect(wrapper.text()).toContain('Gate approved. Pipeline resuming.')
+    expect(wrapper.find('[data-testid="run-detail-hitl-message"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -1529,9 +1529,9 @@ describe('RunDetailView HITL gates', () => {
       params: { path: { run_id: 'test-run-id', gate_id: 'gate-1' } },
       body: { claim_token: 'ct-123', reason: 'Rejected by reviewer' },
     })
-    // Same BUG characterisation as the approve flow: the reject success
-    // message is rendered inside the emptied per-gate loop and is never seen.
-    expect(wrapper.text()).not.toContain('Gate rejected. Pipeline routed to reject target.')
+    // FAR-631: same hoist as the approve flow — the reject success message
+    // now renders outside the (emptied) gate section.
+    expect(wrapper.text()).toContain('Gate rejected. Pipeline routed to reject target.')
     expect(wrapper.text()).not.toContain('HITL Gate')
     wrapper.unmount()
   })

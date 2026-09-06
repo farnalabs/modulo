@@ -234,12 +234,12 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
       failure_behaviour: 'block',
       pass_threshold: 0.55,
     })
-    // BUG: the success flash is invisible — saveEval sets formSuccess then
-    // resetForm() (same synchronous block) nulls it again, so neither the
-    // flash div nor the setTimeout clear can ever render a message. The POST
-    // and the form reset are the observable effects.
-    expect((wrapper.vm as unknown as { formSuccess: string | null }).formSuccess).toBe(null)
-    expect(wrapper.text()).not.toContain('views.EvalEditorView.eval_created')
+    // FAR-631: the success flash now survives the form reset (reset runs
+    // first, then the message is set), so the created message renders.
+    expect((wrapper.vm as unknown as { formSuccess: string | null }).formSuccess).toBe(
+      'views.EvalEditorView.eval_created',
+    )
+    expect(wrapper.text()).toContain('views.EvalEditorView.eval_created')
   })
 
   it('save with a specific node selected maps node_id into the body', async () => {
@@ -305,9 +305,12 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     expect(options.params.path.eval_id).toBe('eval-1')
     expect(options.body.failure_behaviour).toBe('block')
     expect(options.body.pass_threshold).toBe(0.9)
-    // Same invisible-success-flash bug as the create path (see above): the
-    // eval_updated message is nulled by resetForm before it can render.
-    expect((wrapper.vm as unknown as { formSuccess: string | null }).formSuccess).toBe(null)
+    // FAR-631: the updated message now survives the reset and renders (see
+    // the create-path note above).
+    expect((wrapper.vm as unknown as { formSuccess: string | null }).formSuccess).toBe(
+      'views.EvalEditorView.eval_updated',
+    )
+    expect(wrapper.text()).toContain('views.EvalEditorView.eval_updated')
 
     // After a successful save the form is reset and editing state cleared.
     expect((wrapper.find('[data-testid="eval-editor-name"]').element as HTMLInputElement).value).toBe('')

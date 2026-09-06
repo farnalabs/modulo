@@ -203,15 +203,15 @@ describe('SettingsErrorForwardersView', () => {
     wrapper.unmount()
   })
 
-  it('BUG: the Sentry DSN placeholder translation fails to compile ("@" is linked-message syntax)', async () => {
-    // Production bug characterisation. en-US.js ships
-    // `dsn_placeholder: "https://key@sentry.io/123"`; vue-i18n's message
-    // compiler treats `@` as linked-message syntax and throws
-    // SyntaxError: Message compilation error: Invalid linked format.
-    // Any expanded Sentry panel evaluates this placeholder during render, so
-    // the component render aborts and the panel never renders its fields.
+  it('the Sentry DSN placeholder compiles with the escaped @ (FAR-631)', async () => {
+    // FAR-631 fix: the raw "@" in the DSN example compiled as linked-message
+    // syntax and threw "Invalid linked format", aborting any render that
+    // evaluated the placeholder. The locale now escapes it as {'@'} and the
+    // message compiles to the intended literal DSN.
     const i18n = createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': enUS } })
-    expect(() => i18n.global.t('views.SettingsErrorForwardersView.dsn_placeholder')).toThrow(SyntaxError)
+    expect(i18n.global.t('views.SettingsErrorForwardersView.dsn_placeholder')).toBe(
+      'https://key@sentry.io/123',
+    )
     // sanity: non-@ placeholder messages compile fine
     expect(i18n.global.t('views.SettingsErrorForwardersView.push_url_placeholder')).toBe(
       'https://loki.example.com/loki/api/v1/push',
