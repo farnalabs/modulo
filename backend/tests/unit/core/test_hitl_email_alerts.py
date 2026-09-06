@@ -7,6 +7,7 @@ contract, and the fire-and-forget scheduling from ``create_gate``.
 
 import asyncio
 import logging
+import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +23,18 @@ from modulo.core.hitl_email_alerts import (
     schedule_hitl_email_dispatch,
     send_hitl_email_alerts,
 )
+
+# The lazy ``patch("modulo.db.session.get_shared_engine")`` in
+# test_dispatch_session_factory_builds_on_the_shared_engine imports
+# modulo.db.session at TEST time; its module-level ``_build_engine()`` needs
+# Settings. There is no ``.env`` in worktrees, so provide the minimum env the
+# same way as tests/unit/tools/conftest.py — setdefault so explicit CI values
+# always win. (Module-level imports above do not touch db.session; only the
+# patch-time import does, which runs after this block.)
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+os.environ.setdefault("SECRET_KEY", "a" * 32)
+os.environ.setdefault("FERNET_KEY", "b" * 32)
+os.environ.setdefault("REDIS_URL", "")
 
 _ORG = uuid.uuid4()
 _PIPELINE = uuid.uuid4()
