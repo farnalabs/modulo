@@ -128,7 +128,7 @@ async def test_read_org_run_concurrency_limit_failure() -> None:
     )
 
 
-async def test_idempotency_gate_check_failure() -> None:
+def test_idempotency_gate_check_failure() -> None:
     run_id = uuid.uuid4()
     with (
         patch.object(ex, "_should_skip_retry", side_effect=RuntimeError("boom")),

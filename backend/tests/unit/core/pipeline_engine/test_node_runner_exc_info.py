@@ -37,7 +37,8 @@ async def test_read_connector_idempotency_gate_state_failure() -> None:
             org_id_raw=str(org_id),
             node_id="n",
         )
-    assert markers is None and key is None
+    assert markers is None
+    assert key is None
     log.warning.assert_called_once_with(
         "connector.idempotency_gate_read_failed",
         extra={"node_id": "n", "run_id": "r"},
