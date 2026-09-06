@@ -45,6 +45,9 @@ def _make_key() -> MagicMock:
     k.lookup_prefix = "abcd1234"
     k.created_at = _NOW
     k.team_id = None
+    # FAR-620: the caller scope is stamped on real rows; serialisation guard
+    # falls back to 'org' for a non-str scope.
+    k.scope = "org"
     return k
 
 
@@ -178,7 +181,16 @@ def test_create_api_key_emits_api_key_created_audit(client: TestClient) -> None:
     assert kwargs["actor_user_id"] == _USER_ID
     assert kwargs["resource_type"] == "api_key"
     assert kwargs["resource_id"] == key.id
-    assert kwargs["payload_json"] == {"name": "Test Key", "role": "operator", "team_id": None}
+    # FAR-620 payload stamps: auth_type (REST is JWT-only), key_scope and the
+    # masked prefix — shape parity with the MCP surface.
+    assert kwargs["payload_json"] == {
+        "name": "Test Key",
+        "role": "operator",
+        "team_id": None,
+        "auth_type": "jwt",
+        "key_scope": "org",
+        "lookup_prefix": "mk_abcd1234****",
+    }
 
 
 def test_create_api_key_audit_failure_does_not_block_creation(client: TestClient) -> None:
@@ -254,7 +266,7 @@ def test_list_api_keys_returns_200(client: TestClient) -> None:
 
 def test_revoke_api_key_returns_200(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
+        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=_make_key()),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
     ):
@@ -266,8 +278,11 @@ def test_revoke_api_key_returns_200(client: TestClient) -> None:
 def test_revoke_api_key_emits_api_key_revoked_audit(client: TestClient) -> None:
     """Key revocation fires the PRD §8.12 ``api_key_revoked`` audit event."""
     audit = AsyncMock(return_value=MagicMock())
+    revoked_key = _make_key()
+    revoked_key.scope = "user"
+    revoked_key.lookup_prefix = "zzzz9999"
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
+        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=revoked_key),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
         patch("modulo.core.audit_logger.append_audit_event", new=audit),
@@ -281,14 +296,21 @@ def test_revoke_api_key_emits_api_key_revoked_audit(client: TestClient) -> None:
     assert kwargs["actor_user_id"] == _USER_ID
     assert kwargs["resource_type"] == "api_key"
     assert kwargs["resource_id"] == _KEY_ID
-    assert kwargs["payload_json"] == {"revoked_by": str(_USER_ID)}
+    # FAR-620 payload stamps (shape parity with the MCP surface): the revoked
+    # row supplies the key's scope + masked prefix.
+    assert kwargs["payload_json"] == {
+        "revoked_by": str(_USER_ID),
+        "auth_type": "jwt",
+        "key_scope": "user",
+        "lookup_prefix": "mk_zzzz9999****",
+    }
 
 
 def test_revoke_api_key_not_found_does_not_emit_audit(client: TestClient) -> None:
     """A 404 revoke (unknown key) must not fire the revoke audit event."""
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=False),
+        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=None),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
         patch("modulo.core.audit_logger.append_audit_event", new=audit),
@@ -305,7 +327,7 @@ def test_revoke_api_key_audit_failure_does_not_fail_revocation(client: TestClien
         raise RuntimeError("audit boom")
 
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=True),
+        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=_make_key()),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
         patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
@@ -317,7 +339,7 @@ def test_revoke_api_key_audit_failure_does_not_fail_revocation(client: TestClien
 
 def test_revoke_api_key_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=False),
+        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=None),
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
     ):
@@ -818,10 +840,16 @@ class TestUserKeyQuota:
 
     @pytest.mark.asyncio
     async def test_under_quota_passes(self) -> None:
+        """9 active keys < the 10 quota ⇒ the quota gate raises nothing."""
+        from fastapi import HTTPException
+
         from modulo.api.routes.api_keys import _enforce_user_key_quota
 
         session, _executed = self._session(9)
-        await _enforce_user_key_quota(session, self._principal())
+        try:
+            await _enforce_user_key_quota(session, self._principal())
+        except HTTPException as exc:  # pragma: no cover — the assertion path
+            raise AssertionError(f"quota gate must not fire under quota: {exc.status_code}") from exc
 
     @pytest.mark.asyncio
     async def test_at_quota_rejected_429(self) -> None:

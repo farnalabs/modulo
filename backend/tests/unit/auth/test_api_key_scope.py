@@ -92,7 +92,8 @@ class TestCreateApiKeyScope:
         check = constraints["ck_org_api_keys_scope"]
         rendered = str(check.sqltext)
         # The rendered expression must enumerate exactly the two values.
-        assert "'org'" in rendered and "'user'" in rendered
+        assert "'org'" in rendered
+        assert "'user'" in rendered
         assert "team" not in rendered
 
 
@@ -114,8 +115,7 @@ class TestMintRunApiKeyPinnedOrg:
         assert key.run_id == _RUN_ID
         assert key.role == "runner"
 
-    @pytest.mark.asyncio
-    async def test_run_scoped_key_denied_caller_scoped_tools(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_run_scoped_key_denied_caller_scoped_tools(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A run-scoped (org-scope) key is denied caller-scoped (.self) tools
         through the pure resolver — the pinned FAR-620 matrix cell."""
         import types

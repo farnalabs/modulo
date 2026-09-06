@@ -244,6 +244,11 @@ PERMISSIONS: dict[str, str] = {
     "notification.view": "viewer",
     "notification.manage": "operator",
     "notification.self": "viewer",
+    # FAR-614: the caller's OWN HITL email-alert preference (get + set via the
+    # ``.self`` MCP tools and /me endpoints). The ``.self`` suffix derives the
+    # caller-scoped classification — an org-level service key must never alter
+    # a user's own notification configuration (FAR-620).
+    "hitl_email.self": "viewer",
     # dashboard
     "dashboard.summary": "viewer",
     "dashboard.trends": "viewer",

@@ -53,6 +53,8 @@ _EXPECTED_TOOLS = frozenset(
         "create_api_key",
         "list_api_keys",
         "revoke_api_key",
+        "get_hitl_email_alerts",
+        "set_hitl_email_alerts",
         "create_agent",
         "create_schema",
         "search_documentation",
@@ -163,19 +165,21 @@ def test_caller_scope_requirements_values_are_valid() -> None:
         )
 
 
-def test_stage_1_has_zero_self_suffix_tools() -> None:
-    """Stage 1 ships the caller-scope MACHINERY with zero ``.self`` MCP tools
-    (the FAR-614 tools arrive in stage 2). The classification derivation must
-    already be in place — pinned here so stage 2 cannot silently bypass it:
-    any tool whose permission key ends in ``.self`` would classify
-    caller-scoped through the suffix derivation alone."""
-    from modulo.core.mcp.scope_validator import _CALLER_SCOPED_SUFFIX
+def test_self_suffix_tools_are_registered_caller_scoped() -> None:
+    """Stage 2 (FAR-620/FAR-614): every ``.self`` permission key belongs to a
+    REGISTERED tool that classifies caller-scoped purely through the suffix
+    derivation — no parallel classification set to keep in sync, and no
+    dangling ``.self`` mapping without its tool."""
+    from modulo.core.mcp.scope_validator import _CALLER_SCOPED_SUFFIX, classify_caller_scope
 
     for tool_key in TOOL_SCOPE_REQUIREMENTS:
-        assert not tool_key.endswith(_CALLER_SCOPED_SUFFIX)
-        assert not TOOL_SCOPE_REQUIREMENTS[tool_key].endswith(_CALLER_SCOPED_SUFFIX), (
-            f"tool '{tool_key}' carries a ``.self`` permission key — stage 2 "
-            "must land its caller-scoped classification + tools together"
+        if not TOOL_SCOPE_REQUIREMENTS[tool_key].endswith(_CALLER_SCOPED_SUFFIX):
+            continue
+        base = tool_key.split(":", 1)[0]
+        registered = _registered_tool_names()
+        assert base in registered, f".self tool '{base}' mapped but not registered"
+        assert classify_caller_scope(base, TOOL_SCOPE_REQUIREMENTS[tool_key]) == _CALLER_SCOPED, (
+            f".self tool '{tool_key}' must classify caller-scoped via the suffix derivation"
         )
 
 

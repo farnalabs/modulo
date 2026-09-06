@@ -351,6 +351,9 @@ async def create_api_key_endpoint(
     # so a broken audit append never blocks a successful key creation. RLS context
     # (SET LOCAL) reverts on COMMIT, so it must be re-established in this fresh
     # transaction or the STRICT-RLS audit INSERT is rejected (see admin_create_team).
+    #
+    # FAR-620 payload stamps (shape parity with the MCP surface): ``auth_type``
+    # (REST is JWT-only), ``key_scope`` and the masked lookup prefix.
     await append_audit_event_isolated(
         session,
         principal,
@@ -361,6 +364,9 @@ async def create_api_key_endpoint(
             "name": name,
             "role": req.role,
             "team_id": str(team_id) if team_id else None,
+            "auth_type": "jwt",
+            "key_scope": key.scope if isinstance(key.scope, str) else requested_scope,
+            "lookup_prefix": f"mk_{key.lookup_prefix}****",
         },
         log_key="api_keys.create_audit_failed",
     )
@@ -534,7 +540,7 @@ async def revoke_api_key_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            revoked = await revoke_api_key(session, key_id, principal.organisation_id)
+            revoked_key = await revoke_api_key(session, key_id, principal.organisation_id)
     except IntegrityError:
         logger.exception(_CODE_API_KEYS_REVOKE_API)
         raise HTTPException(
@@ -565,7 +571,7 @@ async def revoke_api_key_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
-    if not revoked:
+    if not revoked_key:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
     # PRD §8.12 ``api_key_revoked``: key revocation was never audited. Written in
@@ -573,13 +579,20 @@ async def revoke_api_key_endpoint(
     # so a broken audit append never fails a completed revocation. RLS context
     # (SET LOCAL) reverts on COMMIT, so it must be re-established in this fresh
     # transaction or the STRICT-RLS audit INSERT is rejected (see admin_create_team).
+    #
+    # FAR-620 payload stamps (shape parity with the MCP surface).
     await append_audit_event_isolated(
         session,
         principal,
         resource_type="api_key",
         event_type="api_key_revoked",
         resource_id=key_id,
-        payload={"revoked_by": str(principal.account_id)},
+        payload={
+            "revoked_by": str(principal.account_id),
+            "auth_type": "jwt",
+            "key_scope": revoked_key.scope if isinstance(revoked_key.scope, str) else "org",
+            "lookup_prefix": f"mk_{revoked_key.lookup_prefix}****",
+        },
         log_key="api_keys.revoke_audit_failed",
     )
 

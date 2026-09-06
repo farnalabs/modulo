@@ -190,3 +190,22 @@ class TestUpdateHitlEmailPreferences:
         self._session_gets(client, None)
         resp = client.put(_ENDPOINT, json={"default": True})
         assert resp.status_code == 404
+
+    def test_put_omitting_pipeline_overrides_preserves_stored_overrides(self, client: TestClient) -> None:
+        """FAR-620: the body omitting ``pipeline_overrides`` means "overrides
+        untouched" (shared REPLACE semantics with the MCP tool) — the stored
+        per-pipeline map is preserved, only ``default`` is written."""
+        account = _make_account(
+            {
+                "theme": "dark",
+                "hitl_email": {"default": False, "pipeline_overrides": {str(_PIPELINE_ID): True}},
+            }
+        )
+        self._session_gets(client, account)
+        resp = client.put(_ENDPOINT, json={"default": True})
+
+        assert resp.status_code == 200
+        assert account.preferences["hitl_email"] == {
+            "default": True,
+            "pipeline_overrides": {str(_PIPELINE_ID): True},
+        }

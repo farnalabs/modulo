@@ -418,6 +418,8 @@ class TestConstants:
             "create_api_key",
             "list_api_keys",
             "revoke_api_key",
+            "get_hitl_email_alerts",
+            "set_hitl_email_alerts",
             "list_trigger_events",
             "query_analytics",
             "query_analytics_concurrency",
@@ -612,45 +614,48 @@ class TestResolveToolAccessMatrix:
     @pytest.mark.parametrize(
         ("key_scope", "auth_type", "tool", "role", "kill_switch", "expected"),
         [
-            # ── org-only tools (unmapped mutating → create_pipeline) ────────
-            ("org", "api_key", "create_pipeline", "operator", True, True),
-            ("org", "api_key", "create_pipeline", "operator", False, True),
+            pytest.param("org", "api_key", "create_pipeline", "operator", True, True, id="orgkey-op-ks-on"),
+            pytest.param("org", "api_key", "create_pipeline", "operator", False, True, id="orgkey-op-ks-off"),
             # pipeline.create pins at operator — the role leg still denies a
             # runner (the caller-scope leg is orthogonal).
-            ("org", "api_key", "create_pipeline", "runner", True, False),
-            ("user", "api_key", "create_pipeline", "operator", True, False),
+            pytest.param("org", "api_key", "create_pipeline", "runner", True, False, id="orgkey-runner-denied"),
+            pytest.param("user", "api_key", "create_pipeline", "operator", True, False, id="userkey-orgtool"),
             # combined-legs row: kill_switch OFF bypasses the role leg only —
             # the caller-scope leg still denies a user-scoped KEY on an
             # org-only tool.
-            ("user", "api_key", "create_pipeline", "admin", False, False),
+            pytest.param("user", "api_key", "create_pipeline", "admin", False, False, id="userkey-ks-off-combined"),
             # Identity-bound JWT/OAuth sessions keep today's org-only access.
-            ("user", "jwt", "create_pipeline", "operator", True, True),
-            ("user", "oauth", "create_pipeline", "operator", True, True),
-            ("user", "jwt", "create_pipeline", "admin", False, True),
+            pytest.param("user", "jwt", "create_pipeline", "operator", True, True, id="jwt-op-orgtool"),
+            pytest.param("user", "oauth", "create_pipeline", "operator", True, True, id="oauth-op-orgtool"),
+            pytest.param("user", "jwt", "create_pipeline", "admin", False, True, id="jwt-admin-ks-off"),
             # Unset context fails closed on the caller-scope leg only for
             # caller-scoped tools; org-only tools keep legacy behaviour.
-            (None, None, "create_pipeline", "operator", True, True),
+            pytest.param(None, None, "create_pipeline", "operator", True, True, id="unset-orgtool-legacy"),
             # ── explicitly org-only: create_api_key (FAR-620 mint surface) ──
-            ("org", "api_key", "create_api_key", "operator", True, True),
-            ("user", "api_key", "create_api_key", "admin", True, False),
-            ("user", "api_key", "create_api_key", "admin", False, False),
-            ("user", "jwt", "create_api_key", "admin", True, True),
-            ("user", "oauth", "create_api_key", "admin", True, True),
+            pytest.param("org", "api_key", "create_api_key", "operator", True, True, id="orgkey-mint-ok"),
+            pytest.param("user", "api_key", "create_api_key", "admin", True, False, id="userkey-mint-denied"),
+            pytest.param("user", "api_key", "create_api_key", "admin", False, False, id="userkey-mint-ks-elig"),
+            pytest.param("user", "jwt", "create_api_key", "admin", True, True, id="jwt-mint-ok"),
+            pytest.param("user", "oauth", "create_api_key", "admin", True, True, id="oauth-mint-ok"),
             # ── read-only tools classify 'any' (today's default preserved) ──
-            ("org", "api_key", "list_pipelines", "viewer", True, True),
-            ("user", "api_key", "list_pipelines", "viewer", True, True),
-            (None, None, "list_pipelines", "viewer", True, True),
+            pytest.param("org", "api_key", "list_pipelines", "viewer", True, True, id="orgkey-readonly"),
+            pytest.param("user", "api_key", "list_pipelines", "viewer", True, True, id="userkey-readonly"),
+            pytest.param(None, None, "list_pipelines", "viewer", True, True, id="unset-readonly"),
             # ── caller-scoped tools (synthetic ``.self`` permission key) ────
-            ("user", "api_key", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True),
-            ("user", "jwt", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True),
-            ("user", "oauth", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True),
+            pytest.param("user", "api_key", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True, id="userkey-self-ok"),
+            pytest.param("user", "jwt", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True, id="jwt-self-ok"),
+            pytest.param("user", "oauth", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True, id="oauth-self-ok"),
             # Org keys — org-wide, team-scoped AND run-scoped (all 'org') —
             # are DENIED caller-scoped tools, kill switch ON or OFF.
-            ("org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", True, False),
-            ("org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", False, False),
+            pytest.param("org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", True, False, id="orgkey-self-denied"),
+            pytest.param(
+                "org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", False, False, id="orgkey-self-denied-ks-elig"
+            ),
             # Unset key scope fails closed.
-            (None, None, _CALLER_SCOPED_TEST_TOOL, "admin", True, False),
-            (None, None, _CALLER_SCOPED_TEST_TOOL, "admin", False, False),
+            pytest.param(None, None, _CALLER_SCOPED_TEST_TOOL, "admin", True, False, id="unset-self-failclosed"),
+            pytest.param(
+                None, None, _CALLER_SCOPED_TEST_TOOL, "admin", False, False, id="unset-self-failclosed-ks-elig"
+            ),
             # ── role leg still applies to caller-scoped callers ─────────────
             # hitl_email.self will pin at viewer; an unknown role fails closed
             # regardless of key_scope.

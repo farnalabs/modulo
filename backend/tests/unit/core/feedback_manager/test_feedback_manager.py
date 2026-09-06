@@ -1397,3 +1397,43 @@ class TestRunPostCorrectionEval:
 
         with pytest.raises(ConcurrentModificationError, match="status changed concurrently"):
             await mgr._escalate_record(uuid.uuid4(), "escalation reason")
+
+
+class TestRejectCorrectionAccountGate:
+    """FAR-620 run attribution: the reject-to-correction dispatch gate is
+    ``run.account_id`` — a stamped (manual) run gets a FeedbackRecord
+    created, so dispatch can proceed; an unstamped (webhook/cron/
+    agent_signal) run returns None and the dispatch stays a no-op."""
+
+    def _make_session(self) -> AsyncMock:
+        no_rows = MagicMock()
+        no_rows.first = MagicMock(return_value=None)
+        scalars = MagicMock(return_value=no_rows)
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=MagicMock(scalars=scalars))
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+        return session
+
+    @pytest.mark.parametrize("account_id", [None, _USER_ID])
+    async def test_record_gated_on_account_id(self, account_id: uuid.UUID | None) -> None:
+        from modulo.core.feedback_manager import _get_or_create_feedback_record
+
+        with patch("modulo.core.feedback_manager.coerce_uuid", return_value=None):
+            record = await _get_or_create_feedback_record(
+                self._make_session(),
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                node_id="node-1",
+                gate_id=_GATE_ID,
+                account_id=account_id,
+                rejection_reason="bad output",
+                rejected_output={"x": 1},
+            )
+
+        if account_id is None:
+            assert record is None
+        else:
+            assert record is not None
+            assert record.account_id == _USER_ID
+            assert record.feedback_status == "correcting"

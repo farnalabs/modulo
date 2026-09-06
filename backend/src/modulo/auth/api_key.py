@@ -320,13 +320,15 @@ async def revoke_api_key(
     session: AsyncSession,
     key_id: uuid.UUID,
     org_id: uuid.UUID,
-) -> bool:
-    """Revoke an API key. Returns True if the key was found and revoked.
+) -> OrgApiKey | None:
+    """Revoke an API key. Returns the revoked key ROW, or None if not found.
 
-    The key row is locked with ``FOR UPDATE`` so two concurrent revocations
-    serialise: the second waits for the first to commit, re-reads the row with
-    ``revoked_at`` already set (the ``revoked_at IS NULL`` filter excludes it)
-    and returns False instead of racing on the same row.
+    FAR-620: the row (not a bool) lets the callers stamp audit payloads with
+    the key's ``scope`` and masked prefix. The key row is locked with
+    ``FOR UPDATE`` so two concurrent revocations serialise: the second waits
+    for the first to commit, re-reads the row with ``revoked_at`` already set
+    (the ``revoked_at IS NULL`` filter excludes it) and returns None instead
+    of racing on the same row.
     """
     result = await session.execute(
         select(OrgApiKey)
@@ -340,11 +342,11 @@ async def revoke_api_key(
     key = result.scalar_one_or_none()
     if key is None:
         _log.info("api_key.revoke_not_found", extra={"key_id": str(key_id), "org_id": str(org_id)})
-        return False
+        return None
     key.revoked_at = datetime.now(UTC)
     await session.flush()
     _log.info("api_key.revoked", extra={"key_id": str(key.id)})
-    return True
+    return key
 
 
 def _serialize_key(k: OrgApiKey) -> dict[str, Any]:

@@ -116,6 +116,11 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_api_key": "api_key.create",
     "list_api_keys": "api_key.update",
     "revoke_api_key": "api_key.revoke",
+    # FAR-614: the first caller-scoped (``.self``) MCP tools — get/set the
+    # CALLER's own HITL email-alert preference. Target = the caller's account
+    # by construction; no target parameter exists to misuse.
+    "get_hitl_email_alerts": "hitl_email.self",
+    "set_hitl_email_alerts": "hitl_email.self",
     "list_trigger_events": "trigger.events.list",
     "query_analytics": "analytics.query",
     "query_analytics_concurrency": "analytics.query",
