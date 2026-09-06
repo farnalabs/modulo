@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,9 @@ _CODE_API_KEYS_REVOKE_API = "api_keys.revoke_api_key_endpoint"
 
 # FAR-620: the org-level feature flag gating user-scoped MCP key minting.
 _FLAG_USER_SCOPED_MCP_KEYS = "user_scoped_mcp_keys"
-# Per-(account, org) quota of ACTIVE (revoked_at IS NULL) user-scoped keys.
+# Per-(account, org) quota of ACTIVE user-scoped keys: revoked_at IS NULL AND
+# not expired (expires_at IS NULL OR expires_at > now) — an expired key is
+# unusable and must not consume quota.
 _USER_KEY_ACTIVE_QUOTA = 10
 
 
@@ -198,12 +200,13 @@ async def _enforce_user_key_quota(
 ) -> None:
     """Enforce the per-(account, org) quota of ACTIVE user-scoped keys.
 
-    FAR-620: at most ``_USER_KEY_ACTIVE_QUOTA`` (10) user-scoped keys with
-    ``revoked_at IS NULL`` per account per org. The account row is locked
-    ``FOR UPDATE`` (the me.py pattern) so two concurrent mints serialise on
-    the same row — the second re-counts after the first commits, closing the
-    TOCTOU window. Revoked keys do not count. Distinct error shape from the
-    role mint-cap (429 vs 403).
+    FAR-620: at most ``_USER_KEY_ACTIVE_QUOTA`` (10) user-scoped keys per
+    account per org, counting only ACTIVE keys — ``revoked_at IS NULL`` AND
+    not expired (``expires_at IS NULL OR expires_at > now``): a revoked or
+    expired key is unusable and does not consume quota. The account row is
+    locked ``FOR UPDATE`` (the me.py pattern) so two concurrent mints serialise
+    on the same row — the second re-counts after the first commits, closing
+    the TOCTOU window. Distinct error shape from the role mint-cap (429 vs 403).
     """
     account = await session.get(Account, principal.account_id, with_for_update=True)
     if account is None:
@@ -220,6 +223,7 @@ async def _enforce_user_key_quota(
                 OrgApiKey.account_id == principal.account_id,
                 OrgApiKey.scope == "user",
                 OrgApiKey.revoked_at.is_(None),
+                or_(OrgApiKey.expires_at.is_(None), OrgApiKey.expires_at > datetime.now(UTC)),
             )
         )
     ).scalar_one()

@@ -142,6 +142,7 @@ from modulo.core.trigger_streak import (
     clear_trigger_streak_after_reenable,
 )
 from modulo.db.capacity import StorageExhaustedError
+from modulo.db.crud.account import AccountNotFoundError
 from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
@@ -491,7 +492,7 @@ def _trigger_pipeline_client_key() -> str:
 
     API-key calls are keyed by org + key id — EXCEPT user-scoped keys
     (FAR-620, key_scope='user'), which bucket as ``user:{account_id}`` like
-    the identity-bound OAuth/JWT callers DO: one persona key is one client,
+    the identity-bound OAuth/JWT callers DO: one user-scoped key is one client,
     not a bucket the org's whole key population shares. This is a DELIBERATE
     divergence from the middleware ``_client_key`` identity (which keys every
     API key, org or user, by key id) — documented here, not mirrored.
@@ -1012,13 +1013,18 @@ async def _authenticate_api_key(
         # user-scoped keys — disabling it DENIES the key at auth (401),
         # revoking rather than broadening. The flag is read ONCE per request,
         # fail-closed, and ONLY for user-scoped keys: org-key authentication
-        # is byte-identical to the pre-FAR-620 behaviour (no flag read).
-        if key.scope == "user" and not await _set_user_keys_flag(org_id):
-            _log.info(
-                "api_key.user_scoped_key_denied_flag_off",
-                extra={"key_id": str(key.id), "org_id": str(org_id)},
-            )
-            raise ApiKeyInvalidError
+        # is byte-identical to the pre-FAR-620 behaviour (no flag read). The
+        # deny decision reads the request-scoped ContextVar (not the helper's
+        # inline return) so the var - shared with the mint path - is the
+        # single source of the flag's per-request state.
+        if key.scope == "user":
+            await _set_user_keys_flag(org_id)
+            if not _ctx_user_keys_enabled.get():
+                _log.info(
+                    "api_key.user_scoped_key_denied_flag_off",
+                    extra={"key_id": str(key.id), "org_id": str(org_id)},
+                )
+                raise ApiKeyInvalidError
         _ctx_org_id.set(org_id)
         _ctx_role.set(clamped)
         _ctx_key_id.set(key.id)
@@ -5340,6 +5346,12 @@ async def set_hitl_email_alerts(
         return {"default": default, "pipeline_overrides": overrides}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except AccountNotFoundError:
+        # FAR-620: parity with GET — the shared helper is 404-loud
+        # (AccountNotFoundError) while GET's inline None check returns this
+        # same pinned dict; SET must not bury a missing account in the
+        # generic 500-shaped tool error.
+        return {"error": "account_not_found", "detail": "Account not found"}
     except ProgrammingError:
         _log.exception("set_hitl_email_alerts failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}

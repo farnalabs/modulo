@@ -95,7 +95,7 @@ Common issues, their causes, and resolutions.
 - **Postgres required for production**: SQLite is development-only. Postgres is the only supported production database. See [`docs/system-requirements.md`](./system-requirements.md).
 - **File upload limits**: Library `.zip` imports cap at 50 MB; guardrail payloads at 1 MB. Webhook deliveries are not capped at 10 MB.
 - **Concurrent runs**: Capacity blocks (`max_concurrent_runs` and org caps) demote excess runs to `pending` and retry them in the background; they are not rejected with a 429 at POST time.
-- **API key scoping**: Keys are scoped to `operator` and `runner` roles only. Admin operations require JWT auth. Each key also carries a caller scope (`org` or `user`, immutable post-mint): a `user`-scoped key acts as its creator and is denied org-only MCP tools, while org-wide/run-scoped keys are denied caller-scoped (`.self`) tools that write the caller's own user-level state — a 403 `insufficient_scope` on a caller-scoped tool means the credential is the wrong scope, not that the tool is broken (ADR 030).
+- **API key scoping**: Keys are scoped to `operator` and `runner` roles only. Admin operations require JWT auth. Each key also carries a caller scope (`org` or `user`, immutable post-mint): a `user`-scoped key acts as its creator and is denied org-only MCP tools, while org-wide/run-scoped keys are denied caller-scoped (`.self`) tools that write the caller's own user-level state — a caller-scoped tool denial surfaces on the MCP surface as the in-band tool result `{"error": "insufficient_scope", "detail": ...}` (HTTP 200, not an HTTP 403): the credential is the wrong scope, not that the tool is broken (ADR 030).
 
 ---
 

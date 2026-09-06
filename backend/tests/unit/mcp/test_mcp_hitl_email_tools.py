@@ -239,7 +239,7 @@ class TestSetHitlEmailAlerts:
 
     @pytest.mark.asyncio
     async def test_pipeline_ids_atomically_replace_overrides(self) -> None:
-        """Existing {p1: true} + pipeline_ids=[p2] ⇒ {p2: true} ONLY — the
+        """Existing {p1: true} + pipeline_ids=[p2] → {p2: true} ONLY — the
         override list is replaced as a unit, never per-key patched."""
         _set_credential(key_scope="user", auth_type="jwt")
         session = _mock_session()
@@ -257,6 +257,47 @@ class TestSetHitlEmailAlerts:
         helper.assert_awaited_once_with(
             session, _USER_ID, default=True, pipeline_overrides={str(_OTHER_PIPELINE): True}
         )
+
+    @pytest.mark.asyncio
+    async def test_empty_pipeline_ids_clears_overrides_but_omitted_preserves(self) -> None:
+        """R9 pin: an EXPLICIT empty list REPLACES the override map with {}
+        (all overrides cleared); OMITTING the parameter passes None down so the
+        helper preserves the stored map. One test pins both sides of the
+        distinction — `[]` and absent are semantically different."""
+        _set_credential(key_scope="user", auth_type="jwt")
+
+        # Explicit []: parsed_ids == [] (truthy check is `is not None`) -> the
+        # helper receives pipeline_overrides={} -> atomic REPLACE with an
+        # empty map = every override cleared.
+        cleared = {"hitl_email": {"default": False, "pipeline_overrides": {}}}
+        session_clear = _mock_session()
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session_clear)),
+            patch(
+                "modulo.db.crud.account.set_hitl_email_preference",
+                new=AsyncMock(return_value=cleared),
+            ) as helper,
+        ):
+            result = await set_hitl_email_alerts(enabled=False, pipeline_ids=[])
+        assert result == {"default": False, "pipeline_overrides": {}}
+        helper.assert_awaited_once_with(session_clear, _USER_ID, default=False, pipeline_overrides={})
+
+        # Omitted: pipeline_overrides=None -> the helper preserves the stored
+        # override map untouched.
+        preserved = {"hitl_email": {"default": False, "pipeline_overrides": {str(_PIPELINE_ID): True}}}
+        session_keep = _mock_session()
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session_keep)),
+            patch(
+                "modulo.db.crud.account.set_hitl_email_preference",
+                new=AsyncMock(return_value=preserved),
+            ) as helper,
+        ):
+            result = await set_hitl_email_alerts(enabled=False)
+        assert result == {"default": False, "pipeline_overrides": {str(_PIPELINE_ID): True}}
+        helper.assert_awaited_once_with(session_keep, _USER_ID, default=False, pipeline_overrides=None)
 
     @pytest.mark.asyncio
     async def test_rejects_non_bool_enabled(self) -> None:

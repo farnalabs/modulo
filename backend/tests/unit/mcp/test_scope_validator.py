@@ -17,6 +17,7 @@ import pytest
 from modulo.core.mcp.scope_validator import (
     CALLER_SCOPE_REQUIREMENTS,
     TOOL_SCOPE_REQUIREMENTS,
+    VALID_CALLER_SCOPE_CLASSIFICATIONS,
     MCPAuthorizationError,
     MCPConfigurationError,
     check_tool_scope,
@@ -575,12 +576,11 @@ class TestToolHandlerScopeErrorFormat:
 # FAR-620: the pure resolver + caller-scope dimension
 # ---------------------------------------------------------------------------
 
-# A synthetic caller-scoped tool for the matrix. Stage 1 ships ZERO ``.self``
-# MCP tools (they arrive in stage 2), so the caller-scoped leg is exercised
-# through a test-only registry patch keyed on the EXISTING ``notification.self``
-# permission key (a real ``.self`` entry with no MCP tool mapped to it yet) —
-# the machinery under test is exactly what stage 2's real ``.self`` tools will
-# flow through.
+# A synthetic caller-scoped tool for the matrix. The real ``.self`` MCP tools
+# (get/set_hitl_email_alerts) now exist, but the matrix stays table-driven on a
+# test-only registry patch keyed on the EXISTING ``notification.self``
+# permission key (a real ``.self`` entry with no MCP tool mapped to it) - the
+# machinery under test is exactly what the real ``.self`` tools flow through.
 _CALLER_SCOPED_TEST_TOOL = "notification_self"
 
 
@@ -769,10 +769,60 @@ class TestResolveToolAccessMatrix:
         allowed, permission_key = resolve_tool_access("create_pipeline", None, "operator", "org", "api_key", None, True)
         assert allowed is True
         assert permission_key == TOOL_SCOPE_REQUIREMENTS["create_pipeline"]
-        # Unresolvable tool → (False, "").
+        # Unresolvable tool — (False, "").
         allowed, permission_key = resolve_tool_access("unknown_tool", None, "admin", "org", "api_key", None, True)
         assert allowed is False
         assert permission_key == ""
+
+
+class TestCallerScopeClassificationFailFast:
+    """FAR-620: an out-of-vocabulary caller-scope classification must never be
+    silently treated as 'any' (unrestricted) - it raises ``MCPConfigurationError``.
+    The same vocabulary check runs at import time over the pinned map, so a
+    typo'd pin fails the process at boot rather than widening access at run."""
+
+    @staticmethod
+    def _patch_misspelled_classification(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin ``create_pipeline`` with a typo'd classification for one test."""
+        import types
+
+        import modulo.core.mcp.scope_validator as sv
+
+        patched = {**sv._CALLER_SCOPE_REQUIREMENTS, "create_pipeline": "orgonly"}
+        monkeypatch.setattr(sv, "_CALLER_SCOPE_REQUIREMENTS", patched)
+        monkeypatch.setattr(sv, "CALLER_SCOPE_REQUIREMENTS", types.MappingProxyType(patched))
+
+    def test_import_time_pinned_classifications_are_in_vocabulary(self) -> None:
+        """The import-time loop guarantees every pinned value is in vocabulary;
+        this pins the invariant against silent regressions of the loop itself."""
+        assert CALLER_SCOPE_REQUIREMENTS, "the pinned caller-scope map must not be empty"
+        for tool, classification in CALLER_SCOPE_REQUIREMENTS.items():
+            assert classification in VALID_CALLER_SCOPE_CLASSIFICATIONS, (
+                f"caller-scope pin '{tool}' = '{classification}' is out of vocabulary"
+            )
+
+    def test_classify_caller_scope_raises_on_misspelled_classification(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch_misspelled_classification(monkeypatch)
+        with pytest.raises(MCPConfigurationError, match="orgonly"):
+            classify_caller_scope("create_pipeline", TOOL_SCOPE_REQUIREMENTS["create_pipeline"])
+
+    def test_resolver_propagates_configuration_error_on_misspelled_classification(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``resolve_tool_access`` must RAISE, not fall through to 'any' (a
+        misspelled classification silently widening access is the failure mode
+        this fail-fast exists to prevent)."""
+        self._patch_misspelled_classification(monkeypatch)
+        with pytest.raises(MCPConfigurationError, match="orgonly"):
+            resolve_tool_access(
+                tool="create_pipeline",
+                action=None,
+                role="operator",
+                key_scope="org",
+                auth_type="api_key",
+                allowed_tools=None,
+                kill_switch=True,
+            )
 
 
 class TestCheckToolScopeDelegation:

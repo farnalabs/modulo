@@ -176,11 +176,9 @@ _CALLER_SCOPED_SUFFIX = ".self"
 # Explicit caller-scope classification overrides, keyed by base tool name.
 # The derivation below already covers the default (unmapped mutating tools are
 # org-only, unmapped read-only tools are 'any'); entries here pin tools whose
-# classification must be explicit regardless of derivation. Stage 1 (FAR-620
-# Phase 1) ships the machinery with ZERO caller-scoped MCP tools — the map is
-# populated with org-only pins only; the FAR-614 ``.self`` tools arrive in
-# stage 2 and will be classified caller-scoped purely through their ``.self``
-# permission keys.
+# classification must be explicit regardless of derivation. The FAR-614
+# ``.self`` tools (get/set_hitl_email_alerts) are classified caller-scoped
+# purely through their ``.self`` permission keys - no explicit pin needed.
 # FAR-620: credential minting is an org-level operation. A user-scoped key
 # must never mint an org-wide key (that would escape the user scope entirely),
 # so ``create_api_key`` is pinned org-only: under a user-scoped key the tool
@@ -208,16 +206,34 @@ def _permission_key_for(tool: str, action: str | None) -> str | None:
     return permission_key
 
 
+def _validate_caller_scope_classification(tool: str, classification: str) -> None:
+    """Fail-fast on an out-of-vocabulary caller-scope classification.
+
+    A typo'd classification value (e.g. ``'orgonly'``) would otherwise silently
+    fall through every denial leg of the resolver and be treated as 'any'
+    (unrestricted). Raised at import time for every pinned entry and again at
+    classification time as a defence-in-depth backstop.
+    """
+    if classification not in VALID_CALLER_SCOPE_CLASSIFICATIONS:
+        raise MCPConfigurationError(
+            f"Misconfigured caller-scope classification for '{tool}': "
+            f"'{classification}' is not one of {sorted(VALID_CALLER_SCOPE_CLASSIFICATIONS)}",
+        )
+
+
 def classify_caller_scope(tool: str, permission_key: str | None) -> str:
     """Classify a tool's caller-scope requirement (pure; one of the 3 values).
 
     Order: an explicit ``CALLER_SCOPE_REQUIREMENTS`` entry wins; then the
     ``.self`` permission-key suffix derives caller-scoped; then the read-only
     allowlist classifies 'any'; everything else is org-only (preserving
-    today's default where unmapped mutating tools deny by default).
+    today's default where unmapped mutating tools deny by default). An
+    explicit out-of-vocabulary entry raises ``MCPConfigurationError`` instead
+    of being implicitly treated as 'any'.
     """
     mapped = CALLER_SCOPE_REQUIREMENTS.get(tool)
     if mapped is not None:
+        _validate_caller_scope_classification(tool, mapped)
         return mapped
     if permission_key is not None and permission_key.endswith(_CALLER_SCOPED_SUFFIX):
         return _CALLER_SCOPE_CALLER
@@ -319,6 +335,12 @@ for tool, permission_key in _TOOL_SCOPE_REQUIREMENTS.items():
             f"Misconfigured scope requirement for '{tool}': "
             f"permission '{permission_key}' resolves to unknown role '{role}'",
         )
+
+# FAR-620 fail-fast: every explicit caller-scope classification must be in
+# vocabulary. A typo'd value would otherwise fall through every denial leg and
+# be silently treated as 'any' (unrestricted) - refuse the import instead.
+for _tool, _classification in _CALLER_SCOPE_REQUIREMENTS.items():
+    _validate_caller_scope_classification(_tool, _classification)
 
 
 def _sanitize(value: str, name: str = "value") -> str:

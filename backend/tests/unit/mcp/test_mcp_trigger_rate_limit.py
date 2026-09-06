@@ -88,10 +88,20 @@ class TestTriggerPipelineClientKey:
             f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:oauth:user:{_PLACEHOLDER_USER_ID}"
         )
 
+    def test_jwt_keyed_by_org_and_user_id(self) -> None:
+        """FAR-620 rider: the JWT-segment bucket format is pinned — identity
+        callers (jwt) bucket as ``user:{account_id}`` exactly like oauth."""
+        from modulo.api.mcp_server import _ctx_auth_type, _trigger_pipeline_client_key
+
+        _ctx_auth_type.set("jwt")
+        assert _trigger_pipeline_client_key() == (
+            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:jwt:user:{_PLACEHOLDER_USER_ID}"
+        )
+
     def test_user_scoped_api_key_buckets_by_account_not_key_id(self) -> None:
         """FAR-620: a user-scoped key acts as its creator — it shares the
         ``user:{account_id}`` identity bucket instead of getting an
-        ``ak:{key_id}`` bucket (one persona key = one client)."""
+        ``ak:{key_id}`` bucket (one user-scoped key = one client)."""
         from modulo.api.mcp_server import _ctx_key_scope, _trigger_pipeline_client_key
 
         _ctx_key_scope.set("user")

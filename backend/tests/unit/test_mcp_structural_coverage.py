@@ -13,6 +13,10 @@ register unscoped tools.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
+from pathlib import Path
+
 from modulo.core.mcp.scope_validator import READ_ONLY_TOOLS, TOOL_SCOPE_REQUIREMENTS
 
 _EXPECTED_TOOLS = frozenset(
@@ -181,6 +185,92 @@ def test_self_suffix_tools_are_registered_caller_scoped() -> None:
         assert classify_caller_scope(base, TOOL_SCOPE_REQUIREMENTS[tool_key]) == _CALLER_SCOPED, (
             f".self tool '{tool_key}' must classify caller-scoped via the suffix derivation"
         )
+
+
+# ---------------------------------------------------------------------------
+# FAR-620: the Account.preferences single-writer invariants (source scan)
+#
+# The account preferences blob is serialised ONLY by the row-locked helpers
+# in db/crud/account.py. These structural scans keep the discipline
+# enforceable: a new locked Account read, a new direct ``.preferences``
+# write, or a new ``hitl_email`` literal outside the owner/reader pair fails
+# here instead of resurfacing as a lost-update race in production.
+# ---------------------------------------------------------------------------
+
+_SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "modulo"
+
+# The ONLY src files allowed to lock the Account row
+# (``session.get(Account, ..., with_for_update=True)``):
+# - db/crud/account.py: the shared preferences helpers (the lock IS the
+#   preferences serialisation point);
+# - api/routes/api_keys.py: the user-key quota read - LOCK-ONLY (it counts
+#   keys and never touches ``Account.preferences``), whitelisted explicitly.
+_ACCOUNT_LOCK_ALLOWED = frozenset({Path("db", "crud", "account.py"), Path("api", "routes", "api_keys.py")})
+
+# The ONLY src files allowed to carry direct ``.preferences =`` writes: the
+# two row-locked helpers in the db layer. me.py, in_app_notifications.py and
+# the MCP surface all route through them.
+_PREFERENCES_WRITE_ALLOWED = frozenset({Path("db", "crud", "account.py")})
+
+# The ONLY src files allowed to mention the quoted ``"hitl_email"`` literal:
+# the db layer (owns PREFERENCE_KEY + the single writer) and the core reader
+# (re-imports the constant; its occurrence is the module docstring's shape
+# example). Any OTHER literal site is a would-be writer that bypassed the
+# helper contract.
+_HITL_EMAIL_KEY_ALLOWED = frozenset({Path("db", "crud", "account.py"), Path("core", "hitl_email_alerts.py")})
+
+
+def _iter_source_files() -> Iterator[Path]:
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        if "__pycache__" not in path.parts:
+            yield path
+
+
+def test_account_row_lock_only_in_approved_sites() -> None:
+    """A locked Account read (session.get(Account, ..., with_for_update=True))
+    appears ONLY in the shared preferences helper and the lock-only quota read.
+    Any other locked Account read is a preferences-writer candidate that
+    bypasses the single-writer discipline (FAR-620 spec item 14)."""
+    pattern = re.compile(r"session\.get\(\s*Account\b[^)]*with_for_update\s*=\s*True")
+    found: set[Path] = set()
+    for path in _iter_source_files():
+        if pattern.search(path.read_text(encoding="utf-8")):
+            found.add(path.relative_to(_SRC_ROOT))
+    assert found == _ACCOUNT_LOCK_ALLOWED, (
+        f"locked Account reads found outside the approved set: {sorted(map(str, found - _ACCOUNT_LOCK_ALLOWED))}; "
+        f"approved sites missing: {sorted(map(str, _ACCOUNT_LOCK_ALLOWED - found))}"
+    )
+
+
+def test_account_preferences_writes_only_in_shared_helper() -> None:
+    """Every direct ``.preferences =`` write lives ONLY in db/crud/account.py —
+    the REST /me routes, the notifications dashboard writer and the MCP
+    surface all mutate the blob through the row-locked helpers, never by
+    assigning the column directly."""
+    pattern = re.compile(r"\.preferences\s*=")
+    found: set[Path] = set()
+    for path in _iter_source_files():
+        if pattern.search(path.read_text(encoding="utf-8")):
+            found.add(path.relative_to(_SRC_ROOT))
+    assert found == _PREFERENCES_WRITE_ALLOWED, (
+        f"direct Account.preferences writes found outside the shared helper: "
+        f"{sorted(map(str, found - _PREFERENCES_WRITE_ALLOWED))}"
+    )
+
+
+def test_hitl_email_key_literal_confined_to_owner_and_reader() -> None:
+    """The quoted ``"hitl_email"`` key literal appears ONLY in db/crud/account.py
+    (the constant owner + single writer) and core/hitl_email_alerts.py (the
+    re-importing reader). me.py routes through the helper - it (and every
+    other surface) must never re-declare the key."""
+    found: set[Path] = set()
+    for path in _iter_source_files():
+        text = path.read_text(encoding="utf-8")
+        if '"hitl_email"' in text or "'hitl_email'" in text:
+            found.add(path.relative_to(_SRC_ROOT))
+    assert found == _HITL_EMAIL_KEY_ALLOWED, (
+        f"'hitl_email' literal found outside the owner/reader pair: {sorted(map(str, found - _HITL_EMAIL_KEY_ALLOWED))}"
+    )
 
 
 def test_create_api_key_classified_org_only() -> None:

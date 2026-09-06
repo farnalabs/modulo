@@ -8,7 +8,7 @@
 
 **Status:** Accepted (Phase 1 mechanism shipped; FAR-620)
 **Date:** 2026-09-06
-**Related:** ADR 014 (MCP server as agents), ADR 017 (centralized authorization, Founder Decision 1), ADR 018 (duplicate numbering noted — the room's ADR sequence has two 018s; this file does not renumber), FAR-602 (HITL email alerts), FAR-614 (user-persona MCP preference tools)
+**Related:** ADR 014 (MCP server as agents), ADR 017 (centralized authorization, Founder Decision 1), ADR 018 (duplicate numbering noted — the room's ADR sequence has two 018s; this file does not renumber), FAR-602 (HITL email alerts), FAR-614 (user-scoped MCP preference tools)
 
 ## Context
 
@@ -59,7 +59,7 @@ creation is the DEFAULT posture; org-wide is the deliberate opt-in
 
 5. **`create_api_key` MCP tool stays ORG-ONLY.** Minting is an org-level
    operation; user-scoped key minting is REST-JWT-only (single-tenant
-   dogfood: one surface, one matrix cell — no persona-conditional branch in
+   dogfood: one surface, one matrix cell — no scope-conditional branch in
    the tool body). Under a user-scoped key the MCP mint tool is DENIED.
 
 6. **All `Account.preferences` writes are row-locked** through the shared
@@ -82,7 +82,7 @@ creation is the DEFAULT posture; org-wide is the deliberate opt-in
    test kept green).
 
 8. **Rate buckets.** The in-app `trigger_pipeline` limiter buckets
-   user-scoped keys as `user:{account_id}` (a persona key is one client);
+   user-scoped keys as `user:{account_id}` (a user-scoped key is one client);
    org/team/run-scoped keys keep `ak:{key_id}` (the org-key multiplication
    hole is pre-existing and accepted). The middleware bucket stays per-key —
    accepted asymmetry, documented.
@@ -214,7 +214,7 @@ keys re-read as 'org' — silent widening on rollback is PINNED as accepted
   forbids, guarded only by a convention.
 - **Per-key user binding on every key** (stamping account on every mint):
   conflates "owned by" with "acts as" — every key is owned by someone, but
-  only service personas need the caller scope.
+  only service keys need the caller scope.
 - **OAuth device flow for headless agents**: browser-consent-gated and
   short-lived; does not cover scheduled long-lived agents.
 - **JSONB per-key spans of Account.preferences writers** (migration to
