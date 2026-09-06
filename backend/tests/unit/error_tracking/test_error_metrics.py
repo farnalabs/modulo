@@ -376,7 +376,7 @@ class TestInitAlertCounter:
         with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
             metrics_mod._init_alert_counter()
         assert metrics_mod._error_alerts_total is None
-        log.warning.assert_called_once_with("metrics.alert_counter_failed")
+        log.warning.assert_called_once_with("metrics.alert_counter_failed", exc_info=True)
 
 
 # =========================================================================
