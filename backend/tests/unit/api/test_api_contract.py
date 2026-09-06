@@ -423,12 +423,17 @@ class TestApiKeyEndpointSchemas:
         key_id = uuid.uuid4()
         # FAR-620: revoke_api_key now returns the revoked key ROW (not a bool);
         # the route reads `.scope` / `.lookup_prefix` off it for the audit stamp.
+        # The patch must be an AsyncMock because the endpoint AWAITS the call -
+        # a plain MagicMock return_value would raise TypeError on `await` and 500.
         revoked_key = MagicMock()
         revoked_key.scope = "org"
-        revoked_key.lookup_prefix = "abcd1234"
+        revoked_key.lookup_prefix = "abc123def456"
 
         with (
-            patch("modulo.api.routes.api_keys.revoke_api_key", return_value=revoked_key),
+            patch(
+                "modulo.api.routes.api_keys.revoke_api_key",
+                new=AsyncMock(return_value=revoked_key),
+            ),
             patch("modulo.api.routes.api_keys.set_rls_org"),
         ):
             resp = client.delete(f"/api/v1/api-keys/{key_id}")
