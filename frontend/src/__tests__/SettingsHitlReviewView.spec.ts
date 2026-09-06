@@ -293,7 +293,7 @@ describe('SettingsHitlReviewView', () => {
     expect(approvedBadge?.text()).toBe('approved')
   })
 
-  it('maps a run-not-awaiting 409 to a specific message and re-fetches the list', async () => {
+  it('maps a run-not-awaiting 409 to a specific view-level banner and re-fetches the list', async () => {
     const { api } = await import('../lib/api/client')
     const gates = [pendingGateRow()]
     ;(api.GET as any).mockImplementation(mockGetWithGates(gates))
@@ -316,13 +316,18 @@ describe('SettingsHitlReviewView', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper!.text()).toContain('no longer waiting for a human decision')
-    expect(wrapper!.text()).toContain('status: complete')
+    // The failure message lives in the VIEW-LEVEL banner, not in the gate
+    // row: the immediate refresh drops terminal-run gates from the list, so
+    // a row-level message would be erased before it renders (FAR-612).
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('no longer waiting for a human decision')
+    expect(banner.text()).toContain('status: complete')
     const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
     expect(pendingCallsAfter).toBe(pendingCallsBefore + 1)
   })
 
-  it('maps an already-claimed 409 to a specific message', async () => {
+  it('maps an already-claimed 409 to a specific view-level banner', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
     ;(api.POST as any).mockResolvedValue({
@@ -341,7 +346,36 @@ describe('SettingsHitlReviewView', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper!.text()).toContain('already claimed by another reviewer')
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('already claimed by another reviewer')
+  })
+
+  it('re-fetches the list even when the claim throws a network error', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+    ;(api.POST as any).mockRejectedValue(new Error('network down'))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    await wrapper!.find('[data-testid="hitl-review-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // Network errors land in the catch path: the row on screen may be stale
+    // (the claim may have landed before the connection dropped), so the
+    // refresh must fire here too — not only for API-error failures (FAR-612).
+    const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    expect(pendingCallsAfter).toBe(pendingCallsBefore + 1)
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('network down')
   })
 
   it('renders a claimed-by-another gate as read-only with no approve/reject buttons', async () => {

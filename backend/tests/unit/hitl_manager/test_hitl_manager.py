@@ -114,7 +114,7 @@ def _session_update(
       1. Pre-check SELECT (returns ``pre_check_gate`` or falls back to ``gate``)
       2. Run-status SELECT against ``runs`` (returns status ``run_status``;
          ``None`` simulates a missing run row)
-      3. UPDATE �?� RETURNING  (returns claimed id if rows_returned > 0)
+      3. UPDATE … RETURNING  (returns claimed id if rows_returned > 0)
       4. Re-fetch SELECT     (returns ``gate``)
 
     The ``runs`` SELECT is dispatched by statement shape, not position, so the

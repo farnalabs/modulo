@@ -747,7 +747,8 @@ export default {
       "claimed_by_you": "You",
       "claim_failed_already_claimed": "This gate is already claimed by another reviewer. It becomes claimable again when their claim expires.",
       "claim_failed_already_decided": "This gate already has a final decision and can no longer be claimed.",
-      "claim_failed_run_not_awaiting": "This run is no longer waiting for a human decision ({reason}). The gate list has been refreshed.",
+      "claim_failed_run_not_awaiting": "This run is no longer waiting for a human decision ({reason}).",
+      "dismiss": "Dismiss",
       "claimed_by_other": "Claimed by {user} at {time}. Waiting for their decision."
     },
     "AdminSystemConfigView": {
