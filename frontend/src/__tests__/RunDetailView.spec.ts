@@ -1624,7 +1624,7 @@ describe('RunDetailView rendering extras', () => {
     return wrapper
   }
 
-  it('does not render a workspace lease section after FAR-587 dropped the endpoint', async () => {
+  it('does not render a workspace lease section after the workspace-lease API was removed (FAR-587 / ADR 029)', async () => {
     mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
     const ws = wrapper.text()
@@ -1634,15 +1634,15 @@ describe('RunDetailView rendering extras', () => {
     wrapper.unmount()
   })
 
-  it('omits workspace lease durations after the lease endpoint was removed', async () => {
+  it('does not render workspace lease duration formatting after the endpoint was removed', async () => {
     mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper.text()).not.toContain('45s')
+    expect(wrapper.text()).not.toContain('Workspace')
     wrapper.unmount()
 
     mockWorkspaceLease = { status: 'running', duration_seconds: 125 }
     const wrapper2 = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper2.text()).not.toContain('2m 5s')
+    expect(wrapper2.text()).not.toContain('Workspace')
     wrapper2.unmount()
   })
 
