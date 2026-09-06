@@ -7,8 +7,9 @@ import logging
 import uuid
 from typing import Any
 
+from fastapi import HTTPException, status
 from sqlalchemy import func, select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
@@ -110,8 +111,24 @@ async def delete_model_backend(session: AsyncSession, model_backend_id: uuid.UUI
     mb = await get_model_backend(session, model_backend_id)
     if mb is None:
         return False
-    await session.delete(mb)
-    await session.flush()
+    try:
+        await session.delete(mb)
+        await session.flush()
+    except IntegrityError as exc:
+        # A RESTRICT FK (agents today; agent_runner_bindings when D6 ships)
+        # blocks the hard delete. Map to the typed 409 with an in-use message
+        # so every delete route surfaces the same remediation copy.
+        _log.info(
+            "model_backends.delete_blocked_in_use",
+            extra={"model_backend_id": str(model_backend_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot delete model backend: it is still in use by one or "
+                "more agents or runner bindings. Re-bind them first."
+            ),
+        ) from exc
     return True
 
 

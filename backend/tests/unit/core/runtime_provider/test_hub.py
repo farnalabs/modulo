@@ -1,13 +1,17 @@
 """Unit tests for RuntimeProviderHub."""
 
-import uuid
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
+from modulo.core.runtime_provider import (
+    ExecResult,
+    ProviderNotConfiguredError,
+    RuntimeProvider,
+    WorkspaceSpec,
+)
 from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
@@ -19,10 +23,6 @@ class _StubProvider(RuntimeProvider):
 
     def __init__(self, name: str = "stub") -> None:
         self.name = name
-        self._supports_check: Any = lambda p: False
-
-    def set_supports(self, fn: Any) -> None:
-        self._supports_check = fn
 
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         return f"{self.name}-{spec.environment_profile_id}"
@@ -43,9 +43,6 @@ class _StubProvider(RuntimeProvider):
 
     async def get_workspace_status(self, provider_ref: str) -> str:
         return "running"
-
-    def supports(self, profile: Any) -> bool:
-        return self._supports_check(profile)  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------
@@ -119,64 +116,19 @@ def test_resolve_by_hint() -> None:
     assert hub.resolve(profile) is docker
 
 
-def test_resolve_hint_preferred_over_supports() -> None:
-    """provider_hint takes priority even if another provider supports the profile."""
+def test_resolve_hint_preferred_over_type() -> None:
+    """provider_hint takes priority even if provider_type names another provider."""
     hub = RuntimeProviderHub()
     docker = _StubProvider("docker")
     k8s = _StubProvider("k8s")
-    k8s.set_supports(lambda p: True)
     hub.register("docker", docker)
     hub.register("k8s", k8s)
 
-    profile = MagicMock()
-    profile.provider_hint = "docker"
+    profile = SimpleNamespace(provider_hint="docker", provider_type="k8s")
     assert hub.resolve(profile) is docker
 
 
-def test_resolve_by_supports() -> None:
-    """When no hint, resolve by calling supports() on each provider."""
-    hub = RuntimeProviderHub()
-    docker = _StubProvider("docker")
-    k8s = _StubProvider("k8s")
-    k8s.set_supports(lambda p: True)  # k8s supports it
-    hub.register("docker", docker)
-    hub.register("k8s", k8s)
-
-    profile = MagicMock()
-    profile.provider_hint = None
-    assert hub.resolve(profile) is k8s
-
-
-def test_resolve_first_provider_fallback() -> None:
-    """When no hint and no supports returns True, fall back to first registered."""
-    hub = RuntimeProviderHub()
-    docker = _StubProvider("docker")
-    k8s = _StubProvider("k8s")
-    hub.register("docker", docker)
-    hub.register("k8s", k8s)
-
-    profile = MagicMock()
-    profile.provider_hint = None
-    assert hub.resolve(profile) is docker
-
-
-def test_resolve_empty_hub_returns_none() -> None:
-    hub = RuntimeProviderHub()
-    profile = MagicMock()
-    profile.provider_hint = None
-    assert hub.resolve(profile) is None
-
-
-@pytest.mark.parametrize(
-    ("provider_type", "expected"),
-    [
-        ("local", "local"),
-        ("local_docker", "docker"),
-        ("docker", "docker"),
-        ("e2b", "e2b"),
-    ],
-)
-def test_resolve_honours_explicit_provider_type(provider_type: str, expected: str) -> None:
+def test_resolve_by_explicit_provider_type_order_independent() -> None:
     """Profile provider types resolve independently of registration order."""
     hub = RuntimeProviderHub()
     providers = {
@@ -188,83 +140,79 @@ def test_resolve_honours_explicit_provider_type(provider_type: str, expected: st
     hub.register("host-process", providers["local"])
     hub.register("container-runtime", providers["docker"])
 
-    assert hub.resolve(SimpleNamespace(provider_type=provider_type)) is providers[expected]
+    for provider_type in ("local_docker", "docker", "runner_docker"):
+        assert hub.resolve(SimpleNamespace(provider_type=provider_type)) is providers["docker"]
+    assert hub.resolve(SimpleNamespace(provider_type="local")) is providers["local"]
+    assert hub.resolve(SimpleNamespace(provider_type="e2b")) is providers["e2b"]
 
 
-def test_resolve_explicit_unavailable_provider_does_not_fall_back() -> None:
+def test_resolve_unregistered_provider_type_raises_with_env_var() -> None:
+    """An explicit type whose provider is not registered raises the typed error."""
     hub = RuntimeProviderHub()
     hub.register("local", LocalRuntimeProvider())
 
-    assert hub.resolve(SimpleNamespace(provider_type="e2b")) is None
+    with pytest.raises(ProviderNotConfiguredError, match="MODULO_E2B_API_KEY") as exc_info:
+        hub.resolve(SimpleNamespace(provider_type="e2b"))
+    assert exc_info.value.provider_type == "e2b"
+    assert exc_info.value.env_var == "MODULO_E2B_API_KEY"
 
 
-def test_resolve_hint_not_found_continues() -> None:
-    """If hint doesn't match, fall through to supports/first."""
+def test_resolve_docker_type_without_docker_env_raises_with_remediation() -> None:
+    """legacy local_docker profiles surface the Docker env-var remediation."""
+    hub = RuntimeProviderHub()
+    hub.register("local", LocalRuntimeProvider())
+
+    for legacy_type in ("local_docker", "docker", "runner_docker"):
+        with pytest.raises(ProviderNotConfiguredError, match="MODULO_DOCKER_HOST") as exc_info:
+            hub.resolve(SimpleNamespace(provider_type=legacy_type))
+        assert exc_info.value.env_var == "MODULO_DOCKER_HOST"
+
+
+def test_resolve_unknown_provider_type_raises_without_fallback() -> None:
+    """Unknown provider types raise; no first-registered fallback exists."""
+    hub = RuntimeProviderHub()
+    hub.register("local", LocalRuntimeProvider())
+
+    with pytest.raises(ProviderNotConfiguredError, match="k8s") as exc_info:
+        hub.resolve(SimpleNamespace(provider_type="k8s"))
+    assert exc_info.value.env_var is None
+
+
+def test_resolve_missing_provider_type_raises() -> None:
+    """A profile without any provider_type is unresolvable — no guessing."""
+    hub = RuntimeProviderHub()
+    hub.register("local", LocalRuntimeProvider())
+
+    with pytest.raises(ProviderNotConfiguredError):
+        hub.resolve(SimpleNamespace(provider_hint=None))
+
+
+def test_resolve_empty_hub_raises() -> None:
+    hub = RuntimeProviderHub()
+
+    with pytest.raises(ProviderNotConfiguredError):
+        hub.resolve(SimpleNamespace(provider_type="local", provider_hint=None))
+
+
+def test_resolve_hint_not_found_falls_through_to_type() -> None:
+    """A stale hint falls through to the explicit provider_type match."""
     hub = RuntimeProviderHub()
     k8s = _StubProvider("k8s")
-    k8s.set_supports(lambda p: True)
     hub.register("k8s", k8s)
 
-    profile = MagicMock()
-    profile.provider_hint = "nonexistent"
+    profile = SimpleNamespace(provider_hint="nonexistent", provider_type="k8s")
     assert hub.resolve(profile) is k8s
 
 
-def test_supports_exception_does_not_block() -> None:
-    """If a provider's supports() raises, skip it and continue."""
-    hub = RuntimeProviderHub()
-
-    docker = _StubProvider("docker")
-    docker.set_supports(lambda p: (_ for _ in ()).throw(RuntimeError("boom")))
-
-    k8s = _StubProvider("k8s")
-    k8s.set_supports(lambda p: True)
-
-    hub.register("docker", docker)
-    hub.register("k8s", k8s)
-
-    profile = MagicMock()
-    profile.provider_hint = None
-    assert hub.resolve(profile) is k8s
-
-
-def test_provider_without_supports_skipped() -> None:
-    """If a provider lacks a supports attribute, skip it during supports-based resolution."""
-    hub = RuntimeProviderHub()
-    docker = _StubProvider("docker")
-    # Remove the supports method
-    docker.supports = None  # type: ignore[assignment]
-    k8s = _StubProvider("k8s")
-    k8s.set_supports(lambda p: True)
-    hub.register("docker", docker)
-    hub.register("k8s", k8s)
-
-    profile = MagicMock()
-    profile.provider_hint = None
-    assert hub.resolve(profile) is k8s
-
-
-def test_resolve_profile_without_provider_hint_attr() -> None:
-    """A profile that doesn't have a provider_hint attribute at all."""
+def test_resolve_hint_not_found_and_unresolvable_type_raises() -> None:
+    """A stale hint plus an unregistered provider_type raises the typed error."""
     hub = RuntimeProviderHub()
     k8s = _StubProvider("k8s")
-    k8s.set_supports(lambda p: True)
     hub.register("k8s", k8s)
 
-    profile = MagicMock(spec=[])  # object without provider_hint
-    assert hub.resolve(profile) is k8s
-
-
-def test_resolve_profile_without_provider_hint_attr_fallback_to_first() -> None:
-    """No hint and no supports match -> fallback to first registered."""
-    hub = RuntimeProviderHub()
-    docker = _StubProvider("docker")
-    k8s = _StubProvider("k8s")
-    hub.register("docker", docker)
-    hub.register("k8s", k8s)
-
-    profile = MagicMock(spec=[])
-    assert hub.resolve(profile) is docker
+    profile = SimpleNamespace(provider_hint="nonexistent", provider_type="e2b")
+    with pytest.raises(ProviderNotConfiguredError):
+        hub.resolve(profile)
 
 
 def test_register_and_list_after_unregister() -> None:
@@ -278,62 +226,6 @@ def test_register_and_list_after_unregister() -> None:
     providers = hub.list_providers()
     assert "a" not in providers
     assert "b" in providers
-
-
-def test_resolve_with_hint_after_unregister() -> None:
-    """If a hint-matching provider was unregistered, fall through."""
-    hub = RuntimeProviderHub()
-    docker = _StubProvider("docker")
-    k8s = _StubProvider("k8s")
-    k8s.set_supports(lambda p: True)
-    hub.register("docker", docker)
-    hub.register("k8s", k8s)
-    hub.unregister("docker")
-
-    profile = MagicMock()
-    profile.provider_hint = "docker"
-    assert hub.resolve(profile) is k8s
-
-
-class _SpyProvider(_StubProvider):
-    """Stub provider that records create/destroy calls for lease lifecycle tests."""
-
-    def __init__(self, name: str = "spy") -> None:
-        super().__init__(name)
-        self.destroyed: list[Any] = []
-        self.created: list[WorkspaceSpec] = []
-
-    async def destroy_workspace(self, provider_ref: str) -> None:
-        self.destroyed.append(provider_ref)
-
-    async def create_workspace(self, spec: WorkspaceSpec) -> str:
-        self.created.append(spec)
-        return f"{self.name}-{spec.environment_profile_id}"
-
-
-def _lease_session(existing_lease: Any = None) -> AsyncMock:
-    """Return an async session whose SELECT returns *existing_lease* or None."""
-    session = AsyncMock()
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = existing_lease
-    session.execute = AsyncMock(return_value=result)
-    session.add = MagicMock()
-    return session
-
-
-def _lease_profile(**overrides: Any) -> Any:
-    """Return a minimal EnvironmentProfile-like object."""
-    defaults: dict[str, Any] = {
-        "id": uuid.uuid4(),
-        "organisation_id": uuid.uuid4(),
-        "provider_type": None,
-        "provider_hint": None,
-        "image_ref": "python:3.12",
-        "capabilities_json": ["shell"],
-        "config_json": {},
-    }
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +254,12 @@ class TestInitialise:
         hub = RuntimeProviderHub()
         await hub.initialise({"local_docker": {}})
         assert isinstance(hub.get("local_docker"), DockerRuntimeProvider)
+
+    async def test_registers_runner_docker_type(self) -> None:
+        hub = RuntimeProviderHub()
+        await hub.initialise({"container-runtime": {"type": "runner_docker"}})
+        provider = hub.get("container-runtime")
+        assert isinstance(provider, DockerRuntimeProvider)
 
     async def test_registers_e2b_with_api_key(self) -> None:
         hub = RuntimeProviderHub()
@@ -421,168 +319,51 @@ class TestInitialise:
 
 
 # ---------------------------------------------------------------------------
-# create_lease — workspace lease lifecycle
+# aclose — per-provision disposal
 # ---------------------------------------------------------------------------
 
 
-class TestCreateLease:
-    async def test_returns_existing_lease(self) -> None:
+class TestAclose:
+    async def test_aclose_closes_every_provider(self) -> None:
         hub = RuntimeProviderHub()
-        provider = _SpyProvider("docker")
-        hub.register("docker", provider)
-        existing = MagicMock()
-        session = _lease_session(existing)
-        run_id = uuid.uuid4()
+        provider_a = _StubProvider("a")
+        provider_b = _StubProvider("b")
+        hub.register("a", provider_a)
+        hub.register("b", provider_b)
 
-        lease = await hub.create_lease(_lease_profile(), run_id, session)
+        closed: list[str] = []
 
-        assert lease is existing
-        assert not provider.created
-        session.add.assert_not_called()
+        async def _track_close() -> None:
+            closed.append("yes")
 
-    async def test_creates_lease_from_profile(self) -> None:
+        with (
+            patch.object(provider_a, "close", side_effect=_track_close),
+            patch.object(provider_b, "close", side_effect=_track_close),
+        ):
+            await hub.aclose()
+
+        assert closed == ["yes", "yes"]
+
+    async def test_aclose_failure_does_not_block_remaining_providers(self, caplog: pytest.LogCaptureFixture) -> None:
         hub = RuntimeProviderHub()
-        provider = _SpyProvider("docker")
-        hub.register("docker", provider)
-        profile = _lease_profile()
-        run_id = uuid.uuid4()
-        session = _lease_session(None)
+        failing = _StubProvider("failing")
+        healthy = _StubProvider("healthy")
+        hub.register("failing", failing)
+        hub.register("healthy", healthy)
 
-        lease = await hub.create_lease(profile, run_id, session)
+        async def _boom() -> None:
+            raise RuntimeError("boom")
 
-        assert lease.run_id == run_id
-        assert lease.organisation_id == profile.organisation_id
-        assert lease.environment_profile_id == profile.id
-        assert lease.status == "running"
-        assert lease.provider_ref == f"docker-{profile.id}"
-        assert lease.lease_started_at is not None
-        assert lease.lease_expires_at is not None
-        session.add.assert_called_once_with(lease)
+        closed: list[bool] = []
 
-    async def test_builds_workspace_spec_from_profile(self) -> None:
-        hub = RuntimeProviderHub()
-        provider = _SpyProvider("docker")
-        hub.register("docker", provider)
-        run_id = uuid.uuid4()
-        profile = _lease_profile(
-            image_ref="custom:1.0",
-            capabilities_json=["shell", "network"],
-            config_json={"repo_url": "https://github.com/acme/app", "repo_ref": "main", "memory_mb": 1024},
-        )
+        async def _track_close() -> None:
+            closed.append(True)
 
-        await hub.create_lease(profile, run_id, _lease_session(None))
+        with (
+            patch.object(failing, "close", side_effect=_boom),
+            patch.object(healthy, "close", side_effect=_track_close),
+        ):
+            await hub.aclose()
 
-        assert len(provider.created) == 1
-        spec = provider.created[0]
-        assert spec.environment_profile_id == profile.id
-        assert spec.organisation_id == profile.organisation_id
-        assert spec.run_id == run_id
-        assert spec.image_ref == "custom:1.0"
-        assert spec.capabilities == ["shell", "network"]
-        assert spec.labels == {"repo_url": "https://github.com/acme/app", "repo_ref": "main"}
-        assert spec.resource_limits == {"memory_mb": 1024}
-
-    async def test_dict_ref_uses_ref_key(self) -> None:
-        class _DictProvider(_SpyProvider):
-            async def create_workspace(self, spec: WorkspaceSpec) -> Any:
-                return {"ref": "ws-abc123"}
-
-        hub = RuntimeProviderHub()
-        hub.register("docker", _DictProvider("docker"))
-
-        lease = await hub.create_lease(_lease_profile(), uuid.uuid4(), _lease_session(None))
-
-        assert lease.provider_ref == "ws-abc123"
-
-    async def test_dict_ref_falls_back_to_container_id(self) -> None:
-        class _ContainerIdProvider(_SpyProvider):
-            async def create_workspace(self, spec: WorkspaceSpec) -> Any:
-                return {"container_id": "c-12345"}
-
-        hub = RuntimeProviderHub()
-        hub.register("docker", _ContainerIdProvider("docker"))
-
-        lease = await hub.create_lease(_lease_profile(), uuid.uuid4(), _lease_session(None))
-
-        assert lease.provider_ref == "c-12345"
-
-    async def test_raises_without_registered_provider(self) -> None:
-        hub = RuntimeProviderHub()
-        with pytest.raises(ValueError, match="No RuntimeProvider registered"):
-            await hub.create_lease(_lease_profile(), uuid.uuid4(), _lease_session(None))
-
-
-# ---------------------------------------------------------------------------
-# destroy_lease — workspace teardown
-# ---------------------------------------------------------------------------
-
-
-class TestDestroyLease:
-    async def test_destroys_workspace_and_marks_completed(self) -> None:
-        hub = RuntimeProviderHub()
-        provider = _SpyProvider("docker")
-        hub.register("docker", provider)
-        lease = SimpleNamespace(environment_profile=None, provider_ref="ref-1", status="running")
-
-        await hub.destroy_lease(lease)
-
-        assert provider.destroyed == ["ref-1"]
-        assert lease.status == "completed"
-
-    async def test_resolves_provider_from_profile(self) -> None:
-        hub = RuntimeProviderHub()
-        provider = _SpyProvider("docker")
-        hub.register("docker", provider)
-        profile = SimpleNamespace(provider_type="docker", provider_hint=None)
-        lease = SimpleNamespace(environment_profile=profile, provider_ref="ref-abc", status="running")
-
-        await hub.destroy_lease(lease)
-
-        assert provider.destroyed == ["ref-abc"]
-        assert lease.status == "completed"
-
-    async def test_uses_provider_ref_when_present(self) -> None:
-        hub = RuntimeProviderHub()
-        provider = _SpyProvider("docker")
-        hub.register("docker", provider)
-        lease = SimpleNamespace(environment_profile=None, provider_ref="", status="running")
-
-        await hub.destroy_lease(lease)
-
-        # empty provider_ref falls back to the lease object itself
-        assert provider.destroyed == [lease]
-        assert lease.status == "completed"
-
-    async def test_no_provider_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        hub = RuntimeProviderHub()
-        lease = SimpleNamespace(environment_profile=None, provider_ref="ref-1", status="running")
-
-        await hub.destroy_lease(lease)
-
-        assert "No RuntimeProvider registered" in caplog.text
-        assert lease.status == "running"
-
-    async def test_destroy_failure_logs_but_does_not_raise(self, caplog: pytest.LogCaptureFixture) -> None:
-        class _FailingProvider(_StubProvider):
-            async def destroy_workspace(self, provider_ref: str) -> None:
-                raise RuntimeError("boom")
-
-        hub = RuntimeProviderHub()
-        hub.register("docker", _FailingProvider("docker"))
-        lease = SimpleNamespace(environment_profile=None, provider_ref="ref-1", status="running")
-
-        await hub.destroy_lease(lease)
-
-        assert "Failed to destroy workspace" in caplog.text
-        assert lease.status == "completed"
-
-    async def test_adds_lease_to_session(self) -> None:
-        hub = RuntimeProviderHub()
-        provider = _SpyProvider("docker")
-        hub.register("docker", provider)
-        session = MagicMock()
-        lease = SimpleNamespace(environment_profile=None, provider_ref="ref-1", status="running")
-
-        await hub.destroy_lease(lease, session)
-
-        session.add.assert_called_once_with(lease)
+        assert closed == [True]
+        assert "Failed to close runtime provider" in caplog.text

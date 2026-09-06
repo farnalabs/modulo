@@ -16,8 +16,9 @@ def test_workspace_spec_defaults() -> None:
     assert spec.timeout_seconds == 3600
     assert not spec.resource_limits
     assert spec.egress_policy is None
-    assert not spec.persistence_policy
+    assert spec.persistence_policy == "ephemeral"
     assert not spec.labels
+    assert not spec.workspace_metadata
 
 
 def test_exec_result_fields() -> None:

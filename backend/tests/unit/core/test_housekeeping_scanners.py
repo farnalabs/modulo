@@ -555,9 +555,27 @@ class TestUntriggeredPipelines:
 class TestUnusedEnvironmentProfiles:
     async def test_flags_profiles_not_referenced_by_snapshots(self, session: AsyncSession) -> None:
         now = datetime.now(UTC)
-        unused = EnvironmentProfile(id=uuid.uuid4(), organisation_id=_ORG_A, name="unused", account_id=_ACCOUNT)
-        used = EnvironmentProfile(id=uuid.uuid4(), organisation_id=_ORG_A, name="used", account_id=_ACCOUNT)
-        deleted = EnvironmentProfile(id=uuid.uuid4(), organisation_id=_ORG_A, name="deleted", account_id=_ACCOUNT)
+        unused = EnvironmentProfile(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="unused",
+            account_id=_ACCOUNT,
+            provider_type="local_docker",
+        )
+        used = EnvironmentProfile(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="used",
+            account_id=_ACCOUNT,
+            provider_type="local_docker",
+        )
+        deleted = EnvironmentProfile(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="deleted",
+            account_id=_ACCOUNT,
+            provider_type="local_docker",
+        )
         session.add_all([unused, used, deleted])
         session.add(_snapshot(organisation_id=_ORG_A, pipeline_id=uuid.uuid4(), environment_profile_id=used.id))
         session.add(
@@ -566,6 +584,7 @@ class TestUnusedEnvironmentProfiles:
                 organisation_id=_ORG_A,
                 name="deleted-unused",
                 account_id=_ACCOUNT,
+                provider_type="local_docker",
                 deleted_at=now,
             )
         )
