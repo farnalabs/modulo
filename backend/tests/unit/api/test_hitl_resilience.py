@@ -124,6 +124,7 @@ class TestClaimGateNotTeamMemberError:
 
 
 class TestApproveGateSQLAlchemyError:
+    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_approve_gate_returns_503(self, client: TestClient) -> None:
         resp = client.post(
@@ -134,6 +135,7 @@ class TestApproveGateSQLAlchemyError:
 
 
 class TestApproveGateAtSandboxCapacity:
+    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.org_sandbox_capacity_free",
         new=AsyncMock(return_value=False),
@@ -194,6 +196,7 @@ class TestResumeSandboxCapacityExceeded:
     ) -> None:
         executor = self._executor_raising()
         with (
+            patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch(
                 f"modulo.api.routes.hitl.HITLManager.{hitl_method}",
@@ -241,6 +244,7 @@ class TestResumeDataGateStamp:
         executor = MagicMock()
         executor.resume = AsyncMock()
         with (
+            patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None)),
             patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
             patch("modulo.api.routes.hitl.HITLManager", return_value=manager),
             patch("modulo.api.routes.hitl._build_resume_executor", return_value=executor),
@@ -257,6 +261,7 @@ class TestResumeDataGateStamp:
 
 
 class TestApproveWithModificationSQLAlchemyError:
+    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.HITLManager.approve_with_modification",
         new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
@@ -280,6 +285,7 @@ class TestRejectGateSQLAlchemyError:
 
 
 class TestDeliverManualSQLAlchemyError:
+    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.HITLManager.deliver_manual",
         new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")),
@@ -293,6 +299,7 @@ class TestDeliverManualSQLAlchemyError:
 
 
 class TestSubmitManualSQLAlchemyError:
+    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_submit_manual_returns_503(self, client: TestClient) -> None:
         resp = client.post(
@@ -303,6 +310,7 @@ class TestSubmitManualSQLAlchemyError:
 
 
 class TestSubmitManualNotTeamMemberError:
+    @patch("modulo.api.routes.hitl.resolve_hitl_gate_config", new=AsyncMock(return_value=None))
     @patch(
         "modulo.api.routes.hitl.HITLManager.approve",
         new=AsyncMock(side_effect=NotTeamMemberError(_RUN_ID, "gate-1", _ORG_ID, _USER_ID)),
@@ -489,3 +497,318 @@ class TestListRunPendingGatesLabelResolution:
 
         assert resp.status_code == 200
         assert resp.json()["gates"][0]["label"] is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-610: human_only enforcement on the REST decision routes
+# ---------------------------------------------------------------------------
+
+_HUMAN_ONLY_DETAIL = "human_only gate requires browser authentication; API-key clients cannot approve this gate"
+_UNRESOLVABLE_DETAIL = "HITL gate configuration could not be resolved; decision requires browser authentication"
+_SRC_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
+_TGT_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+_SNAPSHOT_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
+_GATE_ID = f"hitl_gate_{_SRC_ID}_{_TGT_ID}"
+
+
+def _resume_executor() -> MagicMock:
+    executor = MagicMock()
+    executor.resume = AsyncMock()
+    return executor
+
+
+def _hitl_session(
+    run: MagicMock,
+    snapshot: object = None,
+    edge: object = None,
+    pipeline_nodes: object = None,
+    claim_row: object = None,
+) -> AsyncMock:
+    """Session double stubbing the resolver's queries (runs/snapshots/edges/
+    pipelines) plus the fail-closed claim lookup and the authz-kill-switch and
+    RLS set_config reads that fire on every request."""
+    mock_session = AsyncMock()
+    configure_mock_session(mock_session)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin = MagicMock(return_value=begin_cm)
+
+    def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        result = MagicMock()
+        text = str(stmt)
+        if "set_config" in text:
+            result.scalar.return_value = None
+        elif "authz_enforce" in text:
+            result.scalar_one_or_none.return_value = None
+        elif "FROM runs" in text:
+            result.scalar_one_or_none.return_value = run
+        elif "pipeline_snapshots" in text:
+            result.scalar_one_or_none.return_value = snapshot
+        elif "pipeline_edges" in text:
+            result.scalar_one_or_none.return_value = edge
+        elif "pipelines" in text:
+            result.scalar_one_or_none.return_value = pipeline_nodes
+        elif "hitl_claims" in text:
+            result.scalar_one_or_none.return_value = claim_row
+        else:
+            raise AssertionError(f"Unexpected query in HITL route flow: {text}")
+        return result
+
+    mock_session.execute = AsyncMock(side_effect=_execute)
+    return mock_session
+
+
+def _make_hitl_run(*, snapshot_id: uuid.UUID | None = _SNAPSHOT_ID) -> MagicMock:
+    run = MagicMock()
+    run.id = _RUN_ID
+    run.pipeline_id = uuid.uuid4()
+    run.snapshot_id = snapshot_id
+    return run
+
+
+def _human_only_snapshot(*, human_only: bool = True) -> MagicMock:
+    snapshot = MagicMock()
+    snapshot.graph_json = {
+        "nodes": [],
+        "edges": [
+            {
+                "source": str(_SRC_ID),
+                "target": str(_TGT_ID),
+                "hitl_gate_config": {"human_only": human_only},
+            }
+        ],
+    }
+    return snapshot
+
+
+def _override_principal(via_api_key: bool) -> None:
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="user",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+        via_api_key=via_api_key,
+    )
+
+
+class TestHumanOnlyRestEnforcement:
+    """FAR-610: human_only gates deny API-key principals on the resume routes
+    (approve / approve-with-modification / deliver-manual / submit-manual);
+    browser JWTs pass. reject stays allowed for every client."""
+
+    @staticmethod
+    def _install_session(
+        run: MagicMock,
+        snapshot: object = None,
+        edge: object = None,
+        pipeline_nodes: object = None,
+        claim_row: object = None,
+    ) -> None:
+        mock_session = _hitl_session(
+            run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row
+        )
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+    def test_approve_human_only_api_key_returns_403(self, client: TestClient) -> None:
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        approve.assert_not_called()
+
+    def test_approve_human_only_api_key_403_via_live_edge_fallback(self, client: TestClient) -> None:
+        """Legacy run without a snapshot: the live-edge fallback still resolves
+        the gate config by topology and blocks the API-key principal."""
+        live_edge = MagicMock()
+        live_edge.hitl_gate_config = {"human_only": True}
+        with patch("modulo.api.routes.hitl.HITLManager"):
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=live_edge)
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+
+    def test_approve_human_only_browser_jwt_passes_check(self, client: TestClient) -> None:
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=False)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+
+    def test_approve_non_human_only_api_key_allowed(self, client: TestClient) -> None:
+        """No over-blocking: API-key principals may approve non-human_only gates."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot(human_only=False))
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+
+    def test_approve_unresolvable_fired_gate_api_key_returns_403(self, client: TestClient) -> None:
+        """Fail closed (FAR-610 review): the gate FIRED (claim row exists) but
+        its config is unresolvable — the policy cannot be verified, so the
+        API-key principal is denied instead of silently allowed."""
+        approve = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _UNRESOLVABLE_DETAIL
+        approve.assert_not_called()
+
+    def test_approve_unresolvable_gate_without_claim_api_key_allowed(self, client: TestClient) -> None:
+        """A parseable gate id with NO claim row never fired — the fail-closed
+        check passes it through (the manager 404s it later as before)."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=None)
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+
+    def test_approve_unresolvable_fired_gate_browser_jwt_allowed(self, client: TestClient) -> None:
+        """Browser JWTs pass the unresolvable case — the UI is their
+        enforcement surface, and the claim table is not even consulted."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=False)
+            self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+
+    def test_approve_with_modification_human_only_api_key_returns_403(self, client: TestClient) -> None:
+        modify = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.approve_with_modification = modify
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve-with-modification",
+                json={"claim_token": "tok", "modified_output": {"k": "v"}},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        modify.assert_not_called()
+
+    def test_deliver_manual_human_only_api_key_returns_403(self, client: TestClient) -> None:
+        deliver = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.deliver_manual = deliver
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/deliver-manual",
+                json={"claim_token": "tok", "output": {"result": "ok"}},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        deliver.assert_not_called()
+
+    def test_submit_manual_node_id_api_key_allowed(self, client: TestClient) -> None:
+        """submit-manual's gate_id is a manual-NODE id (not hitl_gate_*); the
+        human_only check resolves None and never over-blocks."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/manual/node-1/submit",
+                json={"claim_token": "tok", "output": {"o": 1}},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+
+    def test_reject_human_only_api_key_still_allowed(self, client: TestClient) -> None:
+        """reject is the safe direction — allowed for every client, even with
+        a human_only gate."""
+        reject = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.reject = reject
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/reject",
+                json={"claim_token": "tok", "reason": "not good"},
+            )
+
+        assert resp.status_code == 200
+        reject.assert_awaited_once()
