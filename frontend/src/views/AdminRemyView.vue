@@ -735,13 +735,16 @@ watch(() => configData.value, (cfg) => {
   if (!cfg) return
   const c = cfg as any
   const acl = c.access_list || {}
-  accessList.userIds = acl.user_ids || []
-  accessList.teamIds = acl.team_ids || []
-  accessList.selectedRoles = acl.org_roles || ['admin']
+  // Clone on hydration: query data from vue-query is deep-readonly, so
+  // assigning its arrays/objects by reference into reactive state makes
+  // later in-place mutations (toggles, v-model) silently fail (FAR-630).
+  accessList.userIds = [...(acl.user_ids || [])]
+  accessList.teamIds = [...(acl.team_ids || [])]
+  accessList.selectedRoles = [...(acl.org_roles || ['admin'])]
   modelConfig.defaultProvider = c.default_provider || 'anthropic'
   modelConfig.defaultModel = c.default_model || ''
   modelConfig.contextWindow = c.default_context_window ?? 200000
-  modelConfig.allowedProviders = c.allowed_providers || ['anthropic']
+  modelConfig.allowedProviders = [...(c.allowed_providers || ['anthropic'])]
   modelConfig.allowedModels = (c.allowed_models || []).join(', ')
   systemPrompt.value = c.system_prompt || ''
   guidance.value = c.additional_guidance || ''
@@ -946,7 +949,8 @@ async function saveToolPerms() {
 
 function loadPermsFromConfig(cfg: any) {
   toolPermMode.value = cfg.permission_mode || 'safe'
-  toolPerms.value = cfg.tool_permissions || getDefaultPerms()
+  // spread-copy: cfg.tool_permissions may be a deep-readonly vue-query proxy
+  toolPerms.value = { ...(cfg.tool_permissions || getDefaultPerms()) }
 }
 
 // Safety config
@@ -1081,7 +1085,8 @@ const { data: usersResp, loading: usersLoading, load: loadUsers } = useDataFetch
 watch(() => usersResp.value, (data) => {
   if (data) {
     const raw = data as { items: Array<{ id: string; display_name: string; email: string }> }
-    users.value = raw.items || []
+    // spread-copy before the in-place sort: query data is deep-readonly (FAR-630)
+    users.value = [...(raw.items || [])]
     users.value.sort((a, b) => a.display_name.localeCompare(b.display_name))
   }
 })

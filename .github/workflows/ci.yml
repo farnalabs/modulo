@@ -342,6 +342,50 @@ jobs:
           fi
           echo "$out"
           exit $rc
+      - name: E2E route coverage gate
+        # FAR-637: every production route must be referenced by at least one
+        # e2e spec (guards against routes rotting with zero e2e coverage, e.g.
+        # /pipelines/:id/editor, FAR-616). Known-uncovered MVP routes are
+        # tracked in FAR-638; until those specs land this gate MUST stay
+        # NON-ENFORCING so it cannot block this PR's merge or freeze every
+        # future PR (a permanently red required check defeats the gate). The
+        # per-route table still prints to the step summary as the live tracker
+        # for the FAR-638 fill. Flip to enforcing (make the reporting step
+        # fail closed on rc=1) once the FAR-638 specs land. Runs last so a red
+        # gate never starves the checks above. The job defaults to frontend/
+        # as working directory, but the script reads the repo tree, so run it
+        # from the repo root (it locates the tree relative to itself).
+        #
+        # `continue-on-error` (banned by the Non-Negotiable Enforcement
+        # Gates rule, see AGENTS.md, and silently masks failures) was removed.
+        # Instead the script's exit code is captured into the
+        # `route_coverage_rc` output; the reporting step exits 0 so the
+        # required check stays green (uncovered routes are non-enforcing), and
+        # a genuine breakage (rc=2) is surfaced by the aggregate step below.
+        id: route-coverage
+        working-directory: .
+        run: |
+          set +e
+          python3 .github/scripts/check_e2e_route_coverage.py
+          rc=$?
+          echo "route_coverage_rc=$rc" >> "$GITHUB_OUTPUT"
+          # rc=1 (uncovered routes) is NON-ENFORCING until FAR-638 lands:
+          # report it (the table is already printed to $GITHUB_STEP_SUMMARY)
+          # but do not block the merge. rc=2 (malformed router / missing e2e
+          # dir) is a real breakage and is allowed to fail the job.
+          if [ "$rc" -eq 1 ]; then
+            exit 0
+          fi
+          exit "$rc"
+      - name: E2E route coverage gate (fail closed)
+        # Replacement for the banned `continue-on-error`: an explicit
+        # aggregate step that only runs when a real failure occurred (the
+        # reporting step passes rc=2 through), ending with `exit 1` so the
+        # required check genuinely fails rather than being silently masked.
+        if: failure() && steps.route-coverage.outputs.route_coverage_rc == '2'
+        run: |
+          echo "::error::E2E route coverage gate failed (rc=2: malformed router or missing e2e directory). See the 'E2E route coverage gate' step output." >&2
+          exit 1
 
   sonarcloud-scan:
     name: SonarCloud scan (coverage import)

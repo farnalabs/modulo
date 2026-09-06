@@ -146,7 +146,9 @@ async function toggleSkillActive(skill: SkillItem) {
     if (data) {
       const idx = skills.value.findIndex((s) => s.id === skill.id)
       if (idx !== -1 && skillsResp.value) {
-        skillsResp.value[idx] = data
+        // query data is deep-readonly (FAR-630): replace the whole array
+        // through the writable computed instead of writing one element
+        skillsResp.value = skillsResp.value.map((s, i) => (i === idx ? (data as SkillItem) : s))
       }
     }
     remyStore.signalSkillsChanged()
