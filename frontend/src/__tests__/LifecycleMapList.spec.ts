@@ -135,45 +135,51 @@ describe('LifecycleMapList', () => {
 })
 
 describe('LifecycleMapList responsive layout (FAR-635)', () => {
-  it('stacks the header controls as a column on mobile and rows them at sm+', async () => {
-    const wrapper = mount(LifecycleMapList, {
+  // PageHeader and FilterBar are mounted for real here: the responsive
+  // stacking contract itself lives in PageHeader (FAR-627) and is covered by
+  // PageHeader.spec.ts — these tests only assert this view composes its
+  // controls through that established structure.
+  function mountList() {
+    return mount(LifecycleMapList, {
       global: {
         plugins: [i18n],
         stubs: {
-          PageHeader: true,
-          FilterBar: true,
           ErrorAlert: true,
           EmptyState: true,
           Button: true,
         },
       },
     })
+  }
+
+  it('renders the filter bar and New Map action inside the PageHeader right slot', async () => {
+    const wrapper = mountList()
     await flushPromises()
 
-    const headerContainer = wrapper.find('header > div')
-    expect(headerContainer.exists()).toBe(true)
-    expect(headerContainer.classes()).toEqual(
-      expect.arrayContaining(['flex', 'flex-col', 'sm:flex-row', 'sm:items-center', 'sm:justify-between', 'gap-3']),
-    )
-  })
-
-  it('gives the New Map button full row width on mobile and auto width at sm+', async () => {
-    const wrapper = mount(LifecycleMapList, {
-      global: {
-        plugins: [i18n],
-        stubs: {
-          PageHeader: true,
-          FilterBar: true,
-          ErrorAlert: true,
-          EmptyState: true,
-          Button: true,
-        },
-      },
-    })
-    await flushPromises()
-
+    const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
+    expect(searchInput.exists()).toBe(true)
     const newBtn = wrapper.find('[data-testid="lifecycle-map-list-new"]')
     expect(newBtn.exists()).toBe(true)
-    expect(newBtn.classes()).toEqual(expect.arrayContaining(['w-full', 'sm:w-auto']))
+
+    const headerEl = searchInput.element.closest('header')
+    expect(headerEl).not.toBeNull()
+    expect(headerEl?.contains(newBtn.element)).toBe(true)
+
+    const rightSlot = newBtn.element.parentElement
+    expect(rightSlot).not.toBeNull()
+    expect(rightSlot?.contains(searchInput.element)).toBe(true)
+  })
+
+  it('does not hand-roll the responsive header container at page level', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+
+    const bandWrapper = wrapper.find('header > div')
+    expect(bandWrapper.exists()).toBe(true)
+    const classes = bandWrapper.classes()
+    expect(classes).not.toContain('flex-col')
+    expect(classes).not.toContain('sm:flex-row')
+    expect(classes).not.toContain('sm:items-center')
+    expect(classes).not.toContain('sm:justify-between')
   })
 })
