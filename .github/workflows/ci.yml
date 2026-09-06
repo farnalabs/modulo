@@ -342,6 +342,17 @@ jobs:
           fi
           echo "$out"
           exit $rc
+      - name: E2E route coverage gate
+        # FAR-637: every production route must be referenced by at least one
+        # e2e spec (guards against routes rotting with zero e2e coverage, e.g.
+        # /pipelines/:id/editor, FAR-616). Known-uncovered MVP routes are
+        # tracked in FAR-638; until those specs land this gate is EXPECTED to
+        # fail here - the red is the tracker for the fill. Runs last so a red
+        # gate never starves the checks above. The job defaults to frontend/
+        # as working directory, but the script reads the repo tree, so run it
+        # from the repo root (it locates the tree relative to itself).
+        working-directory: .
+        run: python3 .github/scripts/check_e2e_route_coverage.py
 
   sonarcloud-scan:
     name: SonarCloud scan (coverage import)
