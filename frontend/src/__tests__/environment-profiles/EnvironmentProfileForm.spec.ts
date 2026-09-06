@@ -102,6 +102,7 @@ describe('EnvironmentProfileForm — create mode', () => {
 
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'local_docker'
+    await nextTick()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('python-dev')
     await wrapper.find('[data-testid="envprofile-form-description"]').setValue('  dev sandbox  ')
@@ -133,6 +134,7 @@ describe('EnvironmentProfileForm — create mode', () => {
 
     const vm = wrapper.vm as unknown as { form: { provider_type: string; capabilities: string[] } }
     vm.form.provider_type = 'local_docker'
+    await nextTick()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('cap-profile')
     ;(wrapper.vm as unknown as { form: { provider_type: string } }).form.provider_type = 'local_docker'
@@ -156,8 +158,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
-    // The form defaults to a tier-bearing provider, so clear the selection
-    // first to assert the badge is hidden until a runner-tier provider is chosen.
+    // No tier badge is shown until a provider with a runner tier is selected.
+    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(false)
+
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = ''
     await nextTick()
@@ -180,6 +183,7 @@ describe('EnvironmentProfileForm — create mode', () => {
 
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'local_docker'
+    await nextTick()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
     ;(wrapper.vm as unknown as { form: { provider_type: string } }).form.provider_type = 'local_docker'

@@ -46,7 +46,7 @@
 
     <LoadingSpinner v-if="!loaded" />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadAll" />
+    <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
 
     <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
       <p class="text-lg font-medium">{{ $t('views.SettingsTriggersView.no_triggers_configured') }}</p>
@@ -482,7 +482,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
@@ -616,15 +616,38 @@ interface TriggerForm {
   snapshot_id: string
 }
 
-const { error, data: triggersData, load: loadTriggers, fetched: triggersLoaded } = useDataFetch(
+const {
+  error: triggersError,
+  data: triggersData,
+  load: loadTriggers,
+  fetched: triggersLoaded,
+} = useDataFetch(
   () => api.GET('/api/v1/triggers', { params: { query: { page: 1, page_size: 100 } } }),
 )
-const { data: pipelinesData, load: loadPipelines, fetched: pipelinesLoaded } = useDataFetch(
+const {
+  error: pipelinesError,
+  data: pipelinesData,
+  load: loadPipelines,
+  fetched: pipelinesLoaded,
+} = useDataFetch(
   () => api.GET('/api/v1/pipelines', {}),
   { immediate: false }
 )
 
-const loaded = computed(() => triggersLoaded.value && pipelinesLoaded.value)
+// FAR-631: `fetched` is only set on a successful queryFn, so a failed GET left
+// `loaded` false forever (infinite spinner; error/empty/table unreachable).
+// Any load error unlocks the gate so the ErrorAlert branch can render; a retry
+// clears the flag first so the spinner shows while refetching.
+const loadFailed = ref(false)
+watch(
+  () => [triggersError.value, pipelinesError.value],
+  ([tErr, pErr]) => {
+    if (tErr || pErr) loadFailed.value = true
+  },
+)
+
+const loaded = computed(() => loadFailed.value || (triggersLoaded.value && pipelinesLoaded.value))
+const loadError = computed(() => triggersError.value ?? pipelinesError.value)
 const items = computed<TriggerItem[]>(() =>
   ((triggersData.value as { items?: TriggerItem[] } | null)?.items ?? []),
 )
@@ -995,6 +1018,7 @@ async function toggleActive(trigger: TriggerItem) {
 }
 
 async function loadAll() {
+  loadFailed.value = false
   await Promise.all([loadTriggers(), loadPipelines()])
 }
 

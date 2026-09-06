@@ -181,13 +181,10 @@ describe('AdminRemyView — save flows', () => {
     wrapper.unmount()
   })
 
-  it('BUG: role toggles do not stick — the access list saves with stale roles (readonly vue-query data)', async () => {
-    // Production bug characterisation. The config hydration assigns query
-    // arrays by reference into local reactive state:
-    //   `accessList.selectedRoles = acl.org_roles || ['admin']`
-    // The array is a deep-readonly proxy from @tanstack/vue-query's query
-    // state, so toggleRole()'s push/splice silently fails and the saved
-    // access_list keeps the stale org_roles.
+  it('saves the access list with the toggled role (readonly vue-query data fix, FAR-630)', async () => {
+    // The config hydration spread-copies the query arrays into local reactive
+    // state (vue-query data is deep-readonly), so toggleRole()'s push/splice
+    // works and the saved access_list carries the toggled org_roles.
     const wrapper = await mountRemy()
 
     const access = section(wrapper, 'Access List')!
@@ -200,8 +197,8 @@ describe('AdminRemyView — save flows', () => {
     await flushPromises()
 
     const put = vi.mocked((await import('../lib/api/client')).api.PUT).mock.calls[0]
-    // the toggle did NOT stick: org_roles still the stale ['admin']
-    expect((put[1] as any).body.access_list.org_roles).toEqual(['admin'])
+    // the toggle stuck: org_roles now ['admin', 'operator']
+    expect((put[1] as any).body.access_list.org_roles).toEqual(['admin', 'operator'])
     wrapper.unmount()
   })
 
@@ -246,19 +243,19 @@ describe('AdminRemyView — save flows', () => {
     wrapper.unmount()
   })
 
-  it('BUG: allowed-provider chip toggles do not stick (readonly vue-query data)', async () => {
-    // Same readonly-hydration bug as the role toggles: modelConfig's
-    // allowedProviders is assigned the query's readonly array by reference
-    // (`modelConfig.allowedProviders = c.allowed_providers || ['anthropic']`),
-    // so toggleAllowedProvider()'s push silently fails.
+  it('activates the allowed-provider chip on toggle (readonly vue-query data fix, FAR-630)', async () => {
+    // Same readonly-hydration fix as the role toggles: modelConfig's
+    // allowedProviders is spread-copied from the query data, so
+    // toggleAllowedProvider()'s push works.
     const wrapper = await mountRemy()
 
     const chip = wrapper.find('[data-testid="remy-allowed-provider-openai"]')
     expect(chip.attributes('aria-pressed')).toBe('false')
     await chip.trigger('click')
     await nextTick()
-    // the chip did NOT activate
-    expect(chip.attributes('aria-pressed')).toBe('false')
+    // the chip activated
+    const chipAfter = wrapper.find('[data-testid="remy-allowed-provider-openai"]')
+    expect(chipAfter.attributes('aria-pressed')).toBe('true')
     wrapper.unmount()
   })
 

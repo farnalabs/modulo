@@ -199,7 +199,7 @@ describe('FeedbackInboxView', () => {
     expect((post[1] as any).body.action).toBe('create_correction_run')
     expect(wrapper.text()).toContain('Correction run triggered.')
     // NOTE: the list badge flip (`rec.feedback_status = 'correcting'`) is
-    // asserted separately as a BUG characterisation below.
+    // asserted separately in the readonly-data fix test below.
     wrapper.unmount()
   })
 
@@ -276,11 +276,11 @@ describe('FeedbackInboxView', () => {
     wrapper.unmount()
   })
 
-  it('BUG: resolve/dismiss/correction do not update the list badge (readonly vue-query data)', async () => {
-    // Production bug characterisation. resolveRecord()/dismissRecord()/
-    // triggerCorrection() write `rec.feedback_status = '...'` on an item that
-    // comes from @tanstack/vue-query's deep-readonly query state. Vue drops
-    // the write, so the row badge keeps showing the OLD status.
+  it('updates the row badge after resolve/dismiss/correction (readonly vue-query data fix, FAR-630)', async () => {
+    // resolveRecord()/dismissRecord()/triggerCorrection() write
+    // `rec.feedback_status = '...'` on a writable local copy of the query
+    // data (vue-query state is deep-readonly), so the row badge reflects
+    // the new status immediately.
     mockReviewResult = { ...record(), feedback_status: 'resolved' }
     mockDetail = { ...record(), rejected_output: { a: 1 } }
     const wrapper = await mountWithList([record()])
@@ -292,9 +292,9 @@ describe('FeedbackInboxView', () => {
     await flushPromises()
     await nextTick()
 
-    // the row badge STILL says pending even though the review succeeded
+    // the row badge now shows the new status
     const badge = wrapper.findAll('span').find((s) => s.classes().includes('badge'))
-    expect(badge?.text()).toBe('pending')
+    expect(badge?.text()).toBe('resolved')
     wrapper.unmount()
   })
 
@@ -344,22 +344,27 @@ describe('FeedbackInboxView', () => {
     wrapper.unmount()
   })
 
-  it('BUG: the pipeline filter Select is never imported and renders as a broken native select', async () => {
-    // Production bug characterisation. FeedbackInboxView.vue uses <Select>
-    // (the pipeline filter) but its <script setup> never imports it from
-    // 'primevue/select'. Vue fails to resolve the component and falls back
-    // to a native <select> element: the :options binding becomes a plain
-    // attribute and NO option elements are ever rendered, so the pipeline
-    // filter dropdown is empty and unusable in production.
+  it('renders the pipeline filter as a PrimeVue Select with the pipeline options (FAR-631 fix)', async () => {
+    // FeedbackInboxView.vue imports Select from 'primevue/select', so the
+    // pipeline filter renders as a real PrimeVue Select carrying the pipeline
+    // options — not the broken native-select fallback with zero options.
     mockRecords = []
     mockPipelines = [{ id: 'p1', name: 'Deploy Pipeline' }]
     const wrapper = mount(FeedbackInboxView)
     await flushPromises()
     await nextTick()
 
-    const nativeSelect = wrapper.find('select[data-testid="feedback-inbox-pipeline-select"]')
-    expect(nativeSelect.exists()).toBe(true)
-    expect(nativeSelect.findAll('option').length).toBe(0)
+    const pipelineSelect = wrapper.find('[data-testid="feedback-inbox-pipeline-select"]')
+    expect(pipelineSelect.exists()).toBe(true)
+    // no broken native select fallback
+    expect(pipelineSelect.element.tagName).not.toBe('SELECT')
+    // the PrimeVue Select bound to the testid carries the pipeline options
+    const selectComp = wrapper
+      .findAllComponents({ name: 'Select' })
+      .find((c) => c.element === pipelineSelect.element)
+    expect(selectComp).toBeTruthy()
+    const options = selectComp!.props('options') as Array<{ value: string; label: string }>
+    expect(options.map((o) => o.value)).toContain('p1')
     wrapper.unmount()
   })
 })

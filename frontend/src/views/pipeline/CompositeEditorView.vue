@@ -226,14 +226,22 @@ const { loading, error: pageError } = useDataFetch(
       description: p.description,
       type: p.type || 'string',
       required: p.required || false,
-      default: p.default_value,
+      // Canonical ParameterPort field names — the port object is round-tripped
+      // by handleSaveAs, which reads default_value/multiline/options, so every
+      // stored field must survive the load mapping (save-as data loss fix).
+      default_value: p.default_value,
+      multiline: p.multiline || false,
+      options: p.options ?? null,
     }))
     rawNodes.value = editor?.nodes ?? []
     rawEdges.value = editor?.edges ?? []
     flowNodes.value = rawNodes.value.map(convertBackendNode)
     flowEdges.value = rawEdges.value.map(convertBackendEdge)
 
-    return {}
+    // useDataFetch's queryFn returns `result.data`; vue-query rejects an
+    // undefined query result ("data is undefined"), so always resolve with a
+    // data payload.
+    return { data: {} }
   },
   { initialValue: {} },
 )
