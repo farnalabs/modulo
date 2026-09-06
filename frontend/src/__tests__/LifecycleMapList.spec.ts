@@ -161,25 +161,38 @@ describe('LifecycleMapList responsive layout (FAR-635)', () => {
     const newBtn = wrapper.find('[data-testid="lifecycle-map-list-new"]')
     expect(newBtn.exists()).toBe(true)
 
-    const headerEl = searchInput.element.closest('header')
-    expect(headerEl).not.toBeNull()
-    expect(headerEl?.contains(newBtn.element)).toBe(true)
+    // The controls must live inside PageHeader's own responsive <header>
+    // (class "flex flex-col sm:flex-row ..."), not the page-level band header.
+    // On the pre-fix flat layout the search input sat in the band header, whose
+    // class never contained "flex-col", so this guards the composition.
+    const pageHeader = searchInput.element.closest('header') as HTMLElement | null
+    expect(pageHeader).not.toBeNull()
+    expect(pageHeader?.className).toContain('flex-col')
+    expect(pageHeader?.contains(newBtn.element)).toBe(true)
 
+    // ... and inside PageHeader's #right flex-wrap container (class
+    // "flex flex-wrap sm:flex-nowrap ..."). The old hand-rolled container used
+    // unprefixed "items-center justify-between", so this also fails pre-fix.
     const rightSlot = newBtn.element.parentElement
     expect(rightSlot).not.toBeNull()
+    expect(rightSlot?.className).toContain('sm:flex-nowrap')
     expect(rightSlot?.contains(searchInput.element)).toBe(true)
   })
 
-  it('does not hand-roll the responsive header container at page level', async () => {
+  it('composes the responsive header via PageHeader (no hand-rolled responsive container)', async () => {
     const wrapper = mountList()
     await flushPromises()
 
-    const bandWrapper = wrapper.find('header > div')
+    // The band-level container directly under the page header must not be a
+    // hand-rolled horizontal flex row — the responsive composition is delegated
+    // to PageHeader's nested <header>, not duplicated here. On the pre-fix
+    // layout this div was "mx-auto flex items-center justify-between gap-3",
+    // so the assertions below fail without the fix.
+    const bandWrapper = wrapper.find('header.bg-card > div')
     expect(bandWrapper.exists()).toBe(true)
     const classes = bandWrapper.classes()
-    expect(classes).not.toContain('flex-col')
-    expect(classes).not.toContain('sm:flex-row')
-    expect(classes).not.toContain('sm:items-center')
-    expect(classes).not.toContain('sm:justify-between')
+    expect(classes).not.toContain('flex')
+    expect(classes).not.toContain('items-center')
+    expect(classes).not.toContain('justify-between')
   })
 })
