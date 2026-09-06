@@ -103,6 +103,10 @@ describe('EnvironmentProfileForm — create mode', () => {
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('python-dev')
     await wrapper.find('[data-testid="envprofile-form-description"]').setValue('  dev sandbox  ')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue('python:3.12-slim')
+    // FAR-587 dropped the DB default for provider_type; the form now requires an
+    // explicit choice, so select it before submitting (matching the required field).
+    ;(wrapper.vm as unknown as { form: { provider_type: string } }).form.provider_type = 'local_docker'
+    await flush()
     await wrapper.find('form').trigger('submit')
     await flush()
 
@@ -128,6 +132,8 @@ describe('EnvironmentProfileForm — create mode', () => {
     await flush()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('cap-profile')
+    ;(wrapper.vm as unknown as { form: { provider_type: string } }).form.provider_type = 'local_docker'
+    await flush()
     expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(6)
 
     // Toggle 'git' (index 0) on and 'shell' (index 3) on, then 'shell' off again.
@@ -149,9 +155,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
-    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(true)
-
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    // FAR-587 dropped the provider_type default, so the badge only appears once a
+    // provider is selected (the field is now required).
     vm.form.provider_type = 'e2b'
     await nextTick()
 
@@ -166,6 +172,8 @@ describe('EnvironmentProfileForm — create mode', () => {
     await flush()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
+    ;(wrapper.vm as unknown as { form: { provider_type: string } }).form.provider_type = 'local_docker'
+    await flush()
     await wrapper.find('form').trigger('submit')
     await flush()
 
