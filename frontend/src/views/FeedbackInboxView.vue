@@ -182,6 +182,7 @@ import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import Button from 'primevue/button'
+import Select from 'primevue/select'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
@@ -247,24 +248,26 @@ function handlerTypeLabel(type: string): string {
   return label !== key ? label : type
 }
 
-const { loading, error, data: feedbackResp, load: loadFeedback } = useDataFetch(
+// Query data from vue-query is deep-readonly; keep a writable local copy so
+// resolve/dismiss/correction status writes actually stick (FAR-630).
+const records = ref<FeedbackRecordItem[]>([])
+
+const { loading, error, load: loadFeedback } = useDataFetch(
   async () => {
     const params: Record<string, string | number> = {}
     if (statusFilter.value) params.status = statusFilter.value
     if (pipelineFilter.value) params.pipeline_id = pipelineFilter.value
     if (dateFrom.value) params.date_from = dateFrom.value
     if (dateTo.value) params.date_to = dateTo.value
-    return api.GET('/api/v1/feedback/inbox', {
+    const { data: resp, error: err } = await api.GET('/api/v1/feedback/inbox', {
       params: { query: params as any },
     })
+    if (err) return { error: err }
+    records.value = ((resp?.items ?? []) as FeedbackRecordItem[]).map(r => ({ ...r }))
+    return { data: resp }
   },
   { immediate: false },
 )
-
-const records = computed<FeedbackRecordItem[]>(() => {
-  const response = feedbackResp.value as { items?: FeedbackRecordItem[] } | null
-  return response?.items ?? []
-})
 
 const { error: pipelinesError, data: pipelinesResp, load: loadPipelines } = useDataFetch(
   () => api.GET('/api/v1/pipelines'),

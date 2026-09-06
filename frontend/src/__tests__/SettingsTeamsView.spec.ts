@@ -548,11 +548,10 @@ describe('SettingsTeamsView', () => {
     wrapper.unmount()
   })
 
-  it('BUG: member_count on the team header does not update after add/remove (readonly vue-query data)', async () => {
-    // Production bug characterisation. addMember()/removeMember() adjust
-    // `team.member_count` on items that come from @tanstack/vue-query's
-    // deep-readonly query state; Vue drops the write, so the header count
-    // stays stale until the next full list reload.
+  it('updates member_count on the team header after add (readonly vue-query data fix, FAR-630)', async () => {
+    // addMember()/removeMember() adjust `team.member_count` on a writable
+    // local copy of the query data (vue-query state is deep-readonly), so
+    // the header count reflects the change immediately.
     mockTeams = [team({ member_count: 1 })]
     mockUsers = [{ id: 'u3', display_name: 'Grace Hopper', email: 'grace@example.com' }]
     mockMembersByTeam = { t1: [] }
@@ -570,9 +569,9 @@ describe('SettingsTeamsView', () => {
     await flushPromises()
     await nextTick()
 
-    // member appended to the table but the header count still reads the stale "1 member"
+    // member appended to the table and the header count now reads "2 members"
     expect(wrapper.find('#settings-teams-panel-t1').text()).toContain('Grace Hopper')
-    expect(teamCard(wrapper).text()).toContain('1 member')
+    expect(teamCard(wrapper).text()).toContain('2 members')
     wrapper.unmount()
   })
 })
