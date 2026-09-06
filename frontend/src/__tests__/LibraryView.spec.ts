@@ -253,3 +253,62 @@ describe('LibraryView', () => {
     })
   })
 })
+
+describe('LibraryView responsive layout (FAR-640)', () => {
+  // PageHeader is mounted for real: the responsive stacking contract itself
+  // lives in PageHeader (FAR-627) and is covered by PageHeader.spec.ts — these
+  // tests only assert this view composes its controls through that structure.
+  async function mountLibrary() {
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    return wrapper
+  }
+
+  it('renders the create action, filter bar, and type filter inside the PageHeader right slot', async () => {
+    const wrapper = await mountLibrary()
+
+    const createBtn = wrapper.find('[data-testid="library-create-pipeline-header"]')
+    const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
+    const typeBtn = wrapper.find('[data-testid="library-type-filter-button"]')
+    expect(createBtn.exists()).toBe(true)
+    expect(searchInput.exists()).toBe(true)
+    expect(typeBtn.exists()).toBe(true)
+
+    // LibraryView's outer band and PageHeader both render <header>; closest()
+    // resolves to PageHeader's own header, which must own all the controls.
+    const headerEl = createBtn.element.closest('header')
+    expect(headerEl).not.toBeNull()
+    expect(headerEl?.contains(searchInput.element)).toBe(true)
+    expect(headerEl?.contains(typeBtn.element)).toBe(true)
+
+    const rightSlot = createBtn.element.parentElement
+    expect(rightSlot).not.toBeNull()
+    expect(rightSlot?.contains(searchInput.element)).toBe(true)
+    expect(rightSlot?.contains(typeBtn.element)).toBe(true)
+  })
+
+  it('keeps the type-filter dropdown anchored to its trigger inside the right slot', async () => {
+    const wrapper = await mountLibrary()
+
+    const typeBtn = wrapper.get('[data-testid="library-type-filter-button"]')
+    const dropdownHost = typeBtn.element.parentElement as HTMLElement
+    expect(dropdownHost.classList.contains('relative')).toBe(true)
+    expect(dropdownHost.closest('header')).not.toBeNull()
+  })
+
+  it('does not hand-roll the responsive header container at page level', async () => {
+    const wrapper = await mountLibrary()
+
+    const bandWrapper = wrapper.find('header > div')
+    expect(bandWrapper.exists()).toBe(true)
+    const classes = bandWrapper.classes()
+    expect(classes).not.toContain('flex-col')
+    expect(classes).not.toContain('sm:flex-row')
+    expect(classes).not.toContain('sm:items-center')
+    expect(classes).not.toContain('sm:justify-between')
+  })
+})

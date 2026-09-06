@@ -98,9 +98,11 @@ function mountView() {
   return mount(LifecycleMapView, {
     global: {
       plugins: [i18n],
+      mocks: {
+        $router: { push: routerPushMock },
+      },
       stubs: {
         RouterLink: { template: '<a><slot /></a>' },
-        PageHeader: true,
         ErrorAlert: true,
         LifecycleMapRenderer: true,
         JourneyCard: true,
@@ -199,5 +201,56 @@ describe('LifecycleMapView', () => {
     await flushPromises()
 
     expect(document.body.textContent).toContain('The pasted content is not valid JSON.')
+  })
+})
+
+describe('LifecycleMapView responsive layout (FAR-640)', () => {
+  it('renders the lifecycle controls inside the PageHeader right slot', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const exportBtn = wrapper.find('[data-testid="lifecycle-map-export"]')
+    const editBtn = wrapper.find('[data-testid="lifecycle-map-view-edit"]')
+    const deleteBtn = wrapper.find('[data-testid="lifecycle-map-view-delete"]')
+    expect(exportBtn.exists()).toBe(true)
+    expect(editBtn.exists()).toBe(true)
+    expect(deleteBtn.exists()).toBe(true)
+
+    // PageHeader and the view's outer band both render <header>; closest()
+    // resolves to PageHeader's own header, which must own all controls.
+    const headerEl = exportBtn.element.closest('header')
+    expect(headerEl).not.toBeNull()
+    expect(headerEl?.querySelector('h1')?.textContent).toBe('Launch Flow')
+    expect(headerEl?.contains(editBtn.element)).toBe(true)
+    expect(headerEl?.contains(deleteBtn.element)).toBe(true)
+
+    const rightSlot = exportBtn.element.parentElement
+    expect(rightSlot).not.toBeNull()
+    expect(rightSlot?.contains(editBtn.element)).toBe(true)
+    expect(rightSlot?.textContent).toContain('v1')
+  })
+
+  it('routes back to the lifecycle maps list via the PageHeader back button', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const backBtn = wrapper.findAll('button').find(b => b.text().includes('Back'))
+    expect(backBtn).toBeTruthy()
+
+    await backBtn!.trigger('click')
+    expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps')
+  })
+
+  it('does not hand-roll the responsive header container at page level', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const bandWrapper = wrapper.find('header > div')
+    expect(bandWrapper.exists()).toBe(true)
+    const classes = bandWrapper.classes()
+    expect(classes).not.toContain('flex-col')
+    expect(classes).not.toContain('sm:flex-row')
+    expect(classes).not.toContain('sm:items-center')
+    expect(classes).not.toContain('sm:justify-between')
   })
 })
