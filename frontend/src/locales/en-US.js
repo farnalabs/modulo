@@ -1105,6 +1105,7 @@ export default {
       "status_stalled": "Stalled",
       "status_claimed": "Claimed",
       "status_unknown": "Unknown",
+      "status_hitl_parked": "Parked",
       "status_budget_exceeded": "Budget Exceeded",
       "status_cost_ceiling_exceeded": "Cost Ceiling Exceeded",
       "status_router_no_match": "Router No Match",

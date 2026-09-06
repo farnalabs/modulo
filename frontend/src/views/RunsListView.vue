@@ -10,6 +10,7 @@
               { value: RUN_STATUS.PENDING, label: $t('views.RunsListView.status_pending') },
               { value: RUN_STATUS.RUNNING, label: $t('views.RunsListView.status_running') },
               { value: RUN_STATUS.AWAITING_HUMAN, label: $t('views.RunsListView.status_awaiting_human') },
+              { value: RUN_STATUS.HITL_PARKED, label: $t('views.RunsListView.status_hitl_parked') },
               { value: RUN_STATUS.COMPLETE, label: $t('views.RunsListView.status_complete') },
               { value: RUN_STATUS.FAILED, label: $t('views.RunsListView.status_failed') },
               { value: RUN_STATUS.CANCELLED, label: $t('views.RunsListView.status_cancelled') },

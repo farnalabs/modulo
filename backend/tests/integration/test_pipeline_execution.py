@@ -14,6 +14,7 @@ warnings at shutdown.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 
 import pytest
@@ -392,3 +393,119 @@ async def test_claim_resume_run_async_real_pg(
     assert row is not None
     assert row[0] == "running"
     assert row[1] == token
+
+
+async def test_claim_resume_run_async_matches_hitl_parked_with_committed_decision(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """FAR-604: the resume claim matches a ``hitl_parked`` run whose gate
+    decision committed AFTER the park sweep moved it out of ``awaiting_human``.
+
+    Scenario state the reconcile loop produces: the run is parked
+    (``hitl_parked``, no worker owns it so its heartbeat is stale) and a
+    committed decision exists in ``hitl_claims``. The claim must transition
+    the row to ``running`` and take the claim — otherwise ``resume_run``
+    returns the "successful" no-op ``{"status": "not_claimed"}`` (SAQ sees
+    success, retries never fire) and the reconcile loop re-enqueues the
+    no-op every tick forever.
+    """
+    run_id = uuid.uuid4()
+    await _insert_run(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="hitl_parked",
+    )
+    # A parked run is not owned by any worker — its heartbeat froze when the
+    # park sweep fired. The claim must not require a fresh heartbeat for a
+    # parked row (that would strand it forever).
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE runs SET heartbeat_at = now() - interval '20 minutes' WHERE id=:rid"),
+            {"rid": str(run_id)},
+        )
+    # The committed gate decision (the reconcile guard's precondition), same
+    # shape the decide route writes: verdict action + stamped gate id.
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, gate_id, "
+                "expires_at, decision, decision_at, decision_payload) "
+                "VALUES (:cid, :oid, :rid, :pid, :gid, now(), 'approved', now(), CAST(:p AS json))"
+            ),
+            {
+                "cid": str(uuid.uuid4()),
+                "oid": str(test_org),
+                "rid": str(run_id),
+                "pid": str(test_pipeline),
+                "gid": "gate-1",
+                "p": json.dumps({"action": "approved", "gate_id": "gate-1"}),
+            },
+        )
+
+    token = await pe.claim_resume_run_async(app_engine, str(run_id), str(test_org))
+    assert token is not None, "a hitl_parked run with a committed decision must be claimable"
+    assert await _claim_count(db_engine, run_id) == 1
+
+    second = await pe.claim_resume_run_async(app_engine, str(run_id), str(test_org))
+    assert second is None, "a second resume claim on a fresh-heartbeat running row loses"
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, claim_token, heartbeat_at FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running"
+    assert row[1] == token
+    assert row[2] is not None
+
+
+async def test_claim_resume_run_async_parked_real_pg(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """A ``hitl_parked`` run with a committed gate decision is claimable by the
+    resume claim — the park-sweep vs decide race self-heal (FAR-604 F1).
+
+    The run must transition out of the parked state into ``running`` so the
+    stranded parked run resumes instead of being re-enqueued on every reconcile
+    tick. Before this fix the claimable IN-list only matched
+    ``('awaiting_human', 'claimed')`` and the resume claim matched ZERO rows.
+    """
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="hitl_parked",
+        claim_token="tok-parked",
+    )
+
+    token = await pe.claim_resume_run_async(app_engine, str(run_id), str(test_org))
+    assert token is not None, "resume claim must succeed for a hitl_parked run (F1 self-heal)"
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running", "parked run must resume into running"
