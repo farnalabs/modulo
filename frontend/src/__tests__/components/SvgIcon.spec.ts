@@ -9,6 +9,8 @@ describe('SvgIcon', () => {
     vi.restoreAllMocks()
   })
 
+  // ~10s isolated, 20s+ under full-suite load; zero margin at the 15s default
+  // caused flakes (FAR-632), so give this scan a wide 120s budget.
   it('registers every icon referenced by manifest navigation', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const iconNames = new Set(
@@ -20,7 +22,7 @@ describe('SvgIcon', () => {
     }
 
     expect(warnSpy).not.toHaveBeenCalled()
-  })
+  }, 120_000)
 
   it('renders the canonical Lucide circle-play icon for runs', () => {
     const wrapper = mount(SvgIcon, { props: { name: 'CirclePlay' } })
