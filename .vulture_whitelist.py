@@ -281,4 +281,9 @@ __all__ = [
     #     exercised directly by tests/integration/bdd/test_environment_profiles.py
     #     (vulture scans src/ only so it cannot see the test call sites).
     "delete_environment_profile",
+    # --- FAR-589 D3b error-code registry guard + test-only reset (referenced by
+    #     tests/unit/pipeline_engine/test_error_codes.py; the guard runs as a
+    #     CI test gate and the reset is the signal tests' isolation hook) ---
+    "error_code_map_conflicts",
+    "_reset_unmapped_code_signal_for_tests",
 ]

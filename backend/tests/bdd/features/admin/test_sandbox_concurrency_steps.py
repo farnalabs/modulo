@@ -152,6 +152,12 @@ def _bdd_limit_value(request, limit: int) -> None:
     assert data["sandbox_concurrency_limit"] == limit
 
 
+@then("the limit is flagged as the default")
+def _bdd_limit_flagged_default(request) -> None:
+    data = request.node._resp.json()
+    assert data["is_default"] is True
+
+
 @then("the organisation still has its license key")
 def _bdd_org_license_preserved(request) -> None:
     org = request.node._session.execute.return_value.scalar_one_or_none.return_value

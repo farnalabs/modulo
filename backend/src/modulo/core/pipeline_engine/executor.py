@@ -1114,7 +1114,7 @@ async def org_sandbox_capacity_free(
         graph_json = snap_result.scalar_one_or_none()
         if not _graph_contains_sandbox_agent(graph_json):
             return True
-        cap = await get_sandbox_concurrency_limit(session, org_id)
+        cap = (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap
         if cap is None:
             return True
         active = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
@@ -1860,7 +1860,10 @@ class PipelineExecutor:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
-                return await get_sandbox_concurrency_limit(session, org_id)
+                # FAR-589 D3b: the one reader returns the full contract; this
+                # claim-time cap read enforces the flag-off window cap only
+                # (absent key = no gate until D8's rollout flag).
+                return (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -2634,7 +2637,7 @@ class PipelineExecutor:
         ).scalar_one_or_none()
         if not _graph_contains_sandbox_agent(graph_json):
             return
-        cap = await get_sandbox_concurrency_limit(session, org_id)
+        cap = (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap
         if cap is None:
             return
         # pg_advisory_xact_lock(k1, k2) — the two int4 keys are derived

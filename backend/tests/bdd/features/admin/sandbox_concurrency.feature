@@ -7,7 +7,8 @@ Feature: Admin Sandbox Concurrency Limit
     Given I am authenticated as an admin
     When I request GET /api/v1/admin/org/sandbox-concurrency
     Then the response status is 200
-    And the sandbox concurrency limit is null
+    And the sandbox concurrency limit is 4
+    And the limit is flagged as the default
 
   Scenario: Admin sets the sandbox concurrency limit
     Given I am authenticated as an admin
@@ -22,9 +23,15 @@ Feature: Admin Sandbox Concurrency Limit
     Then the response status is 200
     And the sandbox concurrency limit is null
 
-  Scenario: Admin sets an out-of-range limit
+  Scenario: Admin sets the deny-all limit
     Given I am authenticated as an admin
     When I PUT /api/v1/admin/org/sandbox-concurrency with limit 0
+    Then the response status is 200
+    And the sandbox concurrency limit is 0
+
+  Scenario: Admin sets an out-of-range limit
+    Given I am authenticated as an admin
+    When I PUT /api/v1/admin/org/sandbox-concurrency with limit -1
     Then the response status is 422
 
   Scenario: Non-admin cannot read the sandbox concurrency limit
