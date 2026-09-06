@@ -1,6 +1,6 @@
 /**
  * Centralized filter value constants for run statuses.
- * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed')
+ * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed')
  * These are used across DashboardView, RunsListView, etc.
  */
 export const RUN_STATUS = {
@@ -9,6 +9,7 @@ export const RUN_STATUS = {
   AWAITING_HUMAN: 'awaiting_human' as const,
   CLAIMED: 'claimed',
   UNKNOWN: 'unknown' as const,
+  HITL_PARKED: 'hitl_parked' as const,
   COMPLETE: 'complete',
   FAILED: 'failed' as const,
   CANCELLED: 'cancelled',

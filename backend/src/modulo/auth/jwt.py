@@ -34,6 +34,13 @@ class AuthenticatedPrincipal:
     account_id: uuid.UUID
     org_role: str | None
     is_system_admin: bool = False
+    #: FAR-610: True when the credential was an org API key (``mk_``) rather
+    #: than a browser-login JWT. Human_only HITL gates deny API-key principals
+    #: on decision actions (approve / approve-with-modification / deliver-manual
+    #: / submit-manual); browser JWTs pass. JWTs carry no client-type claim, so
+    #: this marker is the only reliable credential-kind signal — the API-key
+    #: resolution path (``get_current_tenant_user_or_api_key``) sets it True.
+    via_api_key: bool = False
 
     @property
     def user_id(self) -> uuid.UUID:
