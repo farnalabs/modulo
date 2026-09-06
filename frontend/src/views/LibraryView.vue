@@ -1,49 +1,50 @@
 <template>
   <div class="min-h-screen">
     <header class="bg-card border-b border-border px-6 py-4">
-      <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
-        <PageHeader :title="$t('views.LibraryView.title')" />
-        <div class="flex items-center gap-3">
-          <Button as="router-link" to="/library?type=pipeline_template" class="px-4 py-1.5" data-testid="library-create-pipeline-header">
-            {{ $t('views.LibraryView.create_pipeline') }}
-          </Button>
-          <FilterBar
-            :search="{ placeholder: $t('views.LibraryView.search_primitives') }"
-            :search-value="search"
-            @update:search="search = $event"
-          />
-          <div class="relative" ref="typeFilterRef">
-            <button
-              type="button"
-              class="flex items-center gap-2 rounded-lg border border-input bg-background px-3 py-2 text-sm hover:bg-accent transition-colors"
-              @click="showTypeDropdown = !showTypeDropdown"
-              data-testid="library-type-filter-button"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-              {{ $t('views.LibraryView.all_types') }}
-              <span v-if="selectedTypes.length > 0" class="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">{{ selectedTypes.length }}</span>
-            </button>
-            <div
-              v-if="showTypeDropdown"
-              class="absolute right-0 top-full z-50 mt-1 w-56 rounded-lg border bg-card p-2 shadow-lg"
-              data-testid="library-type-filter-dropdown"
-            >
-              <label
-                v-for="opt in typeOptions"
-                :key="opt.value"
-                class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+      <div class="mx-auto max-w-6xl">
+        <PageHeader :title="$t('views.LibraryView.title')">
+          <template #right>
+            <Button as="router-link" to="/library?type=pipeline_template" class="px-4 py-1.5" data-testid="library-create-pipeline-header">
+              {{ $t('views.LibraryView.create_pipeline') }}
+            </Button>
+            <FilterBar
+              :search="{ placeholder: $t('views.LibraryView.search_primitives') }"
+              :search-value="search"
+              @update:search="search = $event"
+            />
+            <div class="relative w-full sm:w-auto" ref="typeFilterRef">
+              <button
+                type="button"
+                class="flex items-center gap-2 rounded-lg border border-input bg-background px-3 py-2 text-sm hover:bg-accent transition-colors"
+                @click="showTypeDropdown = !showTypeDropdown"
+                data-testid="library-type-filter-button"
               >
-                <input
-                  type="checkbox"
-                  :checked="selectedTypes.includes(opt.value)"
-                  class="rounded border-input"
-                  @change="toggleType(opt.value)"
-                />
-                {{ $t(opt.labelKey) }}
-              </label>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                {{ $t('views.LibraryView.all_types') }}
+                <span v-if="selectedTypes.length > 0" class="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">{{ selectedTypes.length }}</span>
+              </button>
+              <div
+                v-if="showTypeDropdown"
+                class="absolute right-0 top-full z-50 mt-1 w-56 rounded-lg border bg-card p-2 shadow-lg"
+                data-testid="library-type-filter-dropdown"
+              >
+                <label
+                  v-for="opt in typeOptions"
+                  :key="opt.value"
+                  class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="selectedTypes.includes(opt.value)"
+                    class="rounded border-input"
+                    @change="toggleType(opt.value)"
+                  />
+                  {{ $t(opt.labelKey) }}
+                </label>
+              </div>
             </div>
-          </div>
-        </div>
+          </template>
+        </PageHeader>
       </div>
     </header>
 
