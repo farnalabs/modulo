@@ -635,6 +635,50 @@ class TestHitlResumeOrSkipPredicateMatrix:
         resume.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_parked_with_committed_decision_resumes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """qa F1 (park-vs-decide race): a ``hitl_parked`` run whose gate
+        decision committed AFTER the park swept it is re-dispatched as
+        ``resume_run`` through the SAME committed-decision guard — the run
+        self-heals via the existing reconcile→resume path instead of being
+        stranded parked forever."""
+        payload = {"action": "approved", "gate_id": "hitl_gate_a_b"}
+        skip, data, summary, guard, resume = await self._resolve(
+            monkeypatch, "hitl_parked", committed=True, resume_data=payload
+        )
+        assert skip is False
+        assert data == payload
+        assert summary["skipped"] == 0
+        guard.assert_awaited_once()
+        resume.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_parked_without_committed_decision_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """qa F1: a genuinely-parked run (gate still undecided — the normal
+        park state) is NEVER re-dispatched: the same auto-approve guard that
+        protects awaiting_human/claimed protects hitl_parked."""
+        skip, data, summary, guard, resume = await self._resolve(monkeypatch, "hitl_parked", committed=False)
+        assert skip is True
+        assert data is None
+        assert summary["skipped"] == 1
+        guard.assert_awaited_once()
+        resume.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("status", "job_type"),
+        [
+            ("awaiting_human", "resume_run"),
+            ("claimed", "resume_run"),
+            ("hitl_parked", "resume_run"),
+            ("pending", "execute_run"),
+            ("running", "execute_run"),
+        ],
+    )
+    def test_reconcile_job_type_covers_parked(self, status: str, job_type: str) -> None:
+        """qa F1: the discriminator maps parked runs to ``resume_run`` so the
+        F6a recovery enqueues the resume (checkpoint-continuing) variant."""
+        assert ch._reconcile_job_type(status) == job_type
+
+    @pytest.mark.asyncio
     async def test_other_status_passes_through_unguarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A non-HITL status (pending/running) is not touched by the guard."""
         summary: dict[str, Any] = {"skipped": 0}
@@ -685,6 +729,33 @@ class TestHitlResumeOrSkipPredicateMatrix:
             ]
         )
         assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
+
+
+class TestReDispatchPredicateMatchesParked:
+    """qa F1: the F6a gated-recovery branch of the re-dispatch predicate
+    matches ``hitl_parked`` rows — a parked run whose gate decision committed
+    after the sweep parked it is recoverable on the reconcile tick."""
+
+    @staticmethod
+    def _predicate_param_values() -> set[str]:
+        predicate = ch._build_re_dispatch_predicate(
+            reenqueue_window=120,
+            stale_window=600,
+            capacity_redispatch_seconds=120,
+        )
+        flat: set[str] = set()
+        for value in predicate.compile().params.values():
+            if isinstance(value, (list, tuple, set, frozenset)):
+                flat.update(str(item) for item in value)
+            else:
+                flat.add(str(value))
+        return flat
+
+    def test_parked_status_in_the_gated_recovery_branch(self) -> None:
+        values = self._predicate_param_values()
+        assert "hitl_parked" in values
+        assert "awaiting_human" in values
+        assert "claimed" in values
 
 
 class TestNodelessRedispatchBudget:
