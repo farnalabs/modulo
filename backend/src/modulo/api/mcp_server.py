@@ -3199,12 +3199,14 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         if run.status in TERMINAL_STATUSES:
             detail = f"Run is already in terminal status: {run.status}"
             return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
-        # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
-        # finalize (§4.2). A STREAMED running run cancelled cross-process is
-        # routed through finalize_cost, re-reading the STORED cumulative
-        # sets; a NEVER-PAUSED in-flight run has none and forfeits its
-        # accrued cost (cost_components_partial_spend_lost log).
-        was_paused = run.status in ("awaiting_human", "claimed")
+        # PAUSED-then-cancelled class (awaiting_human/claimed/hitl_parked —
+        # qa F10: parked runs are the awaiting_human class after expiry)
+        # runs NO finalize (§4.2). A STREAMED running run cancelled
+        # cross-process is routed through finalize_cost, re-reading the
+        # STORED cumulative sets; a NEVER-PAUSED in-flight run has none and
+        # forfeits its accrued cost (cost_components_partial_spend_lost
+        # log).
+        was_paused = run.status in ("awaiting_human", "claimed", "hitl_parked")
         run = await request_cancellation(s, rid)
         if not was_paused:
             await finalize_cancelled_run(s, run_id=rid, org_id=org_id)

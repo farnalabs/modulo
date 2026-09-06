@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0179."""
+    """Exactly one migration chains off each predecessor, and the head is 0180."""
     import re
 
     revisions = {}
@@ -750,9 +750,12 @@ def test_single_migration_head() -> None:
     # 0179_drop_workspace_leases (FAR-587 workspace-lease removal) chains off 0178.
     chaining_off_0178 = [p for p in revisions if parents[p] == "0178_env_profiles_runner_docker"]
     assert [_basename(p) for p in chaining_off_0178] == ["0179_drop_workspace_leases.py"]
-    # Nothing chains off 0179 -> it is the single head.
+    # 0180_hitl_parked_status (FAR-604 D2, HITL capacity) chains off 0179_drop_workspace_leases.
     chaining_off_0179 = [p for p in revisions if parents[p] == "0179_drop_workspace_leases"]
-    assert chaining_off_0179 == []
+    assert [_basename(p) for p in chaining_off_0179] == ["0180_hitl_parked_status.py"]
+    # Nothing chains off 0180_hitl_parked_status -> it is the single head.
+    chaining_off_0180 = [p for p in revisions if parents[p] == "0180_hitl_parked_status"]
+    assert chaining_off_0180 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
