@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
-      <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
+      <div class="mx-auto flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between max-w-6xl">
         <PageHeader title="Lifecycle Maps" />
         <FilterBar
           :search="{ placeholder: 'Search maps...' }"
@@ -10,6 +10,7 @@
         >
           <template #after>
             <Select
+  class="w-full sm:w-auto"
   aria-label="Form control"
   v-model="ownerFilter"
   placeholder="All teams"
@@ -24,7 +25,7 @@
 </Select>
           </template>
         </FilterBar>
-          <Button class="cursor-pointer" @click="handleNewMap" data-testid="lifecycle-map-list-new">
+          <Button class="cursor-pointer w-full sm:w-auto" @click="handleNewMap" data-testid="lifecycle-map-list-new">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Map
           </Button>

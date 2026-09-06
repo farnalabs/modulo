@@ -133,3 +133,47 @@ describe('LifecycleMapList', () => {
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 })
+
+describe('LifecycleMapList responsive layout (FAR-635)', () => {
+  it('stacks the header controls as a column on mobile and rows them at sm+', async () => {
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          PageHeader: true,
+          FilterBar: true,
+          ErrorAlert: true,
+          EmptyState: true,
+          Button: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const headerContainer = wrapper.find('header > div')
+    expect(headerContainer.exists()).toBe(true)
+    expect(headerContainer.classes()).toEqual(
+      expect.arrayContaining(['flex', 'flex-col', 'sm:flex-row', 'sm:items-center', 'sm:justify-between', 'gap-3']),
+    )
+  })
+
+  it('gives the New Map button full row width on mobile and auto width at sm+', async () => {
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          PageHeader: true,
+          FilterBar: true,
+          ErrorAlert: true,
+          EmptyState: true,
+          Button: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const newBtn = wrapper.find('[data-testid="lifecycle-map-list-new"]')
+    expect(newBtn.exists()).toBe(true)
+    expect(newBtn.classes()).toEqual(expect.arrayContaining(['w-full', 'sm:w-auto']))
+  })
+})
