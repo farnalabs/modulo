@@ -338,16 +338,15 @@ class TestDeleteCheckpoints:
 
 class TestDeleteRunIdRows:
     async def test_deletes_set_null_and_restrict_tables_via_orm(self) -> None:
-        """trigger_events / notification_delivery_log / workspace_leases deleted."""
+        """trigger_events / notification_delivery_log deleted (leases table dropped, FAR-587)."""
         session = AsyncMock()
         run_ids = [uuid.uuid4()]
         await rr._delete_run_id_rows(session, run_ids)
         statements = [c.args[0] for c in session.execute.call_args_list]
-        assert len(statements) == 3
+        assert len(statements) == 2
         names = [getattr(getattr(s, "table", None), "name", None) for s in statements]
         assert "trigger_events" in names
         assert "notification_delivery_log" in names
-        assert "workspace_leases" in names
 
 
 # ---------------------------------------------------------------------------
