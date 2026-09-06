@@ -50,7 +50,7 @@ _MIGRATION_PATH = (
 # migration (0180_hitl_parked_status, renumbered from 0177 after the invitations
 # collision and again from 0178 after the env_profiles_runner_docker collision)
 # re-parented onto 0179_drop_workspace_leases as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0180_hitl_parked_status"
+_CHAIN_HEAD_MIGRATION_NAME = "0181_hitl_claims_active_sweep_indexes"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
