@@ -118,14 +118,11 @@ describe('CompositeEditorView', () => {
     postMock.mockResolvedValue({ data: { id: 'new-tpl' }, error: undefined })
   })
 
-  it('BUG: the fetcher resolves but useDataFetch rejects with "data is undefined" so the editor page never renders', async () => {
-    // PRODUCTION BUG characterisation (FAR-617 delivery): the view's
-    // useDataFetch fetcher returns a bare `{}` instead of `{ data: ... }`.
-    // useDataFetch's queryFn returns `result.data` (undefined), and vue-query
-    // unconditionally throws "<queryHash> data is undefined" for undefined
-    // query results. The throw lands in the pageError branch, so the composite
-    // editor renders a permanent error page instead of the canvas — for every
-    // load, in every environment. The fetcher's own side effects still ran.
+  it('loads the editor: fetcher resolves with data, both endpoints map into the canvas/ports state', async () => {
+    // FAR-629 fix: the fetcher previously returned a bare `{}`, so
+    // useDataFetch's queryFn resolved undefined and vue-query threw
+    // "<queryHash> data is undefined" — the page was a permanent error box
+    // for every load. It now resolves `{ data: {} }` and the editor renders.
     const wrapper = mountView()
     await flush()
 
@@ -145,24 +142,29 @@ describe('CompositeEditorView', () => {
     expect(vm.flowEdges).toEqual([
       { id: 'e1', source: 'n1', target: 'n2', type: 'smoothstep', data: { edge_type: 'normal' } },
     ])
+    // ports keep the canonical ParameterPort field names (default_value — not
+    // the old renamed `default`), so every stored field round-trips on save
     expect(vm.ports).toEqual([
-      { id: 'port-1', name: 'topic', label: 'Topic', description: 'the topic', type: 'string', required: true, default: 'news' },
+      { id: 'port-1', name: 'topic', label: 'Topic', description: 'the topic', type: 'string', required: true, default_value: 'news', multiline: false, options: null },
     ])
 
-    // ...but the template is stuck on the error branch: no canvas, no toolbar.
-    expect(wrapper.text()).toContain('data is undefined')
-    expect(wrapper.find('.vue-flow-stub').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('Save as composite')
+    // ...and the template renders the canvas + toolbar, not the error box
+    expect(wrapper.find('.vue-flow-stub').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('data is undefined')
+    expect(wrapper.text()).toContain('Save as composite')
     wrapper.unmount()
   })
 
-  it('BUG: a total API failure lands on the same error page (both GETs are catch-guarded to data:null)', async () => {
+  it('still renders the (empty) editor when both API calls fail — the GETs are catch-guarded to data:null', async () => {
     getMock.mockRejectedValue(new Error('network down'))
     const wrapper = mountView()
     await flush()
 
-    expect(wrapper.text()).toContain('data is undefined')
-    expect(wrapper.text()).not.toContain('network down')
+    // previously this same failure landed on the "data is undefined" error
+    // page; the fetcher now always resolves with a data payload
+    expect(wrapper.find('.vue-flow-stub').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('data is undefined')
+    expect((wrapper.vm as unknown as { compositeName: string }).compositeName).toBe('')
     wrapper.unmount()
   })
 
@@ -177,6 +179,64 @@ describe('CompositeEditorView', () => {
     await flush()
     expect((viewer.vm as unknown as { canManage: boolean }).canManage).toBe(false)
     viewer.unmount()
+  })
+
+  it('toolbar renders manage controls for managers and hides them for viewers; the ports panel toggles', async () => {
+    // These branches were unreachable in production until the fetcher fix
+    // (every load landed on the error page) — now covered.
+    const wrapper = mountView()
+    await flush()
+
+    expect(wrapper.text()).toContain('My Composite')
+    expect(wrapper.text()).toContain('Save as composite')
+    expect(wrapper.text()).toContain('Publish')
+    // port panel defaults to open
+    expect(wrapper.find('[data-testid="port-panel"]').exists()).toBe(true)
+
+    // the Ports button toggles the panel closed and back open
+    const portsBtn = wrapper.findAll('button').find((b) => b.text().includes('Ports'))!
+    await portsBtn.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="port-panel"]').exists()).toBe(false)
+    await portsBtn.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="port-panel"]').exists()).toBe(true)
+
+    // Publish mounts the publish flow with the composite id
+    const publishBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Publish')!
+    await publishBtn.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="publish-flow"]').exists()).toBe(true)
+
+    // viewer JWT: manage controls hidden, read-only canvas stays
+    getAccessTokenMock.mockReturnValue(fakeJwt('viewer'))
+    const viewer = mountView()
+    await flush()
+    expect(viewer.text()).not.toContain('Save as composite')
+    expect(viewer.text()).not.toContain('Publish')
+    expect(viewer.find('.vue-flow-stub').exists()).toBe(true)
+    viewer.unmount()
+    wrapper.unmount()
+  })
+
+  it('save-as dialog opens from the toolbar, accepts a name, and closes on cancel', async () => {
+    const wrapper = mountView()
+    await flush()
+    expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
+
+    const saveAsBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!
+    await saveAsBtn.trigger('click')
+    await nextTick()
+    const nameInput = wrapper.find('#compositeeditorview-field-2')
+    expect(nameInput.exists()).toBe(true)
+
+    await nameInput.setValue('Draft Composite')
+    const cancelBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Cancel')!
+    await cancelBtn.trigger('click')
+    await nextTick()
+    expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
+    expect(postMock).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('flowNodeIds maps the converted nodes (used by the port panel node-ids prop)', async () => {
@@ -216,13 +276,14 @@ describe('CompositeEditorView', () => {
       name: 'topic',
       type: 'string',
       required: true,
-      // BUG (data-loss on Save-as): the load mapping renames the stored
-      // default_value to `default` (view line: `default: p.default_value`),
-      // but handleSaveAs reads back `p.default_value` — which no longer
-      // exists — so the saved composite template always loses the port's
-      // default value ('news' becomes null). Characterised here as shipped;
-      // if the view is fixed to read p.default, update this assertion.
-      default_value: null,
+      // FAR-629 fix (save-as data loss): the stored default used to be
+      // dropped — the load mapping renamed it to `default`, which
+      // handleSaveAs never read, so every saved copy lost the port default.
+      // The port object now keeps the canonical `default_value` field and
+      // the value survives the load → save round-trip.
+      default_value: 'news',
+      multiline: false,
+      options: null,
       target_injection: { mode: 'prompt_replace', injection_point: 'prompt_template' },
     })
     expect(vm.saveAsError).toBe(null)
