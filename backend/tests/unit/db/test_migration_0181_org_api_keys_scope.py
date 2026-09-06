@@ -1,4 +1,4 @@
-"""FAR-620 Phase 1: migration 0178 — ``org_api_keys.scope`` round-trip.
+"""FAR-620 Phase 1: migration 0181 — ``org_api_keys.scope`` round-trip.
 
 Executes the migration against an in-memory SQLite engine (the 0126-style
 portable-DDL template — the migration uses only plain ``ADD COLUMN`` with an
@@ -32,7 +32,7 @@ from alembic.operations import Operations
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
-_REVISION = "0178_org_api_keys_scope"
+_REVISION = "0181_org_api_keys_scope"
 
 _ADD_COLUMN_RE = re.compile(r'op\.add_column\(\s*"(\w+)"\s*,\s*sa\.Column\(\s*"(\w+)"')
 _DROP_COLUMN_RE = re.compile(r'op\.drop_column\(\s*"(\w+)"\s*,\s*"(\w+)"')
@@ -107,7 +107,7 @@ def sqlite_engine() -> Iterator[sa.Engine]:
     engine.dispose()
 
 
-class TestRoundTrip0178:
+class TestRoundTrip0181:
     def test_upgrade_adds_scope_column_with_default(self, sqlite_engine: sa.Engine) -> None:
         with sqlite_engine.begin() as conn:
             _scaffold(conn)

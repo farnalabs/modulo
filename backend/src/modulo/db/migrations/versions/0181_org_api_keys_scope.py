@@ -1,7 +1,7 @@
 """org_api_keys gains the ``scope`` column (FAR-620 Phase 1).
 
-Revision ID: 0178_org_api_keys_scope
-Revises: 0177_invitations
+Revision ID: 0181_org_api_keys_scope
+Revises: 0180_hitl_parked_status
 Create Date: 2026-09-06
 
 ``scope`` classifies an API key's caller scope on the existing scope axis
@@ -28,8 +28,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0178_org_api_keys_scope"
-down_revision: str | None = "0177_invitations"
+revision: str = "0181_org_api_keys_scope"
+down_revision: str | None = "0180_hitl_parked_status"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

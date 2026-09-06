@@ -8,7 +8,7 @@ Covers the ``scope`` axis on ``OrgApiKey``:
 3. ``_serialize_key`` round-trips the scope.
 4. ``update_api_key`` accepts NO scope parameter (immutability post-mint).
 5. The ORM model carries the column + CHECK constraint in lockstep with
-   migration 0178.
+   migration 0181.
 6. The live-role clamp is INDEPENDENT of key_scope (ADR-017 ceiling is
    reused verbatim — a user-scoped key never widens it).
 """
@@ -87,7 +87,7 @@ class TestCreateApiKeyScope:
         session.add.assert_not_called()
 
     def test_scope_column_constraint_vocabulary(self) -> None:
-        """The model's CHECK mirrors migration 0178 (org/user only)."""
+        """The model's CHECK mirrors migration 0181 (org/user only)."""
         constraints = {c.name: c for c in OrgApiKey.__table__.constraints if c.name}
         check = constraints["ck_org_api_keys_scope"]
         rendered = str(check.sqltext)
