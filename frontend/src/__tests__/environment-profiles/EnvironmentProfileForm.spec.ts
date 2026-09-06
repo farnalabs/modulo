@@ -159,8 +159,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
-    // The tier badge is only shown once a runner-tier provider is selected.
-    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(false)
+    // The default provider is local_docker, which is a runner-tier provider, so
+    // the tier badge is shown immediately.
+    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(true)
 
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'e2b'
