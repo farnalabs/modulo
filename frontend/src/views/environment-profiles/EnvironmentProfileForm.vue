@@ -210,7 +210,7 @@ const availableCapabilities = [
 const form = reactive({
   name: '',
   description: '',
-  provider_type: 'local_docker',
+  provider_type: '',
   image_ref: '',
   capabilities: [] as string[],
   network_policy: 'outbound',
