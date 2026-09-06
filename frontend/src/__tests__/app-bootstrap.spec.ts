@@ -20,6 +20,9 @@ describe('app bootstrap', () => {
     expect(routes.length).toBeGreaterThan(0)
   })
 
+  // 180s cap: this test dynamically imports all ~60 lazy route chunks in one
+  // go; on Windows each SFC transform costs ~1s in a cold process, which can
+  // push the total past a smaller cap even though Linux CI finishes quickly.
   it('every route component factory resolves to a module', async () => {
     const routes = router.getRoutes()
     for (const route of routes) {
@@ -33,7 +36,7 @@ describe('app bootstrap', () => {
       // resolved when the router module was imported above; redirect-only
       // routes carry no components and are covered by the redirect test below.
     }
-  }, 60_000)
+  }, 180_000)
 
   it('routes without a component define a redirect', () => {
     const routes = router.getRoutes()
