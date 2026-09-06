@@ -2,8 +2,10 @@
 
 FAR-604 D2 (HITL capacity) adds the non-terminal ``hitl_parked`` run status to
 the ``ck_runs_status`` CHECK constraint (migration ``0180_hitl_parked_status``,
-renumbered from 0177 and re-parented onto main's ``0177_invitations`` after the
-collision). This file asserts:
+renumbered from 0177, re-parented onto main's ``0177_invitations`` after the
+first collision, then renumbered to 0180 and re-parented onto main's
+``0179_drop_workspace_leases`` (the current head) after the second collision).
+This file asserts:
 
 * the model status sets (``db.models.run``) contain ``hitl_parked`` and the
   ORM CHECK constraint reflects it — the model is the single source of truth,
@@ -99,7 +101,7 @@ class TestWideningMigration:
     def test_migration_chains_off_main_head(self) -> None:
         module = _load_migration()
         assert module.revision == _MIGRATION_NAME
-        assert module.down_revision == "0177_invitations"
+        assert module.down_revision == "0179_drop_workspace_leases"
 
     def test_migration_creates_constraint_with_full_vocabulary(self) -> None:
         """A status in the model but missing from the migration breaks writes
