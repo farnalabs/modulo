@@ -626,3 +626,51 @@ class TestSampleRunRuntimeMetrics:
             assert histogram.record.call_count == 2
         finally:
             await engine.dispose()
+
+
+# =========================================================================
+# exception-path coverage for exc_info=True additions (PR #97)
+# =========================================================================
+
+
+class TestInitSuppressedCounterException:
+    def test_exception_leaves_counter_unset(self) -> None:
+        metrics_mod._alerts_suppressed_total = None
+        meter = _make_meter()
+        meter.create_counter.side_effect = RuntimeError("boom")
+        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+            metrics_mod._init_suppressed_counter()
+        assert metrics_mod._alerts_suppressed_total is None
+        log.warning.assert_called_once_with("metrics.suppressed_counter_failed", exc_info=True)
+
+
+class TestInitDeliveryFailedCounterException:
+    def test_exception_leaves_counter_unset(self) -> None:
+        metrics_mod._alert_delivery_failed_total = None
+        meter = _make_meter()
+        meter.create_counter.side_effect = RuntimeError("boom")
+        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+            metrics_mod._init_delivery_failed_counter()
+        assert metrics_mod._alert_delivery_failed_total is None
+        log.warning.assert_called_once_with("metrics.delivery_failed_counter_failed", exc_info=True)
+
+
+class TestInitConnectorUnknownCounterException:
+    def test_exception_leaves_counter_unset(self) -> None:
+        metrics_mod._connector_unknown_total = None
+        meter = _make_meter()
+        meter.create_counter.side_effect = RuntimeError("boom")
+        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+            metrics_mod._init_connector_unknown_counter()
+        assert metrics_mod._connector_unknown_total is None
+        log.warning.assert_called_once_with("metrics.connector_unknown_counter_failed", exc_info=True)
+
+
+class TestCreateRuntimeInstrumentException:
+    def test_generic_exception_returns_none(self) -> None:
+        meter = _make_meter()
+        meter.create_gauge.side_effect = ValueError("boom")
+        with patch.object(metrics_mod, "_log") as log:
+            result = metrics_mod._create_runtime_instrument(meter, "gauge", "my_gauge", "desc")
+        assert result is None
+        log.warning.assert_called_once_with("metrics.runtime_instrument_failed — %s skipped", "my_gauge", exc_info=True)
