@@ -1572,66 +1572,31 @@ async def export_run_fixture(
 
 
 # ---------------------------------------------------------------------------
-# Workspace lease inspection
+# Workspace lease inspection — REMOVED (FAR-587 / ADR 029)
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{run_id}/workspace-lease")
-@handle_db_errors("runs.get_run_workspace_lease")
+@router.get("/{run_id}/workspace-lease", include_in_schema=False)
 async def get_run_workspace_lease(
     run_id: uuid.UUID,
-    session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
-) -> dict[str, Any] | None:
-    """Return the WorkspaceLease associated with a run, if any."""
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            from modulo.db.models.workspace_lease import WorkspaceLease
+) -> None:
+    """Deliberate 410: the WorkspaceLease scaffolding was removed (FAR-587).
 
-            result = await session.execute(select(WorkspaceLease).where(WorkspaceLease.run_id == run_id))
-            lease = result.scalar_one_or_none()
-    except IntegrityError:
-        _log.exception("runs.get_run_workspace_lease")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
-    except ProgrammingError:
-        _log.exception("runs.get_run_workspace_lease")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
-        ) from None
-
-    except SQLAlchemyError:
-        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
-        ) from None
-
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
-    if lease is None:
-        return None
-    return {
-        "id": str(lease.id),
-        "organisation_id": str(lease.organisation_id),
-        "environment_profile_id": str(lease.environment_profile_id),
-        "run_id": str(lease.run_id) if lease.run_id else None,
-        "provider_ref": lease.provider_ref,
-        "status": lease.status,
-        "started_at": lease.lease_started_at.isoformat() if lease.lease_started_at else None,
-        "expires_at": lease.lease_expires_at.isoformat() if lease.lease_expires_at else None,
-        "resource_usage": lease.resource_usage_json,
-    }
+    The route is kept out of the OpenAPI schema but answers a typed 410 so
+    existing clients see an intentional contract change, not an accidental
+    404. Workspace tracking lives in ``runs.sandbox_dispatch_state``.
+    """
+    _log.info(
+        "runs.get_run_workspace_lease_gone",
+        extra={"run_id": str(run_id), "organisation_id": str(principal.organisation_id)},
+    )
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "The workspace lease API was removed; workspace state is tracked via the run's sandbox dispatch state."
+        ),
+    )
 
 
 @router.get("/{run_id}/workspace-events")

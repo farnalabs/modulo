@@ -18,7 +18,7 @@ async def create_environment_profile(
     name: str,
     account_id: uuid.UUID,
     description: str | None = None,
-    provider_type: str = "local_docker",
+    provider_type: str,
     image_ref: str | None = None,
     capabilities: list[str] | None = None,
     config_json: dict[str, Any] | None = None,
