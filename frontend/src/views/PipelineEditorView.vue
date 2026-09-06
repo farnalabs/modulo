@@ -1936,6 +1936,12 @@ function onEdgeClick(event: any) {
 }
 
 function populateEdgeForm(edge: any) {
+  // Reset to defaults FIRST, then apply the edge's own values. Resetting in
+  // the gate-less branch instead would wipe edge_type / condition_expression /
+  // max_iterations / routing_label with defaults: a loop/llm edge without a
+  // HITL gate would open as type "normal" and saving the panel would
+  // overwrite the graph edge's type.
+  Object.assign(edgeForm, { ...defaultEdgeForm })
   edgeForm.edge_type = edge.edge_type || 'normal'
   edgeForm.condition_expression = edge.condition_expression || ''
   edgeForm.max_iterations = edge.max_iterations || 0
@@ -1966,8 +1972,6 @@ function populateEdgeForm(edge: any) {
       edgeForm.eval_threshold = 0.8
       edgeForm.eval_operator = 'lt'
     }
-  } else {
-    Object.assign(edgeForm, { ...defaultEdgeForm })
   }
 }
 
@@ -2449,7 +2453,12 @@ async function triggerRun() {
 
 async function loadFolders() {
   try {
-    folders.value = await get<any[]>('/api/v1/pipeline-folders')
+    const response = await get<any[] | { items?: any[] }>('/api/v1/pipeline-folders')
+    // Accept both the raw-array and { items: [...] } response shapes — the
+    // folderPath computed iterates folders.value unconditionally, so a
+    // non-array payload would throw on every render (see loadLifecycleMaps
+    // for the same tolerance pattern).
+    folders.value = Array.isArray(response) ? response : (response.items ?? [])
   } catch (e) {
     console.warn('Failed to load folders', e)
   }
@@ -2474,15 +2483,22 @@ async function loadLifecycleMaps() {
   }
 }
 
-const { loading, error: pageErrorRef } = useDataFetch<void>(
+// Declared before useDataFetch: vue-query invokes the fetcher synchronously
+// during setup, and the fetcher + the loaders it calls (loadPipeline,
+// loadGraph, loadLifecycleMaps) read/write pageError — the binding must be
+// initialised before the fetcher can run.
+const pageError = ref<string | null>(null)
+
+const { loading } = useDataFetch<null>(
   async () => {
-    pageErrorRef.value = null
+    pageError.value = null
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])
-    return { data: undefined }
+    // useDataFetch's queryFn forwards `result.data`; vue-query rejects an
+    // undefined query result ("data is undefined"), so always resolve with a
+    // defined payload (the loaders write their state directly).
+    return { data: null }
   },
 )
-
-const pageError = pageErrorRef as any as ReturnType<typeof ref<string | null>>
 </script>
 
 <style scoped>

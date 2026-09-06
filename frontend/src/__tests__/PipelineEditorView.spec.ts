@@ -9,11 +9,10 @@ const useApiFns = vi.hoisted(() => ({
   post: vi.fn(),
 }))
 
-// The real useDataFetch cannot run for this view yet: its fetcher references
-// `pageErrorRef` destructured from the same statement, which throws a TDZ on
-// mount (characterised in PipelineEditorViewLoad.spec.ts). The mock keeps
-// these flow tests possible until that production fix lands. The loading ref
-// is exported from the mock so tests can flip the loading branch.
+// useDataFetch is mocked here so tests can deterministically flip the loading
+// branch (the loading ref is exported as __loadingRef); the mount-time loader
+// chain with the REAL fetcher is covered in PipelineEditorViewLoad.spec.ts
+// (FAR-629 fixed the pageErrorRef TDZ there).
 const useDataLoading = vi.hoisted(() => ({ value: false }))
 vi.mock('../composables/useDataFetch', async () => {
   const { ref } = await import('vue')
@@ -1282,8 +1281,8 @@ describe('PipelineEditorView — edge properties panel', () => {
   })
 
   it('shows the max-iterations field for loop edges and the routing label for llm edges', async () => {
-    // Edges WITH a HITL gate config keep their form state (see the BUG test
-    // below for the gate-less reset).
+    // Gate-less edges keep their real form state too — the gate-less loop
+    // variant is pinned explicitly by the adjacent test.
     const wrapper = await mountWithEdge(edgeFixture({ edge_type: 'loop', max_iterations: 4, hitl_gate_config: { label: 'Gate' } }))
     let panel = wrapper.findAll('aside').find((a) => a.text().includes('Edge Properties'))
     const maxIter = panel!.findAll('input[type="number"]').find((i) => Number((i.element as HTMLInputElement).value) === 4)
@@ -1297,20 +1296,32 @@ describe('PipelineEditorView — edge properties panel', () => {
     wrapper2.unmount()
   })
 
-  it('BUG: opening a loop edge without a HITL gate resets the form to defaults', async () => {
-    // Production bug characterisation. populateEdgeForm() sets edge_type /
-    // max_iterations / routing_label from the edge, but its gate-less branch
-    // then does `Object.assign(edgeForm, { ...defaultEdgeForm })`, wiping the
-    // values it just set: a loop edge with no HITL gate opens as type
-    // "normal" with max_iterations 0, and saving the panel would overwrite
-    // the edge's type in the graph.
+  it('opens a gate-less loop edge with its real type and iterations (the defaults reset no longer wipes them)', async () => {
+    // populateEdgeForm resets to defaults FIRST, then applies the edge's own
+    // values — previously the gate-less branch reset after assignment, wiping
+    // edge_type/max_iterations so a loop edge with no HITL gate opened as
+    // "normal" with 0 iterations, and saving the panel would overwrite the
+    // graph edge's type (FAR-631).
     const wrapper = await mountWithEdge(edgeFixture({ edge_type: 'loop', max_iterations: 4 }))
     const vm = wrapper.vm as any
     expect(vm.selectedEdgeData.edge_type).toBe('loop')
-    // the form was reset, losing the edge's actual type and iterations
-    expect(vm.edgeForm.edge_type).toBe('normal')
-    expect(vm.edgeForm.max_iterations).toBe(0)
-    expect(wrapper.findAll('aside').find((a) => a.text().includes('Edge Properties'))!.findAll('input[type="number"]').length).toBe(0)
+    // the form carries the edge's actual type and iterations
+    expect(vm.edgeForm.edge_type).toBe('loop')
+    expect(vm.edgeForm.max_iterations).toBe(4)
+    const panel = wrapper.findAll('aside').find((a) => a.text().includes('Edge Properties'))!
+    const maxIter = panel.findAll('input[type="number"]').find((i) => Number((i.element as HTMLInputElement).value) === 4)
+    expect(maxIter).toBeTruthy()
+
+    // saving keeps the loop type instead of overwriting the graph edge
+    // (the save button only renders for gated edges — the gate-less save path
+    // is driven at vm level here)
+    await vm.saveEdgeConfig()
+    await flushPromises()
+    await nextTick()
+    const patch = vi.mocked(api.PATCH).mock.calls[0]
+    expect(patch[0]).toBe('/api/v1/pipelines/{pipeline_id}/graph')
+    expect((patch[1] as any).body.edges[0].edge_type).toBe('loop')
+    expect((patch[1] as any).body.edges[0].max_iterations).toBe(4)
     wrapper.unmount()
   })
 

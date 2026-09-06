@@ -190,4 +190,59 @@ describe('SettingsHitlReviewView', () => {
     expect(wrapper!.text()).toContain('Alpha')
     expect(wrapper!.text()).not.toContain('Beta')
   })
+
+  it('updates the gate row after claim and approve succeed (readonly vue-query data fix, FAR-630)', async () => {
+    // claimGate()/approveGate() patch gates by replacing the whole array
+    // through the writable computed (vue-query data is deep-readonly, so
+    // `gates.value[idx] = ...` would be silently dropped), so the row badge
+    // reflects the new decision immediately.
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({
+      data: {
+        gates: [
+          {
+            run_id: '550e8400-e29b-41d4-a716-446655440000',
+            gate_id: 'approval-gate-1',
+            pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
+            claimed_by: null,
+            claimed_at: null,
+            expires_at: null,
+            decision: null,
+            decision_at: null,
+            created_at: '2025-06-30T10:00:00Z',
+          },
+        ],
+      },
+      error: undefined,
+    })
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:15:00Z' }, error: undefined })
+      }
+      return Promise.resolve({ data: { ok: true }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    expect(wrapper!.text()).toContain('pending')
+
+    await wrapper!.find('[data-testid="hitl-review-toggle-expand"]').trigger('click')
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const claimedBadge = wrapper!.findAll('span').find((s) => s.classes().includes('badge'))
+    expect(claimedBadge?.text()).toBe('claimed')
+
+    await wrapper!.find('[data-testid="hitl-review-approve"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const approvedBadge = wrapper!.findAll('span').find((s) => s.classes().includes('badge'))
+    expect(approvedBadge?.text()).toBe('approved')
+  })
 })

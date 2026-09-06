@@ -612,21 +612,19 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     expect(wrapper.find('table').exists()).toBe(false)
   })
 
-  it('BUG: a failed list load spins forever — the ErrorAlert branch is gated on `loaded` which never becomes true on error', async () => {
-    // PRODUCTION BUG characterisation (FAR-617 delivery): the template renders
-    // <LoadingSpinner v-if="!loaded"> and <ErrorAlert v-else-if="error">, but
-    // `loaded = triggersLoaded && pipelinesLoaded` where `fetched` is only set
-    // on a SUCCESSFUL queryFn. A failed GET therefore leaves loaded=false
-    // forever: the page shows an infinite spinner and the error branch (and
-    // the empty state / table behind it) is unreachable after any load
-    // failure. If the view is fixed to render the ErrorAlert on failure,
-    // update this test to assert the alert instead.
+  it('a failed list load renders the ErrorAlert (no infinite spinner) and Retry recovers', async () => {
+    // FAR-631: `loaded` is gated on fetched-flags that only flip on a
+    // successful queryFn. A load error now unlocks the gate, so the ErrorAlert
+    // branch renders instead of spinning forever, and Retry reloads cleanly.
     ;(api.GET as any).mockRejectedValue(new Error('triggers backend down'))
     const wrapper = mount(SettingsTriggersView, { global: { stubs: viewStubs } })
     await flush()
 
-    expect(wrapper.find('loading-spinner-stub').exists()).toBe(true)
-    expect(wrapper.find('.border-destructive\\/50').exists()).toBe(false)
+    expect(wrapper.find('loading-spinner-stub').exists()).toBe(false)
+    expect(wrapper.find('.border-destructive\\/50').exists()).toBe(true)
+    expect(wrapper.text()).toContain('triggers backend down')
+    expect(wrapper.text()).toContain('Retry')
+    expect(wrapper.find('table').exists()).toBe(false)
     wrapper.unmount()
   })
 
