@@ -58,6 +58,9 @@
         </template>
         <template #content>
         <div>
+          <p class="mb-3 text-xs text-muted-foreground" data-testid="settings-mcp-org-scope-note">
+            {{ $t('views.SettingsMcpView.api_keys_act_org_wide_note') }}
+          </p>
           <div v-if="apiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
             No API keys created yet.
           </div>

@@ -625,6 +625,67 @@ def test_test_trigger_returns_200(client: TestClient) -> None:
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
+def test_test_trigger_manual_run_stamps_account_id(client: TestClient) -> None:
+    """FAR-620 run attribution: the manual test-trigger run is stamped with
+    the CALLER's account (triggers.py is the already-compliant third call
+    site — pinned here so it cannot regress to the unstamped old form)."""
+    trigger = _make_mock_trigger(trigger_type="manual")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock),
+        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/test",
+            json={"payload": {}},
+        )
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+    assert resp.status_code == 200
+    create_run_mock.assert_awaited_once()
+    assert create_run_mock.await_args.kwargs["account_id"] == _USER_ID
+    assert create_run_mock.await_args.kwargs["trigger_id"] == _TRIGGER_ID
+
+
+def test_test_trigger_webhook_creates_no_run_null_asymmetry(client: TestClient) -> None:
+    """The NULL asymmetry (FAR-620): a WEBHOOK trigger's test event creates
+    NO run — webhook/cron/agent_signal child runs stay legitimately
+    account_id-NULL, the manual stamping above must never leak into the
+    trigger-delivery path. run_id=None in the response pins it."""
+    trigger = _make_mock_trigger(trigger_type="webhook")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("modulo.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/test",
+            json={"payload": {"test": True}},
+        )
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["run_id"] is None
+    assert body["status"] == "test_event_created"
+    create_run_mock.assert_not_called()
+    snap.assert_not_called()
+
+
 def test_test_trigger_storage_exhausted_returns_503(client: TestClient) -> None:
     """Real test-trigger path raises StorageExhaustedError -> 503 (FAR-426).
 

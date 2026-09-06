@@ -14,14 +14,16 @@ endpoints — the contract-round-trip review gate. Covers:
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
@@ -40,6 +42,11 @@ _PREFERENCES_PATH = "/api/v1/notifications/in-app/preferences"
 _DASHBOARD_PATH = "/api/v1/notifications/in-app/dashboard"
 
 _TABLES = [Account.__table__, Notification.__table__, NotificationPreference.__table__, Dismissal.__table__]
+
+# FAR-620: the fixture's per-test engine is captured here so tests can seed
+# preferences blocks the HTTP surface cannot write (e.g. a sibling
+# ``hitl_email`` block) before driving the route under test.
+_CREATED_ENGINES: list[AsyncEngine] = []
 
 
 def _make_settings() -> Settings:
@@ -61,8 +68,17 @@ def _make_principal(account_id: uuid.UUID, username: str) -> TenantPrincipal:
 
 
 @pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+def client(tmp_path: Path) -> Generator[TestClient, None, None]:
+    # A TEMP-FILE DB (not :memory:): every pooled connection - and every event
+    # loop the tests borrow - sees the same data. The in-memory variant made
+    # seeded rows invisible to requests that checked out a different pooled
+    # connection (FAR-620: the seeded-hitl_email + dashboard-write isolation
+    # test needs deterministic cross-request visibility).
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'notif.db'}", echo=False)
+    # One engine per test: clear then append so _CREATED_ENGINES[-1] is
+    # always the engine backing the CURRENT test's client.
+    _CREATED_ENGINES.clear()
+    _CREATED_ENGINES.append(engine)
     seeded = False
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
@@ -235,3 +251,95 @@ def test_opt_outs_are_scoped_to_the_user_and_read_paths_agree(client: TestClient
     other_dashboard = client.get(_DASHBOARD_PATH).json()
     assert {n["category"] for n in other_dashboard["notifications"]} == {"run.failed", "run.stalled"}
     assert other_dashboard["total_unread"] == 2
+
+
+# ---------------------------------------------------------------------------
+# FAR-620: the row-locked dashboard-level writer (update_account_preferences)
+# ---------------------------------------------------------------------------
+
+
+def _seed_preferences(account_id: uuid.UUID, preferences: dict) -> None:
+    """Seed an Account.preferences block the HTTP surface cannot write."""
+
+    async def _seed() -> None:
+        engine = _CREATED_ENGINES[-1]
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as session, session.begin():
+            account = await session.get(Account, account_id)
+            assert account is not None
+            account.preferences = preferences
+
+    asyncio.run(_seed())
+
+
+def _read_preferences(account_id: uuid.UUID) -> dict:
+    async def _read() -> dict:
+        engine = _CREATED_ENGINES[-1]
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as session, session.begin():
+            account = await session.get(Account, account_id)
+            assert account is not None
+            return account.preferences or {}
+
+    return asyncio.run(_read())
+
+
+def test_put_preferences_missing_account_returns_404(client: TestClient) -> None:
+    """FAR-620: the dashboard-level write is 404-loud for a missing account -
+    the locked helper raises AccountNotFoundError and the route surfaces it as
+    HTTP 404 (the pre-refactor behaviour was a silent no-op success)."""
+    ghost = uuid.UUID("00000000-0000-0000-0000-0000000000ee")
+    overrides = client.app.dependency_overrides
+    overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="ghost",
+        organisation_id=_ORG_ID,
+        account_id=ghost,
+        org_role="admin",
+    )
+    overrides[get_current_tenant_user] = lambda: _make_principal(ghost, "ghost")
+    try:
+        resp = client.put(_PREFERENCES_PATH, json={"dashboard_level": "error"})
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Account not found"
+    finally:
+        overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="user-a",
+            organisation_id=_ORG_ID,
+            account_id=_USER_A,
+            org_role="admin",
+        )
+        overrides[get_current_tenant_user] = lambda: _make_principal(_USER_A, "user-a")
+
+
+def test_put_preferences_dashboard_write_preserves_sibling_hitl_email_key(client: TestClient) -> None:
+    """FAR-620: the dashboard-level write routes through the row-locked
+    helper inside the route's own transaction (the nested-txn path) and must
+    preserve every sibling top-level preferences key - here a seeded
+    ``hitl_email`` block survives a dashboard_level PUT byte-for-byte."""
+    override_pipeline = uuid.UUID("00000000-0000-0000-0000-00000000000f")
+    seeded_block = {"default": True, "pipeline_overrides": {str(override_pipeline): True}}
+    # Warm the client (engine + tables created on first request), then seed.
+    assert client.get(_PREFERENCES_PATH).status_code == 200
+    _seed_preferences(_USER_A, {"hitl_email": seeded_block})
+
+    resp = client.put(_PREFERENCES_PATH, json={"dashboard_level": "error"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["dashboard_level"] == "error"
+
+    stored = _read_preferences(_USER_A)
+    assert stored["notification_dashboard_level"] == "error"
+    assert stored["hitl_email"] == seeded_block
+
+
+def test_put_preferences_dashboard_write_happy_path_unchanged(client: TestClient) -> None:
+    """The happy path is unchanged by the locked-helper migration: the
+    dashboard_level round-trips and opt-outs are untouched."""
+    resp = client.put(_PREFERENCES_PATH, json={"dashboard_level": "error"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["dashboard_level"] == "error"
+    assert not any(body["notification_opt_outs"].values())
+
+    get_back = client.get(_PREFERENCES_PATH).json()
+    assert get_back["dashboard_level"] == "error"
+    assert not any(get_back["notification_opt_outs"].values())

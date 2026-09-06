@@ -47,6 +47,11 @@ _METER_NAME = "modulo.pipeline_engine"
 # is already schema-gated upstream and is required for the node to run.
 _CONTEXT_ALWAYS_KEPT = ("input",)
 
+# FAR-620: the caller-scoped (FAR-614) permission-key suffix. A tool whose
+# permission key ends in ``.self`` operates on the CALLER'S OWN account and is
+# therefore forbidden from node allowed_tools (see validate_no_self_tools).
+_SELF_SUFFIX = ".self"
+
 
 class ScopeViolationError(ValueError):
     """Raised when a node uses a capability outside its capability_scope.
@@ -140,6 +145,44 @@ def validate_allowed_connectors_subset(
             continue
         if entry not in granted_types:
             raise ScopeViolationError(node_id=node_id, target=entry, kind="connector")
+
+
+def self_scoped_tools() -> frozenset[str]:
+    """Registry-derived set of tools whose permission key ends in ``.self``.
+
+    FAR-620: the ``.self`` suffix marks caller-scoped tools (FAR-614) — the
+    tool operates on the CALLER'S OWN account. Derived from
+    ``TOOL_SCOPE_REQUIREMENTS`` at call time so the permission registry stays
+    the single source of truth (never a hardcoded tool list). The lazy import
+    keeps this module's import surface free of the auth layer.
+    """
+    from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+
+    return frozenset(
+        tool for tool, permission_key in TOOL_SCOPE_REQUIREMENTS.items() if permission_key.endswith(_SELF_SUFFIX)
+    )
+
+
+def validate_no_self_tools(*, node_id: str, allowed_tools: list[str] | None) -> None:
+    """Save-time guard: a node's ``allowed_tools`` may not name a ``.self`` tool.
+
+    FAR-620 spec item 10: FAR-614-classified (caller-scoped, ``.self``) tools
+    are FORBIDDEN from node ``capability_scope.allowed_tools``. A pipeline node
+    is an org-context principal — it can never be the "caller" a ``.self``
+    tool operates on, so allowing one in a node's tool list would either fail
+    at run time (the resolver denies non-user credentials on caller-scoped
+    tools, fail-closed) or mislead graph authors into shipping a dead node.
+    This compile-time twin mirrors :func:`validate_allowed_connectors_subset`:
+    a violation raises ``ScopeViolationError`` so the graph save is REFUSED
+    (422 at the route) instead of discovered mid-run. Runtime stays fail-closed
+    regardless. Unrestricted (``allowed_tools`` ``None``/empty) passes.
+    """
+    if not allowed_tools:
+        return
+    forbidden = self_scoped_tools()
+    for entry in allowed_tools:
+        if entry in forbidden:
+            raise ScopeViolationError(node_id=node_id, target=entry, kind="self_tool")
 
 
 def is_connector_allowed(

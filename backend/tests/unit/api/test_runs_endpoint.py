@@ -287,6 +287,10 @@ def test_trigger_run_body_includes_thread_id(client: TestClient) -> None:
     assert "langgraph_thread_id" in resp.json()
     assert create_run_mock.await_args.kwargs["snapshot_id"] == _SNAPSHOT_ID
     assert create_snapshot.await_args.kwargs["account_id"] == _USER_ID
+    # FAR-620 run attribution: manually triggered REST runs are stamped with
+    # the CALLER's account — the reject→correction dispatch no longer
+    # dead-ends on a NULL run.account_id.
+    assert create_run_mock.await_args.kwargs["account_id"] == _USER_ID
 
 
 # ---------------------------------------------------------------------------

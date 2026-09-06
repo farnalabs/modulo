@@ -368,8 +368,9 @@ def step_revoke_api_key(request: Any, ctx: dict[str, Any]) -> None:
     loop = asyncio.new_event_loop()
     try:
         revoked = loop.run_until_complete(revoke_api_key(mock_session, key_id, ORG_ID))
-        ctx["api_key_revoked"] = revoked
-        request.node._resp = _make_key_response(200, id=str(key_id), revoked=revoked)
+        revoked_flag = revoked is not None
+        ctx["api_key_revoked"] = revoked_flag
+        request.node._resp = _make_key_response(200, id=str(key_id), revoked=revoked_flag)
     except Exception as exc:
         ctx["_error"] = str(exc)
         request.node._resp = _make_key_response(500)

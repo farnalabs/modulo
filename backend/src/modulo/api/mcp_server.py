@@ -111,7 +111,8 @@ from modulo.core.cron_helpers import (
 from modulo.core.dispatch import dispatch_run
 from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
-from modulo.core.feature_flags import resolve_plan_context
+from modulo.core.feature_flags import get_registry, resolve_plan_context
+from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -141,6 +142,7 @@ from modulo.core.trigger_streak import (
     clear_trigger_streak_after_reenable,
 )
 from modulo.db.capacity import StorageExhaustedError
+from modulo.db.crud.account import AccountNotFoundError
 from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
@@ -325,6 +327,14 @@ _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_
 _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
 _ctx_team_id: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar("mcp_team_id")
+# FAR-620: the credential's caller scope — 'org' (org-wide/team/run keys),
+# 'user' (a user-scoped API key, a regular JWT session, or an OAuth token),
+# None (unset — the caller-scope leg of the tool-scope check fails closed).
+_ctx_key_scope: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_key_scope", default=None)
+# FAR-620: per-request resolution of the ``user_scoped_mcp_keys`` org flag.
+# Read once per request by the auth middleware (no caching across requests);
+# fail-closed default False so a read failure never broadens access.
+_ctx_user_keys_enabled: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp_user_keys_enabled", default=False)
 # FAR-436: node-level allowed_tools for a run-scoped sandbox key. Set by
 # ``_authenticate_api_key`` when the caller is a run-scoped key; None (default)
 # means no node-level narrowing (legacy behaviour). Empty list = deny-all.
@@ -391,12 +401,18 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
     must still permit the tool, AND (when the node declares
     ``capability_scope.allowed_tools``) the tool must be on the node's
     allow-list. Absent scope = legacy behaviour (role check only).
+
+    FAR-620: the request's credential caller-scope (``_ctx_key_scope``) and
+    auth type are threaded into the chokepoint so the caller-scope leg of the
+    tool-scope decision sees the live credential class (None fails closed).
     """
     check_tool_scope(
         _ctx_role_val(),
         tool_name,
         action=action,
         allowed_tools=_ctx_node_allowed_tools_val(),
+        key_scope=_ctx_key_scope.get(None),
+        auth_type=_ctx_auth_type.get(None),
     )
 
 
@@ -474,16 +490,28 @@ _trigger_pipeline_limiter = TokenBucketRegistry(
 def _trigger_pipeline_client_key() -> str:
     """Derive the per-client key for the trigger_pipeline rate limit.
 
-    Mirrors the middleware ``_client_key`` identity: API-key calls are keyed
-    by org + key id, OAuth/JWT calls by org + user id. Distinct clients never
-    share a bucket.
+    API-key calls are keyed by org + key id — EXCEPT user-scoped keys
+    (FAR-620, key_scope='user'), which bucket as ``user:{account_id}`` like
+    the identity-bound OAuth/JWT callers DO: one user-scoped key is one client,
+    not a bucket the org's whole key population shares. This is a DELIBERATE
+    divergence from the middleware ``_client_key`` identity (which keys every
+    API key, org or user, by key id) — documented here, not mirrored.
+    Org-wide + team-scoped + run-scoped keys hold ``ak:{key_id}`` buckets; the
+    org-key multiplication hole (each org key its own bucket) is pre-existing
+    and accepted. Distinct callers never share a bucket.
     """
     org = _ctx_org_id.get(None)
     org_s = str(org) if org is not None else "unknown"
     auth_type = _ctx_auth_type.get(None) or "unknown"
     if auth_type == "api_key":
-        key_id = _ctx_key_id.get(None)
-        client = f"ak:{key_id}" if key_id is not None else "ak:unknown"
+        if _ctx_key_scope.get(None) == "user":
+            # FAR-620: a user-scoped key acts as its creator — rate it per
+            # account, mirroring the OAuth/JWT identity bucket.
+            uid = _ctx_user_id.get(None)
+            client = f"user:{uid}" if uid is not None else "user:unknown"
+        else:
+            key_id = _ctx_key_id.get(None)
+            client = f"ak:{key_id}" if key_id is not None else "ak:unknown"
     else:
         uid = _ctx_user_id.get(None)
         client = f"user:{uid}" if uid is not None else "user:unknown"
@@ -556,6 +584,31 @@ async def _set_authz_enforce(org_id: uuid.UUID) -> None:
         _log.warning("permission.kill_switch_read_failed", exc_info=True)
         enforce = True
     set_authz_enforce(enforce)
+
+
+# FAR-620: the org-level feature flag gating user-scoped MCP keys.
+_FLAG_USER_SCOPED_MCP_KEYS = "user_scoped_mcp_keys"
+
+
+async def _set_user_keys_flag(org_id: uuid.UUID) -> bool:
+    """Read the per-org ``user_scoped_mcp_keys`` flag ONCE for this request.
+
+    Stores the resolved value in the request-scoped ContextVar (no caching
+    across requests — a mid-flight flag flip applies to the next request).
+    Fail-closed: any read error is treated as OFF so a broken flag resolution
+    never broadens access. Org-key requests never consult the flag at all
+    (byte-identical org-key behaviour, no extra read); this helper runs only
+    on the user-scoped-key mint/auth paths.
+    """
+    try:
+        enabled = bool(await get_registry().resolve_flag(_FLAG_USER_SCOPED_MCP_KEYS, org_id=org_id))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("feature_flag.user_scoped_mcp_keys_read_failed", exc_info=True)
+        enabled = False
+    _ctx_user_keys_enabled.set(enabled)
+    return enabled
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -759,6 +812,21 @@ async def validate_current_auth() -> bool:
             return await _validate_api_key_live(token, org_id)
         if auth_type == "oauth":
             return await _validate_oauth_live(token)
+        if auth_type == "jwt":
+            # FAR-620 CRITICAL CO-CHANGE: regular JWT (Remy) sessions now carry
+            # auth_type 'jwt' (previously conflated with 'oauth'). Route them
+            # through the SAME live-principal revalidation that
+            # ``_validate_oauth_live``'s JWT fallback performs — decode the
+            # principal and re-resolve the live org role so a demoted or
+            # removed member loses scope mid-stream. Without this branch every
+            # MCP tool call from a JWT caller would fail token-revoked.
+            try:
+                from modulo.auth.jwt import decode_principal
+
+                principal = decode_principal(token, get_settings().secret_key)
+            except JWTError:
+                return False
+            return await _validate_principal_live(token, principal)
         return False
     except (ApiKeyInvalidError, JWTError):
         return False
@@ -941,6 +1009,22 @@ async def _authenticate_api_key(
                     key_id=key.id,
                 )
         org_id = key.organisation_id
+        # FAR-620: the ``user_scoped_mcp_keys`` flag is the kill switch for
+        # user-scoped keys — disabling it DENIES the key at auth (401),
+        # revoking rather than broadening. The flag is read ONCE per request,
+        # fail-closed, and ONLY for user-scoped keys: org-key authentication
+        # is byte-identical to the pre-FAR-620 behaviour (no flag read). The
+        # deny decision reads the request-scoped ContextVar (not the helper's
+        # inline return) so the var - shared with the mint path - is the
+        # single source of the flag's per-request state.
+        if key.scope == "user":
+            await _set_user_keys_flag(org_id)
+            if not _ctx_user_keys_enabled.get():
+                _log.info(
+                    "api_key.user_scoped_key_denied_flag_off",
+                    extra={"key_id": str(key.id), "org_id": str(org_id)},
+                )
+                raise ApiKeyInvalidError
         _ctx_org_id.set(org_id)
         _ctx_role.set(clamped)
         _ctx_key_id.set(key.id)
@@ -948,6 +1032,10 @@ async def _authenticate_api_key(
         _ctx_user_id.set(key.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("api_key")
+        # FAR-620: the credential's caller scope drives the tool-scope
+        # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
+        # rows) on the fail-closed None; real rows always carry a string.
+        _ctx_key_scope.set(key.scope if isinstance(key.scope, str) else None)
         # FAR-436: a run-scoped sandbox key narrows the agent's MCP tool-call
         # loop to the node's capability_scope.allowed_tools (deny-by-default
         # within the scope). Non-run keys / scoped-less nodes resolve to None
@@ -1073,7 +1161,11 @@ async def _authenticate_oauth_jwt(
         _ctx_key_id.set(uuid.UUID(int=0))
         _ctx_user_id.set(principal.account_id)
         _ctx_auth_token.set(token)
-        _ctx_auth_type.set("oauth")
+        # FAR-620: a regular JWT (Remy) session is the USER's own identity —
+        # auth_type 'jwt' (distinct from OAuth tokens) and caller scope
+        # 'user' (identity-bound, eligible for caller-scoped tools).
+        _ctx_auth_type.set("jwt")
+        _ctx_key_scope.set("user")
         _ctx_team_id.set(None)  # user tokens carry no team boundary
         request.scope["auth_principal"] = {
             "type": "user",
@@ -1188,6 +1280,9 @@ async def _finalize_oauth_principal(
     _ctx_user_id.set(claims.account_id)
     _ctx_auth_token.set(token)
     _ctx_auth_type.set("oauth")
+    # FAR-620: an OAuth token is the user's own identity — caller scope
+    # 'user' (identity-bound, eligible for caller-scoped tools).
+    _ctx_key_scope.set("user")
     _ctx_team_id.set(None)  # user tokens carry no team boundary
     request.scope["auth_principal"] = {
         "type": "user",
@@ -2413,6 +2508,13 @@ async def _create_manual_run(
         snapshot_id=snapshot.id,
         trigger_type="manual",
         input_payload=payload,
+        # FAR-620 run attribution: manual MCP-triggered runs are stamped with
+        # the CALLER's account (the account of the authenticating credential).
+        # This enables the reject→correction guardrail dispatch
+        # (feedback_manager) which requires a non-null run.account_id, and
+        # keeps manual runs attributable no matter which surface triggered
+        # them. Webhook/cron/agent_signal child runs stay legitimately NULL.
+        account_id=uid,
     )
     return run.id, run.langgraph_thread_id, None
 
@@ -5093,6 +5195,171 @@ async def _parse_api_key_team_id(
     return (team_uuid, None)
 
 
+async def _emit_mcp_api_key_audit(
+    *,
+    org_id: uuid.UUID,
+    resource_id: uuid.UUID,
+    event_type: str,
+    payload: dict[str, Any],
+    log_context: str,
+) -> None:
+    """Emit an ``api_key_created`` / ``api_key_revoked`` audit event for MCP.
+
+    FAR-620: parity with the REST surface, which has audited both events since
+    PRD §8.12. The REST payloads always carry ``auth_type='jwt'``; MCP stamps
+    the request's live credential class instead. Written in a fresh
+    ``_session`` AFTER the mint/revoke transaction has committed (the same
+    post-append pattern as ``_append_mcp_hitl_denial_audit``, which the REST
+    routes implement via ``append_audit_event_isolated``). Best-effort: a
+    failed audit append is logged and NEVER fails the completed operation.
+    Exact event_type strings match the REST surface (``api_key_created`` /
+    ``api_key_revoked``); NOTE the audit-viewer's filter options still say
+    ``api_key.created`` / ``api_key.deleted`` (a pre-existing filter drift,
+    tracked separately — do not "fix" the strings here).
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+
+        async with _session(org_id) as s:
+            try:
+                actor_user_id = _ctx_user_id_val()
+            except McpAuthContextError:
+                actor_user_id = None
+            await append_audit_event(
+                s,
+                org_id=org_id,
+                event_type=event_type,
+                actor_user_id=actor_user_id,
+                resource_type="api_key",
+                resource_id=resource_id,
+                payload_json=payload,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(log_context, extra={"org_id": str(org_id), "resource_id": str(resource_id)})
+
+
+# ---------------------------------------------------------------------------
+# FAR-614: the first caller-scoped (``.self``) MCP tools. Both operate on the
+# CALLER's OWN HITL email-alert preference (target = ``_ctx_user_id_val()`` by
+# construction — there is NO target parameter to misuse). Under an org-wide or
+# run-scoped key the stage-1 caller-scope classification DENIES both tools
+# with the pinned ``{"error": "insufficient_scope", ...}`` shape (visible but
+# failing in tools/list); identity-bound JWT/OAuth callers and user-scoped
+# keys are allowed. Permission key: ``hitl_email.self`` (viewer floor).
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    description=(
+        "Get the CALLER'S OWN HITL email-alert preference (the caller-scoped "
+        "target is the key owner / logged-in identity — no other user can be "
+        "read). Returns {default, pipeline_overrides {pipeline_id: enabled}}; "
+        "absent preferences resolve to the all-off default."
+    ),
+)
+@_RETRY_DB
+async def get_hitl_email_alerts() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_hitl_email_alerts")
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+
+        async with _session(org_id) as s:
+            from modulo.db.crud.account import get_account_by_id
+
+            account = await get_account_by_id(s, account_id)
+        if account is None:
+            return {"error": "account_not_found", "detail": "Account not found"}
+        default, overrides = normalize_hitl_email_prefs(account.preferences)
+        return {"default": default, "pipeline_overrides": overrides}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_hitl_email_alerts failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_hitl_email_alerts failed")
+        return _tool_error("Failed to get HITL email alert preferences")
+
+
+@mcp.tool(
+    description=(
+        "Set the CALLER'S OWN HITL email-alert preference (the caller-scoped "
+        "target is the key owner / logged-in identity — no other user can be "
+        "written). ``enabled`` sets the user-level default; ``pipeline_ids`` "
+        "ATOMICALLY REPLACES the per-pipeline override list (each id → "
+        "enabled=true); omitted, the stored overrides are untouched."
+    ),
+)
+@_RETRY_DB
+async def set_hitl_email_alerts(
+    enabled: bool,
+    pipeline_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("set_hitl_email_alerts")
+
+        # StrictBool parity with the REST PUT /me/hitl-email-preferences body
+        # model: a JSON number/string passing lax coercion into ``bool`` must
+        # not silently flip the preference.
+        if not isinstance(enabled, bool):
+            return {
+                "error": "invalid_param",
+                "field": "enabled",
+                "detail": "enabled must be a strict boolean (true/false)",
+            }
+
+        parsed_ids: list[uuid.UUID] = []
+        if pipeline_ids is not None:
+            for pipeline_id in pipeline_ids:
+                try:
+                    parsed_ids.append(uuid.UUID(pipeline_id))
+                except ValueError:
+                    return {
+                        "error": "invalid_id",
+                        "field": "pipeline_ids",
+                        "detail": f"Invalid UUID format in pipeline_ids: {pipeline_id}",
+                    }
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+
+        async with _session(org_id) as s:
+            from modulo.db.crud.account import set_hitl_email_preference
+
+            merged = await set_hitl_email_preference(
+                s,
+                account_id,
+                default=enabled,
+                # Atomic REPLACE when provided; None ⇒ the helper preserves
+                # the stored override map (overrides untouched).
+                pipeline_overrides=(None if pipeline_ids is None else {str(pid): True for pid in parsed_ids}),
+            )
+        default, overrides = normalize_hitl_email_prefs(merged)
+        return {"default": default, "pipeline_overrides": overrides}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except AccountNotFoundError:
+        # FAR-620: parity with GET — the shared helper is 404-loud
+        # (AccountNotFoundError) while GET's inline None check returns this
+        # same pinned dict; SET must not bury a missing account in the
+        # generic 500-shaped tool error.
+        return {"error": "account_not_found", "detail": "Account not found"}
+    except ProgrammingError:
+        _log.exception("set_hitl_email_alerts failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("set_hitl_email_alerts failed")
+        return _tool_error("Failed to set HITL email alert preferences")
+
+
 @mcp.tool(
     description=(
         "Create a new organisation API key. Returns the full mk_... key value "
@@ -5142,6 +5409,24 @@ async def create_api_key(
                 team_id=team_uuid,
                 expires_at=parsed_expires_at,
             )
+
+        # FAR-620: parity with the REST mint audit (PRD §8.12) + payload stamps.
+        await _emit_mcp_api_key_audit(
+            org_id=org_id,
+            resource_id=key.id,
+            event_type="api_key_created",
+            payload={
+                "name": name,
+                "role": role,
+                "team_id": str(team_uuid) if team_uuid else None,
+                "auth_type": _ctx_auth_type.get(None) or "unknown",
+                # MCP minting is org-only (caller-scope org-only pin) — the
+                # tool can never produce a user-scoped key.
+                "key_scope": "org",
+                "lookup_prefix": f"mk_{key.lookup_prefix}****",
+            },
+            log_context="mcp.create_api_key_audit_failed",
+        )
 
         return {
             "id": str(key.id),
@@ -5224,10 +5509,25 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
 
         async with _session(org_id) as s:
             await _deny_break_glass_mint(s, account_id)
-            revoked = await auth_revoke_api_key(s, kid, org_id)
+            revoked_key = await auth_revoke_api_key(s, kid, org_id)
 
-        if not revoked:
+        if not revoked_key:
             return {"error": "not_found", "detail": "API key not found"}
+
+        # FAR-620: parity with the REST revoke audit (PRD §8.12) + payload
+        # stamps (the revoked row supplies the key's scope + masked prefix).
+        await _emit_mcp_api_key_audit(
+            org_id=org_id,
+            resource_id=kid,
+            event_type="api_key_revoked",
+            payload={
+                "revoked_by": str(account_id),
+                "auth_type": _ctx_auth_type.get(None) or "unknown",
+                "key_scope": revoked_key.scope,
+                "lookup_prefix": f"mk_{revoked_key.lookup_prefix}****",
+            },
+            log_context="mcp.revoke_api_key_audit_failed",
+        )
         return {"id": str(kid), "revoked": True}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}

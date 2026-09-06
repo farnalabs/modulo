@@ -1787,6 +1787,7 @@ export default {
       "the_url_clients_use_to_connect_to_the_mcp_server": "The URL clients use to connect to the MCP server",
       "server_url": "Server URL",
       "create_and_manage_api_keys_for_mcp_client_authentication": "Create and manage API keys for MCP client authentication",
+      "api_keys_act_org_wide_note": "API keys act org-wide. Per-user keys (scope: user) are mintable via the API; full key-management UX is coming in Phase 2.",
       "name": "Name",
       "key_prefix": "Key Prefix",
       "role": "Role",

@@ -7,18 +7,29 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
-from modulo.auth.api_key import _UNSET, create_api_key, list_api_keys, revoke_api_key, update_api_key
+from modulo.auth.api_key import (
+    _UNSET,
+    KEY_SCOPES,
+    ApiKeyScopeError,
+    create_api_key,
+    list_api_keys,
+    revoke_api_key,
+    update_api_key,
+)
 from modulo.auth.dependencies import get_current_tenant_user, resolve_role_from_membership
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.audit_logger import append_audit_event_isolated
-from modulo.core.feature_flags import resolve_plan_context
+from modulo.core.feature_flags import get_registry, resolve_plan_context
+from modulo.db.models.account import Account
+from modulo.db.models.api_key import OrgApiKey
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
@@ -27,6 +38,13 @@ _MSG_API_KEYS_NOT_AVAILABLE = "API keys are not available. Run database migratio
 _MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable. Please try again."
 _CODE_API_KEYS_UPDATE_API = "api_keys.update_api_key_endpoint"
 _CODE_API_KEYS_REVOKE_API = "api_keys.revoke_api_key_endpoint"
+
+# FAR-620: the org-level feature flag gating user-scoped MCP key minting.
+_FLAG_USER_SCOPED_MCP_KEYS = "user_scoped_mcp_keys"
+# Per-(account, org) quota of ACTIVE user-scoped keys: revoked_at IS NULL AND
+# not expired (expires_at IS NULL OR expires_at > now) — an expired key is
+# unusable and must not consume quota.
+_USER_KEY_ACTIVE_QUOTA = 10
 
 
 logger = logging.getLogger(__name__)
@@ -71,6 +89,10 @@ class ApiKeyCreate(BaseModel):
     role: str = "operator"
     expires_at: str | None = None
     team_id: str | None = None
+    # FAR-620: optional caller scope. None/'org' = org-level key (today's
+    # behaviour); 'user' = per-user key (flag-gated + quota'd). The scope is
+    # stamped at mint and IMMUTABLE afterwards.
+    scope: str | None = None
 
 
 class ApiKeyUpdate(BaseModel):
@@ -78,6 +100,9 @@ class ApiKeyUpdate(BaseModel):
     role: str | None = Field(None, min_length=1)
     team_id: str | None = None
     expires_at: str | None = None
+    # FAR-620: present ONLY so an explicit payload field can be rejected —
+    # the caller scope is immutable post-mint.
+    scope: str | None = None
 
 
 class ApiKeyCreatedResponse(BaseModel):
@@ -88,6 +113,7 @@ class ApiKeyCreatedResponse(BaseModel):
     lookup_prefix: str
     created_at: datetime
     team_id: str | None = None
+    scope: str = "org"
 
     model_config = {"from_attributes": False}
 
@@ -153,6 +179,73 @@ async def _enforce_mint_cap(session: AsyncSession, principal: TenantPrincipal, r
         )
 
 
+async def _user_keys_flag_enabled(org_id: uuid.UUID) -> bool:
+    """Resolve the per-org ``user_scoped_mcp_keys`` flag (FAR-620).
+
+    Fail-closed: any resolution error is treated as OFF so a broken flag read
+    can never enable user-scoped key minting. Mirrors the ``remy.py``
+    ``resolve_flag`` precedent (org ``settings_json.feature_overrides`` wins
+    over the catalog default).
+    """
+    try:
+        return bool(await get_registry().resolve_flag(_FLAG_USER_SCOPED_MCP_KEYS, org_id=org_id))
+    except Exception:
+        logger.warning("feature_flag.user_scoped_mcp_keys_read_failed", exc_info=True)
+        return False
+
+
+async def _enforce_user_key_quota(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+) -> None:
+    """Enforce the per-(account, org) quota of ACTIVE user-scoped keys.
+
+    FAR-620: at most ``_USER_KEY_ACTIVE_QUOTA`` (10) user-scoped keys per
+    account per org, counting only ACTIVE keys — ``revoked_at IS NULL`` AND
+    not expired (``expires_at IS NULL OR expires_at > now``): a revoked or
+    expired key is unusable and does not consume quota. The account row is
+    locked ``FOR UPDATE`` (the me.py pattern) so two concurrent mints serialise
+    on the same row — the second re-counts after the first commits, closing
+    the TOCTOU window. Distinct error shape from the role mint-cap (429 vs 403).
+    """
+    account = await session.get(Account, principal.account_id, with_for_update=True)
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Active organisation membership required to manage API keys",
+        )
+    active = (
+        await session.execute(
+            select(func.count())
+            .select_from(OrgApiKey)
+            .where(
+                OrgApiKey.organisation_id == principal.organisation_id,
+                OrgApiKey.account_id == principal.account_id,
+                OrgApiKey.scope == "user",
+                OrgApiKey.revoked_at.is_(None),
+                or_(OrgApiKey.expires_at.is_(None), OrgApiKey.expires_at > datetime.now(UTC)),
+            )
+        )
+    ).scalar_one()
+    if active >= _USER_KEY_ACTIVE_QUOTA:
+        logger.warning(
+            "api_keys.user_key_quota_exceeded",
+            extra={
+                "org_id": str(principal.organisation_id),
+                "account_id": str(principal.account_id),
+                "active_user_keys": active,
+                "quota": _USER_KEY_ACTIVE_QUOTA,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"User-scoped API key quota exceeded: at most {_USER_KEY_ACTIVE_QUOTA} "
+                "active user-scoped keys per account. Revoke one first."
+            ),
+        )
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
@@ -169,6 +262,24 @@ async def create_api_key_endpoint(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
+        )
+    # FAR-620: optional caller scope. 'org' (or omitted) keeps today's
+    # behaviour; 'user' is gated by the org flag (OFF ⇒ 422, never a silent
+    # downgrade to an org key) and the per-account active-key quota.
+    requested_scope = req.scope if req.scope is not None else "org"
+    if requested_scope not in KEY_SCOPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"scope must be one of {sorted(KEY_SCOPES)}",
+        )
+    if requested_scope == "user" and not await _user_keys_flag_enabled(principal.organisation_id):
+        logger.warning(
+            "api_keys.user_key_mint_denied_flag_off",
+            extra={"org_id": str(principal.organisation_id), "account_id": str(principal.account_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="User-scoped API keys are not enabled for this organisation",
         )
     name = _normalise_name(req.name)
     if not name:
@@ -194,6 +305,8 @@ async def create_api_key_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             await _enforce_mint_cap(session, principal, req.role)
+            if requested_scope == "user":
+                await _enforce_user_key_quota(session, principal)
             key, full_key = await create_api_key(
                 session,
                 org_id=principal.organisation_id,
@@ -202,7 +315,13 @@ async def create_api_key_endpoint(
                 account_id=principal.account_id,
                 team_id=team_id,
                 expires_at=expires_at,
+                scope=requested_scope,
             )
+    except ApiKeyScopeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from None
     except IntegrityError:
         logger.exception(_CODE_API_KEYS_CREATE_API)
         raise HTTPException(
@@ -236,6 +355,9 @@ async def create_api_key_endpoint(
     # so a broken audit append never blocks a successful key creation. RLS context
     # (SET LOCAL) reverts on COMMIT, so it must be re-established in this fresh
     # transaction or the STRICT-RLS audit INSERT is rejected (see admin_create_team).
+    #
+    # FAR-620 payload stamps (shape parity with the MCP surface): ``auth_type``
+    # (REST is JWT-only), ``key_scope`` and the masked lookup prefix.
     await append_audit_event_isolated(
         session,
         principal,
@@ -246,6 +368,9 @@ async def create_api_key_endpoint(
             "name": name,
             "role": req.role,
             "team_id": str(team_id) if team_id else None,
+            "auth_type": "jwt",
+            "key_scope": key.scope if isinstance(key.scope, str) else requested_scope,
+            "lookup_prefix": f"mk_{key.lookup_prefix}****",
         },
         log_key="api_keys.create_audit_failed",
     )
@@ -258,6 +383,7 @@ async def create_api_key_endpoint(
         lookup_prefix=f"mk_{key.lookup_prefix}****",
         created_at=key.created_at,
         team_id=str(key.team_id) if key.team_id else None,
+        scope=key.scope if isinstance(key.scope, str) else requested_scope,
     )
 
 
@@ -314,6 +440,14 @@ async def update_api_key_endpoint(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'.",
+        )
+    # FAR-620: the caller scope is IMMUTABLE post-mint — an update payload
+    # carrying an explicit ``scope`` is rejected (422), never applied or
+    # silently ignored.
+    if "scope" in req.model_fields_set:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="scope is immutable: an API key's caller scope cannot be changed after mint",
         )
     name: str | None = None
     if req.name is not None:
@@ -410,7 +544,7 @@ async def revoke_api_key_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            revoked = await revoke_api_key(session, key_id, principal.organisation_id)
+            revoked_key = await revoke_api_key(session, key_id, principal.organisation_id)
     except IntegrityError:
         logger.exception(_CODE_API_KEYS_REVOKE_API)
         raise HTTPException(
@@ -441,7 +575,7 @@ async def revoke_api_key_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
-    if not revoked:
+    if not revoked_key:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
     # PRD §8.12 ``api_key_revoked``: key revocation was never audited. Written in
@@ -449,13 +583,20 @@ async def revoke_api_key_endpoint(
     # so a broken audit append never fails a completed revocation. RLS context
     # (SET LOCAL) reverts on COMMIT, so it must be re-established in this fresh
     # transaction or the STRICT-RLS audit INSERT is rejected (see admin_create_team).
+    #
+    # FAR-620 payload stamps (shape parity with the MCP surface).
     await append_audit_event_isolated(
         session,
         principal,
         resource_type="api_key",
         event_type="api_key_revoked",
         resource_id=key_id,
-        payload={"revoked_by": str(principal.account_id)},
+        payload={
+            "revoked_by": str(principal.account_id),
+            "auth_type": "jwt",
+            "key_scope": revoked_key.scope if isinstance(revoked_key.scope, str) else "org",
+            "lookup_prefix": f"mk_{revoked_key.lookup_prefix}****",
+        },
         log_key="api_keys.revoke_audit_failed",
     )
 

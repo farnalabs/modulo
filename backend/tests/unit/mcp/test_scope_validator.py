@@ -2,6 +2,10 @@
 
 Tests the ViewModel-level scope checks independently of the middleware,
 and verifies integration through the MCP tool handlers.
+
+FAR-620: the pure resolver ``resolve_tool_access`` (decision + permission
+key) is exercised table-driven over the caller-scope dimension; the
+``check_tool_scope`` delegation is pinned by a seam test.
 """
 
 import uuid
@@ -11,10 +15,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.mcp.scope_validator import (
+    CALLER_SCOPE_REQUIREMENTS,
     TOOL_SCOPE_REQUIREMENTS,
+    VALID_CALLER_SCOPE_CLASSIFICATIONS,
     MCPAuthorizationError,
     MCPConfigurationError,
     check_tool_scope,
+    classify_caller_scope,
+    resolve_tool_access,
 )
 
 
@@ -411,6 +419,8 @@ class TestConstants:
             "create_api_key",
             "list_api_keys",
             "revoke_api_key",
+            "get_hitl_email_alerts",
+            "set_hitl_email_alerts",
             "list_trigger_events",
             "query_analytics",
             "query_analytics_concurrency",
@@ -560,3 +570,382 @@ class TestToolHandlerScopeErrorFormat:
         ):
             result = await _grs(run_id=_FAKE_ID)
         assert "insufficient_scope" not in result
+
+
+# ---------------------------------------------------------------------------
+# FAR-620: the pure resolver + caller-scope dimension
+# ---------------------------------------------------------------------------
+
+# A synthetic caller-scoped tool for the matrix. The real ``.self`` MCP tools
+# (get/set_hitl_email_alerts) now exist, but the matrix stays table-driven on a
+# test-only registry patch keyed on the EXISTING ``notification.self``
+# permission key (a real ``.self`` entry with no MCP tool mapped to it) - the
+# machinery under test is exactly what the real ``.self`` tools flow through.
+_CALLER_SCOPED_TEST_TOOL = "notification_self"
+
+
+def _patch_caller_scoped_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register a synthetic caller-scoped tool in the scope maps for one test."""
+    import types
+
+    import modulo.core.mcp.scope_validator as sv
+
+    patched = {
+        **sv._TOOL_SCOPE_REQUIREMENTS,
+        _CALLER_SCOPED_TEST_TOOL: "notification.self",
+    }
+    # TOOL_SCOPE_REQUIREMENTS is a read-only proxy built from the private dict;
+    # point BOTH names at the patched mapping so the resolver's lookups see
+    # the synthetic tool.
+    monkeypatch.setattr(sv, "_TOOL_SCOPE_REQUIREMENTS", patched)
+    monkeypatch.setattr(sv, "TOOL_SCOPE_REQUIREMENTS", types.MappingProxyType(patched))
+
+
+class TestResolveToolAccessMatrix:
+    """Table-driven matrix over the pure resolver (FAR-620 3g).
+
+    Axes: key_scope {None, org, user} x stored role {runner, operator} x
+    kill_switch {on, off} x classification {org-only, caller-scoped, any}.
+    The live-membership axis is exercised via the clamp tests
+    (``tests/unit/auth/test_api_key_cap.py``); the resolver receives the
+    ALREADY-clamped role.
+    """
+
+    @pytest.mark.parametrize(
+        ("key_scope", "auth_type", "tool", "role", "kill_switch", "expected"),
+        [
+            pytest.param("org", "api_key", "create_pipeline", "operator", True, True, id="orgkey-op-ks-on"),
+            pytest.param("org", "api_key", "create_pipeline", "operator", False, True, id="orgkey-op-ks-off"),
+            # pipeline.create pins at operator — the role leg still denies a
+            # runner (the caller-scope leg is orthogonal).
+            pytest.param("org", "api_key", "create_pipeline", "runner", True, False, id="orgkey-runner-denied"),
+            pytest.param("user", "api_key", "create_pipeline", "operator", True, False, id="userkey-orgtool"),
+            # combined-legs row: kill_switch OFF bypasses the role leg only —
+            # the caller-scope leg still denies a user-scoped KEY on an
+            # org-only tool.
+            pytest.param("user", "api_key", "create_pipeline", "admin", False, False, id="userkey-ks-off-combined"),
+            # Identity-bound JWT/OAuth sessions keep today's org-only access.
+            pytest.param("user", "jwt", "create_pipeline", "operator", True, True, id="jwt-op-orgtool"),
+            pytest.param("user", "oauth", "create_pipeline", "operator", True, True, id="oauth-op-orgtool"),
+            pytest.param("user", "jwt", "create_pipeline", "admin", False, True, id="jwt-admin-ks-off"),
+            # Unset context fails closed on the caller-scope leg only for
+            # caller-scoped tools; org-only tools keep legacy behaviour.
+            pytest.param(None, None, "create_pipeline", "operator", True, True, id="unset-orgtool-legacy"),
+            # ── explicitly org-only: create_api_key (FAR-620 mint surface) ──
+            pytest.param("org", "api_key", "create_api_key", "operator", True, True, id="orgkey-mint-ok"),
+            pytest.param("user", "api_key", "create_api_key", "admin", True, False, id="userkey-mint-denied"),
+            pytest.param("user", "api_key", "create_api_key", "admin", False, False, id="userkey-mint-ks-elig"),
+            pytest.param("user", "jwt", "create_api_key", "admin", True, True, id="jwt-mint-ok"),
+            pytest.param("user", "oauth", "create_api_key", "admin", True, True, id="oauth-mint-ok"),
+            # ── read-only tools classify 'any' (today's default preserved) ──
+            pytest.param("org", "api_key", "list_pipelines", "viewer", True, True, id="orgkey-readonly"),
+            pytest.param("user", "api_key", "list_pipelines", "viewer", True, True, id="userkey-readonly"),
+            pytest.param(None, None, "list_pipelines", "viewer", True, True, id="unset-readonly"),
+            # ── caller-scoped tools (synthetic ``.self`` permission key) ────
+            pytest.param("user", "api_key", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True, id="userkey-self-ok"),
+            pytest.param("user", "jwt", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True, id="jwt-self-ok"),
+            pytest.param("user", "oauth", _CALLER_SCOPED_TEST_TOOL, "viewer", True, True, id="oauth-self-ok"),
+            # Org keys — org-wide, team-scoped AND run-scoped (all 'org') —
+            # are DENIED caller-scoped tools, kill switch ON or OFF.
+            pytest.param("org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", True, False, id="orgkey-self-denied"),
+            pytest.param(
+                "org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", False, False, id="orgkey-self-denied-ks-elig"
+            ),
+            # Unset key scope fails closed.
+            pytest.param(None, None, _CALLER_SCOPED_TEST_TOOL, "admin", True, False, id="unset-self-failclosed"),
+            pytest.param(
+                None, None, _CALLER_SCOPED_TEST_TOOL, "admin", False, False, id="unset-self-failclosed-ks-elig"
+            ),
+            # ── role leg still applies to caller-scoped callers ─────────────
+            # hitl_email.self will pin at viewer; an unknown role fails closed
+            # regardless of key_scope.
+        ],
+    )
+    def test_matrix(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        key_scope: str | None,
+        auth_type: str | None,
+        tool: str,
+        role: str,
+        kill_switch: bool,
+        expected: bool,
+    ) -> None:
+        _patch_caller_scoped_tool(monkeypatch)
+        allowed, permission_key = resolve_tool_access(
+            tool=tool,
+            action=None,
+            role=role,
+            key_scope=key_scope,
+            auth_type=auth_type,
+            allowed_tools=None,
+            kill_switch=kill_switch,
+        )
+        assert allowed is expected, f"{tool} key_scope={key_scope} role={role} kill_switch={kill_switch}"
+        if expected:
+            assert permission_key != ""
+
+    def test_unknown_role_fails_closed_regardless_of_kill_switch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_caller_scoped_tool(monkeypatch)
+        for kill_switch in (True, False):
+            allowed, _ = resolve_tool_access(
+                tool="create_pipeline",
+                action=None,
+                role="superadmin",
+                key_scope="org",
+                auth_type="api_key",
+                allowed_tools=None,
+                kill_switch=kill_switch,
+            )
+            assert allowed is False
+
+    def test_none_role_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_caller_scoped_tool(monkeypatch)
+        allowed, _ = resolve_tool_access(
+            tool="create_pipeline",
+            action=None,
+            role=None,
+            key_scope="org",
+            auth_type="api_key",
+            allowed_tools=None,
+            kill_switch=False,
+        )
+        assert allowed is False
+
+    def test_kill_switch_off_bypasses_role_leg_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """kill_switch=False (enforcement OFF) fail-opens ONLY the hierarchy
+        comparison: a viewer caller passes an operator tool, but the
+        caller-scope and resolution legs still deny."""
+        _patch_caller_scoped_tool(monkeypatch)
+        # Role leg bypassed: viewer + operator tool → allowed.
+        allowed, _ = resolve_tool_access(
+            tool="create_pipeline",
+            action=None,
+            role="viewer",
+            key_scope="org",
+            auth_type="api_key",
+            allowed_tools=None,
+            kill_switch=False,
+        )
+        assert allowed is True
+        # Caller-scope leg NOT bypassed: user key + org-only tool → denied
+        # (the combined-legs row).
+        allowed, _ = resolve_tool_access(
+            tool="create_pipeline",
+            action=None,
+            role="viewer",
+            key_scope="user",
+            auth_type="api_key",
+            allowed_tools=None,
+            kill_switch=False,
+        )
+        assert allowed is False
+
+    def test_allowed_tools_narrowing_in_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-418/436 narrowing semantics preserved exactly inside the
+        resolver: absent = unrestricted; out-of-list = deny; empty = deny."""
+        _patch_caller_scoped_tool(monkeypatch)
+        # Absent allow-list → role check only.
+        allowed, _ = resolve_tool_access("create_pipeline", None, "operator", "org", "api_key", None, True)
+        assert allowed is True
+        # Tool on the list → allowed.
+        allowed, _ = resolve_tool_access(
+            "create_pipeline", None, "operator", "org", "api_key", {"create_pipeline"}, True
+        )
+        assert allowed is True
+        # Tool NOT on the list → denied despite a valid role.
+        allowed, _key = resolve_tool_access("create_pipeline", None, "admin", "org", "api_key", {"create_agent"}, True)
+        assert allowed is False
+        # An explicit EMPTY allow-list is deny-by-default.
+        allowed, _ = resolve_tool_access("create_pipeline", None, "admin", "org", "api_key", set(), True)
+        assert allowed is False
+        # Narrowing never widens: the caller-scope leg still denies a
+        # user-scoped key even when the tool IS on the node's list.
+        allowed, _ = resolve_tool_access("create_api_key", None, "admin", "user", "api_key", {"create_api_key"}, True)
+        assert allowed is False
+
+    def test_return_shape_is_decision_plus_permission_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_caller_scoped_tool(monkeypatch)
+        allowed, permission_key = resolve_tool_access("create_pipeline", None, "operator", "org", "api_key", None, True)
+        assert allowed is True
+        assert permission_key == TOOL_SCOPE_REQUIREMENTS["create_pipeline"]
+        # Unresolvable tool — (False, "").
+        allowed, permission_key = resolve_tool_access("unknown_tool", None, "admin", "org", "api_key", None, True)
+        assert allowed is False
+        assert permission_key == ""
+
+
+class TestCallerScopeClassificationFailFast:
+    """FAR-620: an out-of-vocabulary caller-scope classification must never be
+    silently treated as 'any' (unrestricted) - it raises ``MCPConfigurationError``.
+    The same vocabulary check runs at import time over the pinned map, so a
+    typo'd pin fails the process at boot rather than widening access at run."""
+
+    @staticmethod
+    def _patch_misspelled_classification(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin ``create_pipeline`` with a typo'd classification for one test."""
+        import types
+
+        import modulo.core.mcp.scope_validator as sv
+
+        patched = {**sv._CALLER_SCOPE_REQUIREMENTS, "create_pipeline": "orgonly"}
+        monkeypatch.setattr(sv, "_CALLER_SCOPE_REQUIREMENTS", patched)
+        monkeypatch.setattr(sv, "CALLER_SCOPE_REQUIREMENTS", types.MappingProxyType(patched))
+
+    def test_import_time_pinned_classifications_are_in_vocabulary(self) -> None:
+        """The import-time loop guarantees every pinned value is in vocabulary;
+        this pins the invariant against silent regressions of the loop itself."""
+        assert CALLER_SCOPE_REQUIREMENTS, "the pinned caller-scope map must not be empty"
+        for tool, classification in CALLER_SCOPE_REQUIREMENTS.items():
+            assert classification in VALID_CALLER_SCOPE_CLASSIFICATIONS, (
+                f"caller-scope pin '{tool}' = '{classification}' is out of vocabulary"
+            )
+
+    def test_classify_caller_scope_raises_on_misspelled_classification(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch_misspelled_classification(monkeypatch)
+        with pytest.raises(MCPConfigurationError, match="orgonly"):
+            classify_caller_scope("create_pipeline", TOOL_SCOPE_REQUIREMENTS["create_pipeline"])
+
+    def test_resolver_propagates_configuration_error_on_misspelled_classification(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``resolve_tool_access`` must RAISE, not fall through to 'any' (a
+        misspelled classification silently widening access is the failure mode
+        this fail-fast exists to prevent)."""
+        self._patch_misspelled_classification(monkeypatch)
+        with pytest.raises(MCPConfigurationError, match="orgonly"):
+            resolve_tool_access(
+                tool="create_pipeline",
+                action=None,
+                role="operator",
+                key_scope="org",
+                auth_type="api_key",
+                allowed_tools=None,
+                kill_switch=True,
+            )
+
+
+class TestCheckToolScopeDelegation:
+    """``check_tool_scope`` stays the single entry point and delegates the
+    decision to the pure resolver — the seam test patches
+    ``resolve_tool_access`` and asserts handlers reach it transitively."""
+
+    def test_seam_check_tool_scope_calls_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import modulo.core.mcp.scope_validator as sv
+
+        calls: list[dict[str, object]] = []
+
+        def _fake_resolve(**kwargs: object) -> tuple[bool, str]:
+            calls.append(kwargs)
+            return True, "run.trigger"
+
+        monkeypatch.setattr(sv, "resolve_tool_access", _fake_resolve)
+        sv.check_tool_scope("runner", "trigger_pipeline", key_scope="org", auth_type="api_key")
+        assert len(calls) == 1
+        call = calls[0]
+        assert call["tool"] == "trigger_pipeline"
+        assert call["role"] == "runner"
+        assert call["key_scope"] == "org"
+        assert call["auth_type"] == "api_key"
+
+    @pytest.mark.asyncio
+    async def test_seam_handler_reaches_resolver_transitively(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The production wiring: an MCP tool handler → _check_agent_tool_scope
+        → check_tool_scope → resolve_tool_access, with key_scope/auth_type
+        threaded from the request ContextVars."""
+        import modulo.api.mcp_server as ms
+        import modulo.core.mcp.scope_validator as sv
+
+        calls: list[dict[str, object]] = []
+
+        def _fake_resolve(**kwargs: object) -> tuple[bool, str]:
+            calls.append(kwargs)
+            return True, "hitl.list"
+
+        monkeypatch.setattr(sv, "resolve_tool_access", _fake_resolve)
+        token_role = ms._ctx_role.set("runner")
+        token_org = ms._ctx_org_id.set(uuid.UUID(_FAKE_ID))
+        token_scope = ms._ctx_key_scope.set("org")
+        token_type = ms._ctx_auth_type.set("api_key")
+        try:
+            with (
+                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+                patch("modulo.api.mcp_server._session"),
+                patch(
+                    "modulo.api.mcp_server._load_pending_hitl_gates",
+                    new=AsyncMock(return_value=([], 0)),
+                ),
+            ):
+                result = await ms.list_pending_hitl()
+        finally:
+            ms._ctx_role.reset(token_role)
+            ms._ctx_org_id.reset(token_org)
+            ms._ctx_key_scope.reset(token_scope)
+            ms._ctx_auth_type.reset(token_type)
+        assert "error" not in result
+        assert len(calls) == 1
+        assert calls[0]["tool"] == "list_pending_hitl"
+        assert calls[0]["key_scope"] == "org"
+        assert calls[0]["auth_type"] == "api_key"
+
+    def test_user_key_denied_create_api_key_via_chokepoint(self) -> None:
+        """A user-scoped KEY calling the org-only ``create_api_key`` tool is
+        denied at the chokepoint with the pinned caller-scope message."""
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope(
+                "admin",
+                "create_api_key",
+                key_scope="user",
+                auth_type="api_key",
+            )
+        assert "org-scoped" in str(excinfo.value)
+        assert "user-scoped API key" in str(excinfo.value)
+
+    def test_caller_scoped_deny_message_via_chokepoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_caller_scoped_tool(monkeypatch)
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", _CALLER_SCOPED_TEST_TOOL, key_scope="org", auth_type="api_key")
+        assert "caller-scoped" in str(excinfo.value)
+        assert "user-scoped" in str(excinfo.value)
+        # None key scope fails closed with the 'unset' display.
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("admin", _CALLER_SCOPED_TEST_TOOL, key_scope=None, auth_type=None)
+        assert "unset" in str(excinfo.value)
+
+    def test_legacy_messages_preserved_through_delegation(self) -> None:
+        """The pre-existing per-leg denial messages are byte-identical after
+        the delegation rewrite (resolution, narrowing, role)."""
+        with pytest.raises(MCPAuthorizationError, match="Unknown action 'bogus' for tool 'trigger_pipeline'"):
+            check_tool_scope("admin", "trigger_pipeline", action="bogus")
+        with pytest.raises(MCPAuthorizationError, match=r"Tool 'unknown_tool' is not registered in the scope policy"):
+            check_tool_scope("admin", "unknown_tool")
+        with pytest.raises(
+            MCPAuthorizationError, match=r"Tool 'create_pipeline' is outside the node's allowed_tools scope"
+        ):
+            check_tool_scope("admin", "create_pipeline", allowed_tools=["create_agent"])
+        with pytest.raises(MCPAuthorizationError, match="Insufficient scope for 'MCP tool") as excinfo:
+            check_tool_scope("viewer", "create_pipeline")
+        assert "requires 'operator' role, got 'viewer'" in str(excinfo.value)
+
+
+class TestCallerScopeClassification:
+    """The 3-value classification (pure) + its structural invariants."""
+
+    def test_explicit_org_only_pin_create_api_key(self) -> None:
+        assert CALLER_SCOPE_REQUIREMENTS["create_api_key"] == "org-only"
+
+    def test_self_suffix_derives_caller_scoped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_caller_scoped_tool(monkeypatch)
+        from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+
+        assert classify_caller_scope(_CALLER_SCOPED_TEST_TOOL, TOOL_SCOPE_REQUIREMENTS[_CALLER_SCOPED_TEST_TOOL]) == (
+            "caller-scoped"
+        )
+
+    def test_unmapped_mutating_is_org_only(self) -> None:
+        for tool in ("create_pipeline", "delete_connector", "perform_housekeeping"):
+            assert classify_caller_scope(tool, TOOL_SCOPE_REQUIREMENTS[tool]) == "org-only"
+
+    def test_read_only_is_any(self) -> None:
+        for tool in ("list_pipelines", "get_run_status", "search_library"):
+            assert classify_caller_scope(tool, "resource.read_only") == "any"
