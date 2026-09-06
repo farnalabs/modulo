@@ -107,7 +107,6 @@ describe('EnvironmentProfileForm — create mode', () => {
     await wrapper.find('[data-testid="envprofile-form-description"]').setValue('  dev sandbox  ')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue('python:3.12-slim')
 
-    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'local_docker'
     await nextTick()
 
@@ -191,7 +190,6 @@ describe('EnvironmentProfileForm — create mode', () => {
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
 
-    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'local_docker'
     await nextTick()
 
