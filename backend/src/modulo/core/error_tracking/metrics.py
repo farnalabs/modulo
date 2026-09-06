@@ -130,7 +130,7 @@ def _create_runtime_instrument(meter: Any, kind: str, name: str, description: st
         _log.warning("metrics.runtime_instrument_unsupported — %s skipped", name)
         return None
     except Exception:
-        _log.warning("metrics.runtime_instrument_failed — %s skipped", name)
+        _log.warning("metrics.runtime_instrument_failed — %s skipped", name, exc_info=True)
         return None
 
 
@@ -298,7 +298,7 @@ def _init_alert_counter() -> None:
             unit="1",
         )
     except Exception:
-        _log.warning("metrics.alert_counter_failed")
+        _log.warning("metrics.alert_counter_failed", exc_info=True)
 
 
 def record_error_alert(level: str, action_type: str) -> None:
@@ -322,7 +322,7 @@ def _init_suppressed_counter() -> None:
             unit="1",
         )
     except Exception:
-        _log.warning("metrics.suppressed_counter_failed")
+        _log.warning("metrics.suppressed_counter_failed", exc_info=True)
 
 
 def record_alert_suppressed(rule_id: str) -> None:
@@ -346,7 +346,7 @@ def _init_delivery_failed_counter() -> None:
             unit="1",
         )
     except Exception:
-        _log.warning("metrics.delivery_failed_counter_failed")
+        _log.warning("metrics.delivery_failed_counter_failed", exc_info=True)
 
 
 def record_alert_delivery_failed(rule_id: str, action_type: str) -> None:
@@ -373,7 +373,7 @@ def _init_connector_unknown_counter() -> None:
             unit="1",
         )
     except Exception:
-        _log.warning("metrics.connector_unknown_counter_failed")
+        _log.warning("metrics.connector_unknown_counter_failed", exc_info=True)
 
 
 def record_connector_unknown(connector: str, node_id: str = "") -> None:

@@ -250,7 +250,7 @@ async def _maybe_alert_retry_storm(aengine: AsyncEngine, run_id: str, org_id: st
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("pipeline_execution.retry_storm_alert_failed run=%s", run_id)
+        _log.warning("pipeline_execution.retry_storm_alert_failed run=%s", run_id, exc_info=True)
 
 
 async def claim_run_async(
@@ -1405,7 +1405,7 @@ async def _resolve_result_status(
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("run_executor_with_watchdog: could not read run status for %s", rid)
+            _log.warning("run_executor_with_watchdog: could not read run status for %s", rid, exc_info=True)
             status = None
     return status
 
@@ -1903,7 +1903,7 @@ async def resume_run(
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("resume_run: job kwargs stamp failed for run %s", rid)
+            _log.warning("resume_run: job kwargs stamp failed for run %s", rid, exc_info=True)
 
     try:
         run, executor = await load_and_setup(async_engine, rid, oid)

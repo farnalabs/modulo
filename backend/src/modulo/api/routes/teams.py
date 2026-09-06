@@ -546,6 +546,7 @@ async def create_team_endpoint(
         _log.warning(
             "create_team audit event failed — team was created",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team.id)},
+            exc_info=True,
         )
 
     return TeamResponse(
@@ -689,6 +690,7 @@ async def update_team_endpoint(
         _log.warning(
             "update_team audit event failed — team was updated",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+            exc_info=True,
         )
 
     return TeamResponse(
@@ -798,6 +800,7 @@ async def delete_team_endpoint(
         _log.warning(
             "delete_team audit event failed — team was deleted",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+            exc_info=True,
         )
 
 
@@ -1012,6 +1015,7 @@ async def add_member_endpoint(
         _log.warning(
             "add_member audit event failed — member was added",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+            exc_info=True,
         )
 
     return MembershipResponse(
@@ -1104,6 +1108,7 @@ async def remove_member_endpoint(
         _log.warning(
             "remove_member audit event failed — member was removed",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+            exc_info=True,
         )
 
 
@@ -1200,6 +1205,7 @@ async def change_member_role_endpoint(
         _log.warning(
             "change_member_role audit event failed — member role was changed",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
+            exc_info=True,
         )
 
     return MembershipResponse(

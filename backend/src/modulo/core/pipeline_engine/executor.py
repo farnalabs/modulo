@@ -1125,6 +1125,7 @@ async def org_sandbox_capacity_free(
         _log.warning(
             "hitl.sandbox_capacity_check_failed",
             extra={"org_id": str(org_id), "run_id": str(run_id)},
+            exc_info=True,
         )
         return True
 
@@ -1795,6 +1796,7 @@ class PipelineExecutor:
             _log.warning(
                 "pipeline.run_started_audit_failed",
                 extra={"run_id": str(run_id), "org_id": str(org_id)},
+                exc_info=True,
             )
         return running_run
 
@@ -1808,6 +1810,7 @@ class PipelineExecutor:
             _log.warning(
                 "pipeline.sandbox_org_count_failed",
                 extra={"org_id": str(org_id), "run_id": str(run_id)},
+                exc_info=True,
             )
             return 0
 
@@ -1821,6 +1824,7 @@ class PipelineExecutor:
             _log.warning(
                 "pipeline.org_run_count_failed",
                 extra={"org_id": str(org_id), "run_id": str(run_id)},
+                exc_info=True,
             )
             return 0
 
@@ -1847,6 +1851,7 @@ class PipelineExecutor:
             _log.warning(
                 "pipeline.sandbox_graph_scan_failed",
                 extra={"org_id": str(org_id)},
+                exc_info=True,
             )
             return None
         if not has_sandbox:
@@ -1862,6 +1867,7 @@ class PipelineExecutor:
             _log.warning(
                 "pipeline.sandbox_cap_read_failed",
                 extra={"org_id": str(org_id)},
+                exc_info=True,
             )
             return None
 
@@ -1884,6 +1890,7 @@ class PipelineExecutor:
             _log.warning(
                 "pipeline.org_run_cap_read_failed",
                 extra={"org_id": str(org_id)},
+                exc_info=True,
             )
             return None
 
@@ -4130,7 +4137,7 @@ class PipelineExecutor:
                 and single_sandbox_node
             )
         except Exception:
-            _log.warning("pipeline.idempotency_gate.check_failed", extra={"run_id": str(run_id)})
+            _log.warning("pipeline.idempotency_gate.check_failed", extra={"run_id": str(run_id)}, exc_info=True)
             gate_ok = False
         return gate_ok
 
@@ -4816,6 +4823,7 @@ class PipelineExecutor:
                         _log.warning(
                             "hitl_gate.pipeline_name_lookup_failed",
                             extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                            exc_info=True,
                         )
             if coalesce_reused:
                 detail = (
