@@ -33,7 +33,11 @@ describe('app bootstrap', () => {
       // resolved when the router module was imported above; redirect-only
       // routes carry no components and are covered by the redirect test below.
     }
-  }, 60_000)
+    // Large timeout margin: this test intentionally dynamic-imports every lazy
+    // route chunk (that IS the smoke test), so its duration scales with route
+    // count and cold transform pressure. It runs ~53s in isolation and needs
+    // generous headroom under parallel full-suite worker load (FAR-633).
+  }, 120_000)
 
   it('routes without a component define a redirect', () => {
     const routes = router.getRoutes()
