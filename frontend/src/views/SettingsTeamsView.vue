@@ -242,11 +242,16 @@ interface AdminUserListItem {
   email: string
 }
 
-const { loading, error, data: teams, load: loadTeams } = useDataFetch<AdminTeamItem[]>(
+// Query data from vue-query is deep-readonly; keep a writable local copy so
+// addMember()/removeMember() member_count updates actually stick (FAR-630).
+const teams = ref<AdminTeamItem[]>([])
+const { loading, error, load: loadTeams } = useDataFetch<AdminTeamItem[]>(
   async () => {
     const res = await api.GET('/api/v1/admin/teams')
     if (res.error) return { error: res.error }
-    return { data: res.data.items }
+    const items = ((res.data?.items ?? []) as AdminTeamItem[]).map(team => ({ ...team }))
+    teams.value = items
+    return { data: items }
   },
   { initialValue: [] as AdminTeamItem[] }
 )

@@ -290,16 +290,20 @@ interface ForwarderConfigs {
 const planStore = usePlanStore()
 const { t } = useI18n()
 
-const { loading, error: loadError, data: forwarders, load: loadForwarders } = useDataFetch<ForwarderItem[]>(
+// Query data from vue-query is deep-readonly; keep a writable local copy so
+// toggleForwarder()/saveConfig() mutations actually stick (FAR-630).
+const forwarders = ref<ForwarderItem[]>([])
+const { loading, error: loadError, load: loadForwarders } = useDataFetch<ForwarderItem[]>(
   async () => {
     const { data, error: err } = await api.GET('/api/v1/errors/forwarders')
     if (err) return { error: err }
-    const items = (data?.forwarders ?? []) as ForwarderItem[]
+    const items = ((data?.forwarders ?? []) as ForwarderItem[]).map(fwd => ({ ...fwd }))
     for (const fwd of items) {
       if (fwd.configured) {
         expanded.value[fwd.forwarder_type] = true
       }
     }
+    forwarders.value = items
     return { data: items }
   },
   { initialValue: [] as ForwarderItem[] }

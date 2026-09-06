@@ -20,6 +20,11 @@ describe('app bootstrap', () => {
     expect(routes.length).toBeGreaterThan(0)
   })
 
+  // 300s: the loop vitest-transforms every lazy route module (~100 .vue files)
+  // — well over the 60s default on Windows dev filesystems (observed 2026-09-06:
+  // the test timed out at 60s on both a fresh worktree and main; Linux CI is
+  // unaffected). The larger budget only buys transform time; a module that
+  // genuinely fails to resolve still fails the assertion immediately.
   it('every route component factory resolves to a module', async () => {
     const routes = router.getRoutes()
     for (const route of routes) {
@@ -33,7 +38,7 @@ describe('app bootstrap', () => {
       // resolved when the router module was imported above; redirect-only
       // routes carry no components and are covered by the redirect test below.
     }
-  }, 60_000)
+  }, 300_000)
 
   it('routes without a component define a redirect', () => {
     const routes = router.getRoutes()
