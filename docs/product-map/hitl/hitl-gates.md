@@ -58,9 +58,10 @@ may decide.
       permission. The org-wide queue joins `runs` and lists only undecided
       gates whose run is in `awaiting_human` or `claimed` status — undecided
       gates on terminal runs are data rot, not pending work, and are excluded
-      (FAR-612). The review UI renders a gate held by another session as
-      read-only (claimed by \<user\> at \<time\>) and shows approve/reject only
-      to the session holding that gate's claim token
+      (FAR-612); the MCP `list_pending_hitl` tool applies the same
+      actionable-status filter. The review UI renders a gate held by another
+      session as read-only (claimed by \<user\> at \<time\>) and shows
+      approve/reject only to the session holding that gate's claim token
 - [x] Claim is atomic — `claim()` issues a short-lived (15-minute) JWT
       `claim_token` scoped to run + gate + client; an already-claimed gate →
       409, expired/invalid claim token rejected; the gate's run must be in

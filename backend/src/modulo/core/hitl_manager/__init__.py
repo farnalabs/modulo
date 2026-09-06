@@ -45,7 +45,7 @@ from modulo.core import hitl_email_alerts
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.run import unpark_parked_run
 from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.run import Run
+from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.models.team_membership import TeamMembership
 
 _log = logging.getLogger(__name__)
@@ -173,12 +173,6 @@ _DECISION_DELIVER_MANUAL = "deliver_manual"
 # Bounded decision payload at write (B1): refuse payloads over this size with a
 # clear 422 instead of silently truncating a human's manual output.
 _DECISION_PAYLOAD_MAX_BYTES = 256 * 1024
-
-# Run statuses whose undecided gates are actionable work (FAR-612):
-# ``awaiting_human`` gates are claimable now; ``claimed`` gates are held by a
-# reviewer and legitimately render as claimed. Every other run status makes an
-# undecided gate data rot, not pending work.
-_ACTIONABLE_RUN_STATUSES: frozenset[str] = frozenset({"awaiting_human", "claimed"})
 
 
 class HITLManager:
@@ -672,7 +666,7 @@ class HITLManager:
             .where(
                 HitlClaim.organisation_id == org_id,
                 HitlClaim.decision.is_(None),
-                Run.status.in_(_ACTIONABLE_RUN_STATUSES),
+                Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
             )
         )
         return list(result.scalars())

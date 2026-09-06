@@ -153,7 +153,7 @@ from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
@@ -3346,7 +3346,10 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
         base_where: list[Any] = [
             HitlClaim.organisation_id == org_id,
             HitlClaim.decision.is_(None),
-            Run.status.not_in(TERMINAL_STATUSES),
+            # FAR-612: same actionable-run-status filter as the REST org-wide
+            # pending queue — ``not_in(TERMINAL_STATUSES)`` would still list
+            # gates on pending/running/unknown runs, which claim() now refuses.
+            Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
         ]
         key_team_id = _ctx_team_id_val()
         if key_team_id is not None:

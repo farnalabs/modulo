@@ -547,6 +547,34 @@ class TestListPendingHitl(_AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
+    async def test_pending_filter_matches_rest_actionable_run_statuses(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-612: the MCP pending list filters runs to the same actionable set
+        (awaiting_human + claimed) as the REST org-wide queue — a plain
+        not_in(TERMINAL_STATUSES) would still list gates on pending/running/
+        unknown runs, which claim() refuses with run_not_awaiting."""
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        gates_result = MagicMock()
+        gates_result.scalars.return_value = []
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result])
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await list_pending_hitl()
+
+        assert result["total"] == 0
+        sql = str(mock_sesh.execute.call_args_list[0][0][0].compile(compile_kwargs={"literal_binds": True}))
+        assert "awaiting_human" in sql, f"pending filter must allow awaiting_human, got: {sql}"
+        assert "claimed" in sql, f"pending filter must allow claimed, got: {sql}"
+        assert "running" not in sql, f"pending filter must exclude non-actionable run statuses, got: {sql}"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
     async def test_migration_required_when_programming_error(
         self,
         mock_session: AsyncMock,
