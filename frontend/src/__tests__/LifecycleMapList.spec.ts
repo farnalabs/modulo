@@ -111,6 +111,25 @@ describe('LifecycleMapList', () => {
     expect(routerPushMock).not.toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 
+  it('gives the empty-state Create Map button the responsive width classes', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okJson({ items: [] }))))
+    const wrapper = mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          PageHeader: true,
+          FilterBar: true,
+          ErrorAlert: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const emptyBtn = wrapper.find('[data-testid="lifecycle-map-list-empty-new"]')
+    expect(emptyBtn.exists()).toBe(true)
+    expect(emptyBtn.classes()).toEqual(expect.arrayContaining(['w-full', 'sm:w-auto']))
+  })
+
   it('opens the map detail when the card itself is clicked', async () => {
     const wrapper = mount(LifecycleMapList, {
       global: {
