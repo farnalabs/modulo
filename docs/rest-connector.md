@@ -43,6 +43,9 @@ Jinja2 against the runtime variables supplied per call
 | `timeout_seconds` | `float` | `30.0` | Per-request timeout (connect + read/write) for the pooled client. |
 | `verify_tls` | `bool` | `true` | Whether the client verifies the server certificate. Disable only for a self-hosted registry with a self-signed cert – the SSRF guard still blocks loopback/metadata targets regardless. |
 | `idempotency_header` | `str` | `null` | Header that makes a non-`GET`/`HEAD` request safe to retry; a fresh UUID is injected per attempt. |
+| `on_unknown` | `str` | `fail_open` | Per-op idempotency gate mode for the UNKNOWN (couldn't-confirm-delivery) case (FAR-458): `fail_open` (re-fire on ambiguity, possible duplicate), `fail_closed` (suppress on ambiguity, possible silent miss), or `off` (never deduplicated, write always fires). A confirmed-delivered write is suppressed in every mode except `off`. |
+| `fan_out` | `dict` | `null` | Fan-out / iterator mode (FAR-411). When `enabled` is true and `items_path` resolves to a sequence, `write()` fans out one request per item. Sub-fields: `enabled` (bool), `items_path` (JMESPath into `payload.data`), `max_cardinality` (fail-closed cap, default 1000), `per_item_timeout` (per-item HTTP timeout), `max_retries` (per-item retries). |
+| `rate_limit` | `dict` | `null` | Per-destination token bucket (FAR-411). Sub-fields: `requests_per_second` (refill rate), `burst` (burst capacity). Shared across fleet workers when Redis is configured; per-process when Redis is absent. |
 
 You can also declare **operations** – a map of named resources, each with its
 own method/path/headers/params/body/records_path. When present, a node must
