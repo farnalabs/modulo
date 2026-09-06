@@ -106,7 +106,7 @@ def test_trim_truncates_messages_nested_in_root_channel():
 
 
 def test_trim_keeps_short_or_absent_channels_untouched():
-    """Messages at/below the bound, or absent, are left entirely unmodified."""
+    """Messages below the bound, or absent, are left entirely unmodified."""
     short_messages = _messages(3)
     checkpoint: dict[str, Any] = {
         "channel_values": {
@@ -117,6 +117,22 @@ def test_trim_keeps_short_or_absent_channels_untouched():
     _trim_checkpoint_channels(checkpoint)
     assert checkpoint["channel_values"]["messages"] is short_messages
     assert checkpoint["channel_values"]["artifacts"] == [{"node_id": "a"}]
+
+
+def test_trim_keeps_exactly_at_bound_messages_untouched():
+    """Exactly ``_CHECKPOINT_MESSAGE_TRIM_TAIL`` messages are left unmodified.
+
+    Pins the boundary: trimming fires only when the list EXCEEDS the bound
+    (``len > tail``), so a list of exactly the bound keeps its identity and
+    every element. Guards the off-by-one regression of ``>`` flipped to ``>=``.
+    """
+    boundary_messages = _messages(_CHECKPOINT_MESSAGE_TRIM_TAIL)
+    checkpoint: dict[str, Any] = {"channel_values": {"messages": boundary_messages}}
+    _trim_checkpoint_channels(checkpoint)
+    assert checkpoint["channel_values"]["messages"] is boundary_messages
+    assert len(checkpoint["channel_values"]["messages"]) == _CHECKPOINT_MESSAGE_TRIM_TAIL
+    assert checkpoint["channel_values"]["messages"][0] is boundary_messages[0]
+    assert checkpoint["channel_values"]["messages"][-1] is boundary_messages[-1]
 
 
 def test_trim_preserves_non_conversational_channels():
