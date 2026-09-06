@@ -103,6 +103,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('python-dev')
     await wrapper.find('[data-testid="envprofile-form-description"]').setValue('  dev sandbox  ')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue('python:3.12-slim')
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'local_docker'
+    await nextTick()
     await wrapper.find('form').trigger('submit')
     await flush()
 
@@ -130,6 +133,10 @@ describe('EnvironmentProfileForm — create mode', () => {
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('cap-profile')
     expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(6)
 
+    const vm0 = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm0.form.provider_type = 'local_docker'
+    await nextTick()
+
     // Toggle 'git' (index 0) on and 'shell' (index 3) on, then 'shell' off again.
     await wrapper.findAll('input[type="checkbox"]')[0].trigger('change')
     await wrapper.findAll('input[type="checkbox"]')[3].trigger('change')
@@ -149,8 +156,6 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
-    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(true)
-
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'e2b'
     await nextTick()
@@ -166,6 +171,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     await flush()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'local_docker'
+    await nextTick()
     await wrapper.find('form').trigger('submit')
     await flush()
 

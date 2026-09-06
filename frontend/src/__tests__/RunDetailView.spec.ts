@@ -1624,26 +1624,28 @@ describe('RunDetailView rendering extras', () => {
     return wrapper
   }
 
-  it('renders the workspace lease section with status, sandbox, duration and error', async () => {
+  it('does not render a workspace lease section (endpoint removed in FAR-587 / ADR 029)', async () => {
     mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    const ws = wrapper.text()
-    expect(ws).toContain('Workspace')
-    expect(ws).toContain('failed')
-    expect(ws).toContain('OOM killed')
-    expect(ws).toContain('1h 30m')
+    // The /api/v1/runs/{run_id}/workspace-lease endpoint was dropped by
+    // migration 0177_drop_workspace_leases.py; the run detail no longer renders
+    // a workspace lease panel, so no lease text should appear.
+    expect(wrapper.find('[data-testid="run-detail-workspace-lease"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('OOM killed')
     wrapper.unmount()
   })
 
-  it('formats sub-minute and minute workspace durations', async () => {
+  it('does not render workspace lease durations (endpoint removed in FAR-587 / ADR 029)', async () => {
     mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper.text()).toContain('45s')
+    expect(wrapper.find('[data-testid="run-detail-workspace-lease"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('45s')
     wrapper.unmount()
 
     mockWorkspaceLease = { status: 'running', duration_seconds: 125 }
     const wrapper2 = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper2.text()).toContain('2m 5s')
+    expect(wrapper2.find('[data-testid="run-detail-workspace-lease"]').exists()).toBe(false)
+    expect(wrapper2.text()).not.toContain('2m 5s')
     wrapper2.unmount()
   })
 
