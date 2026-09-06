@@ -2171,7 +2171,7 @@ export default {
       "failed": "Failed",
       "toggle_forwarder": "Toggle {name}",
       "dsn": "DSN",
-      "dsn_placeholder": "https://key@sentry.io/123",
+      "dsn_placeholder": "https://key{'@'}sentry.io/123",
       "org_slug": "Org Slug",
       "org_slug_placeholder": "my-org",
       "project_slug": "Project Slug",
