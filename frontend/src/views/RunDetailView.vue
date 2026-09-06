@@ -94,7 +94,8 @@
       </output>
 
       <!-- HITL Gate -->
-      <section v-if="run.status === 'awaiting_human' && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
+      <!-- qa F4: a parked run still shows its open (claimable) gate — the status changed, the review did not. -->
+      <section v-if="(run.status === 'awaiting_human' || run.status === 'hitl_parked') && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
         <h2 class="text-base font-semibold tracking-tight mb-4">HITL Gate</h2>
         <div v-for="gate in pendingGates" :key="gate.gate_id" class="space-y-3">
           <div class="flex items-center gap-2 text-sm">
@@ -588,35 +589,6 @@
         </div>
       </section>
 
-      <!-- Workspace Lease -->
-      <section v-if="workspaceLease" class="rounded-lg border bg-card p-6">
-        <h2 class="mb-3 text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.workspace') }}</h2>
-        <div class="space-y-2 text-sm">
-          <div class="flex items-center gap-2">
-            <span class="font-medium capitalize">{{ $t('views.RunDetailView.status_label') }}</span>
-            <span
-              class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-              :class="workspaceStatusClass"
-            >
-              <span class="h-1.5 w-1.5 rounded-full" :class="workspaceDotClass" />
-              <span class="capitalize">{{ workspaceLease.status }}</span>
-            </span>
-          </div>
-          <div v-if="workspaceLease.sandbox_id" class="flex items-center gap-2">
-            <span class="font-medium">{{ $t('views.RunDetailView.sandbox_label') }}</span>
-            <code class="select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs" :title="workspaceLease.sandbox_id">{{ shortId(workspaceLease.sandbox_id) }}</code>
-          </div>
-          <div v-if="workspaceLease.duration_seconds != null">
-            <span class="font-medium">{{ $t('views.RunDetailView.duration_label') }}</span>
-            <span class="ml-1 tabular-nums">{{ formatDuration(workspaceLease.duration_seconds) }}</span>
-          </div>
-          <div v-if="workspaceLease.error_message" class="text-destructive">
-            <span class="font-medium">{{ $t('views.RunDetailView.error_label') }}</span>
-            <span class="ml-1">{{ workspaceLease.error_message }}</span>
-          </div>
-        </div>
-      </section>
-
       <!-- Total Run Cost -->
       <section v-if="run.total_cost_usd != null" id="run-detail-cost-section" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
@@ -873,13 +845,6 @@ interface NodeEntry {
   stallReason: string | null
 }
 
-interface WorkspaceLeaseInfo {
-  status: string
-  sandbox_id?: string
-  duration_seconds?: number
-  error_message?: string
-}
-
 interface RunChunkEvent {
   seq: number
   event_type: string
@@ -903,7 +868,6 @@ const pollInterval = ref<ReturnType<typeof setInterval> | null>(null)
 const promptLoading = ref(new Set<string>())
 const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
 const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
-const workspaceLease = ref<WorkspaceLeaseInfo | null>(null)
 const cancelling = ref(false)
 const cancelError = ref<string | null>(null)
 const pendingGates = ref<components['schemas']['GateResponse'][]>([])
@@ -1247,6 +1211,7 @@ function statusBadgeClassFor(status: string | undefined): string {
     cancelled: 'badge badge-status-warning',
     pending: 'badge badge-status-muted',
     awaiting_human: 'badge badge-status-pending',
+    hitl_parked: 'badge badge-status-pending',
   }
   return map[status ?? ''] ?? 'badge badge-context-slate'
 }
@@ -1417,30 +1382,6 @@ const formattedOutput = computed(() => {
   if (output == null) return ''
   if (typeof output === 'string') return output
   return JSON.stringify(output, null, 2)
-})
-
-const workspaceStatusClass = computed(() => {
-  const s = workspaceLease.value?.status ?? ''
-  const map: Record<string, string> = {
-    running: 'bg-primary/10 text-primary',
-    pending: 'bg-warning/10 text-warning',
-    completed: 'bg-success/10 text-success',
-    failed: 'bg-destructive/10 text-destructive',
-    expired: 'bg-muted text-muted-foreground',
-  }
-  return map[s] ?? 'bg-muted text-muted-foreground'
-})
-
-const workspaceDotClass = computed(() => {
-  const s = workspaceLease.value?.status ?? ''
-  const map: Record<string, string> = {
-    running: 'bg-primary',
-    pending: 'bg-warning',
-    completed: 'bg-success',
-    failed: 'bg-destructive',
-    expired: 'bg-muted-foreground',
-  }
-  return map[s] ?? 'bg-muted-foreground'
 })
 
 function formatDuration(seconds: number): string {
@@ -1822,7 +1763,7 @@ async function fetchRunData(runId: string) {
     })
     if (runData) {
       run.value = runData as unknown as RunResponse
-      if (run.value.status === 'awaiting_human') {
+      if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
         fetchHitlGates(runId)
       }
     }
@@ -1900,34 +1841,30 @@ import { useDataFetch } from '../composables/useDataFetch'
 interface RunFetchResult {
   run: RunResponse | null
   io: RunIOResponse | null
-  workspace: WorkspaceLeaseInfo | null
 }
 
 const { loading, error } = useDataFetch<RunFetchResult>(
   async () => {
     const runId = route.params.id as string
     if (!runId) {
-      return { data: { run: null, io: null, workspace: null }, error: { detail: t('views.RunDetailView.no_run_id_provided') } }
+      return { data: { run: null, io: null }, error: { detail: t('views.RunDetailView.no_run_id_provided') } }
     }
 
     try {
-      const [runResp, ioResp, wsResp] = await Promise.all([
+      const [runResp, ioResp] = await Promise.all([
         api.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
         api.GET('/api/v1/runs/{run_id}/io', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
-        api.GET('/api/v1/runs/{run_id}/workspace-lease', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
       ])
       const runData = runResp?.data
       const ioData = ioResp?.data
-      const wsData = wsResp?.data
 
       if (runData) {
         run.value = runData as unknown as RunResponse
-        if (run.value.status === 'awaiting_human') {
+        if (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked') {
           fetchHitlGates(runId)
         }
       }
       if (ioData) runIO.value = ioData as unknown as RunIOResponse
-      if (wsData) workspaceLease.value = wsData as unknown as WorkspaceLeaseInfo
 
       if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
         const last = nodeEntries.value[nodeEntries.value.length - 1]
@@ -1935,7 +1872,7 @@ const { loading, error } = useDataFetch<RunFetchResult>(
       }
       startPolling(runId)
 
-      return { data: { run: run.value, io: runIO.value, workspace: workspaceLease.value }, error: undefined }
+      return { data: { run: run.value, io: runIO.value }, error: undefined }
     } catch (e: unknown) {
       return { data: undefined, error: { detail: `${t('views.RunDetailView.failed_to_load_run')} ${formatApiError(e)}` } }
     }

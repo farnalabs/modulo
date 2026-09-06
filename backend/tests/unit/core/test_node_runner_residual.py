@@ -2684,7 +2684,6 @@ async def test_sandbox_script_capacity_gate_skips_unparseable_org(monkeypatch: p
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.db.crud.run.get_sandbox_concurrency_limit", new=counts),
-        patch("modulo.db.crud.run.count_active_sandbox_leases_for_org", new=AsyncMock()),
     ):
         result = await fn({**_run_state(), "_org_id": "not-a-uuid"})
     assert result["output"]["status"] == "completed"

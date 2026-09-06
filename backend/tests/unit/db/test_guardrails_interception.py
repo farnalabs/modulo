@@ -119,6 +119,7 @@ async def _seed_env_profile(session: AsyncSession, *, capabilities: list[str]) -
             name="env",
             capabilities_json=capabilities,
             account_id=_ACCOUNT,
+            provider_type="local_docker",
         )
     )
     await session.flush()

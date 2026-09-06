@@ -64,6 +64,7 @@ from modulo.core.eval_engine import (
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.hitl_manager import HITLManager
+from modulo.core.hitl_manager.gate_coalescing import evaluate_gate_coalescing
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.node_output_split import (
     DEFAULT_NODE_TYPE,
@@ -557,6 +558,12 @@ async def _teardown_hub(hub: Any) -> None:
     even when the awaiting task is cancelled (a second CancelledError cannot
     abort the cleanup). The shielded future is re-awaited on cancellation so no
     "Task was destroyed but it is pending" warning is emitted at loop close.
+
+    The runtime provider hub the executor built alongside the ConnectorHub
+    (FAR-587) is aclosed here too, best-effort: workspaces tracked at
+    teardown are destroyed. A workspace whose provision was cancelled
+    mid-create may outlive the run (known gap, tracked for D4 lifecycle
+    work).
     """
     shielded = asyncio.shield(hub.__aexit__(None, None, None))
     try:
@@ -567,6 +574,20 @@ async def _teardown_hub(hub: Any) -> None:
         raise
     except Exception:
         _log.exception("pipeline.hub_cleanup_failed")
+    finally:
+        # Read the runtime hub through the ConnectorHub constructor seam
+        # (FAR-587). Depending on construction ``_runtime_provider`` may hold
+        # a bare provider (no ``aclose`` — disposal is then driven by the
+        # hub's own ``__aexit__``) or a ``RuntimeProviderHub`` whose
+        # ``aclose()`` disposes tracked workspaces.
+        runtime_hub = getattr(hub, "_runtime_provider", None)
+        if runtime_hub is not None and hasattr(runtime_hub, "aclose"):
+            try:
+                await runtime_hub.aclose()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("pipeline.runtime_hub_cleanup_failed")
 
 
 class GraphValidationError(ValueError):
@@ -2212,6 +2233,11 @@ class PipelineExecutor:
                         org_id=str(org_id),
                         request_visibility=request_visibility,
                     )
+                    # FAR-587: the runtime-provider hub stays reachable for
+                    # the teardown path via the ConnectorHub constructor seam
+                    # (``runtime_provider=`` -> ``_runtime_provider``);
+                    # _teardown_hub acloses it there, disposing
+                    # provider-tracked workspaces e.g. billable E2B sandboxes.
                     await hub.__aenter__()
                     await hub.initialise(rows, allowed_connectors=allowed_connectors)
                     if hub.skipped or hub.healthy:
@@ -4753,27 +4779,54 @@ class PipelineExecutor:
         if pipeline_id is not None and org_id is not None:
             mgr = HITLManager()
             pipeline_name: str | None = None
+            coalesce_reused = False
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
-                await mgr.create_gate(
+                # FAR-604 D4 gate coalescing: when an OPEN gate already
+                # covers this work item, the duplicate run never raises a
+                # second gate. Unchanged SHA → "reuse" (the existing gate
+                # decides; this run is terminalised superseded below);
+                # changed SHA → the old gate was auto-superseded in the same
+                # transaction and this run raises fresh.
+                outcome = await evaluate_gate_coalescing(
                     session,
                     run_id=run_id,
                     gate_id=gate_id,
                     pipeline_id=pipeline_id,
                     org_id=org_id,
-                    required_team_id=required_team_id,
                 )
-                try:
-                    pipeline = await get_pipeline(session, pipeline_id)
-                    pipeline_name = pipeline.name if pipeline is not None else None
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "hitl_gate.pipeline_name_lookup_failed",
-                        extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                if outcome == "reuse":
+                    coalesce_reused = True
+                else:
+                    await mgr.create_gate(
+                        session,
+                        run_id=run_id,
+                        gate_id=gate_id,
+                        pipeline_id=pipeline_id,
+                        org_id=org_id,
+                        required_team_id=required_team_id,
                     )
+                    try:
+                        pipeline = await get_pipeline(session, pipeline_id)
+                        pipeline_name = pipeline.name if pipeline is not None else None
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.warning(
+                            "hitl_gate.pipeline_name_lookup_failed",
+                            extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                        )
+            if coalesce_reused:
+                detail = (
+                    "HITL gate coalesced (FAR-604 D4): an open gate already covers this work item "
+                    f"(unchanged payload hash); the existing gate decides. run={run_id} gate={gate_id}"
+                )
+                _log.info(
+                    "pipeline.gate_coalesced",
+                    extra={"run_id": str(run_id), "gate_id": gate_id, "pipeline_id": str(pipeline_id)},
+                )
+                return _terminal_failure(broker, "failed", "executor_superseded", detail, node_token_usage)
             broker.publish(
                 "hitl_awaiting",
                 {

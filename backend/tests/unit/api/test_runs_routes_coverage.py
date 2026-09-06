@@ -394,11 +394,9 @@ def test_workspace_lease_returns_lease(client: tuple[TestClient, AsyncMock]) -> 
 
     resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-lease")
 
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["provider_ref"] == "e2b-123"
-    assert body["status"] == "active"
-    assert body["resource_usage"] == {"cpu_s": 1.5}
+    assert resp.status_code == 410, resp.text
+    assert resp.json()["title"] == "Gone"
+    assert "workspace lease API was removed" in resp.json()["detail"]
 
 
 def test_workspace_lease_absent_returns_null(client: tuple[TestClient, AsyncMock]) -> None:
@@ -407,16 +405,21 @@ def test_workspace_lease_absent_returns_null(client: tuple[TestClient, AsyncMock
 
     resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-lease")
 
-    assert resp.status_code == 200, resp.text
-    assert resp.json() is None
+    assert resp.status_code == 410, resp.text
+    assert resp.json()["title"] == "Gone"
 
 
-@pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (_INTEGRITY, 409), (_SQL, 503), (_RUNTIME, 500)])
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [(_PROG, 410), (_INTEGRITY, 410), (_SQL, 410), (_RUNTIME, 500)],
+)
 def test_workspace_lease_error_mapping(exc: Exception, expected: int) -> None:
     with _fresh_client(begin_exc=exc) as http:
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-lease")
 
     assert resp.status_code == expected, resp.text
+    if expected == 410:
+        assert resp.json()["title"] == "Gone"
 
 
 # ---------------------------------------------------------------------------
