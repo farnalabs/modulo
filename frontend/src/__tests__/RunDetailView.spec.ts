@@ -1624,27 +1624,27 @@ describe('RunDetailView rendering extras', () => {
     return wrapper
   }
 
-  it('renders the workspace lease section with status, sandbox, duration and error', async () => {
-    mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
+  // FAR-587 / ADR 029 dropped the workspace-lease feature (the
+  // /api/v1/runs/{run_id}/workspace-lease endpoint was removed by migration
+  // 0177_drop_workspace_leases.py and RunDetailView no longer fetches or
+  // renders the workspace lease section). These tests previously asserted the
+  // removed UI; they now assert the run detail renders cleanly without it.
+  it('does not render a workspace lease section after the feature was removed (FAR-587 / ADR 029)', async () => {
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    const ws = wrapper.text()
-    expect(ws).toContain('Workspace')
-    expect(ws).toContain('failed')
-    expect(ws).toContain('OOM killed')
-    expect(ws).toContain('1h 30m')
+    const text = wrapper.text()
+    expect(text).toContain('Run Detail')
+    expect(text).not.toContain('Workspace')
+    expect(text).not.toContain('OOM killed')
     wrapper.unmount()
   })
 
-  it('formats sub-minute and minute workspace durations', async () => {
-    mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
+  it('renders the run detail without a workspace lease duration block (FAR-587)', async () => {
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper.text()).toContain('45s')
+    const text = wrapper.text()
+    expect(text).toContain('Run Detail')
+    expect(text).not.toContain('45s')
+    expect(text).not.toContain('2m 5s')
     wrapper.unmount()
-
-    mockWorkspaceLease = { status: 'running', duration_seconds: 125 }
-    const wrapper2 = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper2.text()).toContain('2m 5s')
-    wrapper2.unmount()
   })
 
   it('copies the trace id to the clipboard', async () => {
