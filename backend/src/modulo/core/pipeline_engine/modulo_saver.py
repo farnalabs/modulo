@@ -184,7 +184,7 @@ _RECONNECT_TIMEOUT_SECONDS = 10.0
 _CHECKPOINT_MESSAGE_TRIM_TAIL = 100
 
 
-def _trim_checkpoint_channels(checkpoint: Checkpoint) -> Checkpoint:
+def _trim_checkpoint_channels(checkpoint: Checkpoint) -> None:
     """Trim the voluminous conversational channel(s) in a checkpoint payload.
 
     Applied just before serialization in :meth:`ModuloPostgresSaver.aput` so
@@ -201,14 +201,14 @@ def _trim_checkpoint_channels(checkpoint: Checkpoint) -> Checkpoint:
         ``messages`` list.
 
     The value is trimmed to the last :data:`_CHECKPOINT_MESSAGE_TRIM_TAIL`
-    entries. Mutates ``checkpoint`` in place and returns it (the checkpoint is
-    a per-superstep snapshot handed to the checkpointer; the in-memory graph
-    state is unaffected, so the running graph still sees the full history and
-    only the persisted copy is bounded).
+    entries. Mutates ``checkpoint`` in place and returns ``None`` (the
+    checkpoint is a per-superstep snapshot handed to the checkpointer; the
+    in-memory graph state is unaffected, so the running graph still sees the
+    full history and only the persisted copy is bounded).
     """
     channel_values = checkpoint.get("channel_values")
     if not isinstance(channel_values, dict):
-        return checkpoint
+        return
     messages = channel_values.get("messages")
     if isinstance(messages, (list, tuple)) and len(messages) > _CHECKPOINT_MESSAGE_TRIM_TAIL:
         channel_values["messages"] = messages[-_CHECKPOINT_MESSAGE_TRIM_TAIL:]
@@ -217,7 +217,7 @@ def _trim_checkpoint_channels(checkpoint: Checkpoint) -> Checkpoint:
         root_messages = root.get("messages")
         if isinstance(root_messages, (list, tuple)) and len(root_messages) > _CHECKPOINT_MESSAGE_TRIM_TAIL:
             root["messages"] = root_messages[-_CHECKPOINT_MESSAGE_TRIM_TAIL:]
-    return checkpoint
+    return
 
 
 class ModuloPostgresSaver(AsyncPostgresSaver):
@@ -544,7 +544,8 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             current = nv.get(channel) if nv else None
             checkpoint_id = self.get_next_version(current, channel)  # type: ignore[arg-type]
 
-        encrypted_checkpoint = self._encrypt_checkpoint(_trim_checkpoint_channels(checkpoint))
+        _trim_checkpoint_channels(checkpoint)
+        encrypted_checkpoint = self._encrypt_checkpoint(checkpoint)
 
         await self._aput_write_with_retry(
             thread_id=thread_id,
