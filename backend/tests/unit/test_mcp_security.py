@@ -164,27 +164,31 @@ class TestHumanOnlyGateBypass:
             mock_session = AsyncMock(name="session")
             mock_session_factory.return_value.__aenter__.return_value = mock_session
 
-            gate_row = MagicMock()
-            gate_row.run_id = _FAKE_ID
-            gate_row.gate_id = "gate-human-only"
-            gate_row.organisation_id = _FAKE_ID
-            gate_row.pipeline_id = _FAKE_ID
+            src = uuid.uuid4()
+            tgt = uuid.uuid4()
+            gate_id = f"hitl_gate_{src}_{tgt}"
+            run = MagicMock()
+            run.id = uuid.uuid4()
+            run.owner_team_id = uuid.uuid4()  # team boundary check: no extra query
+            run.snapshot_id = uuid.uuid4()
+            snapshot = MagicMock()
+            snapshot.graph_json = {
+                "nodes": [],
+                "edges": [
+                    {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+                ],
+            }
 
-            edge_row = MagicMock()
-            edge_row.hitl_gate_config = {"human_only": True}
-
-            hitl_result = MagicMock()
-            hitl_result.scalar_one_or_none.return_value = gate_row
-            edge_result = MagicMock()
-            edge_result.scalars.return_value.first.return_value = edge_row
             run_result = MagicMock()
-            run_result.scalar_one_or_none.return_value = MagicMock()  # the run
+            run_result.scalar_one_or_none.return_value = run
+            snapshot_result = MagicMock()
+            snapshot_result.scalar_one_or_none.return_value = snapshot
 
-            mock_session.execute.side_effect = [run_result, hitl_result, edge_result]
+            mock_session.execute.side_effect = [run_result, snapshot_result]
 
             result = await _rh(
                 run_id=_FAKE_ID,
-                gate_id="gate-human-only",
+                gate_id=gate_id,
                 action="approve",
                 claim_token="test-token",
             )
@@ -201,23 +205,27 @@ class TestHumanOnlyGateBypass:
             mock_session = AsyncMock(name="session")
             mock_session_factory.return_value.__aenter__.return_value = mock_session
 
-            gate_row = MagicMock()
-            gate_row.run_id = _FAKE_ID
-            gate_row.gate_id = "gate-normal"
-            gate_row.organisation_id = _FAKE_ID
-            gate_row.pipeline_id = _FAKE_ID
+            src = uuid.uuid4()
+            tgt = uuid.uuid4()
+            gate_id = f"hitl_gate_{src}_{tgt}"
+            run = MagicMock()
+            run.id = uuid.uuid4()
+            run.owner_team_id = uuid.uuid4()  # team boundary check: no extra query
+            run.snapshot_id = uuid.uuid4()
+            snapshot = MagicMock()
+            snapshot.graph_json = {
+                "nodes": [],
+                "edges": [
+                    {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": False}},
+                ],
+            }
 
-            edge_row = MagicMock()
-            edge_row.hitl_gate_config = {"human_only": False}
-
-            hitl_result = MagicMock()
-            hitl_result.scalar_one_or_none.return_value = gate_row
-            edge_result = MagicMock()
-            edge_result.scalars.return_value.first.return_value = edge_row
             run_result = MagicMock()
-            run_result.scalar_one_or_none.return_value = MagicMock()  # the run
+            run_result.scalar_one_or_none.return_value = run
+            snapshot_result = MagicMock()
+            snapshot_result.scalar_one_or_none.return_value = snapshot
 
-            mock_session.execute.side_effect = [run_result, hitl_result, edge_result]
+            mock_session.execute.side_effect = [run_result, snapshot_result]
 
             with patch("modulo.api.mcp_server.HITLManager") as mock_mgr:
                 mock_mgr_instance = AsyncMock()
@@ -226,7 +234,7 @@ class TestHumanOnlyGateBypass:
 
                 result = await _rh(
                     run_id=_FAKE_ID,
-                    gate_id="gate-normal",
+                    gate_id=gate_id,
                     action="approve",
                     claim_token="test-token",
                 )

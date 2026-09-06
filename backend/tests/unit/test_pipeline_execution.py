@@ -1233,7 +1233,10 @@ class TestCountActiveRuns:
         session = _FakeAsyncSession()
         await count_active_runs_for_pipeline(session, uuid.uuid4(), include_pending=False)  # type: ignore[arg-type]
         statuses = self._in_clause_statuses(executed[0][1])
-        assert statuses == {"running", "awaiting_human", "claimed"}
+        # FAR-604 D1 (HITL capacity): the pipeline capacity gate counts only
+        # executing/claimed runs — awaiting_human (and the parked
+        # hitl_parked) do NOT consume a pipeline slot.
+        assert statuses == {"running", "claimed"}
 
     async def test_include_pending_true_includes_pending(self) -> None:
         from modulo.db.crud.run import count_active_runs_for_pipeline
@@ -1356,7 +1359,8 @@ class TestSaqWorkerSettings:
         # PR B-2: system crons wired (fire_due_triggers, reconcile, claim-expiry,
         # retention, webhook-dedup, stale recovery) + the cost probe (PR A2)
         # + the hourly missed-fire alert cron (retro item 4)
-        # + the hitl_overdue notification sweep.
+        # + the hitl_overdue notification sweep
+        # + the FAR-604 sweeps (slot reconciliation, HITL park-on-expiry).
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
@@ -1369,6 +1373,7 @@ class TestSaqWorkerSettings:
             "trigger_events_cleanup",
             "stale_run_recovery",
             "slot_reconciliation",
+            "hitl_park_sweep",
             "cost_probe",
             "check_missed_fire_alerts_cron",
             "journey_reconcile",
