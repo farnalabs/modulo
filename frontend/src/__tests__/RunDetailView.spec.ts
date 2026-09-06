@@ -1624,26 +1624,27 @@ describe('RunDetailView rendering extras', () => {
     return wrapper
   }
 
-  it('renders the workspace lease section with status, sandbox, duration and error', async () => {
+  it('does not render a workspace lease section after the lease UI was removed (FAR-587)', async () => {
     mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    const ws = wrapper.text()
-    expect(ws).toContain('Workspace')
-    expect(ws).toContain('failed')
-    expect(ws).toContain('OOM killed')
-    expect(ws).toContain('1h 30m')
+    // The run detail view still renders its core content.
+    expect(wrapper.text()).toContain('Run Detail')
+    // The workspace lease section UI was removed in the runtime-provider cleanup.
+    expect(wrapper.text()).not.toContain('Workspace')
+    expect(wrapper.text()).not.toContain('OOM killed')
+    expect(wrapper.text()).not.toContain('1h 30m')
     wrapper.unmount()
   })
 
-  it('formats sub-minute and minute workspace durations', async () => {
+  it('does not surface a workspace lease duration after the lease UI was removed (FAR-587)', async () => {
     mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper.text()).toContain('45s')
+    expect(wrapper.text()).not.toContain('45s')
     wrapper.unmount()
 
     mockWorkspaceLease = { status: 'running', duration_seconds: 125 }
     const wrapper2 = await mountWith(baseDetail(), { outputs_json: null })
-    expect(wrapper2.text()).toContain('2m 5s')
+    expect(wrapper2.text()).not.toContain('2m 5s')
     wrapper2.unmount()
   })
 
