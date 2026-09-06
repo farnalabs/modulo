@@ -20,6 +20,7 @@ from modulo.auth.permissions import (
     PermissionConfigurationError,
     PermissionDenied,
     assert_org_role,
+    authz_enforce_enabled,
     resolve_required,
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
@@ -49,12 +50,15 @@ def get_request_allowed_tools() -> Sequence[str] | None:
 
 
 __all__ = [
+    "CALLER_SCOPE_REQUIREMENTS",
     "READ_ONLY_TOOLS",
     "TOOL_SCOPE_REQUIREMENTS",
     "MCPAuthorizationError",
     "MCPConfigurationError",
     "check_tool_scope",
+    "classify_caller_scope",
     "get_request_allowed_tools",
+    "resolve_tool_access",
     "set_request_allowed_tools",
 ]
 
@@ -136,6 +140,166 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# ---------------------------------------------------------------------------
+# FAR-620: caller-scope dimension (org-only | caller-scoped | any)
+# ---------------------------------------------------------------------------
+
+# Classification values for CALLER_SCOPE_REQUIREMENTS:
+#   "org-only"      — org-level machine identities only: a user-scoped API
+#                     key (``scope='user'``) is DENIED; org-wide/team-scoped/
+#                     run-scoped keys and identity-bound JWT/OAuth sessions
+#                     pass (the identity sessions ARE the user).
+#   "caller-scoped" — the tool operates on the CALLER'S OWN account (its
+#                     permission key carries the ``.self`` suffix): DENIED
+#                     unless the credential is identity-bound or a user-scoped
+#                     key (``key_scope == 'user'``). An org-scoped service key
+#                     must never alter user-level configuration, so org keys
+#                     are denied here.
+#   "any"           — no caller-scope restriction (today's behaviour).
+_CALLER_SCOPE_ORG_ONLY = "org-only"
+_CALLER_SCOPE_CALLER = "caller-scoped"
+_CALLER_SCOPE_ANY = "any"
+VALID_CALLER_SCOPE_CLASSIFICATIONS: frozenset[str] = frozenset(
+    {_CALLER_SCOPE_ORG_ONLY, _CALLER_SCOPE_CALLER, _CALLER_SCOPE_ANY}
+)
+
+# Caller-scoped tools are DERIVED from the ``.self`` permission-key suffix —
+# a tool whose permission key ends in ``.self`` operates on the caller's own
+# account. There is deliberately NO parallel tool set to keep in sync.
+_CALLER_SCOPED_SUFFIX = ".self"
+
+# Explicit caller-scope classification overrides, keyed by base tool name.
+# The derivation below already covers the default (unmapped mutating tools are
+# org-only, unmapped read-only tools are 'any'); entries here pin tools whose
+# classification must be explicit regardless of derivation. Stage 1 (FAR-620
+# Phase 1) ships the machinery with ZERO caller-scoped MCP tools — the map is
+# populated with org-only pins only; the FAR-614 ``.self`` tools arrive in
+# stage 2 and will be classified caller-scoped purely through their ``.self``
+# permission keys.
+# FAR-620: credential minting is an org-level operation. A user-scoped key
+# must never mint an org-wide key (that would escape the user scope entirely),
+# so ``create_api_key`` is pinned org-only: under a user-scoped key the tool
+# is denied, under org keys it behaves exactly as today.
+_CALLER_SCOPE_REQUIREMENTS: dict[str, str] = {
+    "create_api_key": _CALLER_SCOPE_ORG_ONLY,
+}
+
+CALLER_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_CALLER_SCOPE_REQUIREMENTS)
+
+
+def _permission_key_for(tool: str, action: str | None) -> str | None:
+    """Resolve the permission key for a (tool, action) pair, or None.
+
+    Mirrors the registered-scope lookup in ``check_tool_scope``: an explicit
+    ``tool:action`` mapping wins, then the base-tool mapping, then the
+    read-only allowlist (pinned at ``resource.read_only``). Pure lookup —
+    no ContextVar reads.
+    """
+    if action is not None:
+        return TOOL_SCOPE_REQUIREMENTS.get(f"{tool}:{action}")
+    permission_key = TOOL_SCOPE_REQUIREMENTS.get(tool)
+    if permission_key is None and tool in READ_ONLY_TOOLS:
+        return "resource.read_only"
+    return permission_key
+
+
+def classify_caller_scope(tool: str, permission_key: str | None) -> str:
+    """Classify a tool's caller-scope requirement (pure; one of the 3 values).
+
+    Order: an explicit ``CALLER_SCOPE_REQUIREMENTS`` entry wins; then the
+    ``.self`` permission-key suffix derives caller-scoped; then the read-only
+    allowlist classifies 'any'; everything else is org-only (preserving
+    today's default where unmapped mutating tools deny by default).
+    """
+    mapped = CALLER_SCOPE_REQUIREMENTS.get(tool)
+    if mapped is not None:
+        return mapped
+    if permission_key is not None and permission_key.endswith(_CALLER_SCOPED_SUFFIX):
+        return _CALLER_SCOPE_CALLER
+    if tool in READ_ONLY_TOOLS:
+        return _CALLER_SCOPE_ANY
+    return _CALLER_SCOPE_ORG_ONLY
+
+
+def resolve_tool_access(
+    tool: str,
+    action: str | None,
+    role: str | None,
+    key_scope: str | None,
+    auth_type: str | None,
+    allowed_tools: set[str] | None,
+    kill_switch: bool,
+) -> tuple[bool, str]:
+    """Pure tool-access decision for one MCP call (FAR-620).
+
+    Args:
+        tool: lower-cased base tool name (the caller sanitises).
+        action: optional lower-cased action (e.g. ``review_hitl`` claim).
+        role: the caller's effective (live-clamped) org role.
+        key_scope: the credential's caller scope — ``'org'`` (org-wide,
+            team-scoped and run-scoped keys), ``'user'`` (a user-scoped key,
+            a regular JWT session, or an OAuth token), or ``None`` (unset —
+            fails closed).
+        auth_type: the credential class — ``'api_key'``, ``'jwt'`` (regular
+            JWT/Remy session), ``'oauth'``, or ``None`` (unset).
+        allowed_tools: normalised node-level allow-list (``None`` =
+            UNRESTRICTED; an explicit empty set is deny-by-default).
+        kill_switch: True when the org's authz-enforce kill switch is ON
+            (hierarchy enforced); False fail-opens ONLY the role leg.
+
+    Returns ``(allowed, permission_key)``. ``permission_key`` is the resolved
+    key for error/log detail, or ``""`` when the tool could not be resolved.
+
+    Composes four deny-only legs in a fixed order (never widen):
+
+    1. node allowed_tools narrowing (FAR-418/436 semantics preserved exactly).
+    2. resolution — the tool/action must map to a permission key
+       (``TOOL_SCOPE_REQUIREMENTS`` / ``READ_ONLY_TOOLS``) or deny.
+    3. caller-scope leg — KILL-SWITCH-INELIGIBLE (the tenant-boundary
+       precedent): caller-scoped tools require ``key_scope == 'user'`` (a
+       user-scoped key, JWT session, or OAuth token); org-only tools deny
+       user-scoped API KEYS (an org-wide key must never be mintable from a
+       user-scoped credential, and a user-scoped key is not an org-level
+       machine identity). ``None`` key scope fails closed on caller-scoped
+       tools. Identity-bound JWT/OAuth sessions keep today's access to
+       org-only tools.
+    4. role leg — kill-switch-ELIGIBLE: the org-role hierarchy check; the
+       kill switch OFF bypasses the comparison (never the identity checks,
+       which deny above).
+    """
+    # Leg 1: node-level allowed_tools narrowing. When the node's
+    # capability_scope declares an allow-list it is an ADDITIONAL filter —
+    # the role must still permit the tool. Absent (None) = UNRESTRICTED;
+    # an explicit EMPTY set is deny-by-default.
+    if allowed_tools is not None and tool not in allowed_tools:
+        return False, ""
+
+    # Leg 2: resolution. Unmapped + not read-only ⇒ deny (deny-by-default).
+    permission_key = _permission_key_for(tool, action)
+    if permission_key is None:
+        return False, ""
+
+    # Leg 3: caller-scope (kill-switch-ineligible).
+    classification = classify_caller_scope(tool, permission_key)
+    if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
+        return False, permission_key
+    if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
+        return False, permission_key
+
+    # Leg 4: role hierarchy (kill-switch-eligible). Fail-closed on a
+    # missing/unknown role regardless of the kill switch, mirroring
+    # ``assert_org_role``'s identity checks.
+    required = resolve_required(permission_key)
+    if role is None or not isinstance(role, str) or not role:
+        return False, permission_key
+    actual_level = ORG_ROLE_HIERARCHY.get(role.strip().lower())
+    if actual_level is None:
+        return False, permission_key
+    if kill_switch and actual_level < ORG_ROLE_HIERARCHY[required]:
+        return False, permission_key
+    return True, permission_key
+
+
 # Import-time fail-fast validation: every tool's permission key must resolve
 # through PERMISSIONS and its resolved role must be in the role hierarchy.
 for tool, permission_key in _TOOL_SCOPE_REQUIREMENTS.items():
@@ -164,7 +328,19 @@ def check_tool_scope(
     tool_name: str,
     action: str | None = None,
     allowed_tools: Sequence[str] | None = None,
+    key_scope: str | None = None,
+    auth_type: str | None = None,
 ) -> None:
+    """Single tool-dispatch chokepoint (delegates to ``resolve_tool_access``).
+
+    FAR-620: the DECISION is made by the pure resolver; this wrapper keeps the
+    input validation, the ContextVar wiring (node allowed-tools fallback, the
+    request-scoped authz-enforce kill switch) and the per-leg denial messages.
+    ``key_scope`` / ``auth_type`` arrive from the MCP middleware's ContextVars
+    via ``_check_agent_tool_scope``; direct callers that omit them keep
+    today's behaviour (key_scope None fails closed on caller-scoped tools —
+    there are none yet — and leaves the role/org legs untouched).
+    """
     # FAR-418: when no explicit allow-list is passed, fall back to the
     # request-scoped node allowed_tools (set by McpAuthMiddleware from the
     # agent-supplied ``X-Modulo-Allowed-Tools`` header). This is the production
@@ -183,50 +359,87 @@ def check_tool_scope(
 
     normalized = _sanitize(tool_name, name="tool_name")
 
-    # FAR-418 / FAR-436: node-level allowed_tools narrowing. When a node's
-    # capability_scope declares an allowed-tool allow-list, it is an ADDITIONAL
-    # filter layered on the (already-validated) role check — the role must still
-    # permit the tool, and the tool must be on the node's list. Only an ABSENT
-    # allow-list (None — the UNRESTRICTED default) performs no narrowing; an
-    # explicit EMPTY allow-list is deny-by-default (a node granted no tools may
-    # call none), preserving the narrow-not-widen invariant.
-    if allowed_tools is not None:
-        allowed = {_sanitize(t, name="allowed_tool") for t in allowed_tools}
-        if normalized not in allowed:
-            _log.warning(
-                "Tool '%s' is outside the node's allowed_tools scope (allowed=%s)",
-                tool_name,
-                ",".join(sorted(allowed)),
-            )
-            raise MCPAuthorizationError(
-                f"Tool '{tool_name}' is outside the node's allowed_tools scope",
-            )
-
+    act: str | None = None
     if action is not None:
         if not isinstance(action, str):
             _log.error("Scope check failed: action is not a string (type=%s)", type(action).__name__)
             raise MCPAuthorizationError("Action must be a string")
         act = _sanitize(action, name="action")
-        key = f"{normalized}:{act}"
-        permission_key = TOOL_SCOPE_REQUIREMENTS.get(key)
-        if permission_key is None:
-            _log.warning("Unknown action '%s' for tool '%s'", action, tool_name)
-            raise MCPAuthorizationError(
-                f"Unknown action '{action}' for tool '{tool_name}'",
-            )
-    else:
-        permission_key = TOOL_SCOPE_REQUIREMENTS.get(normalized)
-        if permission_key is None:
-            if normalized in READ_ONLY_TOOLS:
-                permission_key = "resource.read_only"
-            else:
-                _log.warning("Tool '%s' is not registered in the scope policy", tool_name)
-                raise MCPAuthorizationError(
-                    f"Tool '{tool_name}' is not registered in the scope policy",
-                )
 
+    allowed_set: set[str] | None = None
+    if allowed_tools is not None:
+        allowed_set = {_sanitize(t, name="allowed_tool") for t in allowed_tools}
+
+    allowed, _permission_key = resolve_tool_access(
+        tool=normalized,
+        action=act,
+        role=current_role,
+        key_scope=key_scope,
+        auth_type=auth_type,
+        allowed_tools=allowed_set,
+        kill_switch=authz_enforce_enabled(),
+    )
+    if not allowed:
+        message = _denial_message(
+            tool_name=tool_name,
+            normalized=normalized,
+            action=action,
+            act=act,
+            current_role=current_role,
+            key_scope=key_scope,
+            auth_type=auth_type,
+            allowed_set=allowed_set,
+            kill_switch=authz_enforce_enabled(),
+        )
+        _log.warning("Scope check failed: %s", message)
+        raise MCPAuthorizationError(message)
+
+
+def _denial_message(
+    *,
+    tool_name: str,
+    normalized: str,
+    action: str | None,
+    act: str | None,
+    current_role: str,
+    key_scope: str | None,
+    auth_type: str | None,
+    allowed_set: set[str] | None,
+    kill_switch: bool,
+) -> str:
+    """Re-derive the specific denial message for a resolver denial.
+
+    The pure resolver returns a bare False; the legacy per-leg error messages
+    (pinned by the unit tests) are re-derived here in the same leg order the
+    resolver evaluated them. Single-fault inputs make the first failing leg
+    deterministic.
+    """
+    # Leg 1: node allowed_tools narrowing.
+    if allowed_set is not None and normalized not in allowed_set:
+        return f"Tool '{tool_name}' is outside the node's allowed_tools scope"
+
+    # Leg 2: resolution.
+    permission_key = _permission_key_for(normalized, act)
+    if permission_key is None:
+        if act is not None:
+            return f"Unknown action '{action}' for tool '{tool_name}'"
+        return f"Tool '{tool_name}' is not registered in the scope policy"
+
+    # Leg 3: caller-scope (kill-switch-ineligible).
+    classification = classify_caller_scope(normalized, permission_key)
+    if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
+        return (
+            f"Tool '{tool_name}' is caller-scoped and requires a user-scoped "
+            f"credential; this caller's key scope is '{key_scope or 'unset'}'"
+        )
+    if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
+        return f"Tool '{tool_name}' is org-scoped and cannot be called with a user-scoped API key"
+
+    # Leg 4: role hierarchy — reuse ``assert_org_role`` so the pinned
+    # "Insufficient scope ... requires ... got ..." message is identical.
     required = resolve_required(permission_key)
     try:
         assert_org_role(current_role, required, subject=f"MCP tool '{tool_name}'")
     except PermissionDenied as exc:
-        raise MCPAuthorizationError(str(exc)) from exc
+        return str(exc)
+    return f"Tool '{tool_name}' access denied"

@@ -107,3 +107,79 @@ def test_scope_requirements_only_reference_registered_tools() -> None:
     for tool_key in TOOL_SCOPE_REQUIREMENTS:
         base = tool_key.split(":", 1)[0]
         assert base in registered, f"TOOL_SCOPE_REQUIREMENTS references unregistered tool '{base}'"
+
+
+# ---------------------------------------------------------------------------
+# FAR-620: caller-scope classification invariants
+# ---------------------------------------------------------------------------
+
+_CALLER_SCOPED = "caller-scoped"
+_ORG_ONLY = "org-only"
+_ANY = "any"
+_VALID_CLASSIFICATIONS = {_ORG_ONLY, _CALLER_SCOPED, _ANY}
+
+
+def _classified_caller_scope(tool: str) -> str:
+    from modulo.core.mcp.scope_validator import classify_caller_scope
+
+    permission_key = TOOL_SCOPE_REQUIREMENTS.get(tool)
+    if permission_key is None and tool in READ_ONLY_TOOLS:
+        permission_key = "resource.read_only"
+    return classify_caller_scope(tool, permission_key)
+
+
+def test_every_registered_tool_has_a_valid_caller_scope_classification() -> None:
+    registered = _registered_tool_names()
+    for tool in registered:
+        classification = _classified_caller_scope(tool)
+        assert classification in _VALID_CLASSIFICATIONS, (
+            f"registered tool '{tool}' classified '{classification}' — must be one of {sorted(_VALID_CLASSIFICATIONS)}"
+        )
+
+
+def test_no_mutating_tool_classified_any() -> None:
+    mutating = _EXPECTED_TOOLS - READ_ONLY_TOOLS
+    for tool in mutating:
+        classification = _classified_caller_scope(tool)
+        assert classification != _ANY, (
+            f"mutating tool '{tool}' classified '{_ANY}' — a mutating tool must never be callable by every caller scope"
+        )
+
+
+def test_caller_scope_requirements_reference_registered_tools() -> None:
+    from modulo.core.mcp.scope_validator import CALLER_SCOPE_REQUIREMENTS
+
+    registered = _registered_tool_names()
+    for tool in CALLER_SCOPE_REQUIREMENTS:
+        assert tool in registered, f"CALLER_SCOPE_REQUIREMENTS references unregistered tool '{tool}'"
+
+
+def test_caller_scope_requirements_values_are_valid() -> None:
+    from modulo.core.mcp.scope_validator import CALLER_SCOPE_REQUIREMENTS
+
+    for tool, classification in CALLER_SCOPE_REQUIREMENTS.items():
+        assert classification in _VALID_CLASSIFICATIONS, (
+            f"CALLER_SCOPE_REQUIREMENTS['{tool}'] = '{classification}' is not a valid classification"
+        )
+
+
+def test_stage_1_has_zero_self_suffix_tools() -> None:
+    """Stage 1 ships the caller-scope MACHINERY with zero ``.self`` MCP tools
+    (the FAR-614 tools arrive in stage 2). The classification derivation must
+    already be in place — pinned here so stage 2 cannot silently bypass it:
+    any tool whose permission key ends in ``.self`` would classify
+    caller-scoped through the suffix derivation alone."""
+    from modulo.core.mcp.scope_validator import _CALLER_SCOPED_SUFFIX
+
+    for tool_key in TOOL_SCOPE_REQUIREMENTS:
+        assert not tool_key.endswith(_CALLER_SCOPED_SUFFIX)
+        assert not TOOL_SCOPE_REQUIREMENTS[tool_key].endswith(_CALLER_SCOPED_SUFFIX), (
+            f"tool '{tool_key}' carries a ``.self`` permission key — stage 2 "
+            "must land its caller-scoped classification + tools together"
+        )
+
+
+def test_create_api_key_classified_org_only() -> None:
+    """Minting is an org-level operation: under a user-scoped key the
+    ``create_api_key`` MCP tool is denied (user minting is REST-JWT-only)."""
+    assert _classified_caller_scope("create_api_key") == _ORG_ONLY

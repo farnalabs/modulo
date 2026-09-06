@@ -666,3 +666,251 @@ def test_update_api_key_clear_team_requires_admin(operator_client: TestClient) -
             json={"name": "k", "team_id": None},
         )
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# FAR-620: user-scoped key minting (scope param, flag gate, quota, immutability)
+# ---------------------------------------------------------------------------
+
+
+def _flag_registry(enabled: bool) -> MagicMock:
+    registry = MagicMock()
+    registry.resolve_flag = AsyncMock(return_value=enabled)
+    return registry
+
+
+def test_create_user_scoped_key_flag_on(client: TestClient) -> None:
+    """scope='user' + flag ON ⇒ minted with scope='user' (response carries the
+    scope; the quota helper ran)."""
+    key = _make_key()
+    key.scope = "user"
+    with (
+        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_user_key")) as mint,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()) as quota,
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "user:duncan", "role": "operator", "scope": "user"},
+        )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["scope"] == "user"
+    assert mint.await_args.kwargs["scope"] == "user"
+    quota.assert_awaited_once()
+
+
+def test_create_user_scoped_key_flag_off_rejected_422(client: TestClient) -> None:
+    """Flag OFF ⇒ minting a user-scoped key is REJECTED 422 — never silently
+    downgraded to an org key."""
+    with (
+        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(False)),
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "user:duncan", "role": "operator", "scope": "user"},
+        )
+    assert resp.status_code == 422
+    assert "not enabled" in resp.json()["detail"]
+    mint.assert_not_called()
+
+
+def test_create_user_scoped_key_flag_read_failure_fails_closed(client: TestClient) -> None:
+    """A flag resolution error is treated as OFF (fail-closed) ⇒ 422."""
+    registry = MagicMock()
+    registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
+    with (
+        patch("modulo.api.routes.api_keys.get_registry", return_value=registry),
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "user:duncan", "role": "operator", "scope": "user"},
+        )
+    assert resp.status_code == 422
+    mint.assert_not_called()
+
+
+def test_create_api_key_rejects_unknown_scope(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/api-keys",
+        json={"name": "k", "role": "operator", "scope": "team"},
+    )
+    assert resp.status_code == 422
+
+
+def test_create_org_key_default_scope_no_quota(client: TestClient) -> None:
+    """scope omitted (or 'org') keeps today's behaviour exactly: org key
+    minted, NO quota check, response carries scope 'org'."""
+    key = _make_key()
+    key.scope = "org"
+    with (
+        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(False)) as registry,
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_org_key")) as mint,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()) as quota,
+    ):
+        resp = client.post("/api/v1/api-keys", json={"name": "Org Key", "role": "operator"})
+    assert resp.status_code == 201
+    assert resp.json()["scope"] == "org"
+    assert mint.await_args.kwargs["scope"] == "org"
+    quota.assert_not_awaited()
+    # Org-key minting never consults the user-keys flag (byte-identical).
+    registry.return_value.resolve_flag.assert_not_awaited()
+
+
+def test_update_api_key_rejects_scope_payload_422(client: TestClient) -> None:
+    """The caller scope is IMMUTABLE: a PUT payload carrying ``scope`` is
+    rejected 422, never applied or silently ignored."""
+    with patch("modulo.api.routes.api_keys.update_api_key", return_value=_make_key()) as update:
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "k", "scope": "user"},
+        )
+    assert resp.status_code == 422
+    assert "immutable" in resp.json()["detail"]
+    update.assert_not_called()
+
+
+def test_update_api_key_without_scope_still_works(client: TestClient) -> None:
+    """A PUT payload that does NOT mention scope is unaffected."""
+    with patch("modulo.api.routes.api_keys.update_api_key", return_value=_make_key()) as update:
+        resp = client.put(f"/api/v1/api-keys/{_KEY_ID}", json={"name": "Renamed"})
+    assert resp.status_code == 200
+    update.assert_awaited_once()
+
+
+class TestUserKeyQuota:
+    """Per-(account, org) quota of 10 ACTIVE user-scoped keys, TOCTOU-safe
+    via the FOR UPDATE account-row lock (the me.py pattern)."""
+
+    @staticmethod
+    def _session(count: int, *, account: Any = ...) -> tuple[AsyncMock, list[Any]]:
+        session = AsyncMock()
+        executed: list[Any] = []
+        # Ellipsis default = "a real account row"; explicit None = missing row.
+        resolved_account = MagicMock() if account is ... else account
+        session.get = AsyncMock(return_value=resolved_account)
+        account_result = MagicMock()
+        account_result.scalar_one.return_value = count
+
+        async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+            executed.append(stmt)
+            return account_result
+
+        session.execute = _execute
+        return session, executed
+
+    @staticmethod
+    def _principal() -> Any:
+        from modulo.auth.jwt import TenantPrincipal
+
+        return TenantPrincipal(
+            username="u",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+
+    @pytest.mark.asyncio
+    async def test_under_quota_passes(self) -> None:
+        from modulo.api.routes.api_keys import _enforce_user_key_quota
+
+        session, _executed = self._session(9)
+        await _enforce_user_key_quota(session, self._principal())
+
+    @pytest.mark.asyncio
+    async def test_at_quota_rejected_429(self) -> None:
+        from fastapi import HTTPException
+
+        from modulo.api.routes.api_keys import _enforce_user_key_quota
+
+        session, _executed = self._session(10)
+        with pytest.raises(HTTPException) as excinfo:
+            await _enforce_user_key_quota(session, self._principal())
+        # Distinct error shape from the role mint-cap (403).
+        assert excinfo.value.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_account_row_locked_for_update(self) -> None:
+        """TOCTOU: the account row is locked FOR UPDATE so concurrent mints
+        serialise and the second re-counts after the first commits."""
+        from modulo.api.routes.api_keys import _enforce_user_key_quota
+
+        session, _executed = self._session(0)
+        await _enforce_user_key_quota(session, self._principal())
+        session.get.assert_awaited_once()
+        assert session.get.await_args.kwargs.get("with_for_update") is True
+        assert session.get.await_args.args[1] == _USER_ID
+
+    @pytest.mark.asyncio
+    async def test_count_filters_active_user_keys_per_account_org(self) -> None:
+        """Revoked keys do not count; the count is scoped per-(account, org)."""
+        from modulo.api.routes.api_keys import _enforce_user_key_quota
+
+        session, executed = self._session(0)
+        await _enforce_user_key_quota(session, self._principal())
+        assert len(executed) == 1
+        stmt = str(executed[0])
+        assert "revoked_at" in stmt
+        assert "account_id" in stmt
+        assert "organisation_id" in stmt
+        assert "scope" in stmt
+
+    @pytest.mark.asyncio
+    async def test_missing_account_denies_403(self) -> None:
+        from fastapi import HTTPException
+
+        from modulo.api.routes.api_keys import _enforce_user_key_quota
+
+        session, _executed = self._session(0, account=None)
+        with pytest.raises(HTTPException) as excinfo:
+            await _enforce_user_key_quota(session, self._principal())
+        assert excinfo.value.status_code == 403
+
+
+class TestUserKeyQuotaConcurrentMint:
+    """TOCTOU regression: two concurrent mints by the same account must NOT
+    both pass the quota check. The FOR UPDATE lock serialises them — session
+    B's re-read (after blocking on A's lock) sees A's committed mint and is
+    rejected, where an unlocked check would have double-spent the quota."""
+
+    @staticmethod
+    def _quota_session(count: int) -> AsyncMock:
+        session = AsyncMock()
+        session.get = AsyncMock(return_value=MagicMock())
+        result = MagicMock()
+        result.scalar_one.return_value = count
+
+        async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+            return result
+
+        session.execute = _execute
+        return session
+
+    @pytest.mark.asyncio
+    async def test_second_concurrent_mint_sees_post_commit_count(self) -> None:
+        from fastapi import HTTPException
+
+        from modulo.api.routes.api_keys import _enforce_user_key_quota
+        from modulo.auth.jwt import TenantPrincipal
+
+        principal = TenantPrincipal(
+            username="u",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="operator",
+        )
+        # Session A locks the account and counts 9 (under quota → mint). The
+        # mint commits. Session B's FOR UPDATE get() blocks until A commits,
+        # then re-counts — 10 active keys → 429.
+        session_a = self._quota_session(9)
+        await _enforce_user_key_quota(session_a, principal)
+        session_b = self._quota_session(10)
+        with pytest.raises(HTTPException) as excinfo:
+            await _enforce_user_key_quota(session_b, principal)
+        assert excinfo.value.status_code == 429

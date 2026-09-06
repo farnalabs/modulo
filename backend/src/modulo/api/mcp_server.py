@@ -111,7 +111,7 @@ from modulo.core.cron_helpers import (
 from modulo.core.dispatch import dispatch_run
 from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
-from modulo.core.feature_flags import resolve_plan_context
+from modulo.core.feature_flags import get_registry, resolve_plan_context
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -325,6 +325,14 @@ _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_
 _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
 _ctx_team_id: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar("mcp_team_id")
+# FAR-620: the credential's caller scope — 'org' (org-wide/team/run keys),
+# 'user' (a user-scoped API key, a regular JWT session, or an OAuth token),
+# None (unset — the caller-scope leg of the tool-scope check fails closed).
+_ctx_key_scope: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_key_scope", default=None)
+# FAR-620: per-request resolution of the ``user_scoped_mcp_keys`` org flag.
+# Read once per request by the auth middleware (no caching across requests);
+# fail-closed default False so a read failure never broadens access.
+_ctx_user_keys_enabled: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp_user_keys_enabled", default=False)
 # FAR-436: node-level allowed_tools for a run-scoped sandbox key. Set by
 # ``_authenticate_api_key`` when the caller is a run-scoped key; None (default)
 # means no node-level narrowing (legacy behaviour). Empty list = deny-all.
@@ -391,12 +399,18 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
     must still permit the tool, AND (when the node declares
     ``capability_scope.allowed_tools``) the tool must be on the node's
     allow-list. Absent scope = legacy behaviour (role check only).
+
+    FAR-620: the request's credential caller-scope (``_ctx_key_scope``) and
+    auth type are threaded into the chokepoint so the caller-scope leg of the
+    tool-scope decision sees the live credential class (None fails closed).
     """
     check_tool_scope(
         _ctx_role_val(),
         tool_name,
         action=action,
         allowed_tools=_ctx_node_allowed_tools_val(),
+        key_scope=_ctx_key_scope.get(None),
+        auth_type=_ctx_auth_type.get(None),
     )
 
 
@@ -556,6 +570,31 @@ async def _set_authz_enforce(org_id: uuid.UUID) -> None:
         _log.warning("permission.kill_switch_read_failed", exc_info=True)
         enforce = True
     set_authz_enforce(enforce)
+
+
+# FAR-620: the org-level feature flag gating user-scoped MCP keys.
+_FLAG_USER_SCOPED_MCP_KEYS = "user_scoped_mcp_keys"
+
+
+async def _set_user_keys_flag(org_id: uuid.UUID) -> bool:
+    """Read the per-org ``user_scoped_mcp_keys`` flag ONCE for this request.
+
+    Stores the resolved value in the request-scoped ContextVar (no caching
+    across requests — a mid-flight flag flip applies to the next request).
+    Fail-closed: any read error is treated as OFF so a broken flag resolution
+    never broadens access. Org-key requests never consult the flag at all
+    (byte-identical org-key behaviour, no extra read); this helper runs only
+    on the user-scoped-key mint/auth paths.
+    """
+    try:
+        enabled = bool(await get_registry().resolve_flag(_FLAG_USER_SCOPED_MCP_KEYS, org_id=org_id))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("feature_flag.user_scoped_mcp_keys_read_failed", exc_info=True)
+        enabled = False
+    _ctx_user_keys_enabled.set(enabled)
+    return enabled
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -759,6 +798,21 @@ async def validate_current_auth() -> bool:
             return await _validate_api_key_live(token, org_id)
         if auth_type == "oauth":
             return await _validate_oauth_live(token)
+        if auth_type == "jwt":
+            # FAR-620 CRITICAL CO-CHANGE: regular JWT (Remy) sessions now carry
+            # auth_type 'jwt' (previously conflated with 'oauth'). Route them
+            # through the SAME live-principal revalidation that
+            # ``_validate_oauth_live``'s JWT fallback performs — decode the
+            # principal and re-resolve the live org role so a demoted or
+            # removed member loses scope mid-stream. Without this branch every
+            # MCP tool call from a JWT caller would fail token-revoked.
+            try:
+                from modulo.auth.jwt import decode_principal
+
+                principal = decode_principal(token, get_settings().secret_key)
+            except JWTError:
+                return False
+            return await _validate_principal_live(token, principal)
         return False
     except (ApiKeyInvalidError, JWTError):
         return False
@@ -941,6 +995,17 @@ async def _authenticate_api_key(
                     key_id=key.id,
                 )
         org_id = key.organisation_id
+        # FAR-620: the ``user_scoped_mcp_keys`` flag is the kill switch for
+        # user-scoped keys — disabling it DENIES the key at auth (401),
+        # revoking rather than broadening. The flag is read ONCE per request,
+        # fail-closed, and ONLY for user-scoped keys: org-key authentication
+        # is byte-identical to the pre-FAR-620 behaviour (no flag read).
+        if key.scope == "user" and not await _set_user_keys_flag(org_id):
+            _log.info(
+                "api_key.user_scoped_key_denied_flag_off",
+                extra={"key_id": str(key.id), "org_id": str(org_id)},
+            )
+            raise ApiKeyInvalidError
         _ctx_org_id.set(org_id)
         _ctx_role.set(clamped)
         _ctx_key_id.set(key.id)
@@ -948,6 +1013,10 @@ async def _authenticate_api_key(
         _ctx_user_id.set(key.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("api_key")
+        # FAR-620: the credential's caller scope drives the tool-scope
+        # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
+        # rows) on the fail-closed None; real rows always carry a string.
+        _ctx_key_scope.set(key.scope if isinstance(key.scope, str) else None)
         # FAR-436: a run-scoped sandbox key narrows the agent's MCP tool-call
         # loop to the node's capability_scope.allowed_tools (deny-by-default
         # within the scope). Non-run keys / scoped-less nodes resolve to None
@@ -1073,7 +1142,11 @@ async def _authenticate_oauth_jwt(
         _ctx_key_id.set(uuid.UUID(int=0))
         _ctx_user_id.set(principal.account_id)
         _ctx_auth_token.set(token)
-        _ctx_auth_type.set("oauth")
+        # FAR-620: a regular JWT (Remy) session is the USER's own identity —
+        # auth_type 'jwt' (distinct from OAuth tokens) and caller scope
+        # 'user' (identity-bound, eligible for caller-scoped tools).
+        _ctx_auth_type.set("jwt")
+        _ctx_key_scope.set("user")
         _ctx_team_id.set(None)  # user tokens carry no team boundary
         request.scope["auth_principal"] = {
             "type": "user",
@@ -1188,6 +1261,9 @@ async def _finalize_oauth_principal(
     _ctx_user_id.set(claims.account_id)
     _ctx_auth_token.set(token)
     _ctx_auth_type.set("oauth")
+    # FAR-620: an OAuth token is the user's own identity — caller scope
+    # 'user' (identity-bound, eligible for caller-scoped tools).
+    _ctx_key_scope.set("user")
     _ctx_team_id.set(None)  # user tokens carry no team boundary
     request.scope["auth_principal"] = {
         "type": "user",
