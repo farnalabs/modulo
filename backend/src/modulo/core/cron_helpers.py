@@ -332,7 +332,7 @@ async def write_dispatcher_reconcile_stats(redis_client: AsyncRedis, stats: dict
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.dispatcher_reconcile stats persist failed")
+        _log.warning("cron_helpers.dispatcher_reconcile stats persist failed", exc_info=True)
 
 
 async def read_dispatcher_reconcile_stats(redis_client: AsyncRedis) -> dict[str, Any] | None:
@@ -1653,7 +1653,7 @@ async def _handle_report_failure(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.report_failure_counter_unavailable report=%s", report_id)
+        _log.warning("cron_helpers.report_failure_counter_unavailable report=%s", report_id, exc_info=True)
         # Best-effort counter — the next_send_at backoff alone already stops the
         # every-30s re-enqueue loop.
 
@@ -1668,7 +1668,7 @@ async def _clear_report_failure_counter(redis_client: AsyncRedis, report_id: uui
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.clear_report_failure_counter failed for %s", report_id)
+        _log.warning("cron_helpers.clear_report_failure_counter failed for %s", report_id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1750,7 +1750,7 @@ async def _bump_ongoing_failure(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.ongoing_failure_counter_unavailable trigger=%s", trigger_id)
+        _log.warning("cron_helpers.ongoing_failure_counter_unavailable trigger=%s", trigger_id, exc_info=True)
 
 
 async def _clear_ongoing_failure(redis_client: AsyncRedis | None, trigger_id: uuid.UUID) -> None:
@@ -1762,7 +1762,7 @@ async def _clear_ongoing_failure(redis_client: AsyncRedis | None, trigger_id: uu
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.clear_ongoing_failure failed for %s", trigger_id)
+        _log.warning("cron_helpers.clear_ongoing_failure failed for %s", trigger_id, exc_info=True)
 
 
 async def _ongoing_topup(
@@ -2185,7 +2185,7 @@ async def fire_ongoing_trigger(
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.warning("cron_helpers.ongoing_stats_persist_failed trigger=%s", trigger_id)
+            _log.warning("cron_helpers.ongoing_stats_persist_failed trigger=%s", trigger_id, exc_info=True)
         _log.info("fire_ongoing_trigger summary: %s", summary)
         return summary
     finally:
@@ -2699,7 +2699,7 @@ async def _claim_catchup_marker(redis_client: AsyncRedis, trigger_id: uuid.UUID,
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.catchup_marker_claim_failed trigger=%s", trigger_id)
+        _log.warning("cron_helpers.catchup_marker_claim_failed trigger=%s", trigger_id, exc_info=True)
         return True
 
 
@@ -2715,7 +2715,7 @@ async def _mark_catchup_fired(redis_client: AsyncRedis, trigger_id: uuid.UUID, m
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.catchup_marker_write_failed trigger=%s", trigger_id)
+        _log.warning("cron_helpers.catchup_marker_write_failed trigger=%s", trigger_id, exc_info=True)
 
 
 async def _advance_catchup_epoch(
@@ -3127,7 +3127,7 @@ async def _write_cron_liveness(redis_client: AsyncRedis) -> None:
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.fire_due_triggers liveness heartbeat write failed")
+        _log.warning("cron_helpers.fire_due_triggers liveness heartbeat write failed", exc_info=True)
 
 
 async def _process_due_cron_scan(

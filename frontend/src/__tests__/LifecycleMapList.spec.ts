@@ -152,3 +152,66 @@ describe('LifecycleMapList', () => {
     expect(routerPushMock).toHaveBeenCalledWith('/lifecycle-maps/map-1')
   })
 })
+
+describe('LifecycleMapList responsive layout (FAR-635)', () => {
+  // PageHeader and FilterBar are mounted for real here: the responsive
+  // stacking contract itself lives in PageHeader (FAR-627) and is covered by
+  // PageHeader.spec.ts — these tests only assert this view composes its
+  // controls through that established structure.
+  function mountList() {
+    return mount(LifecycleMapList, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          ErrorAlert: true,
+          EmptyState: true,
+          Button: true,
+        },
+      },
+    })
+  }
+
+  it('renders the filter bar and New Map action inside the PageHeader right slot', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+
+    const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
+    expect(searchInput.exists()).toBe(true)
+    const newBtn = wrapper.find('[data-testid="lifecycle-map-list-new"]')
+    expect(newBtn.exists()).toBe(true)
+
+    // The controls must live inside PageHeader's own responsive <header>
+    // (class "flex flex-col sm:flex-row ..."), not the page-level band header.
+    // On the pre-fix flat layout the search input sat in the band header, whose
+    // class never contained "flex-col", so this guards the composition.
+    const pageHeader = searchInput.element.closest('header') as HTMLElement | null
+    expect(pageHeader).not.toBeNull()
+    expect(pageHeader?.className).toContain('flex-col')
+    expect(pageHeader?.contains(newBtn.element)).toBe(true)
+
+    // ... and inside PageHeader's #right flex-wrap container (class
+    // "flex flex-wrap sm:flex-nowrap ..."). The old hand-rolled container used
+    // unprefixed "items-center justify-between", so this also fails pre-fix.
+    const rightSlot = newBtn.element.parentElement
+    expect(rightSlot).not.toBeNull()
+    expect(rightSlot?.className).toContain('sm:flex-nowrap')
+    expect(rightSlot?.contains(searchInput.element)).toBe(true)
+  })
+
+  it('composes the responsive header via PageHeader (no hand-rolled responsive container)', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+
+    // The band-level container directly under the page header must not be a
+    // hand-rolled horizontal flex row — the responsive composition is delegated
+    // to PageHeader's nested <header>, not duplicated here. On the pre-fix
+    // layout this div was "mx-auto flex items-center justify-between gap-3",
+    // so the assertions below fail without the fix.
+    const bandWrapper = wrapper.find('header.bg-card > div')
+    expect(bandWrapper.exists()).toBe(true)
+    const classes = bandWrapper.classes()
+    expect(classes).not.toContain('flex')
+    expect(classes).not.toContain('items-center')
+    expect(classes).not.toContain('justify-between')
+  })
+})
