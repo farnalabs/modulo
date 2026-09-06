@@ -116,6 +116,11 @@ async def get_current_tenant_user(
         # fallback is only reachable when the read is explicitly stubbed.
         org_role=live_role if live_role is not None else current_user.org_role,
         is_system_admin=current_user.is_system_admin,
+        # FAR-610: preserve the credential-kind marker (JWT vs API key) so
+        # human_only HITL enforcement sees the real credential. JWTs resolve
+        # through decode_principal (via_api_key=False); only the mk_ branch
+        # below sets it True.
+        via_api_key=current_user.via_api_key,
     )
 
 
@@ -250,6 +255,10 @@ async def get_current_tenant_user_or_api_key(
             account_id=key.account_id,
             org_role=clamped_role,
             is_system_admin=False,
+            # FAR-610: the credential is an org API key, not a browser-login
+            # JWT. human_only HITL gates deny API-key principals on decision
+            # actions; this marker is the mechanism that distinguishes them.
+            via_api_key=True,
         )
 
     try:
