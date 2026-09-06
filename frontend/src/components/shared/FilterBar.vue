@@ -1,6 +1,6 @@
 <template>
   <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
-    <div v-if="search" class="relative w-full sm:w-auto">
+    <div v-if="search" data-testid="filter-bar-search-wrapper" class="relative w-full sm:w-auto">
       <svg
         class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none"
         xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -21,12 +21,12 @@
   :aria-label="filter.label"
   v-for="filter in selectFilters"
   :key="filter.key"
-  :model-value="(filterValues[filter.key] ?? '') || '__all__'"
-  @update:model-value="(val) => $emit('update:filter', filter.key, val === '__all__' ? '' : String(val))"
+  :model-value="(filterValues[filter.key] ?? '') || ALL_VALUE"
+  @update:model-value="(val) => $emit('update:filter', filter.key, val === ALL_VALUE ? '' : String(val))"
   :placeholder="filter.label"
   :data-testid="`filter-bar-${filter.key}`"
-  class="w-full sm:w-auto min-w-0 sm:min-w-[140px]"
-  :options="[{ value: '__all__', label: allLabel(filter) }, ...filter.options.map(opt => ({ value: opt.value, label: opt.label }))]"
+  class="w-full sm:w-auto sm:min-w-[140px]"
+  :options="[{ value: ALL_VALUE, label: allLabel(filter) }, ...filter.options.map(opt => ({ value: opt.value, label: opt.label }))]"
   option-label="label"
   option-value="value"
 >
@@ -61,6 +61,7 @@ defineEmits<{
   (e: 'update:filter', key: string, value: string): void
 }>()
 
+const ALL_VALUE = '__all__'
 const { t } = useI18n()
 
 const selectFilters = computed(() => props.filters ?? [])

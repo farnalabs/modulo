@@ -193,6 +193,8 @@ describe('EnvironmentProfileForm — create mode', () => {
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
     // FAR-587 made provider_type required (no default) - select it so submit reaches the API.
+    const vmFail = wrapper.vm as unknown as { form: { provider_type: string } }
+    vmFail.form.provider_type = 'local_docker'
     await wrapper.find('form').trigger('submit')
     await flush()
 
