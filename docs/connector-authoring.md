@@ -43,6 +43,22 @@ class ConnectorBase(ABC):
         """Write data to the external tool. Returns the created/updated resource."""
 ```
 
+### Overridable (non-abstract) methods
+
+These methods have default implementations and can be overridden for custom behaviour:
+
+```python
+class ConnectorBase(ABC):
+    def on_unknown_for(self, resource: str) -> str:
+        """Policy hook for unknown resource types (FAR-458 idempotency gate)."""
+
+    def write_reported_failure(self, result: Any) -> bool:
+        """Detect write failures from the result (FAR-531 failure detection)."""
+
+    async def compensate(self, operation, *, context, error) -> CompensationResult:
+        """Compensate a failed write operation (FAR-213 compensation)."""
+```
+
 The payload types are simple dataclasses:
 
 ```python

@@ -49,7 +49,7 @@ export function useDataFetch<T>(
       return result.data as T
     },
     enabled: options?.immediate !== false,
-    retry: import.meta.env.MODE === 'test' ? false : 1,
+    retry: false,
     staleTime: 30_000,
   })
 

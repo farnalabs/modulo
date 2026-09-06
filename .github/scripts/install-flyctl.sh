@@ -29,8 +29,8 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "${work_dir}"' EXIT
 
 echo "Downloading flyctl ${FLYCTL_VERSION} (linux x86_64)..."
-curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/${tarball}" "${base_url}/${tarball}"
-curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/checksums.txt" "${base_url}/flyctl_${version_num}_checksums.txt"
+curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/${tarball}" "${base_url}/${tarball}"
+curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/checksums.txt" "${base_url}/flyctl_${version_num}_checksums.txt"
 
 expected_sha="$(awk -v file="${tarball}" '$2 == file { print $1 }' "${work_dir}/checksums.txt")"
 if [ -z "${expected_sha}" ]; then

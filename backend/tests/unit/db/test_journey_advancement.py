@@ -28,6 +28,7 @@ Part 3 wiring (FAR-143 part 3):
     worker_lost), and never for runs it merely re-dispatches
 """
 
+import re
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
@@ -42,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core import pipeline_execution as pe
 from modulo.core.cost_controller.finalize import _advance_journeys_on_terminal, finalize_cost
-from modulo.core.lifecycle_map.advancement import advance_journeys
+from modulo.core.lifecycle_map.advancement import _ADVANCE_SQL, advance_journeys
 from modulo.core.pipeline_execution import (
     _advance_journeys_from_stored_refs,
     fail_run_terminal,
@@ -232,6 +233,124 @@ class TestCompareAndSet:
         assert journey.latest_status == "complete"
         assert journey.run_count == 2
         assert journey.updated_at == _T2
+
+
+# Target-table columns read from the EXISTING row inside _ADVANCE_SQL's
+# DO UPDATE SET arm (FAR-622).
+_ADVANCE_ARM_COLUMNS = (
+    "updated_at",
+    "latest_terminal_run_id",
+    "latest_status",
+    "latest_provenance",
+    "map_id",
+    "map_version",
+    "stage_id",
+    "stage_name",
+    "position",
+    "run_count",
+)
+
+
+def _bare_column_refs_in_do_update_arm(sql: str) -> list[str]:
+    """Return bare target-table column references inside ``_ADVANCE_SQL``'s
+    ``DO UPDATE SET`` arm (FAR-622 regression guard).
+
+    A column-name occurrence is legitimate (not bare) when it is:
+      * table-qualified (``journeys.<col>``) — the existing-row reference form
+        Postgres 17 requires;
+      * a bind parameter (``:<name>``) — not a column reference;
+      * the SET target on the left of ``=`` — bare per SQL syntax.
+    """
+    arm_start = sql.find("DO UPDATE SET ")
+    assert arm_start != -1, "_ADVANCE_SQL has no DO UPDATE SET arm"
+    arm = sql[arm_start:]
+    bare: list[str] = []
+    for column in _ADVANCE_ARM_COLUMNS:
+        for match in re.finditer(rf"\b{column}\b", arm):
+            before, after = arm[: match.start()], arm[match.end() :]
+            if before.rstrip('"').endswith("journeys.") or before.endswith(":"):
+                continue  # qualified existing-row ref (incl. `journeys."position"`), or a bind-parameter name
+            followed_by_assignment = re.match(r'\s*"?\s*=', after) is not None
+            starts_assignment = re.search(r'(?:\bSET|,)\s*"?\s*$', before.rstrip()) is not None
+            if followed_by_assignment and starts_assignment:
+                continue  # SET target column (bare per SQL syntax)
+            bare.append(f"{column} at offset {match.start()}")
+    return bare
+
+
+class TestQualifiedUpsertRegression:
+    """FAR-622 — ``_ADVANCE_SQL``'s DO UPDATE arm must table-qualify every
+    existing-row column reference.
+
+    Postgres 17 (production: 17.7, flyio/postgres-flex) rejects bare column
+    names inside ``DO UPDATE SET`` expressions with ``column reference
+    "updated_at" is ambiguous`` (asyncpg ``AmbiguousColumnError``), so every
+    reference to the existing row is written as ``journeys.<col>``. SQLite
+    accepts both the bare and the qualified form, so the semantic test below
+    cannot reproduce the production failure on this backend — it pins the
+    upsert's compare-and-set behaviour against the real ``_ADVANCE_SQL``, while
+    the SQL-text guard fails if the qualification is ever reverted.
+    """
+
+    async def test_compare_and_set_semantics_with_qualified_refs(self, session: AsyncSession) -> None:
+        existing_run = uuid.uuid4()
+        await _seed_journey(
+            session,
+            latest_terminal_run_id=existing_run,
+            run_count=1,
+            updated_at=_T2,
+            stage_identity=True,
+        )
+
+        # Existing evidence (_T2) is newer than the incoming evidence (_T1):
+        # updated_at/latest_* are kept, run_count still increments, and the
+        # stage identity is preserved (non-map pipeline).
+        older = uuid.uuid4()
+        advanced = await _advance(session, run_id=older, status="failed", completed_at=_T1)
+        assert advanced == 1
+        journey = await _read_journey(session)
+        assert journey is not None
+        assert journey.updated_at == _T2
+        assert journey.latest_terminal_run_id == existing_run
+        assert journey.latest_status == "complete"
+        assert journey.latest_provenance == "derived"
+        assert journey.run_count == 2
+        assert journey.map_id == _MAP_ID
+        assert journey.stage_id == "review"
+
+        # Equal timestamps keep the existing evidence (first-writer-wins) —
+        # the CASE falls through to the ELSE branch on both conditions false.
+        equal = uuid.uuid4()
+        advanced = await _advance(session, run_id=equal, status="complete", completed_at=_T2)
+        assert advanced == 1
+        journey = await _read_journey(session)
+        assert journey is not None
+        assert journey.updated_at == _T2
+        assert journey.latest_terminal_run_id == existing_run
+        assert journey.run_count == 3
+
+        # Existing evidence (_T2) is older than the incoming evidence (_T3):
+        # the incoming evidence overwrites updated_at/latest_* and increments
+        # run_count; the stage identity is still preserved.
+        newer = uuid.uuid4()
+        advanced = await _advance(session, run_id=newer, status="complete", completed_at=_T3)
+        assert advanced == 1
+        journey = await _read_journey(session)
+        assert journey is not None
+        assert journey.updated_at == _T3
+        assert journey.latest_terminal_run_id == newer
+        assert journey.latest_status == "complete"
+        assert journey.run_count == 4
+        assert journey.map_id == _MAP_ID
+        assert journey.stage_id == "review"
+        assert journey.position == 2
+
+    def test_do_update_arm_column_refs_are_table_qualified(self) -> None:
+        bare = _bare_column_refs_in_do_update_arm(str(_ADVANCE_SQL))
+        assert bare == [], (
+            "FAR-622: _ADVANCE_SQL's DO UPDATE SET arm contains bare target-table "
+            f"column references (Postgres 17 raises AmbiguousColumnError): {bare}"
+        )
 
 
 class TestNonAdvancing:

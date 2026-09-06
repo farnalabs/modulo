@@ -1,4 +1,4 @@
-"""Drive migration ``0178_hitl_parked_status`` upgrade/downgrade code paths.
+"""Drive migration ``0180_hitl_parked_status`` upgrade/downgrade code paths.
 
 The migration body is pure schema DDL that only executes inside ``alembic
 upgrade head``; the unit suite provisions its schema out-of-band, so the
@@ -22,7 +22,7 @@ import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-_MIGRATION_NAME = "0178_hitl_parked_status"
+_MIGRATION_NAME = "0180_hitl_parked_status"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )

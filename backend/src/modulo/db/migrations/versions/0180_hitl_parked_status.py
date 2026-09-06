@@ -1,14 +1,17 @@
 """HITL capacity (FAR-604 D2): ``hitl_parked`` run status.
 
-Revision ID: 0178_hitl_parked_status
+Revision ID: 0180_hitl_parked_status
 Revises: 0177_invitations
 Create Date: 2026-09-05
 
 Renumber note: originally ``0177_hitl_parked_status`` chained off
 ``0176_trigger_event_validation_results``; main's ``0177_invitations`` took
-the same number, so this is renumbered to ``0178`` and re-parented onto
-``0177_invitations`` to keep the chain linear (the standard collision
-renumber flow).
+the same number, so this was renumbered to ``0178`` and re-parented onto
+``0177_invitations``. A subsequent collision on the ``0178`` prefix with
+main's ``0178_env_profiles_runner_docker`` (and the chain continuing to
+``0179_drop_workspace_leases``) forced a second renumber to ``0180``,
+re-parented onto ``0179_drop_workspace_leases`` to keep the chain linear (the
+standard collision renumber flow).
 
 FAR-604 D2 (HITL capacity design) introduces the park-on-expiry sweep: a run
 whose HITL gate expired unanswered past the grace window (settings
@@ -49,8 +52,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0178_hitl_parked_status"
-down_revision: str | None = "0177_invitations"
+revision: str = "0180_hitl_parked_status"
+down_revision: str | None = "0179_drop_workspace_leases"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

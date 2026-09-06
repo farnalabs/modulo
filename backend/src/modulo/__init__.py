@@ -1,6 +1,8 @@
 import os
 
-__version__ = "0.1.0"
+from modulo.version import get_version
+
+__version__ = get_version()
 
 
 def _get_build_tag() -> str:

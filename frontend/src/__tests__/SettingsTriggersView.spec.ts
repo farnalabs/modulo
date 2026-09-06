@@ -549,3 +549,302 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(badges[1].classes()).not.toContain('text-destructive')
   })
 })
+
+describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', () => {
+  const slotStub = { template: '<div><slot /></div>' }
+  const viewStubs = {
+    Dialog: slotStub,
+    DialogContent: slotStub,
+    DialogDescription: slotStub,
+    DialogFooter: slotStub,
+    DialogHeader: slotStub,
+    DialogTitle: slotStub,
+    FormDialog: slotStub,
+    LoadingSpinner: true,
+    FeatureGate: featureGateStub,
+    PageHeader: { template: '<div />' },
+  }
+
+  const cronTrigger = {
+    id: 'trig-cron-1',
+    pipeline_id: 'p1',
+    trigger_type: 'cron',
+    active: true,
+    config_json: {},
+    cron_expression: '0 * * * *',
+    cron_timezone: 'UTC',
+    last_fired_at: null,
+    next_fire_at: null,
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    // Restore resolving defaults: implementations set with mockRejectedValue in
+    // earlier describes survive clearAllMocks (calls-only reset).
+    ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
+    ;(api.PUT as any).mockResolvedValue({ data: null, error: undefined })
+    ;(api.DELETE as any).mockResolvedValue({ response: { status: 204, ok: true }, error: undefined })
+  })
+
+  function mountWithApi(token: string, listData: Record<string, unknown>) {
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url.includes('/pipelines')) {
+        return Promise.resolve({ data: { items: [{ id: 'p1', name: 'P1 Pipeline' }], total: 1 }, error: undefined })
+      }
+      return Promise.resolve({ data: listData, error: undefined })
+    })
+    ;(getAccessToken as any).mockReturnValue(token)
+    return mount(SettingsTriggersView, { global: { stubs: viewStubs } })
+  }
+
+  async function flush() {
+    await nextTick()
+    await nextTick()
+    await nextTick()
+  }
+
+  it('empty list renders the no-triggers empty state', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    expect(wrapper.text()).toContain('No triggers configured')
+    expect(wrapper.find('table').exists()).toBe(false)
+  })
+
+  it('BUG: a failed list load spins forever — the ErrorAlert branch is gated on `loaded` which never becomes true on error', async () => {
+    // PRODUCTION BUG characterisation (FAR-617 delivery): the template renders
+    // <LoadingSpinner v-if="!loaded"> and <ErrorAlert v-else-if="error">, but
+    // `loaded = triggersLoaded && pipelinesLoaded` where `fetched` is only set
+    // on a SUCCESSFUL queryFn. A failed GET therefore leaves loaded=false
+    // forever: the page shows an infinite spinner and the error branch (and
+    // the empty state / table behind it) is unreachable after any load
+    // failure. If the view is fixed to render the ErrorAlert on failure,
+    // update this test to assert the alert instead.
+    ;(api.GET as any).mockRejectedValue(new Error('triggers backend down'))
+    const wrapper = mount(SettingsTriggersView, { global: { stubs: viewStubs } })
+    await flush()
+
+    expect(wrapper.find('loading-spinner-stub').exists()).toBe(true)
+    expect(wrapper.find('.border-destructive\\/50').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('table rows resolve pipeline names and render type badges; unknown pipelines fall back to the short id', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), {
+      ...baseListData,
+      items: [cronTrigger, { id: 't2', pipeline_id: 'unknown-pipeline-id', trigger_type: 'webhook', active: true, config_json: {} }],
+    })
+    await flush()
+
+    expect(wrapper.text()).toContain('P1 Pipeline')
+    expect(wrapper.text()).toContain('#unknown-') // shortId fallback
+    expect(wrapper.text()).toContain('Cron')
+    expect(wrapper.text()).toContain('Webhook')
+    // Null timestamps render the em-dash placeholder.
+    expect(wrapper.text()).toContain('\u2014')
+  })
+
+  it('create webhook: invalid headers JSON blocks the POST; valid headers POST the parsed config', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: 'https://hook.example/x', webhook_method: 'POST' }
+
+    await nextTick()
+    await wrapper.find('[data-testid="settings-triggers-form-webhook-url"]').setValue('https://hook.example/x')
+    await wrapper.find('[data-testid="settings-triggers-form-webhook-headers"]').setValue('{bad json')
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).not.toHaveBeenCalled()
+    expect(vm.formError).toContain('Headers must be valid JSON')
+
+    await wrapper.find('[data-testid="settings-triggers-form-webhook-headers"]').setValue('{"X-Key":"v"}')
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [url, options] = (api.POST as any).mock.calls[0]
+    expect(url).toBe('/api/v1/pipelines/{pipeline_id}/triggers')
+    expect(options.params.path.pipeline_id).toBe('p1')
+    expect(options.body).toEqual({
+      trigger_type: 'webhook',
+      active: true,
+      config_json: { url: 'https://hook.example/x', method: 'POST', headers: { 'X-Key': 'v' } },
+    })
+    expect(vm.dialogOpen).toBe(false)
+  })
+
+  it('create polling: full config (connector, query, condition) lands in the POST body', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = {
+      ...vm.defaultForm,
+      pipeline_id: 'p1',
+      trigger_type: 'polling',
+      connector_instance_id: 'conn-1',
+      poll_query: 'SELECT 1',
+      poll_interval: 120,
+      condition_expression: 'rows > 0',
+    }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body.config_json).toEqual({
+      connector_instance_id: 'conn-1',
+      poll_query: 'SELECT 1',
+      poll_interval_seconds: 120,
+      condition_expression: 'rows > 0',
+    })
+  })
+
+  it('create agent_signal: source pipeline/node ids land in the POST config', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = {
+      ...vm.defaultForm,
+      pipeline_id: 'p1',
+      trigger_type: 'agent_signal',
+      signal_source_pipeline: 'p1',
+      signal_source_node: 'node-9',
+    }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body.config_json).toEqual({ source_pipeline_id: 'p1', source_node_id: 'node-9' })
+  })
+
+  it('create cron: cron expression/timezone and parsed input template land in the POST body', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = {
+      ...vm.defaultForm,
+      pipeline_id: 'p1',
+      trigger_type: 'cron',
+      cron_expression: '*/5 * * * *',
+      cron_timezone: 'Europe/London',
+      input_template: '{"topic":"x"}',
+    }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body).toMatchObject({
+      trigger_type: 'cron',
+      cron_expression: '*/5 * * * *',
+      cron_timezone: 'Europe/London',
+      config_json: { input_template: { topic: 'x' } },
+    })
+  })
+
+  it('save without a pipeline shows the pipeline error and never calls the API', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, trigger_type: 'webhook' }
+    await vm.saveTrigger()
+    await flush()
+
+    expect(vm.formError).toContain('Please select a pipeline')
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
+  it('edit cron: PUT carries the cron fields and timezone; an API error payload surfaces the form error', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), { ...baseListData, items: [cronTrigger] })
+    await flush()
+
+    ;(wrapper.vm as any).openEditDialog(cronTrigger)
+    await flush()
+    expect((wrapper.vm as any).form.cron_expression).toBe('0 * * * *')
+
+    ;(api.PUT as any).mockResolvedValue({ data: null, error: { detail: 'cron rejected' } })
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.PUT).toHaveBeenCalledTimes(1)
+    const [url, options] = (api.PUT as any).mock.calls[0]
+    expect(url).toBe('/api/v1/triggers/{trigger_id}')
+    expect(options.params.path.trigger_id).toBe('trig-cron-1')
+    expect(options.body).toMatchObject({
+      cron_expression: '0 * * * *',
+      cron_timezone: 'UTC',
+      max_concurrent_runs: 1,
+    })
+    expect((wrapper.vm as any).formError).toContain('Failed to update trigger')
+    expect((wrapper.vm as any).formError).toContain('cron rejected')
+  })
+
+  it('create: a thrown API error surfaces the catch-path form error ("Error: {detail}")', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+    ;(api.POST as any).mockRejectedValue(new Error('socket hang up'))
+
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: 'https://h.example' }
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    // The thrown path renders the error_saving_trigger template ("Error: {detail}"),
+    // not failed_to_create_trigger (which is reserved for { error } payloads).
+    expect(vm.formError).toBe('Error: socket hang up')
+  })
+
+  it('delete flow: confirm deletes via the API and reloads; an error payload surfaces the inline delete error', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), { ...baseListData, items: [cronTrigger] })
+    await flush()
+
+    const vm = wrapper.vm as any
+    // Row buttons in DOM order: status toggle, then TableActions (Edit, Delete).
+    await wrapper.find('tbody tr').findAll('button')[2].trigger('click')
+    await flush()
+    expect(vm.deleteDialogOpen).toBe(true)
+
+    await vm.deleteTrigger()
+    await flush()
+
+    expect(api.DELETE).toHaveBeenCalledTimes(1)
+    const [url, options] = (api.DELETE as any).mock.calls[0]
+    expect(url).toBe('/api/v1/triggers/{trigger_id}')
+    expect(options.params.path.trigger_id).toBe('trig-cron-1')
+    expect(vm.deleteDialogOpen).toBe(false)
+
+    // Error path: dialog stays open with the inline error.
+    ;(api.DELETE as any).mockResolvedValue({ response: { status: 409, ok: false }, error: { detail: 'trigger busy' } })
+    await vm.confirmDelete(cronTrigger)
+    await flush()
+    await vm.deleteTrigger()
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-triggers-delete-error"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('trigger busy')
+    expect(vm.deleteDialogOpen).toBe(true)
+  })
+})

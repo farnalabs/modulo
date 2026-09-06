@@ -47,6 +47,7 @@ from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
 from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
+from modulo.version import get_version
 
 _CODE_HEALTH_CHECK_CHECKPOINTER = "health._check_checkpointer"
 
@@ -56,7 +57,7 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
-VERSION = "0.1.0"
+VERSION = get_version()
 _START_TIME: datetime = datetime.now(UTC)
 
 # 4 consecutive stale probes before 503 (plan F7): 4 x ~15-30s probe interval

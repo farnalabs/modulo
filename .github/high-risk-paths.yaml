@@ -23,7 +23,13 @@
 #   pipeline     -> backend/src/modulo/core/pipeline_engine/** (execution + gating)
 #
 # The router ALSO treats test-file DELETIONS and skip/xfail additions anywhere in the
-# diff as high-risk even though they are not simple path globs — see the prompt change.
+# diff as high-risk even though they are not simple path globs — with one exemption:
+# a test-ONLY diff (every changed file is a test file — under backend/tests/ or
+# frontend/tests/, or matching *_test*.py / test_*.py / *.feature / *.spec.ts /
+# *.test.ts / conftest.py) is LOW-RISK even if it deletes tests or adds skip/xfail
+# markers; a MIXED diff (any non-test file) still triggers the full rules, including
+# the test-coverage-defeated rule.
+# The test-only-diff exemption's operative home is the policy-router prompt (devtools: dogfood/pipeline-scripts/pr-reviewer-policy-router-prompt.md, Step 4).
 
 high_risk_paths:
   - ".github/workflows/**"

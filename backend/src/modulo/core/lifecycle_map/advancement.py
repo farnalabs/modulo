@@ -117,8 +117,15 @@ _MINT_SQL = text(
 #   * latest_* only overwrite when :evidence_ts > updated_at (compare-and-set);
 #   * stage identity columns only change when a map-stage pipeline resolved
 #     (:map_id IS NOT NULL); otherwise they are preserved unchanged.
-# Bare column names in the DO UPDATE arm refer to the EXISTING row on both
-# Postgres and SQLite (proposed values live under `excluded`).
+# Qualified ``journeys.<col>`` references are REQUIRED in the DO UPDATE arm
+# (FAR-622): bare column names are ambiguous there — Postgres 17 rejects the
+# statement with ``column reference "updated_at" is ambiguous`` (asyncpg
+# ``AmbiguousColumnError``; validated empirically against the production
+# engine, Postgres 17.7 on flyio/postgres-flex) — so every EXISTING-row column
+# inside the SET expressions must be table-qualified. The SET target columns on
+# the left of ``=`` stay bare per SQL syntax, and proposed values live under
+# ``excluded``. The qualified form is also valid on SQLite (table-qualified
+# refs resolve to the existing row in its upsert DO UPDATE arm).
 _ADVANCE_SQL = text(
     "INSERT INTO journeys ("
     "id, organisation_id, kind, ref, canonical_work_item_id, "
@@ -132,28 +139,28 @@ _ADVANCE_SQL = text(
     ":run_count_delta, CURRENT_TIMESTAMP, :evidence_ts"
     ") ON CONFLICT (organisation_id, kind, ref) DO UPDATE SET "
     "latest_terminal_run_id = CASE "
-    "  WHEN (:evidence_ts > updated_at OR updated_at IS NULL) AND :run_id IS NOT NULL THEN :run_id "
-    "  ELSE latest_terminal_run_id END, "
+    "  WHEN (:evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL) AND :run_id IS NOT NULL THEN :run_id "
+    "  ELSE journeys.latest_terminal_run_id END, "
     "latest_status = CASE "
-    "  WHEN :evidence_ts > updated_at OR updated_at IS NULL THEN :status "
-    "  ELSE latest_status END, "
+    "  WHEN :evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL THEN :status "
+    "  ELSE journeys.latest_status END, "
     "latest_provenance = CASE "
-    "  WHEN :evidence_ts > updated_at OR updated_at IS NULL THEN :provenance "
-    "  ELSE latest_provenance END, "
-    "map_id = CASE WHEN (:evidence_ts > updated_at OR updated_at IS NULL) AND :map_id IS NOT NULL "
-    "  THEN :map_id ELSE map_id END, "
-    "map_version = CASE WHEN (:evidence_ts > updated_at OR updated_at IS NULL) AND :map_id IS NOT NULL "
-    "  THEN :map_version ELSE map_version END, "
-    "stage_id = CASE WHEN (:evidence_ts > updated_at OR updated_at IS NULL) AND :map_id IS NOT NULL "
-    "  THEN :stage_id ELSE stage_id END, "
-    "stage_name = CASE WHEN (:evidence_ts > updated_at OR updated_at IS NULL) AND :map_id IS NOT NULL "
-    "  THEN :stage_name ELSE stage_name END, "
-    '"position" = CASE WHEN (:evidence_ts > updated_at OR updated_at IS NULL) AND :map_id IS NOT NULL '
-    '  THEN :position ELSE "position" END, '
-    "run_count = COALESCE(run_count, 0) + :run_count_delta, "
+    "  WHEN :evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL THEN :provenance "
+    "  ELSE journeys.latest_provenance END, "
+    "map_id = CASE WHEN (:evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL) "
+    "  AND :map_id IS NOT NULL THEN :map_id ELSE journeys.map_id END, "
+    "map_version = CASE WHEN (:evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL) "
+    "  AND :map_id IS NOT NULL THEN :map_version ELSE journeys.map_version END, "
+    "stage_id = CASE WHEN (:evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL) "
+    "  AND :map_id IS NOT NULL THEN :stage_id ELSE journeys.stage_id END, "
+    "stage_name = CASE WHEN (:evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL) "
+    "  AND :map_id IS NOT NULL THEN :stage_name ELSE journeys.stage_name END, "
+    '"position" = CASE WHEN (:evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL) '
+    '  AND :map_id IS NOT NULL THEN :position ELSE journeys."position" END, '
+    "run_count = COALESCE(journeys.run_count, 0) + :run_count_delta, "
     "updated_at = CASE "
-    "  WHEN :evidence_ts > updated_at OR updated_at IS NULL THEN :evidence_ts "
-    "  ELSE updated_at END"
+    "  WHEN :evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL THEN :evidence_ts "
+    "  ELSE journeys.updated_at END"
 )
 
 

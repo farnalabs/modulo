@@ -12,7 +12,7 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_env_profiles_visibility"),
         CheckConstraint(
-            "provider_type IN ('local_docker', 'e2b', 'local')",
+            "provider_type IN ('local_docker', 'e2b', 'local', 'runner_docker')",
             name="ck_env_profiles_provider_type",
         ),
         CheckConstraint(
@@ -27,7 +27,9 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    provider_type: Mapped[str] = mapped_column(String(50), nullable=False, server_default="local_docker")
+    # No server_default (dropped by migration 0176): every writer sets
+    # provider_type explicitly post-D2 (FAR-587 writer inventory).
+    provider_type: Mapped[str] = mapped_column(String(50), nullable=False)
     image_ref: Mapped[str | None] = mapped_column(String(500))
     capabilities_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

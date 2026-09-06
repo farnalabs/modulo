@@ -45,6 +45,35 @@
         </div>
       </header>
 
+      <!-- Run-level warnings summary strip: surfaces run-level issues at the
+           top of the page so they are visible without scrolling to the
+           dedicated detail sections below. -->
+      <div
+        v-if="runLevelWarnings.length > 0"
+        data-testid="run-detail-warnings-strip"
+        role="status"
+        aria-live="polite"
+        class="mb-4 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning"
+      >
+        <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold tracking-tight">
+          <AlertTriangle aria-hidden="true" class="h-4 w-4 shrink-0" />
+          {{ $t('views.RunDetailView.warnings_strip_title', { count: runLevelWarnings.length }) }}
+        </h2>
+        <ul class="space-y-1.5">
+          <li v-for="warning in runLevelWarnings" :key="warning.id">
+            <button
+              type="button"
+              :data-testid="`run-detail-warnings-strip-${warning.id}`"
+              :aria-label="$t(warning.labelKey)"
+              class="w-full rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-left text-xs font-medium text-warning transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              @click="scrollToWarning(warning.targetId)"
+            >
+              {{ $t(warning.labelKey) }}
+            </button>
+          </li>
+        </ul>
+      </div>
+
       <!-- Queue position banner (pending + waiting on sandbox capacity) -->
       <output
         v-if="run.status === 'pending' && run.capacity?.waiting"
@@ -145,7 +174,7 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.started') }}</span> {{ runTimestamps.started }}</div>
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
         <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</div>
-        <div data-testid="run-detail-heartbeat">
+        <div data-testid="run-detail-heartbeat" id="run-detail-heartbeat-anchor">
           <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>
           <span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
         </div>
@@ -344,6 +373,7 @@
       <!-- Guardrail-blocked override (terminal eval_failed / eval_blocked) -->
       <div
         v-if="isGuardrailBlocked"
+        id="run-detail-guardrail-override"
         data-testid="run-detail-guardrail-override-panel"
         class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4"
       >
@@ -559,37 +589,8 @@
         </div>
       </section>
 
-      <!-- Workspace Lease -->
-      <section v-if="workspaceLease" class="rounded-lg border bg-card p-6">
-        <h2 class="mb-3 text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.workspace') }}</h2>
-        <div class="space-y-2 text-sm">
-          <div class="flex items-center gap-2">
-            <span class="font-medium capitalize">{{ $t('views.RunDetailView.status_label') }}</span>
-            <span
-              class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-              :class="workspaceStatusClass"
-            >
-              <span class="h-1.5 w-1.5 rounded-full" :class="workspaceDotClass" />
-              <span class="capitalize">{{ workspaceLease.status }}</span>
-            </span>
-          </div>
-          <div v-if="workspaceLease.sandbox_id" class="flex items-center gap-2">
-            <span class="font-medium">{{ $t('views.RunDetailView.sandbox_label') }}</span>
-            <code class="select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs" :title="workspaceLease.sandbox_id">{{ shortId(workspaceLease.sandbox_id) }}</code>
-          </div>
-          <div v-if="workspaceLease.duration_seconds != null">
-            <span class="font-medium">{{ $t('views.RunDetailView.duration_label') }}</span>
-            <span class="ml-1 tabular-nums">{{ formatDuration(workspaceLease.duration_seconds) }}</span>
-          </div>
-          <div v-if="workspaceLease.error_message" class="text-destructive">
-            <span class="font-medium">{{ $t('views.RunDetailView.error_label') }}</span>
-            <span class="ml-1">{{ workspaceLease.error_message }}</span>
-          </div>
-        </div>
-      </section>
-
       <!-- Total Run Cost -->
-      <section v-if="run.total_cost_usd != null" class="rounded-lg border bg-card p-6">
+      <section v-if="run.total_cost_usd != null" id="run-detail-cost-section" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
           <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
           <span class="text-2xl font-semibold tabular-nums">{{ formatMoney(Number(formattedCost), currencyCode, 6) }}</span>
@@ -766,7 +767,7 @@ import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbea
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { Check, X } from '@lucide/vue'
+import { Check, X, AlertTriangle } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
   created_at?: string | null
@@ -844,13 +845,6 @@ interface NodeEntry {
   stallReason: string | null
 }
 
-interface WorkspaceLeaseInfo {
-  status: string
-  sandbox_id?: string
-  duration_seconds?: number
-  error_message?: string
-}
-
 interface RunChunkEvent {
   seq: number
   event_type: string
@@ -874,7 +868,6 @@ const pollInterval = ref<ReturnType<typeof setInterval> | null>(null)
 const promptLoading = ref(new Set<string>())
 const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { role: string; content: string }[]; tokenCount: number; promptAlwaysVisible: boolean }>>({})
 const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
-const workspaceLease = ref<WorkspaceLeaseInfo | null>(null)
 const cancelling = ref(false)
 const cancelError = ref<string | null>(null)
 const pendingGates = ref<components['schemas']['GateResponse'][]>([])
@@ -1391,30 +1384,6 @@ const formattedOutput = computed(() => {
   return JSON.stringify(output, null, 2)
 })
 
-const workspaceStatusClass = computed(() => {
-  const s = workspaceLease.value?.status ?? ''
-  const map: Record<string, string> = {
-    running: 'bg-primary/10 text-primary',
-    pending: 'bg-warning/10 text-warning',
-    completed: 'bg-success/10 text-success',
-    failed: 'bg-destructive/10 text-destructive',
-    expired: 'bg-muted text-muted-foreground',
-  }
-  return map[s] ?? 'bg-muted text-muted-foreground'
-})
-
-const workspaceDotClass = computed(() => {
-  const s = workspaceLease.value?.status ?? ''
-  const map: Record<string, string> = {
-    running: 'bg-primary',
-    pending: 'bg-warning',
-    completed: 'bg-success',
-    failed: 'bg-destructive',
-    expired: 'bg-muted-foreground',
-  }
-  return map[s] ?? 'bg-muted-foreground'
-})
-
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
@@ -1712,6 +1681,60 @@ const heartbeatAge = computed<number | null>(() => {
   return heartbeatAgeSeconds(r.heartbeat_at, r.status, heartbeatNow.value)
 })
 
+// Run-level warnings summary (strip at the top of the page). Aggregates the
+// four run-level warning signals so users see them without scrolling to the
+// dedicated detail sections; each entry anchors to its section on click.
+// Cost entries are co-gated on the cost section's own render condition so an
+// entry never points at an anchor that is not in the DOM.
+interface RunLevelWarning {
+  id: string
+  labelKey: string
+  targetId: string
+}
+
+const costSectionPresent = computed(() => run.value?.total_cost_usd != null)
+
+const hasUnreportedCostEntries = computed(() =>
+  breakdownRaw.value.some((e) => e.missing_self_report === true),
+)
+
+const runLevelWarnings = computed<RunLevelWarning[]>(() => {
+  const warnings: RunLevelWarning[] = []
+  if (costSectionPresent.value && hasUnreportedCostEntries.value) {
+    warnings.push({
+      id: 'unreported-cost',
+      labelKey: 'views.RunDetailView.warnings_strip_unreported_cost',
+      targetId: 'run-detail-cost-section',
+    })
+  }
+  if (costSectionPresent.value && breakdownTotalClamped.value) {
+    warnings.push({
+      id: 'clamped-total',
+      labelKey: 'views.RunDetailView.warnings_strip_clamped_total',
+      targetId: 'run-detail-cost-section',
+    })
+  }
+  if (isGuardrailBlocked.value) {
+    warnings.push({
+      id: 'guardrail-override',
+      labelKey: 'views.RunDetailView.warnings_strip_guardrail_override',
+      targetId: 'run-detail-guardrail-override',
+    })
+  }
+  if (isHeartbeatStale(heartbeatAge.value)) {
+    warnings.push({
+      id: 'stale-heartbeat',
+      labelKey: 'views.RunDetailView.warnings_strip_stale_heartbeat',
+      targetId: 'run-detail-heartbeat-anchor',
+    })
+  }
+  return warnings
+})
+
+function scrollToWarning(targetId: string) {
+  document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 function childRunBadgeClass(status: string | undefined): string {
   return statusBadgeClassFor(status)
 }
@@ -1818,25 +1841,22 @@ import { useDataFetch } from '../composables/useDataFetch'
 interface RunFetchResult {
   run: RunResponse | null
   io: RunIOResponse | null
-  workspace: WorkspaceLeaseInfo | null
 }
 
 const { loading, error } = useDataFetch<RunFetchResult>(
   async () => {
     const runId = route.params.id as string
     if (!runId) {
-      return { data: { run: null, io: null, workspace: null }, error: { detail: t('views.RunDetailView.no_run_id_provided') } }
+      return { data: { run: null, io: null }, error: { detail: t('views.RunDetailView.no_run_id_provided') } }
     }
 
     try {
-      const [runResp, ioResp, wsResp] = await Promise.all([
+      const [runResp, ioResp] = await Promise.all([
         api.GET('/api/v1/runs/{run_id}', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
         api.GET('/api/v1/runs/{run_id}/io', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
-        api.GET('/api/v1/runs/{run_id}/workspace-lease', { params: { path: { run_id: runId } } }).catch(() => ({ data: null })),
       ])
       const runData = runResp?.data
       const ioData = ioResp?.data
-      const wsData = wsResp?.data
 
       if (runData) {
         run.value = runData as unknown as RunResponse
@@ -1845,7 +1865,6 @@ const { loading, error } = useDataFetch<RunFetchResult>(
         }
       }
       if (ioData) runIO.value = ioData as unknown as RunIOResponse
-      if (wsData) workspaceLease.value = wsData as unknown as WorkspaceLeaseInfo
 
       if (run.value?.status === 'complete' && nodeEntries.value.length > 0) {
         const last = nodeEntries.value[nodeEntries.value.length - 1]
@@ -1853,7 +1872,7 @@ const { loading, error } = useDataFetch<RunFetchResult>(
       }
       startPolling(runId)
 
-      return { data: { run: run.value, io: runIO.value, workspace: workspaceLease.value }, error: undefined }
+      return { data: { run: run.value, io: runIO.value }, error: undefined }
     } catch (e: unknown) {
       return { data: undefined, error: { detail: `${t('views.RunDetailView.failed_to_load_run')} ${formatApiError(e)}` } }
     }

@@ -18,7 +18,7 @@ const selectStub = defineComponent({
     },
   },
   template: `
-    <div class="p-select" :data-testid="$attrs['data-testid']">
+    <div class="p-select" v-bind="$attrs">
       <span class="p-select-label">{{ displayValue }}</span>
       <div class="p-select-options">
         <div class="p-select-header"><slot name="header" /></div>
@@ -120,5 +120,57 @@ describe('FilterBar', () => {
     await allOption.trigger('click')
     expect(wrapper.emitted('update:filter')).toBeTruthy()
     expect(wrapper.emitted('update:filter')![0]).toEqual(['status', ''])
+  })
+})
+
+describe('FilterBar responsive layout (FAR-627)', () => {
+  function mountResponsive() {
+    return mount(FilterBar, {
+      global: { stubs: { Select: selectStub } },
+      props: {
+        search: { placeholder: 'Search by pipeline name' },
+        filters: [
+          {
+            key: 'status',
+            label: 'Status',
+            options: [
+              { value: 'running', label: 'Running' },
+              { value: 'complete', label: 'Complete' },
+            ],
+          },
+        ],
+        filterValues: { status: '' },
+      },
+    })
+  }
+
+  it('stacks the bar as a column on mobile and wraps as a row from sm up', () => {
+    const wrapper = mountResponsive()
+    expect(wrapper.classes()).toEqual(
+      expect.arrayContaining(['flex', 'flex-col', 'sm:flex-row', 'sm:flex-wrap', 'sm:items-center', 'gap-2']),
+    )
+  })
+
+  it('gives the search wrapper the full row width on mobile and restores intrinsic width at sm', () => {
+    const wrapper = mountResponsive()
+    const searchWrapper = wrapper.find('.relative')
+    expect(searchWrapper.exists()).toBe(true)
+    expect(searchWrapper.classes()).toEqual(expect.arrayContaining(['relative', 'w-full', 'sm:w-auto']))
+  })
+
+  it('keeps the search input full width on mobile and auto width at sm', () => {
+    const wrapper = mountResponsive()
+    const input = wrapper.find('[data-testid="filter-bar-search"]')
+    expect(input.exists()).toBe(true)
+    expect(input.classes()).toEqual(expect.arrayContaining(['w-full', 'sm:w-auto']))
+  })
+
+  it('renders each select full width on mobile with compact behaviour from sm up', () => {
+    const wrapper = mountResponsive()
+    const select = wrapper.find('[data-testid="filter-bar-status"]')
+    expect(select.exists()).toBe(true)
+    expect(select.classes()).toEqual(
+      expect.arrayContaining(['w-full', 'sm:w-auto', 'min-w-0', 'sm:min-w-[140px]']),
+    )
   })
 })

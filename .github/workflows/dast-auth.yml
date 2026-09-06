@@ -62,10 +62,13 @@ jobs:
           uv run --no-build --no-sync python /tmp/gen_openapi.py
           TARGET="${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}"
           mkdir -p "$GITHUB_WORKSPACE/zap-report"
-          # Ephemeral CI dir mounted into the ZAP container; world-writable so the
-          # container (running as a fixed uid) can write the report.
-          chmod 777 "$GITHUB_WORKSPACE/zap-report"
+          # Ephemeral CI dir mounted read-write into the ZAP container, which runs
+          # as a fixed uid (1000). Ownership is interleaved, not world-writable:
+          # after the runner writes the OpenAPI spec below, the dir is handed to
+          # uid 1000 for the container step, then handed back to the runner user at
+          # the end of the scan step so redaction can rewrite the reports in place.
           python3 -c "import json; p=json.load(open('/tmp/modulo_openapi.json')); p['servers']=[{'url':\"$TARGET\"}]; json.dump(p, open('$GITHUB_WORKSPACE/zap-report/modulo_openapi_target.json','w')); print('servers injected, paths=', len(p['paths']))"
+          sudo chown -R 1000:1000 "$GITHUB_WORKSPACE/zap-report"
 
       - name: Login and run authenticated ZAP API scan
         shell: bash
@@ -112,6 +115,9 @@ jobs:
             echo "::error::ZAP report not generated - the scan did not actually run."
             exit 1
           fi
+          # The container finished; hand zap-report back to the runner user so the
+          # redaction step can rewrite the report files in place.
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/zap-report"
 
       - name: Redact secrets from ZAP report
         if: success()

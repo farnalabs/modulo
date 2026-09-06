@@ -22,10 +22,22 @@ The application refuses to start if any required variable is absent or invalid.
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | **Yes** | – | `postgresql+asyncpg://user:pass@host:port/db` |
 | `MODULO_DB` | No | `postgres` | Database backend: `postgres`, `sqlite`, `mariadb`, or `mysql` |
+| `MODULO_SYSTEM_DATABASE_URL` | No | `""` | Dedicated connection string for cross-org system cron jobs (`modulo_system` role). When set, system crons use this instead of `DATABASE_URL`. |
 
 `MODULO_DB=sqlite` switches to SQLite for local development (no RLS, no advisory locks, no flood protection).
 `MODULO_DB=mariadb` or `mysql` uses the aiomysql driver (MariaDB is deprecated since 2026-07-11).
 See [`docs/system-requirements.md`](./system-requirements.md) for backend limitations.
+
+### DB Capacity Monitor
+
+Controls a 98% hard-stop that refuses new runs when database capacity is nearly full.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DB_CAPACITY_MODE` | No | `fixed` | Capacity mode: `fixed` (enforced), `elastic` (advisory only), or `disabled` |
+| `DB_CAPACITY_BYTES` | No | `None` | Total capacity bytes for computing usage percentage (required when mode=fixed) |
+| `DB_CAPACITY_BYPASS` | No | `false` | Operator bypass for the 98% hard-stop (e.g. deliberate migrations) |
+| `DB_CAPACITY_HARD_STOP_PCT` | No | `98.0` | Percent of capacity at/above which new runs are refused (mode=fixed only) |
 
 ---
 
@@ -41,6 +53,7 @@ See [`docs/system-requirements.md`](./system-requirements.md) for backend limita
 | `MODULO_ADMIN_SECRET` | No | – | **CLI-only**. Shared secret for `modulo-migrate` CLI auth bypass (not part of the Settings class; read directly by the CLI tool) |
 | `MODULO_ADMIN_TOKEN` | No | – | **CLI-only**. Admin JWT for `modulo-migrate` CLI (alternative to env; not part of the Settings class) |
 | `MODULO_SECRETS_BACKEND` | No | `fernet` | Secrets backend: `fernet`, `vault`, or `aws` |
+| `INVITATION_EXPIRY_HOURS` | No | `72` | How long an in-app invitation token stays consumable |
 
 See [`docs/deployment-security.md`](./deployment-security.md) for key rotation procedures and [`docs/security/secret-management.md`](./security/secret-management.md) for backend-specific configuration.
 
@@ -75,7 +88,7 @@ events) issues exactly one license.
 
 ## Demo Mode
 
-Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visitor in as a known read-only demo user in a dedicated `Demo` organisation with benign sample data. All three variables must be set — otherwise the endpoint answers 404 and nothing is seeded.
+Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visitor in as a known read-only demo user in a dedicated `Demo` organisation with benign sample data. All three variables must be set, otherwise the endpoint answers 404 and nothing is seeded.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -84,9 +97,9 @@ Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visit
 | `MODULO_DEMO_PASSWORD` | Yes (for demo) | – | Password of the demo user. The seed re-stamps the stored hash to match on every boot, so rotating the secret takes effect on restart. |
 | `MODULO_DEMO_TOKEN_MINUTES` | No | `120` | Demo access-token TTL in minutes. The demo session carries no refresh token and dies with this token. |
 
-Point `MODULO_DEMO_USER` at a **dedicated** account: if it names an existing account, boot re-stamps that account's password to the demo password. Regardless, the demo endpoint only ever mints a session scoped to the `demo` organisation with the `viewer` role — an authenticating account without a viewer membership in the demo org (e.g. a privileged account) answers the same 404 as the kill switch.
+Point `MODULO_DEMO_USER` at a **dedicated** account: if it names an existing account, boot re-stamps that account's password to the demo password. Regardless, the demo endpoint only ever mints a session scoped to the `demo` organisation with the `viewer` role; an authenticating account without a viewer membership in the demo org (e.g. a privileged account) answers the same 404 as the kill switch.
 
-The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent — it creates the `demo` organisation, the user, and minimal "Demo"-prefixed sample data (schemas, one pipeline, two synthetic runs) at boot, or immediately via `python -m modulo.db.seed_demo`. Rate limiting: 10 requests/hour per IP on the demo endpoint.
+The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent: it creates the `demo` organisation, the user, and minimal "Demo"-prefixed sample data (schemas, one pipeline, two synthetic runs) at boot, or immediately via `python -m modulo.db.seed_demo`. Rate limiting: 10 requests/hour per IP on the demo endpoint.
 
 ---
 
@@ -96,7 +109,7 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_OIDC_PROVIDERS` | No | `[]` | JSON array of `{provider_id, client_id, client_secret, discovery_url}` objects. **Deprecated** — use the admin SSO providers UI. |
+| `MODULO_OIDC_PROVIDERS` | No | `[]` | JSON array of `{provider_id, client_id, client_secret, discovery_url}` objects. **Deprecated**; use the admin SSO providers UI. |
 | `MODULO_SAML_ENABLED` | No | `false` | Enable SAML 2.0 authentication |
 | `MODULO_SAML_IDP_METADATA_URL` | No | – | SAML IdP metadata URL |
 | `MODULO_SAML_IDP_METADATA_XML` | No | – | SAML IdP metadata XML (alternative to URL) |
@@ -116,6 +129,7 @@ Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env va
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
 | `MODULO_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `MODULO_WS_TOKEN_TTL_SECONDS` | No | `60` | WebSocket auth token TTL in seconds |
+| `MODULO_ACCESS_TOKEN_MINUTES` | No | `15` | Access token TTL in minutes (min 5, max 1440) |
 | `DEBUG` | No | `false` | Enable debug mode (test/staging environments) |
 | `MODULO_DEV_MODE` | No | `false` | Enable preview / in-development features |
 | `INACTIVITY_TIMEOUT_MINUTES` | No | `480` | Session inactivity timeout in minutes (0 to disable) |
@@ -134,6 +148,19 @@ executor – only in-memory rate limiting and an in-memory event broker.
 
 ---
 
+## Hosted Community Library
+
+Client sync for the hosted community library of pipeline primitives.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_LIBRARY_ENDPOINT` | No | `""` | Library server endpoint URL. Empty disables library sync. |
+| `MODULO_LIBRARY_ROOT_PUBLIC_KEY` | No | `""` | Ed25519 PEM public key for verifying signed library manifests |
+| `MODULO_LIBRARY_SYNC_INTERVAL_SECONDS` | No | `300` | Seconds between library sync polls |
+| `MODULO_LIBRARY_SYNC_TIMEOUT_SECONDS` | No | `15` | HTTP timeout for library sync requests |
+
+---
+
 ## SAQ (task queue / workers)
 
 | Variable | Required | Default | Description |
@@ -147,17 +174,21 @@ executor – only in-memory rate limiting and an in-memory event broker.
 | `SAQ_RUN_TIMEOUT` | No | `7200` | Per-run execution ceiling; the job must reach a terminal state within this budget (seconds) |
 | `SAQ_RUN_CLAIM_CAP` | No | `20` | Per-claim cap on SAQ claim attempts for `dispatcher='saq'` runs |
 | `SAQ_SETUP_GRACE_SECONDS` | No | `600` | Zombie-run protection: a run must dispatch at least one node within this window or the watchdog fails it |
-| `SAQ_CLAIMED_NODELESS_MINUTES` | No | `35` | Secondary zombie net: a run still `running` with a fresh heartbeat but zero checkpoints after this many minutes is failed. Reduced from `45` by FAR-199 (bounds wedged-fleet accumulation) — must stay above the 1800s max node timeout so a slow-but-healthy first node is never false-failed |
+| `SAQ_CLAIMED_NODELESS_MINUTES` | No | `35` | Secondary zombie net: a run still `running` with a fresh heartbeat but zero checkpoints after this many minutes is failed. Reduced from `45` by FAR-199 (bounds wedged-fleet accumulation); must stay above the 1800s max node timeout so a slow-but-healthy first node is never false-failed |
 | `SAQ_JOB_HEARTBEAT` | No | `300` | SAQ job heartbeat knob (per-job `heartbeat`) |
 | `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |
 | `SAQ_NEVER_DISPATCHED_WINDOW` | No | `300` | Legacy never-dispatched sweep window (non-SAQ rows only) |
 | `SAQ_WORKER_LOST_WINDOW` | No | `600` | Legacy worker-lost sweep window (non-SAQ rows only) |
-| `SAQ_WORKER_DB_POOL_SIZE` | No | `65` | SAQ worker Postgres pool size (per worker). The effective pool is floored at `SAQ_WORKER_CONCURRENCY * 3 + 5` (max() in `saq_worker._effective_db_pool_size` — each concurrent run draws multiple DB connections, +5 reserve for the watchdog terminalize writes and shared system-cron connections). Operators on a small Postgres tier may lower it further. |
-| `SAQ_REDIS_POOL_SIZE` | No | `20` | SAQ Redis client pool size (Upstash connection budget). The effective pool is floored at `SAQ_WORKER_CONCURRENCY + 5` (max() in `saq_worker._effective_redis_pool_size` — blocking dequeue holds one connection per concurrent slot, +5 reserve for upkeep ops). Prod pins `50` in `fly.toml`; staging pins `10` in `deploy/fly/fly.staging.toml` (2026-09 Redis-usage audit right-size). Operators on a small Redis tier may lower it further. |
+| `SAQ_WORKER_DB_POOL_SIZE` | No | `65` | SAQ worker Postgres pool size (per worker). The effective pool is floored at `SAQ_WORKER_CONCURRENCY * 3 + 5` (max() in `saq_worker._effective_db_pool_size`; each concurrent run draws multiple DB connections, +5 reserve for the watchdog terminalize writes and shared system-cron connections). Operators on a small Postgres tier may lower it further. |
+| `SAQ_REDIS_POOL_SIZE` | No | `20` | SAQ Redis client pool size (Upstash connection budget). The effective pool is floored at `SAQ_WORKER_CONCURRENCY + 5` (max() in `saq_worker._effective_redis_pool_size`; blocking dequeue holds one connection per concurrent slot, +5 reserve for upkeep ops). Prod pins `50` in `fly.toml`; staging pins `10` in `deploy/fly/fly.staging.toml` (2026-09 Redis-usage audit right-size). Operators on a small Redis tier may lower it further. |
 | `SAQ_WORKER_CONCURRENCY` | No | `5` | SAQ worker job concurrency, decoupled from Redis pool size. Design target 20/worker x up to 5 machines = up to 100 concurrent runs – verified-safe against the prod Postgres 300-connection cap (SAQ is asyncio single-engine, so concurrency does not multiply the DB pool). Prod pins `20` in `fly.toml` (ADR 017 design target); staging pins `2` in `deploy/fly/fly.staging.toml` (2026-09 Redis-usage audit right-size). |
 | `RUN_CLAIM_STALE_SECONDS` | No | `450` | Staleness gate for re-claiming a SAQ run whose heartbeat is stale |
 | `RUN_HEARTBEAT_SECONDS` | No | `30` | DB heartbeat cadence (keep below the 300s SAQ sweep threshold) |
 | `SAQ_TEST_PAUSE` | TEST-ONLY | `false` | Test-only pause flag; refused outside test/staging (`DEBUG=true`) |
+| `SAQ_NODE_DEFAULT_TIMEOUT_SECONDS` | No | `1200` | Default node execution timeout when graph node has no explicit timeout |
+| `SAQ_NODELESS_REDISPATCH_BUDGET` | No | `2` | Max re-dispatch cycles for claimed-but-nodeless SAQ zombies |
+| `SLOT_RECONCILE_STALE_SECONDS` | No | `1800` | Stale heartbeat window for slot reconciliation sweep (force-releases leaked slots) |
+| `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` | No | `3600` | Max age (seconds) for pending runs before trigger backpressure kicks in |
 
 `SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
 only dispatch path, so the readiness gate is always active. The deploy-time
@@ -188,7 +219,14 @@ Rate limits are hardcoded in `RateLimitMiddleware` (see [`backend/src/modulo/api
 | POST `/api/v1/triggers` | 100 | 60s |
 | POST `/api/v1/errors/ingest` | 10 | 60s |
 | `/mcp` (all POST/PUT/PATCH) | 200 | 60s |
-| Auth endpoints (all POST/PUT/PATCH) | 10 attempts | 60s |
+| POST `/api/v1/auth/demo` | 10 | 3600s |
+| `/hitl/` (all) | 20 | 60s |
+
+Additionally, the `AuthRateLimitMiddleware` enforces a separate login lockout:
+
+| Path | Limit | Window |
+|------|-------|--------|
+| Auth endpoints (all POST/PUT/PATCH) | `MODULO_AUTH_MAX_ATTEMPTS` (default 10) | `MODULO_AUTH_WINDOW_SECONDS` (default 60s) |
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -208,6 +246,7 @@ Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to
 | `MODULO_E2B_API_KEY` | For E2B | – | E2B sandbox API key for runtime provider (read directly from env, not via Settings) |
 | `MODULO_MAX_LOCAL_CONCURRENCY` | No | `2` | Max concurrent local agents (LocalRuntimeProvider) |
 | `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate. |
+| `RUN_API_KEY_DEFAULT_TTL_SECONDS` | No | `900` | Per-run agent runtime API key TTL floor (min 300, max 86400) |
 
 ---
 
@@ -237,6 +276,13 @@ LOAD.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_PLUGIN_DISCOVERY` | No | `true` | Enable automatic plugin discovery |
+| `MODULO_AGENT_FAILURE_ELEVATION_ENABLED` | No | `true` | When a sandbox node reports agent_status=failed, terminalize the run as failed |
+| `MODULO_IDEMPOTENCY_GATE_ENABLED` | No | `true` | Enable sandbox idempotency gate (re-run skip for single sandbox nodes) |
+| `MODULO_CONNECTOR_WRITE_GATE_ENABLED` | No | `false` | Enable connector-write idempotency gate (skip byte-identical re-executed writes) |
+| `MODULO_SEED_DEMO_ORGS` | No | `false` | Seed demo organisations with signed licenses on boot (gated framework) |
+| `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` | No | `""` | Endpoint URL for opt-in aggregate product analytics. Empty disables. |
+| `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` | No | `""` | Instance secret for HMAC signing product analytics. Empty disables. |
+| `MODULO_MONITOR_DOMAINS` | No | `""` | Space-separated CSP connect-src expressions (e.g. custom Grafana Faro collectors) |
 
 ---
 
@@ -307,7 +353,7 @@ An in-process asyncio task running in the web-process FastAPI lifespan that read
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_CSRF_ENABLED` | No | `true` | Enable CSRF protection middleware |
-| `MODULO_CSRF_EXEMPT_PATHS` | No | `/api/v1/health,/api/v1/triggers,/api/v1/auth` | Comma-separated paths exempt from CSRF |
+| `MODULO_CSRF_EXEMPT_PATHS` | No | `/api/v1/health,/api/v1/triggers,/api/v1/auth,/api/v1/webhooks` | Comma-separated paths exempt from CSRF |
 
 ---
 
@@ -353,7 +399,7 @@ cloud-metadata and CGNAT destinations are refused by default.
 | `SSRF_DNS_TIMEOUT` | No | `10` | DNS resolution timeout in seconds; a hung resolver fails closed |
 
 Link-local (`169.254.0.0/16`, `fe80::/10`), multicast, IPv6 site-local and the
-cloud-metadata ranges are a **non-negotiable floor** — no allowlist entry can
+cloud-metadata ranges are a **non-negotiable floor**: no allowlist entry can
 make them reachable.
 
 ### Self-hosted targets on localhost
@@ -367,7 +413,7 @@ SSRF_ALLOW_PRIVATE_RANGES=127.0.0.0/8,::1/128
 
 **Both entries are required.** `localhost` resolves to `127.0.0.1` *and* `::1` on
 a dual-stack host, and validation fails closed if any resolved address is
-blocked — allowlisting only `127.0.0.0/8` leaves `http://localhost:11434`
+blocked, allowlisting only `127.0.0.0/8` leaves `http://localhost:11434`
 unreachable. Alternatively, use a literal `http://127.0.0.1:11434` URL, which
 skips DNS resolution entirely and needs only `127.0.0.0/8`.
 

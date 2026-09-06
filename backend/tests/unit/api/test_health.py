@@ -25,6 +25,7 @@ from modulo.api.routes.health import (
     _per_check_timeout,
 )
 from modulo.settings import Settings, get_settings
+from modulo.version import get_version
 
 
 def _make_settings() -> Settings:
@@ -70,7 +71,7 @@ class TestReadiness:
             return
         if resp.status_code == 503:
             assert body["status"] == "unavailable"
-        assert body["version"] == "0.1.0"
+        assert body["version"] == get_version()
         assert isinstance(body["uptime_seconds"], float)
         assert isinstance(body["checks"], dict)
         for key in ("database", "redis", "checkpointer", "migrations"):

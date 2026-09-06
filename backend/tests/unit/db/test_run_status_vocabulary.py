@@ -1,7 +1,7 @@
 """Vocabulary/constraint parity tests for the ``hitl_parked`` status widening.
 
 FAR-604 D2 (HITL capacity) adds the non-terminal ``hitl_parked`` run status to
-the ``ck_runs_status`` CHECK constraint (migration ``0178_hitl_parked_status``,
+the ``ck_runs_status`` CHECK constraint (migration ``0180_hitl_parked_status``,
 renumbered from 0177 and re-parented onto main's ``0177_invitations`` after the
 collision). This file asserts:
 
@@ -27,7 +27,7 @@ from types import ModuleType
 
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, PIPELINE_CAPACITY_STATUSES, TERMINAL_STATUSES
 
-_MIGRATION_NAME = "0178_hitl_parked_status"
+_MIGRATION_NAME = "0180_hitl_parked_status"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
