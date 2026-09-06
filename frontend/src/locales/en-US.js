@@ -521,7 +521,19 @@ export default {
       "password_must_be_at_least_8_characters": "Password must be at least 8 characters",
       "member_since": "Member since {date}",
       "my_teams": "My Teams",
-      "not_a_member_of_any_team": "You are not a member of any team."
+      "not_a_member_of_any_team": "You are not a member of any team.",
+      "hitl_email_alerts": "HITL email alerts",
+      "hitl_email_alerts_description": "Get an email when a pipeline stops at a HITL gate and waits for your review.",
+      "hitl_email_default_label": "Email me about HITL gates in any pipeline",
+      "hitl_email_default_help": "Emails are off by default. Per-pipeline overrides below win over this switch.",
+      "hitl_email_per_pipeline": "Per-pipeline overrides",
+      "hitl_email_overrides_help": "Choose On or Off to override the default for a pipeline; Default follows the switch above.",
+      "hitl_email_override_default": "Default",
+      "hitl_email_override_on": "On",
+      "hitl_email_override_off": "Off",
+      "hitl_email_select_aria": "HITL email preference for pipeline {name}",
+      "hitl_email_saved": "HITL email preferences saved.",
+      "hitl_email_no_pipelines": "No pipelines available."
     },
     "ForceChangePasswordView": {
       "change_your_password": "Set a new password",
