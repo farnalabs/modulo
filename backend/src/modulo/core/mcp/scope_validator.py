@@ -366,7 +366,8 @@ def check_tool_scope(
     ``key_scope`` / ``auth_type`` arrive from the MCP middleware's ContextVars
     via ``_check_agent_tool_scope``; direct callers that omit them keep
     today's behaviour (key_scope None fails closed on caller-scoped tools —
-    there are none yet — and leaves the role/org legs untouched).
+    e.g. the FAR-614 ``.self`` tools ``get_hitl_email_alerts`` /
+    ``set_hitl_email_alerts`` — and leaves the role/org legs untouched).
     """
     # FAR-418: when no explicit allow-list is passed, fall back to the
     # request-scoped node allowed_tools (set by McpAuthMiddleware from the
