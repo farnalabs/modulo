@@ -9,7 +9,7 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 - [ ] **PostgreSQL 16+** is provisioned and reachable
   - Connection string uses a least-privilege role (not superuser)
   - TLS enabled (`sslmode=require`)
-- [ ] **Redis 7+** is provisioned (required for multi-replica)
+- [ ] **Redis 8+** is provisioned (required for multi-replica)
   - `protected-mode yes` with `requirepass`
   - TLS enabled if Redis is configured with `tls-port`
 - [ ] **Docker images** are published to ghcr.io with anonymous pull enabled

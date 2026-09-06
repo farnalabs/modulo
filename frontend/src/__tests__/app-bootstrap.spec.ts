@@ -20,6 +20,11 @@ describe('app bootstrap', () => {
     expect(routes.length).toBeGreaterThan(0)
   })
 
+  // 300s cap: this test dynamically imports all ~60 lazy route chunks in one
+  // go; on Windows each SFC transform costs ~1s in a cold process, which can
+  // push the total past a smaller cap even though Linux CI finishes quickly.
+  // Measured 151s on a loaded 4-core Windows box (FAR-632), so 300s is a ~2x
+  // margin rather than a thin one.
   it('every route component factory resolves to a module', async () => {
     const routes = router.getRoutes()
     for (const route of routes) {

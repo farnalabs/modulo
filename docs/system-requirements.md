@@ -76,7 +76,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | Service | Version | Required | Purpose |
 |---------|---------|----------|---------|
 | PostgreSQL | 16+ | **Yes** (production) | Primary data store |
-| Redis | 7+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
+| Redis | 8+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
 | Python | 3.12+ | Yes | Application runtime |
 | `uv` | 0.11.x | Yes | Python package manager (pinned in Docker images) |
 | Node.js | 20+ | For frontend dev | Frontend build toolchain |
