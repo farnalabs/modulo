@@ -1631,10 +1631,10 @@ describe('RunDetailView rendering extras', () => {
     mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
     const ws = wrapper.text()
+    expect(ws).toContain('Run Detail')
     expect(ws).not.toContain('Workspace')
     expect(ws).not.toContain('OOM killed')
     expect(ws).not.toContain('1h 30m')
-    expect(ws).toContain('Run Detail')
     wrapper.unmount()
   })
 
