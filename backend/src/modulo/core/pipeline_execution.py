@@ -1765,10 +1765,12 @@ def build_resume_claim_update(
       * ``status IN ('awaiting_human', 'claimed', 'hitl_parked')`` — the gate
         decision has already been committed by the caller, the run is waiting
         to resume. ``hitl_parked`` (FAR-604) is the parked counterpart of
-        ``awaiting_human``: the reconcile loop re-enqueues ``resume_run`` for a
-        parked run whose decision committed after the park sweep moved it out
-        of review state, and the claim must match it or the resume is a silent
-        no-op that re-enqueues forever. Literal ``'hitl_parked'`` mirrors
+        ``awaiting_human``: the park-sweep vs decide race (decision tx commits
+        while the park UPDATE is in flight) leaves a run parked with a
+        committed decision, the reconcile loop re-enqueues ``resume_run`` for
+        it, and the claim must match it or the resume is a silent no-op that
+        re-enqueues forever (``status='running'`` is the correct resume
+        transition out of parked). Literal ``'hitl_parked'`` mirrors
         ``db.models.run.HITL_PARKED_STATUS`` (see the template comment).
       * ``status = 'running'`` with a stale heartbeat — a mid-resume crash left
         the run running but the worker died.
