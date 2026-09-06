@@ -1624,10 +1624,8 @@ describe('RunDetailView rendering extras', () => {
     return wrapper
   }
 
-  it('no longer renders a workspace lease section after the endpoint was retired', async () => {
-    // The /api/v1/runs/{run_id}/workspace-lease endpoint was dropped by
-    // migration 0177 and the RunDetailView panel was removed in FAR-587, so
-    // the run detail must render without the retired workspace lease section.
+  it('does not render a workspace lease section after the workspace-lease API was removed (FAR-587 / ADR 029)', async () => {
+    mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
     const text = wrapper.text()
     expect(text).toContain('Run Detail')
@@ -1637,12 +1635,16 @@ describe('RunDetailView rendering extras', () => {
     wrapper.unmount()
   })
 
-  it('renders run detail without a workspace lease duration', async () => {
+  it('does not render workspace lease duration formatting after the endpoint was removed', async () => {
+    mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    const text = wrapper.text()
-    // Workspace lease durations (e.g. "45s", "2m 5s") are no longer surfaced.
-    expect(text).not.toContain('Workspace')
+    expect(wrapper.text()).not.toContain('Workspace')
     wrapper.unmount()
+
+    mockWorkspaceLease = { status: 'running', duration_seconds: 125 }
+    const wrapper2 = await mountWith(baseDetail(), { outputs_json: null })
+    expect(wrapper2.text()).not.toContain('Workspace')
+    wrapper2.unmount()
   })
 
   it('copies the trace id to the clipboard', async () => {

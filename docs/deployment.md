@@ -4,7 +4,7 @@
 
 - Python 3.12+
 - PostgreSQL 16+
-- Redis 7+ (for SAQ task queue, multi-replica coordination)
+- Redis 8+ (for SAQ task queue, multi-replica coordination)
 
 ## Installation
 
