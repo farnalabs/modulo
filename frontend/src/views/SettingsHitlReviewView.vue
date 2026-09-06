@@ -316,6 +316,13 @@ function gateStatus(gate: GateItem): string {
   return 'pending'
 }
 
+// Query data from vue-query is deep-readonly (FAR-630): patch gates by
+// replacing the whole array through the writable computed, never by
+// writing one element (gates.value[idx] = ... is silently dropped).
+function updateGate(key: string, patch: Partial<GateItem>) {
+  gates.value = gates.value.map(g => (expandKey(g) === key ? { ...g, ...patch } : g))
+}
+
 function statusBadgeClass(status: string): string {
   const classMap: Record<string, string> = {
     pending: 'badge badge-status-pending',
@@ -392,10 +399,7 @@ async function claimGate(gate: GateItem) {
     } else if (data) {
       const d = data as any
       claimTokens.value[key] = d.claim_token
-      const idx = gates.value.findIndex(g => expandKey(g) === key)
-      if (idx !== -1) {
-        gates.value[idx] = { ...gates.value[idx], claimed_by: t('views.SettingsHitlReviewView.claimed_by_you'), claimed_at: new Date().toISOString(), expires_at: d.expires_at }
-      }
+      updateGate(key, { claimed_by: t('views.SettingsHitlReviewView.claimed_by_you'), claimed_at: new Date().toISOString(), expires_at: d.expires_at })
       actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_claimed_you_can_now_approve_or_reject') }
       actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
     }
@@ -427,10 +431,7 @@ async function approveGate(gate: GateItem) {
         text: `${t('views.SettingsHitlReviewView.approve_failed')} ${formatApiError(err)}`,
       }
     } else {
-      const idx = gates.value.findIndex(g => expandKey(g) === key)
-      if (idx !== -1) {
-        gates.value[idx] = { ...gates.value[idx], decision: 'approved', decision_at: new Date().toISOString() }
-      }
+      updateGate(key, { decision: 'approved', decision_at: new Date().toISOString() })
       actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_approved_pipeline_resuming') }
       actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
     }
@@ -464,10 +465,7 @@ async function rejectGate(gate: GateItem) {
         text: `${t('views.SettingsHitlReviewView.reject_failed')} ${formatApiError(err)}`,
       }
     } else {
-      const idx = gates.value.findIndex(g => expandKey(g) === key)
-      if (idx !== -1) {
-        gates.value[idx] = { ...gates.value[idx], decision: 'rejected', decision_at: new Date().toISOString() }
-      }
+      updateGate(key, { decision: 'rejected', decision_at: new Date().toISOString() })
       actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_rejected_pipeline_routed_to_reject_target') }
       actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
     }

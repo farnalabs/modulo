@@ -166,8 +166,6 @@ describe('SettingsErrorForwardersView', () => {
   })
 
   it('unconfigured forwarders start collapsed and expand via the loader-level expand state', async () => {
-    // NOTE: expanding an unconfigured forwarder through the toggle is broken
-    // (see the BUG test below); assert the collapsed default here.
     mockForwarders = [forwarder('loki')]
     const wrapper = mountView()
     await flushPromises()
@@ -176,15 +174,12 @@ describe('SettingsErrorForwardersView', () => {
     wrapper.unmount()
   })
 
-  it('BUG: toggling a forwarder off then saving persists the stale enabled state (readonly vue-query data)', async () => {
-    // Production bug characterisation. toggleForwarder() does
-    // `fwd.enabled = !fwd.enabled` on an item that comes from @tanstack/vue-query's
-    // deep-readonly query state (useBaseQuery wraps state in readonly(state)).
-    // Vue silently drops the write, so:
-    //   1. the switch never flips visually,
-    //   2. the config panel never expands for an unconfigured forwarder
-    //      (expansion is gated on `fwd.enabled` becoming true), and
-    //   3. Save persists the STALE original enabled value.
+  it('persists the toggled enabled state when saving (readonly vue-query data fix, FAR-630)', async () => {
+    // toggleForwarder() writes `fwd.enabled = !fwd.enabled` on a writable local
+    // copy of the query data (vue-query state is deep-readonly), so:
+    //   1. the switch flips visually,
+    //   2. the config panel expands for the enabled forwarder, and
+    //   3. Save persists the TOGGLED enabled value, not the stale original.
     mockForwarders = [forwarder('loki', { configured: true, enabled: true })]
     const wrapper = mountView()
     await flushPromises()
@@ -193,25 +188,28 @@ describe('SettingsErrorForwardersView', () => {
     await wrapper.find('button[aria-label="Toggle Loki"]').trigger('click')
     await nextTick()
 
+    // the toggle expanded the config panel
+    expect(cardFor(wrapper, 'Loki').find('#settingserrorforwardersview-field-3').exists()).toBe(true)
+
     const saveBtn = findButton(cardFor(wrapper, 'Loki'), 'Save')
     await saveBtn!.trigger('click')
     await flushPromises()
 
-    // The PUT went out with the STALE `enabled: true`, not the intended false.
+    // The PUT went out with the toggled `enabled: false`, not the stale true.
     const put = vi.mocked(api.PUT).mock.calls[0]
-    expect((put[1] as any).body.enabled).toBe(true)
+    expect((put[1] as any).body.enabled).toBe(false)
     wrapper.unmount()
   })
 
-  it('BUG: the Sentry DSN placeholder translation fails to compile ("@" is linked-message syntax)', async () => {
-    // Production bug characterisation. en-US.js ships
-    // `dsn_placeholder: "https://key@sentry.io/123"`; vue-i18n's message
-    // compiler treats `@` as linked-message syntax and throws
-    // SyntaxError: Message compilation error: Invalid linked format.
-    // Any expanded Sentry panel evaluates this placeholder during render, so
-    // the component render aborts and the panel never renders its fields.
+  it('the Sentry DSN placeholder compiles with the escaped @ (FAR-631)', async () => {
+    // FAR-631 fix: the raw "@" in the DSN example compiled as linked-message
+    // syntax and threw "Invalid linked format", aborting any render that
+    // evaluated the placeholder. The locale now escapes it as {'@'} and the
+    // message compiles to the intended literal DSN.
     const i18n = createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': enUS } })
-    expect(() => i18n.global.t('views.SettingsErrorForwardersView.dsn_placeholder')).toThrow(SyntaxError)
+    expect(i18n.global.t('views.SettingsErrorForwardersView.dsn_placeholder')).toBe(
+      'https://key@sentry.io/123',
+    )
     // sanity: non-@ placeholder messages compile fine
     expect(i18n.global.t('views.SettingsErrorForwardersView.push_url_placeholder')).toBe(
       'https://loki.example.com/loki/api/v1/push',

@@ -468,19 +468,23 @@ async function saveEval() {
     pass_threshold: form.pass_threshold,
   }
   try {
-    if (editingEvalId.value) {
+    const evalId = editingEvalId.value
+    if (evalId) {
       await api.PUT('/api/v1/evals/{eval_id}', {
-        params: { path: { eval_id: editingEvalId.value } },
+        params: { path: { eval_id: evalId } },
         body,
       })
-      formSuccess.value = t('views.EvalEditorView.eval_updated')
     } else {
       await api.POST('/api/v1/evals', { body })
-      formSuccess.value = t('views.EvalEditorView.eval_created')
     }
+    // FAR-631: reset BEFORE setting the flash — resetForm() nulls formSuccess,
+    // so setting first (then resetting) erased the message in the same
+    // synchronous block and it never rendered.
     resetForm()
+    formSuccess.value = evalId
+      ? t('views.EvalEditorView.eval_updated')
+      : t('views.EvalEditorView.eval_created')
     await loadEvals()
-    setTimeout(() => { formSuccess.value = null }, 2000)
   } catch (e: unknown) {
     formError.value = formatApiError(e)
   } finally {
