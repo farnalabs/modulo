@@ -103,6 +103,10 @@ describe('EnvironmentProfileForm — create mode', () => {
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('python-dev')
     await wrapper.find('[data-testid="envprofile-form-description"]').setValue('  dev sandbox  ')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue('python:3.12-slim')
+    // FAR-587 made provider_type a required field with no default, so select it
+    // explicitly before submitting (the create payload expects local_docker).
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'local_docker'
     await wrapper.find('form').trigger('submit')
     await flush()
 
@@ -130,6 +134,10 @@ describe('EnvironmentProfileForm — create mode', () => {
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('cap-profile')
     expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(6)
 
+    // FAR-587 made provider_type required (no default) - select it so submit passes.
+    const vmCap = wrapper.vm as unknown as { form: { provider_type: string } }
+    vmCap.form.provider_type = 'local_docker'
+
     // Toggle 'git' (index 0) on and 'shell' (index 3) on, then 'shell' off again.
     await wrapper.findAll('input[type="checkbox"]')[0].trigger('change')
     await wrapper.findAll('input[type="checkbox"]')[3].trigger('change')
@@ -149,7 +157,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
-    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(true)
+    // FAR-587 made provider_type a required field with no default, so no tier
+    // badge is shown until a provider is selected.
+    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(false)
 
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'e2b'
@@ -166,6 +176,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     await flush()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
+    // FAR-587 made provider_type required (no default) - select it so submit reaches the API.
+    const vmFail = wrapper.vm as unknown as { form: { provider_type: string } }
+    vmFail.form.provider_type = 'local_docker'
     await wrapper.find('form').trigger('submit')
     await flush()
 
