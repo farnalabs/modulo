@@ -137,6 +137,9 @@ describe('FilterBar responsive layout (FAR-627)', () => {
     const searchWrapper = wrapper.find('[data-testid="filter-bar-search-wrapper"]')
     expect(searchWrapper.exists()).toBe(true)
     expect(searchWrapper.classes()).toEqual(expect.arrayContaining(['relative', 'w-full', 'sm:w-auto']))
+    const input = wrapper.find('[data-testid="filter-bar-search"]')
+    expect(input.exists()).toBe(true)
+    expect(input.classes()).toEqual(expect.arrayContaining(['w-full', 'sm:w-auto']))
   })
 
   it('renders each select full width on mobile with compact behaviour from sm up', () => {
