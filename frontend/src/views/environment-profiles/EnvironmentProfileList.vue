@@ -2,17 +2,15 @@
   <div class="page-wide">
     <FeatureGate feature-name="environment_profiles" required-tier="team" show-disabled>
 
-      <PageHeader title="Environment Profiles" subtitle="Reusable sandbox environment templates for code execution nodes" />
-
-      <div class="space-y-6">
-        <div class="flex items-center justify-between gap-3">
-          <div class="relative">
+      <PageHeader title="Environment Profiles" subtitle="Reusable sandbox environment templates for code execution nodes">
+        <template #right>
+          <div class="relative w-full sm:w-auto">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input aria-label="Search profiles..."
               v-model="search"
               type="text"
               placeholder="Search profiles..."
-              class="pl-9 pr-3 py-1.5 border border-input bg-background rounded-lg text-sm w-64"
+              class="pl-9 pr-3 py-1.5 border border-input bg-background rounded-lg text-sm w-full sm:w-auto"
               data-testid="envprofile-list-search"
             />
           </div>
@@ -20,8 +18,10 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Profile
           </Button>
-        </div>
+        </template>
+      </PageHeader>
 
+      <div class="space-y-6">
         <LoadingSpinner v-if="store.isLoading" />
 
         <ErrorAlert v-else-if="store.error" :message="store.error" :on-retry="store.fetchProfiles" />
