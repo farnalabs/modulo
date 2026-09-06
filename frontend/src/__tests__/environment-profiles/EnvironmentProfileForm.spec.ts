@@ -154,10 +154,15 @@ describe('EnvironmentProfileForm — create mode', () => {
     const wrapper = mountForm()
     await flush()
 
+    // The form defaults to a tier-bearing provider, so clear the selection
+    // first to assert the badge is hidden until a runner-tier provider is chosen.
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = ''
+    await nextTick()
+
     // The badge only renders once a provider with a runner tier is selected.
     expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(false)
 
-    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
     vm.form.provider_type = 'e2b'
     await nextTick()
 
