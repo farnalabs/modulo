@@ -1633,6 +1633,7 @@ describe('RunDetailView rendering extras', () => {
     const ws = wrapper.text()
     expect(ws).not.toContain('Workspace')
     expect(ws).not.toContain('OOM killed')
+    expect(ws).not.toContain('1h 30m')
     expect(ws).toContain('Run Detail')
     wrapper.unmount()
   })

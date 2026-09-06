@@ -322,7 +322,7 @@ async def clear_trigger_streak_after_reenable(trigger_id: uuid.UUID) -> None:
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.clear_streak_after_reenable failed trigger=%s", trigger_id)
+        _log.warning("cron_helpers.clear_streak_after_reenable failed trigger=%s", trigger_id, exc_info=True)
 
 
 def _streak_deactivate_enabled() -> bool:
@@ -774,7 +774,7 @@ async def _count_recent_streak_deactivations(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.deactivation_count_failed org=%s", org_id)
+        _log.warning("streak.deactivation_count_failed org=%s", org_id, exc_info=True)
         return 0
 
 
@@ -949,7 +949,7 @@ async def _write_streak_notify_pending(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.notify_pending_write_failed org=%s", org_id)
+        _log.warning("streak.notify_pending_write_failed org=%s", org_id, exc_info=True)
 
 
 async def _record_streak_notify_failed(
@@ -990,7 +990,7 @@ async def _record_streak_notify_failed(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.notify_failed_audit_write_failed org=%s", org_id)
+        _log.warning("streak.notify_failed_audit_write_failed org=%s", org_id, exc_info=True)
 
 
 async def _pend_streak_notify_retry(
@@ -1158,7 +1158,7 @@ async def _trigger_active_state(org_id: uuid.UUID, trigger_id: uuid.UUID) -> boo
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.trigger_active_read_failed org=%s trigger=%s", org_id, trigger_id)
+        _log.warning("streak.trigger_active_read_failed org=%s trigger=%s", org_id, trigger_id, exc_info=True)
         return None
 
 
@@ -1168,7 +1168,7 @@ async def _srem_streak_member(redis_client: AsyncRedis, key: str, raw: str) -> N
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.notify_pending_remove_failed key=%s", key)
+        _log.warning("streak.notify_pending_remove_failed key=%s", key, exc_info=True)
 
 
 def _build_deactivation_payload(
@@ -1279,7 +1279,7 @@ async def _retry_one_pending_member(
             attempted,
         )
     except Exception:
-        _log.warning("streak.notify_pending_retry_failed org=%s", org_id)
+        _log.warning("streak.notify_pending_retry_failed org=%s", org_id, exc_info=True)
         await _srem_streak_member(redis_client, key, raw)
         return "failed", attempted
 
@@ -1364,7 +1364,7 @@ async def _read_streak_pending_members(redis_client: AsyncRedis, org_id: uuid.UU
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.notify_pending_read_failed org=%s", org_id)
+        _log.warning("streak.notify_pending_read_failed org=%s", org_id, exc_info=True)
         return None
 
 
@@ -1435,7 +1435,7 @@ async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int) -> None:
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.mass_cascade_audit_write_failed org=%s", org_id)
+        _log.warning("streak.mass_cascade_audit_write_failed org=%s", org_id, exc_info=True)
 
 
 async def _streak_mass_cascade_alerted_this_window(
@@ -1467,7 +1467,7 @@ async def _streak_mass_cascade_alerted_this_window(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.mass_cascade_dedup_check_failed org=%s", org_id)
+        _log.warning("streak.mass_cascade_dedup_check_failed org=%s", org_id, exc_info=True)
         return False  # fail-open: cannot confirm a prior alert -> alert
 
 
@@ -1512,7 +1512,7 @@ async def _maybe_alert_mass_cascade(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.mass_cascade_check_failed org=%s", org_id)
+        _log.warning("streak.mass_cascade_check_failed org=%s", org_id, exc_info=True)
         return False
 
 
@@ -1543,7 +1543,7 @@ async def _pipeline_name(
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("streak.pipeline_name_read_failed pipeline=%s", pipeline_id)
+        _log.warning("streak.pipeline_name_read_failed pipeline=%s", pipeline_id, exc_info=True)
         return ""
 
 
