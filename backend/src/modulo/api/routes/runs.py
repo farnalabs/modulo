@@ -1232,7 +1232,11 @@ async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id:
             detail=f"Run is already in terminal status: {run.status}",
         )
 
-    was_paused = run.status in ("awaiting_human", "claimed")
+    # qa F10: ``hitl_parked`` is the parked class too — a parked run's gate
+    # decisions were never finalize-eligible (it is the awaiting_human state
+    # after expiry), so cancelling it must NOT run finalize_cost (the run
+    # holds no accrued-spend accounting the cancel path owns).
+    was_paused = run.status in ("awaiting_human", "claimed", "hitl_parked")
     await request_cancellation(session, run_id)
     if not was_paused:
         from modulo.core.cost_controller.finalize import finalize_cancelled_run
