@@ -160,8 +160,13 @@ describe('EnvironmentProfileForm — create mode', () => {
 
     // No tier badge is shown until a provider with a runner tier is selected.
     expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(false)
-
     const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = ''
+    await nextTick()
+
+    // The badge only renders once a provider with a runner tier is selected.
+    expect(wrapper.find('[data-testid="envprofile-form-tier-badge"]').exists()).toBe(false)
+
     vm.form.provider_type = 'e2b'
     await nextTick()
 

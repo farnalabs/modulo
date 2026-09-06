@@ -106,7 +106,7 @@ Inline confirmation, server-reject-and-explain naming affected edges. The fronte
 - Rollout note (unchanged): `replace_pipeline_graph_endpoint` currently has no authorization check at all – net-new for weakening transitions. An audit query for non-admin accounts with historical gate-touching edits is run before flipping enforcement on; findings treated as an incident.
 - MCP tooling dependent on MCP-driven gate weakening will see denials post-ship (structurally guaranteed via the literal `caller_type="mcp"` at the MCP call site) – check dogfooded pipelines.
 - Ships directly to enforcing, with **no rollback lever specific to this control** (no kill switch, by design – see §3 item 5). If the guard itself misbehaves in production, rollback is a code revert, not a flag flip. This is a deliberate tradeoff: an HITL-integrity control that can be silently disabled (even for good operational reasons) is weaker than one that can't be, and ADR-017 already made this call for the general case.
-- PRD update at `docs/prd.md` §8.8 alongside §5/§7.x, and a cross-reference added to ADR-017 pointing at this plan as the concrete "Service-layer backstop" spec.
+- A cross-reference added to ADR-017 pointing at this plan as the concrete "Service-layer backstop" spec.
 - Known limitation, stated plainly: no per-account break-glass path exists at ship time (§4). This is unrelated to the kill-switch removal in this version – it was already true in v14-v18.
 
 ## Effort estimate

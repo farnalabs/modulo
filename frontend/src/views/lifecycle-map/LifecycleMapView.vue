@@ -1,57 +1,49 @@
 <template>
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
-      <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
-        <div class="flex items-center gap-3">
-          <router-link
-            to="/lifecycle-maps"
-            class="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-            Back
-          </router-link>
-          <PageHeader :title="mapData?.name || 'Lifecycle Map'" />
-          <span
-            v-if="mapData"
-            class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-          >
-            v{{ mapData.current_version }}
-          </span>
-        </div>
-        <div class="flex items-center gap-2">
-          <Button severity="secondary" outlined size="small" :disabled="exporting || !mapData" :data-testid="'lifecycle-map-export'" @click="handleExport">
-            {{ exporting ? $t('views.LifecycleMapView.exporting') : $t('views.LifecycleMapView.export_map') }}
-          </Button>
-          <Button severity="secondary" outlined size="small" :data-testid="'lifecycle-map-import'" @click="openImportDialog">
-            {{ $t('views.LifecycleMapView.import_map') }}
-          </Button>
-          <template v-if="mapData?.versions && mapData.versions.length > 1">
-            <div class="flex items-center gap-2">
-              <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
-              <Select
-  :aria-label="$t('views.LifecycleMapView.version_label')"
-  v-model="selectedVersion"
-  @update:model-value="onVersionChange"
-  :placeholder="$t('views.LifecycleMapView.version_placeholder')"
-  data-testid="lifecycle-map-version-select"
-  :options="sortedVersions.map(v => ({ value: v.version, label: 'v' + v.version + '—' + (v.created_by ? shortId(v.created_by) : '') }))"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
-            </div>
+      <div class="mx-auto max-w-6xl">
+        <PageHeader :title="mapData?.name || 'Lifecycle Map'" back-link="/lifecycle-maps">
+          <template #right>
+            <span
+              v-if="mapData"
+              class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+            >
+              v{{ mapData.current_version }}
+            </span>
+            <Button severity="secondary" outlined size="small" :disabled="exporting || !mapData" :data-testid="'lifecycle-map-export'" @click="handleExport">
+              {{ exporting ? $t('views.LifecycleMapView.exporting') : $t('views.LifecycleMapView.export_map') }}
+            </Button>
+            <Button severity="secondary" outlined size="small" :data-testid="'lifecycle-map-import'" @click="openImportDialog">
+              {{ $t('views.LifecycleMapView.import_map') }}
+            </Button>
+            <template v-if="mapData?.versions && mapData.versions.length > 1">
+              <div class="flex items-center gap-2">
+                <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
+                <Select
+                  :aria-label="$t('views.LifecycleMapView.version_label')"
+                  v-model="selectedVersion"
+                  @update:model-value="onVersionChange"
+                  :placeholder="$t('views.LifecycleMapView.version_placeholder')"
+                  data-testid="lifecycle-map-version-select"
+                  :options="sortedVersions.map(v => ({ value: v.version, label: 'v' + v.version + '—' + (v.created_by ? shortId(v.created_by) : '') }))"
+                  option-label="label"
+                  option-value="value"
+                >
+                  <template #option="{ option }">
+                    <span :data-value="option.value">{{ option.label }}</span>
+                  </template>
+                </Select>
+              </div>
+            </template>
+            <Button severity="secondary" outlined size="small" data-testid="lifecycle-map-view-edit" :aria-label="$t('views.LifecycleMapView.edit')" @click="editMap">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+              {{ $t('views.LifecycleMapView.edit') }}
+            </Button>
+            <Button severity="danger" outlined size="small" data-testid="lifecycle-map-view-delete" :aria-label="$t('views.LifecycleMapView.delete')" :disabled="!mapData" @click="showDeleteDialog = true">
+              {{ $t('views.LifecycleMapView.delete') }}
+            </Button>
           </template>
-          <Button severity="secondary" outlined size="small" data-testid="lifecycle-map-view-edit" :aria-label="$t('views.LifecycleMapView.edit')" @click="editMap">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
-            {{ $t('views.LifecycleMapView.edit') }}
-          </Button>
-          <Button severity="danger" outlined size="small" data-testid="lifecycle-map-view-delete" :aria-label="$t('views.LifecycleMapView.delete')" :disabled="!mapData" @click="showDeleteDialog = true">
-            {{ $t('views.LifecycleMapView.delete') }}
-          </Button>
-        </div>
+        </PageHeader>
         <p
           v-if="exportError"
           role="alert"
