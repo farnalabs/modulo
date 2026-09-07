@@ -43,6 +43,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.exceptions import RateLimitConflictError
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
@@ -51,7 +52,6 @@ from modulo.core.trigger_engine import (
     TriggerEngine,
     _apply_payload_mapping,
     _extract_work_item_refs,
-    _uuid_to_lock_keys,
     verify_timestamp,
 )
 from modulo.db.crud.run import create_run

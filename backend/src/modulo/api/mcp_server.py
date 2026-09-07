@@ -153,12 +153,7 @@ from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.run import (
-    AWAITING_HUMAN_STATUS,
-    HITL_ACTIONABLE_RUN_STATUSES,
-    TERMINAL_STATUSES,
-    Run,
-)
+from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_ACTIONABLE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings

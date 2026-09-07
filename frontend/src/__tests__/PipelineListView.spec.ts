@@ -8,7 +8,7 @@ const mockResponses: Record<string, unknown> = {
   default: { items: [], total: 0, page: 1, page_size: 100 },
 }
 
-const { patchMock } = vi.hoisted(() => ({ patchMock: vi.fn() }))
+const { patchMock, postMock } = vi.hoisted(() => ({ patchMock: vi.fn(), postMock: vi.fn() }))
 
 vi.mock('../lib/api/client', () => {
   const mockGet = vi.fn((url: string, options?: { params?: { query?: { page_size?: number } } }) => {
@@ -22,7 +22,7 @@ vi.mock('../lib/api/client', () => {
         error: undefined,
       })
     }
-    return Promise.resolve({ data: mockResponses.default, error: undefined })
+    return Promise.resolve({ data: mockResponses[url] ?? mockResponses.default, error: undefined })
   })
   return {
     api: {
@@ -39,13 +39,14 @@ vi.mock('../lib/api/client', () => {
 vi.mock('../composables/useApi', () => ({
   useApi: () => ({
     get: vi.fn((url: string) => Promise.resolve(mockResponses[url] ?? [])),
-    post: vi.fn(),
+    post: postMock,
     patch: patchMock,
   }),
 }))
 
 import PipelineListView from '../views/PipelineListView.vue'
 import { api } from '../lib/api/client'
+import { usePlanStore } from '../stores/planStore'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -451,5 +452,280 @@ describe('PipelineListView', () => {
     for (const [url, options] of fetchCalls) {
       expect(options?.params?.query?.page_size, `${url} page_size must be clamped to the backend max`).toBeLessThanOrEqual(100)
     }
+  })
+
+  it('opens the delete confirmation dialog and renders its i18n copy', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Delete Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openDelete: (p: typeof pipeline) => void }
+    vm.openDelete(pipeline)
+    await nextTick()
+
+    const dialog = wrapper.find('[aria-label="Delete Pipeline"]')
+    expect(dialog.exists()).toBe(true)
+    // The UX-sweep i18n strings for the delete confirm dialog must render.
+    expect(wrapper.text()).toContain('Are you sure? This permanently deletes the pipeline and all its runs.')
+    const buttons = wrapper.findAll('button')
+    expect(buttons.some(b => b.text() === 'Cancel')).toBe(true)
+    expect(buttons.some(b => b.text() === 'Delete')).toBe(true)
+  })
+
+  it('opens the move-to-folder dialog and renders the folder choices with icons', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+    ]
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Move Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: null }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openMoveToFolder: (p: typeof pipeline) => void }
+    vm.openMoveToFolder(pipeline)
+    await flushPromises()
+    await nextTick()
+
+    const dialog = wrapper.find('[aria-label="Move to Folder"]')
+    expect(dialog.exists()).toBe(true)
+    // The folder choices (with their lucide icons) and the "No folder" option
+    // introduced by the UX sweep must render.
+    expect(wrapper.text()).toContain('Folder One')
+    expect(wrapper.text()).toContain('No folder')
+  })
+
+  it('resolves the Last Run and Trigger columns from the runs/triggers APIs', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Dated Pipe', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    mockResponses['/api/v1/runs'] = { items: [{ id: 'r1', pipeline_id: 'p1', created_at: '2025-03-04T05:06:07Z' }], total: 1, page: 1, page_size: 100 }
+    mockResponses['/api/v1/triggers'] = { items: [{ id: 't1', pipeline_id: 'p1', trigger_type: 'webhook' }], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    // Last Run column must resolve from the newest run for the pipeline.
+    expect(wrapper.text()).toContain('2025')
+    // Trigger column must resolve from the newest trigger for the pipeline.
+    expect(wrapper.text()).toContain('webhook')
+  })
+
+  it('filters the table by search term and shows the no-match state', async () => {
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Alpha Pipeline', description: 'first', visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
+        { id: 'p2', organisation_id: 'org1', name: 'Beta Pipeline', description: 'second', visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 100,
+    }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { search: string }
+    vm.search = 'alpha'
+    await nextTick()
+    expect(wrapper.text()).toContain('Alpha Pipeline')
+    expect(wrapper.text()).not.toContain('Beta Pipeline')
+
+    // A search with no matches swaps the table for the empty-search state.
+    vm.search = 'zzz-no-match'
+    await nextTick()
+    expect(wrapper.text()).toContain('No pipelines match your search')
+  })
+
+  it('navigates to the editor when a pipeline row is clicked', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Click Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+    await wrapper.find('[data-testid="pipeline-tree-row-p1"]').trigger('click')
+    expect(router.push).toHaveBeenCalledWith({ name: 'pipeline-editor', params: { id: 'p1' } })
+  })
+
+  it('drops a pipeline onto a folder row in the table to move it', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+      { id: 'f2', organisation_id: 'org1', name: 'Folder Two', parent_id: null, sort_order: 1 },
+    ]
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [
+        { id: 'p1', organisation_id: 'org1', name: 'Drag Pipe', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f1' },
+        { id: 'p2', organisation_id: 'org1', name: 'Other Pipe', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: 'f2' },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 100,
+    }
+    // Expand both folders so their rows render for the drag interaction.
+    localStorage.setItem('modulo.pipelines.expandedFolders', JSON.stringify(['f1', 'f2']))
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const dataTransfer = {
+      store: {} as Record<string, string>,
+      setData(k: string, v: string) { this.store[k] = v },
+      getData(k: string) { return this.store[k] },
+      effectAllowed: '',
+    }
+    const row = wrapper.find('[data-testid="pipeline-tree-row-p1"]')
+    const ds = new Event('dragstart') as unknown as DragEvent
+    ;(ds as unknown as { dataTransfer: unknown }).dataTransfer = dataTransfer
+    row.element.dispatchEvent(ds)
+
+    const folderRows = wrapper.findAll('[data-testid="pipeline-tree-folder-row"]')
+    const targetFolderRow = folderRows.find(r => r.text().includes('Folder Two'))
+    expect(targetFolderRow).toBeDefined()
+    const drop = new Event('drop') as unknown as DragEvent
+    ;(drop as unknown as { dataTransfer: unknown }).dataTransfer = dataTransfer
+    targetFolderRow!.element.dispatchEvent(drop)
+    await flushPromises()
+    expect(patchMock).toHaveBeenCalled()
+  })
+
+  it('renames a pipeline via the action menu and persists the new name', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Old Name', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, pipeline)
+    await nextTick()
+    const rename = vm.actionMenuItems.find(i => i.label === 'Rename')
+    expect(rename).toBeDefined()
+    rename!.command()
+    await nextTick()
+
+    const input = wrapper.find('#pipelinelistview-field-1')
+    expect(input.exists()).toBe(true)
+    await input.setValue('New Name')
+    // The save Button has no fixed aria-label; trigger its click by text.
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Save')
+    await saveBtn!.trigger('click')
+    await flushPromises()
+    expect((api.PATCH as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0)
+  })
+
+  it('archives and unarchives a pipeline via the action menu', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Archive Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, pipeline)
+    await nextTick()
+    const archive = vm.actionMenuItems.find(i => i.label === 'Archive')
+    expect(archive).toBeDefined()
+    archive!.command()
+    await flushPromises()
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/archive')
+
+    // Exercise the Unarchive branch by selecting an already-archived pipeline.
+    vm.openActionMenu({} as MouseEvent, { ...pipeline, archived_at: '2025-02-02T00:00:00Z' })
+    await nextTick()
+    const unarchive = vm.actionMenuItems.find(i => i.label === 'Unarchive')
+    expect(unarchive).toBeDefined()
+    unarchive!.command()
+    await flushPromises()
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/unarchive')
+  })
+
+  it('deletes a pipeline via the action menu when the delete feature is enabled', async () => {
+    const plan = usePlanStore()
+    plan.features.pipeline_delete = true
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Delete Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, pipeline)
+    await nextTick()
+    const del = vm.actionMenuItems.find(i => i.label === 'Delete')
+    expect(del).toBeDefined()
+    del!.command()
+    await nextTick()
+
+    const confirmBtn = wrapper.findAll('button').find(b => b.text() === 'Delete')
+    await confirmBtn!.trigger('click')
+    await flushPromises()
+    expect((api.DELETE as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0)
+  })
+
+  it('saves a move-to-folder selection and refreshes the list', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Move Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: null }
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+    ]
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openMoveToFolder: (p: typeof pipeline) => void }
+    vm.openMoveToFolder(pipeline)
+    await flushPromises()
+    await nextTick()
+    // Select the folder choice, then save.
+    await wrapper.findAll('button').find(b => b.text() === 'Folder One')!.trigger('click')
+    await nextTick()
+    const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Save')
+    await saveBtn!.trigger('click')
+    await flushPromises()
+    expect(patchMock).toHaveBeenCalled()
+    // The move error banner is not shown on success.
+    expect(wrapper.find('[data-testid="pipeline-list-move-error"]').exists()).toBe(false)
   })
 })

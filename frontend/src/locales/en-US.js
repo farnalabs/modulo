@@ -274,7 +274,13 @@ export default {
       "input_payload_json": "Input Payload (JSON)",
       "rename_pipeline": "Rename Pipeline",
       "delete_pipeline": "Delete Pipeline",
-      "invalid_json_in_advanced_payload": "Invalid JSON in advanced payload"
+      "invalid_json_in_advanced_payload": "Invalid JSON in advanced payload",
+      "empty_description": "Create a new pipeline or browse the Library to find a template.",
+      "browse_library": "Browse Library",
+      "visibility_org": "Org",
+      "visibility_team": "Team",
+      "pipeline_name_placeholder": "Pipeline name",
+      "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs."
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
@@ -1757,7 +1763,25 @@ export default {
       "attempts": "Attempts",
       "error": "Error",
       "actions": "Actions",
-      "dead_letter_queue": "Dead Letter Queue"
+      "dead_letter_queue": "Dead Letter Queue",
+      "to": "To",
+      "apply": "Apply",
+      "reset": "Reset",
+      "retry": "Retry",
+      "previous": "Previous",
+      "next": "Next",
+      "of_deliveries": "{count} of {total} deliveries",
+      "try_adjusting_filters": "Try adjusting your filters or wait for notifications to be sent.",
+      "no_additional_details": "No additional details available.",
+      "view_dead_lettered": "View Dead Lettered",
+      "dead_letter_queue_description": "{count} undeliverable notification across all endpoints | {count} undeliverable notifications across all endpoints",
+      "deliveries_count": "{count} delivery | {count} deliveries",
+      "expand_delivery": "Expand delivery {id}",
+      "retry_failed": "Retry failed:",
+      "retry_request_failed": "Retry request failed:",
+      "retried_deliveries_count": "{count} delivery retried | {count} deliveries retried",
+      "errors_count": "{count} error | {count} errors",
+      "retried_with_errors": "{retried} with {errors}"
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",

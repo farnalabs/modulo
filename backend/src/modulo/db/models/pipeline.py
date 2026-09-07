@@ -79,5 +79,6 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     organisation: Mapped["Organisation"] = relationship()
-    creator: Mapped["Account"] = relationship()
+    creator: Mapped["Account"] = relationship(foreign_keys=[account_id])
