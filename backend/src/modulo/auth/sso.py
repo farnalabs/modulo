@@ -37,6 +37,10 @@ from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
 
+# Default OIDC scopes requested when a provider configures none (same default
+# in every branch of the scope resolution below).
+OIDC_DEFAULT_SCOPES = "openid email profile"
+
 
 # ---------------------------------------------------------------------------
 # State signing (CSRF protection for OIDC redirect flow)
@@ -376,11 +380,11 @@ async def oidc_get_authorize_url(
     signed = sign_state(f"{provider_id}:{raw_state}", settings.secret_key)
 
     if isinstance(scopes, list):
-        scope = " ".join(scopes) if scopes else "openid email profile"
+        scope = " ".join(scopes) if scopes else OIDC_DEFAULT_SCOPES
     elif isinstance(scopes, str):
-        scope = scopes.strip() or "openid email profile"
+        scope = scopes.strip() or OIDC_DEFAULT_SCOPES
     else:
-        scope = "openid email profile"
+        scope = OIDC_DEFAULT_SCOPES
     params = urllib.parse.urlencode(
         {
             "client_id": client_id,
