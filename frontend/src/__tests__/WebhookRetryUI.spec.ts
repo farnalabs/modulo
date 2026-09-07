@@ -251,7 +251,7 @@ describe('WebhookRetryUI', () => {
       await nextTick()
       const msg = wrapper.find('[data-testid="admin-notification-log-retry-success"]')
       expect(msg.exists()).toBe(true)
-      expect(msg.text()).toContain('Retried 2 deliveries')
+      expect(msg.text()).toContain('2 deliveries retried')
     })
 
     it('shows partial error message when retry-all has errors', async () => {
@@ -265,7 +265,7 @@ describe('WebhookRetryUI', () => {
       await nextTick()
       const msg = wrapper.find('[data-testid="admin-notification-log-retry-success"]')
       expect(msg.exists()).toBe(true)
-      expect(msg.text()).toContain('Retried 2 deliveries with 1 error(s)')
+      expect(msg.text()).toContain('2 deliveries retried with 1 error')
     })
   })
 })
