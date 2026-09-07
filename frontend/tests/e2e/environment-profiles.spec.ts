@@ -23,7 +23,7 @@ test.describe('Environment Profiles', { tag: "@regression" }, () => {
   test('renders the Environment Profiles page', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/environment-profiles')
-    await expect(page.locator('h1')).toContainText('Environment Profiles')
+    await expect(page.getByRole('heading', { name: 'Environment Profiles' })).toContainText('Environment Profiles')
     if (env.name === 'local') {
       await expect(page.getByTestId('envprofile-list-new')).toBeVisible()
     }
@@ -33,14 +33,14 @@ test.describe('Environment Profiles', { tag: "@regression" }, () => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/environments')
     await expect(page).toHaveURL(/\/environment-profiles$/)
-    await expect(page.locator('h1')).toContainText('Environment Profiles')
+    await expect(page.getByRole('heading', { name: 'Environment Profiles' })).toContainText('Environment Profiles')
   })
 
   test('renders the new-profile form', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/environment-profiles/new')
     await expect(page).toHaveURL(/\/environment-profiles\/new$/)
-    await expect(page.locator('h1')).toContainText('New Environment Profile')
+    await expect(page.getByRole('heading', { name: 'New Environment Profile' })).toContainText('New Environment Profile')
     if (env.name === 'local') {
       await expect(page.getByTestId('envprofile-form-name')).toBeVisible()
       await expect(page.getByTestId('envprofile-form-description')).toBeVisible()
@@ -56,12 +56,12 @@ test.describe('Environment Profiles', { tag: "@regression" }, () => {
   test('shows a validation error on empty submit and cancel returns to the list', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/environment-profiles/new')
-    await expect(page.locator('h1')).toContainText('New Environment Profile')
+    await expect(page.getByRole('heading', { name: 'New Environment Profile' })).toContainText('New Environment Profile')
     await page.getByTestId('envprofile-form-submit').click()
     await expect(page.getByText('Name is required')).toBeVisible()
     await page.getByTestId('envprofile-form-cancel').click()
     await expect(page).toHaveURL(/\/environment-profiles$/)
-    await expect(page.locator('h1')).toContainText('Environment Profiles')
+    await expect(page.getByRole('heading', { name: 'Environment Profiles' })).toContainText('Environment Profiles')
   })
 
   test('renders the edit-profile form for an unknown profile id', { tag: "@regression" }, async ({ page, env }) => {
@@ -77,7 +77,7 @@ test.describe('Environment Profiles', { tag: "@regression" }, () => {
     }
     await page.goto('/environment-profiles/e2e-missing-profile/edit')
     await expect(page).toHaveURL(/\/environment-profiles\/e2e-missing-profile\/edit$/)
-    await expect(page.locator('h1')).toContainText('Edit Environment Profile')
+    await expect(page.getByRole('heading', { name: 'Edit Environment Profile' })).toContainText('Edit Environment Profile')
     if (env.name === 'local') {
       await expect(page.getByTestId('envprofile-form-name')).toBeVisible()
       await expect(page.getByTestId('envprofile-form-submit')).toBeVisible()
@@ -108,7 +108,7 @@ test.describe('Environment Profiles', { tag: "@regression" }, () => {
     await expect(page.getByTestId('envprofile-list-edit')).toBeVisible()
     await page.getByTestId('envprofile-list-edit').click()
     await expect(page).toHaveURL(/\/environment-profiles\/e2e-profile-1\/edit$/)
-    await expect(page.locator('h1')).toContainText('Edit Environment Profile')
+    await expect(page.getByRole('heading', { name: 'Edit Environment Profile' })).toContainText('Edit Environment Profile')
     await expect(page.getByTestId('envprofile-form-name')).toHaveValue('e2e-edit-profile')
   })
 })
