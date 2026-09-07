@@ -1,0 +1,259 @@
+name: "Bundle: single-install artifact (bundle-v*)"
+
+# FAR-670 — P1a bundle pipeline for the single-install native distribution
+# (ADR 031). Tag `bundle-v*` and this workflow builds the linux-amd64
+# tar.gz artifact, attaches it (plus its SHA256SUMS — the P1a checksums page)
+# to the GitHub release, and asserts the pinned bundled-service majors still
+# match docker-compose.yml (the CI mirror of the shared version constants in
+# scripts/bundle-versions.env).
+#
+# Pragmatic v1 choices (documented, per ADR 031):
+#   - PostgreSQL 16 and Redis 8 binaries are extracted from PINNED glibc
+#     (Debian) .deb packages rather than compiled in CI. Sources: PGDG pool
+#     (apt.postgresql.org) for PostgreSQL, Debian 13 (trixie) main for Redis.
+#     NEVER alpine/musl extraction (ADR 031, Decision 3).
+#   - Resulting glibc floor: Debian 13 baseline (glibc 2.41) for the service
+#     binaries; the backend venv is built on this ubuntu-24.04 runner
+#     (glibc 2.39). Support envelope v1: Debian 13+, Ubuntu 26.04+. Widening
+#     it (older-baseline builds, bundled transitive libs) is packaging
+#     hardening tracked for the launcher/packaging tickets.
+#   - Known v1 limitation: transitive shared-library dependencies of the
+#     extracted binaries (e.g. libicu for postgres, libjemalloc for
+#     redis-server) are NOT yet bundled into the artifact; making the binaries
+#     self-contained (bundled lib dir + launcher-set LD_LIBRARY_PATH, or CI
+#     compilation) is tracked for FAR-671.
+#   - The venv's python symlink points at the build runner's uv-managed
+#     interpreter; rewiring it to the bundled runtime/ tree is boot-env work
+#     owned by the launcher (FAR-671).
+
+on:
+  push:
+    tags:
+      - "bundle-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version-parity:
+    # Shared-constants rule (ADR 031, Decision 3/11): the bundle's pinned
+    # majors must match the docker-compose.yml image tags. This is the CI
+    # assertion over scripts/bundle-versions.env; a later ticket also asserts
+    # it from the compose side. Fail loudly on drift — never warn.
+    name: Assert bundle versions match docker-compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assert bundle-versions.env majors match docker-compose.yml tags
+        run: |
+          set -euo pipefail
+          source scripts/bundle-versions.env
+
+          pg_compose_major="$(grep -m1 -E '^[[:space:]]*image:[[:space:]]*postgres:' docker-compose.yml | sed -E 's/.*postgres:([0-9]+).*/\1/' || true)"
+          redis_compose_major="$(grep -m1 -E '^[[:space:]]*image:[[:space:]]*redis:' docker-compose.yml | sed -E 's/.*redis:([0-9]+).*/\1/' || true)"
+
+          case "${pg_compose_major}" in
+            '' | *[!0-9]*) echo "::error::could not parse a postgres major version from docker-compose.yml (got '${pg_compose_major}')"; exit 1 ;;
+          esac
+          case "${redis_compose_major}" in
+            '' | *[!0-9]*) echo "::error::could not parse a redis major version from docker-compose.yml (got '${redis_compose_major}')"; exit 1 ;;
+          esac
+
+          if [ "${PG_MAJOR}" != "${pg_compose_major}" ]; then
+            echo "::error::version drift: bundle pins PostgreSQL major ${PG_MAJOR} (scripts/bundle-versions.env) but docker-compose.yml pins major ${pg_compose_major}. Bump both together."
+            exit 1
+          fi
+          if [ "${REDIS_MAJOR}" != "${redis_compose_major}" ]; then
+            echo "::error::version drift: bundle pins Redis major ${REDIS_MAJOR} (scripts/bundle-versions.env) but docker-compose.yml pins major ${redis_compose_major}. Bump both together."
+            exit 1
+          fi
+          echo "parity OK: postgres ${PG_MAJOR}, redis ${REDIS_MAJOR} (bundle == docker-compose)"
+
+  bundle:
+    # linux-amd64 only for now; the matrix structure below is where linux-arm64
+    # slots in (scripts/bundle-versions.env already carries the arm64 pins).
+    name: Bundle linux-${{ matrix.arch }}
+    needs: version-parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve pinned versions (scripts/bundle-versions.env)
+        run: |
+          set -euo pipefail
+          source scripts/bundle-versions.env
+          case "${{ matrix.arch }}" in
+            amd64) PBS_TARBALL="$PBS_AMD64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_AMD64_SHA256" ;;
+            arm64) PBS_TARBALL="$PBS_ARM64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_ARM64_SHA256" ;;
+            *) echo "::error::unsupported matrix arch: ${{ matrix.arch }}"; exit 1 ;;
+          esac
+          VERSION_NUM="${GITHUB_REF_NAME#bundle-v}"
+          {
+            echo "ARCH=${{ matrix.arch }}"
+            echo "VERSION_NUM=${VERSION_NUM}"
+            echo "PBS_RELEASE=${PBS_RELEASE}"
+            echo "PBS_TARBALL=${PBS_TARBALL}"
+            echo "PBS_SHA256=${PBS_SHA256}"
+            echo "BUNDLE_ROOT=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}"
+            echo "TARBALL_NAME=modulo-${VERSION_NUM}-linux-${{ matrix.arch }}.tar.gz"
+          } >> "$GITHUB_ENV"
+
+      - name: Download and sha256-verify python-build-standalone
+        run: |
+          set -euo pipefail
+          mkdir -p downloads
+          curl -fsSL --retry 3 --retry-delay 2 -o "downloads/${PBS_TARBALL}" \
+            "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_TARBALL}"
+          echo "${PBS_SHA256}  ${PBS_TARBALL}" | (cd downloads && sha256sum --check --strict -)
+
+      - name: Download and sha256-verify pinned PostgreSQL + Redis debs
+        run: |
+          set -euo pipefail
+          source scripts/bundle-versions.env
+          case "$ARCH" in
+            amd64) PG_SRV_SHA="$PG_SERVER_AMD64_SHA256"; PG_CLI_SHA="$PG_CLIENT_AMD64_SHA256"; REDIS_SRV_SHA="$REDIS_SERVER_AMD64_SHA256"; REDIS_TOOLS_SHA="$REDIS_TOOLS_AMD64_SHA256" ;;
+            arm64) PG_SRV_SHA="$PG_SERVER_ARM64_SHA256"; PG_CLI_SHA="$PG_CLIENT_ARM64_SHA256"; REDIS_SRV_SHA="$REDIS_SERVER_ARM64_SHA256"; REDIS_TOOLS_SHA="$REDIS_TOOLS_ARM64_SHA256" ;;
+            *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
+          esac
+
+          download_and_verify() {
+            local url="$1" name="$2" sha="$3"
+            curl -fsSL --retry 3 --retry-delay 2 -o "downloads/${name}" "$url"
+            echo "${sha}  ${name}" | (cd downloads && sha256sum --check --strict -)
+          }
+
+          download_and_verify "${PG_POOL_BASE_URL}/postgresql-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-16.deb" "$PG_SRV_SHA"
+          download_and_verify "${PG_POOL_BASE_URL}/postgresql-client-16_${PG_DEB_VERSION}_${ARCH}.deb" "postgresql-client-16.deb" "$PG_CLI_SHA"
+          download_and_verify "${REDIS_POOL_BASE_URL}/redis-server_${REDIS_DEB_VERSION}_${ARCH}.deb" "redis-server.deb" "$REDIS_SRV_SHA"
+          download_and_verify "${REDIS_POOL_BASE_URL}/redis-tools_${REDIS_DEB_VERSION}_${ARCH}.deb" "redis-tools.deb" "$REDIS_TOOLS_SHA"
+
+          # Chain-of-custody assert: the deb's own Version field must equal the pin.
+          for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}" "redis-server.deb:${REDIS_DEB_VERSION}" "redis-tools.deb:${REDIS_DEB_VERSION}"; do
+            deb="${spec%%:*}"
+            want="${spec#*:}"
+            got="$(dpkg-deb -f "downloads/${deb}" Version)"
+            if [ "$got" != "$want" ]; then
+              echo "::error::${deb} Version field is '${got}' but the pin is '${want}' — refusing to ship a mismatched package"
+              exit 1
+            fi
+          done
+
+      - name: Assemble bundle layout
+        run: |
+          set -euo pipefail
+          source scripts/bundle-versions.env
+          BUNDLE="build/${BUNDLE_ROOT}"
+          mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis"
+
+          # CPython runtime (glibc build — x86_64/aarch64-unknown-linux-gnu).
+          # Strip the top-level `python/` dir so runtime/ IS the interpreter
+          # tree: runtime/bin/python3.12, runtime/lib/...
+          tar -xzf "downloads/${PBS_TARBALL}" -C "$BUNDLE/runtime" --strip-components=1
+
+          # PostgreSQL server + client (pg_dump/pg_isready/psql live in the
+          # client deb) into pg/bin + pg/share.
+          dpkg-deb -x downloads/postgresql-16.deb debx/pg-server
+          dpkg-deb -x downloads/postgresql-client-16.deb debx/pg-client
+          mkdir -p "$BUNDLE/pg/share"
+          cp -a debx/pg-server/usr/lib/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/"
+          cp -a debx/pg-client/usr/lib/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/"
+          cp -a debx/pg-server/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/"
+          cp -a debx/pg-client/usr/share/postgresql/"${PG_MAJOR}"/. "$BUNDLE/pg/share/"
+
+          # redis-server (server deb) + redis-cli and friends (redis-tools deb).
+          dpkg-deb -x downloads/redis-server.deb debx/redis-server
+          dpkg-deb -x downloads/redis-tools.deb debx/redis-tools
+          cp -a debx/redis-server/usr/bin/redis-server "$BUNDLE/redis/"
+          cp -a debx/redis-tools/usr/bin/. "$BUNDLE/redis/"
+
+          # Launcher placeholder — the real launcher binary is FAR-671.
+          # TODO(FAR-671): replace with the actual launcher (process
+          # supervision, env scrub, boot contract per ADR 031 Decisions 1-2),
+          # plus PG share-dir relocation and venv rewiring to runtime/.
+          {
+            echo '#!/bin/sh'
+            echo '# PLACEHOLDER — the Modulo launcher is implemented in FAR-671.'
+            echo '# The bundle layout is complete; the launcher wires it together.'
+            echo 'echo "Modulo bundle layout is present, but the launcher is not implemented yet (tracked as FAR-671)." >&2'
+            echo 'exit 1'
+          } > "$BUNDLE/launcher"
+          chmod 755 "$BUNDLE/launcher"
+
+          echo "$GITHUB_REF_NAME" > "$BUNDLE/VERSION"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: uv sync and stage backend into the bundle
+        run: |
+          set -euo pipefail
+          cd backend
+          uv sync --frozen --no-dev
+          BUNDLE="../build/${BUNDLE_ROOT}"
+          mkdir -p "$BUNDLE/backend"
+          cp -a src "$BUNDLE/backend/src"
+          cp pyproject.toml uv.lock "$BUNDLE/backend/"
+          cp -a .venv "$BUNDLE/backend/.venv"
+          # TODO(FAR-671): the venv's python symlink targets the runner's
+          # uv-managed interpreter; the launcher rewires it to runtime/ at boot.
+
+      - name: Build frontend dist (pnpm) and stage into the bundle
+        run: |
+          set -euo pipefail
+          cd frontend
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm run build
+          BUNDLE="../build/${BUNDLE_ROOT}"
+          mkdir -p "$BUNDLE/frontend-dist"
+          cp -a dist/. "$BUNDLE/frontend-dist/"
+
+      - name: Generate SHA256SUMS over every shipped file
+        run: |
+          set -euo pipefail
+          cd "build/${BUNDLE_ROOT}"
+          find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          wc -l SHA256SUMS
+
+      - name: Create tar.gz and its release checksum
+        run: |
+          set -euo pipefail
+          cd build
+          tar -czf "${TARBALL_NAME}" "${BUNDLE_ROOT}"
+          sha256sum "${TARBALL_NAME}" > SHA256SUMS
+          cat SHA256SUMS
+          ls -lh "${TARBALL_NAME}"
+
+      - name: Attach tar.gz + SHA256SUMS to the bundle release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release ${TAG} already exists — uploading artifacts with --clobber"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Modulo bundle ${TAG}" \
+              --notes "Single-install bundle artifact (P1a). Verify with SHA256SUMS before install — see scripts/install.sh. P1a ships checksums only; signed manifests land in P1b (FAR-675)." \
+              --latest=false
+          fi
+          gh release upload "$TAG" "build/${TARBALL_NAME}" "build/SHA256SUMS" --repo "$GITHUB_REPOSITORY" --clobber
