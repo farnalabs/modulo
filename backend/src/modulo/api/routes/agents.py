@@ -1148,7 +1148,7 @@ async def delete_binding_endpoint(
             agent = await get_agent(session, agent_id)
             if agent is None or agent.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
-            deleted = await delete_binding(session, binding_id)
+            deleted = await delete_binding(session, binding_id, agent_id=agent_id)
             if deleted:
                 await append_audit_event(
                     session,

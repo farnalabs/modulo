@@ -120,9 +120,18 @@ async def delete_all_bindings_for_agent(session: AsyncSession, agent_id: uuid.UU
     return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
 
-async def delete_binding(session: AsyncSession, binding_id: uuid.UUID) -> bool:
+async def delete_binding(session: AsyncSession, binding_id: uuid.UUID, *, agent_id: uuid.UUID | None = None) -> bool:
+    """Delete a single binding row.
+
+    When ``agent_id`` is supplied the delete is scoped to that agent: a binding
+    owned by a different (same-org) agent is NOT deleted and ``False`` is
+    returned, so callers can 404 instead of silently deleting the wrong agent's
+    binding and writing an audit event naming the wrong resource.
+    """
     binding = await get_binding(session, binding_id)
     if binding is None:
+        return False
+    if agent_id is not None and binding.agent_id != agent_id:
         return False
     await session.delete(binding)
     await session.flush()

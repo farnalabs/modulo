@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from modulo.core.runner_bindings import resolve_agent_bindings
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.agent_runner_binding import (
+    delete_binding,
     get_binding,
     list_bindings_for_agent,
     replace_agent_bindings,
@@ -208,6 +209,30 @@ async def test_rls_org_isolation(db_engine: AsyncEngine, app_engine: AsyncEngine
         await set_rls_execution_context(session)
         rows = await list_bindings_for_agent(session, foreign_agent)
         assert not rows
+
+
+async def test_delete_binding_scoped_to_agent(rls_session, test_org, test_user) -> None:
+    """A binding owned by a DIFFERENT same-org agent must NOT be deleted by a
+    wrong-agent DELETE: the call returns False and the row survives, so the
+    endpoint can 404 instead of deleting the wrong agent's binding and writing
+    an audit event naming the wrong resource.
+    """
+    agent_a, mb_a = await _seed_agent_and_backend(rls_session, test_org, test_user, "BindAgent-A")
+    agent_b, mb_b = await _seed_agent_and_backend(rls_session, test_org, test_user, "BindAgent-B")
+    created_a = await replace_agent_bindings(
+        rls_session, org_id=test_org, agent_id=agent_a.id, bindings_specs=[_binding_spec(mb_a.id, test_user)]
+    )
+    created_b = await replace_agent_bindings(
+        rls_session, org_id=test_org, agent_id=agent_b.id, bindings_specs=[_binding_spec(mb_b.id, test_user)]
+    )
+
+    # Wrong-agent DELETE is scoped out: not deleted, row survives.
+    assert await delete_binding(rls_session, created_b[0].id, agent_id=agent_a.id) is False
+    assert (await get_binding(rls_session, created_b[0].id)) is not None
+
+    # Correct-agent DELETE removes the row.
+    assert await delete_binding(rls_session, created_a[0].id, agent_id=agent_a.id) is True
+    assert (await get_binding(rls_session, created_a[0].id)) is None
 
 
 async def test_org_teardown_with_bindings_present(db_engine: AsyncEngine, test_user: uuid.UUID) -> None:
