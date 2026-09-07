@@ -274,7 +274,13 @@ export default {
       "input_payload_json": "Input Payload (JSON)",
       "rename_pipeline": "Rename Pipeline",
       "delete_pipeline": "Delete Pipeline",
-      "invalid_json_in_advanced_payload": "Invalid JSON in advanced payload"
+      "invalid_json_in_advanced_payload": "Invalid JSON in advanced payload",
+      "empty_description": "Create a new pipeline or browse the Library to find a template.",
+      "browse_library": "Browse Library",
+      "visibility_org": "Org",
+      "visibility_team": "Team",
+      "pipeline_name_placeholder": "Pipeline name",
+      "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs."
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
