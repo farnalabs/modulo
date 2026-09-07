@@ -2482,7 +2482,7 @@ export default {
       "view_type": "View Type",
       "duplicate_view": "'Duplicate view'",
       "created_by": "Created By",
-      "edit_view_1": "Edit view",
+      "edit_view_1": "Edit View",
       "sort_by": "Sort By",
       "new_view": "New View",
       "delete_view": "'Delete view'",
@@ -2502,7 +2502,12 @@ export default {
       "kanban": "Kanban",
       "timeline": "Timeline",
       "ascending": "Ascending",
-      "descending": "Descending"
+      "descending": "Descending",
+      "create_view": "Create View",
+      "confirm_delete": "Delete \"{name}\"?",
+      "this_action_cannot_be_undone": "This action cannot be undone.",
+      "empty_description": "Create a view to save filter configurations and layout preferences so you can quickly switch between different data perspectives.",
+      "learn_about_saved_views": "Learn about saved views"
     },
     "ProductAnalytics": {
       "consent_prompt_title": "Help improve Modulo",
