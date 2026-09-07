@@ -26,7 +26,7 @@
                 </Select>
               </template>
             </FilterBar>
-            <Button class="cursor-pointer" @click="handleNewMap" data-testid="lifecycle-map-list-new">
+            <Button @click="handleNewMap" data-testid="lifecycle-map-list-new">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               New Map
             </Button>
@@ -59,7 +59,7 @@
         title="No Lifecycle Maps yet"
         description="Create one to model your SDLC."
       >
-        <Button class="cursor-pointer w-full sm:w-auto" @click="handleNewMap" data-testid="lifecycle-map-list-empty-new">
+        <Button class="w-full sm:w-auto" @click="handleNewMap" data-testid="lifecycle-map-list-empty-new">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Create Map
         </Button>
@@ -69,7 +69,7 @@
         <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
           v-for="m in pagedMaps"
           :key="m.id"
-          class="card card-hover p-5 cursor-pointer"
+          class="card card-hover p-5"
           @click="openMap(m)"
           data-testid="lifecycle-map-list-card"
         >

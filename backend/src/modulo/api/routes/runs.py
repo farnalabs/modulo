@@ -20,7 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
+from modulo.api.constants import (
+    MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+    MSG_RESOURCE_ALREADY_EXISTS,
+    MSG_UNEXPECTED_ERROR,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
@@ -88,9 +92,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
 
-_MSG_FEATURE_NOT_AVAILABLE_FEATURE = (
-    "Feature is not available. This feature requires a database update. Please contact support."
-)
 _CODE_ROUTE_DB_ERROR = "route.db_error"
 _MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 _CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR = "pipeline_execution.unexpected_error"
@@ -544,7 +545,7 @@ async def list_runs_endpoint(
         _log.exception("route.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
     except SQLAlchemyError:
         _log.exception(_CODE_ROUTE_DB_ERROR)
@@ -1039,7 +1040,7 @@ async def trigger_run(
         _log.exception(_CODE_RUNS_TRIGGER_RUN)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1098,7 +1099,7 @@ async def get_run_stats_endpoint(
         _log.exception("runs.get_run_stats_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1135,7 +1136,7 @@ async def get_run_heatmap_endpoint(
         _log.exception("runs.get_run_heatmap_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1179,7 +1180,7 @@ async def get_run_status(
         _log.exception("runs.get_run_status")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1273,7 +1274,7 @@ async def cancel_run(
         _log.exception("runs.cancel_run")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1480,7 +1481,7 @@ async def get_run_io_endpoint(
         _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1535,7 +1536,7 @@ async def export_run_fixture(
         _log.exception("runs.export_run_fixture")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1640,7 +1641,7 @@ async def get_run_workspace_events(
         _log.exception("runs.get_run_workspace_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1745,7 +1746,7 @@ async def get_run_node_output(
         _log.exception("runs.get_run_node_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1892,7 +1893,7 @@ async def observe_run_node(
         _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -1933,7 +1934,7 @@ async def observe_run_node(
         _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -2106,7 +2107,7 @@ async def recover_run_node(
         _log.exception("runs.recover_run_node")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -2264,7 +2265,7 @@ async def guardrail_override_run(
         _log.exception("runs.guardrail_override")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:
@@ -2640,7 +2641,7 @@ async def reveal_node_prompt(
         _log.exception(_CODE_RUNS_REVEAL_NODE_PROMPT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
     except HTTPException:
         raise
@@ -2716,7 +2717,7 @@ async def diff_node_output(
         _log.exception("runs.diff_node_output")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_FEATURE_NOT_AVAILABLE_FEATURE,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError:

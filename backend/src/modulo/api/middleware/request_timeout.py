@@ -4,9 +4,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+
+from modulo.api.models.problem import ProblemDetail, ProblemType
 
 _log = logging.getLogger(__name__)
 
@@ -51,13 +52,10 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
                     "timeout_s": timeout,
                 },
             )
-            return JSONResponse(
-                status_code=504,
-                content={
-                    "error": "gateway_timeout",
-                    "detail": f"Request exceeded {timeout}s timeout",
-                },
-            )
+            return ProblemDetail.from_type(
+                problem_type=ProblemType.GATEWAY_TIMEOUT,
+                detail=f"Request exceeded {timeout}s timeout",
+            ).to_response()
         except asyncio.CancelledError:
             raise
 

@@ -469,7 +469,7 @@
                   type="button"
                   data-testid="run-detail-node-trace-id"
                   :aria-label="node.isNodeSpanId ? $t('views.RunDetailView.copy_node_span_id') : $t('views.RunDetailView.copy_node_trace_id')"
-                  class="cursor-pointer rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
+                  class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
                   :title="node.traceId"
                   @click="copyText(node.traceId!)"
                   @keydown.enter="copyText(node.traceId!)"

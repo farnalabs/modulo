@@ -56,7 +56,7 @@
             v-for="c in connectors"
             :key="c.id"
             data-testid="onboarding-wizard-connector-card"
-            class="flex cursor-pointer items-center gap-3 rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="flex items-center gap-3 rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             :class="wizardState.connectorId === c.id ? 'border-primary bg-primary/5' : 'border-input'"
             @click="wizardState.connectorId = c.id; wizardState.connectorName = c.name"
           >
@@ -231,7 +231,7 @@
               v-for="item in filteredLibraryItems"
               :key="item.id"
               data-testid="onboarding-wizard-library-item"
-              class="cursor-pointer rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              class="rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               :class="wizardState.selectedLibraryItemId === item.id ? 'border-primary bg-primary/5' : 'border-input'"
               @click="wizardState.selectedLibraryItemId = wizardState.selectedLibraryItemId === item.id ? null : item.id"
             >

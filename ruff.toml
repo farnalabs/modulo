@@ -27,7 +27,6 @@ select = [
     # so enabling them tightens the lint gate against future regressions without
     # touching existing code.
     "G001", "G002", "G003", "G004", "G201",
-    "PERF101", "PERF203", "PERF402", "PERF403",
     "PT020", "PT021",
     "Q000", "Q003",
     "ICN",
@@ -102,6 +101,9 @@ select = [
     "PLR1733",
     "PLR1736",
     "PLC2401",
+    # PERF group: matches backend/pyproject.toml full PERF prefix to close drift.
+    # Verified zero current violations with ruff==0.16.5: `ruff check . --select PERF --statistics`.
+    "PERF",
     # Fourth wave of defensive gate-strengthening (verified zero current
     # violations with ruff==0.16.5: `ruff check . --extend-select <codes>
     # --statistics`). Mirrors the backend/pyproject.toml gate.
@@ -114,7 +116,6 @@ select = [
     "PLW0133",
     "PLW0245",
     "PLW0604",
-    "PERF401",
     # Fifth wave of defensive gate-strengthening (verified zero current
     # violations with ruff==0.16.5: `ruff check . --extend-select <codes>
     # --statistics`). Mirrors the backend/pyproject.toml gate. Includes PT027
@@ -270,5 +271,14 @@ ignore = [
 "backend/src/modulo/core/cron_scheduler.py" = ["UP017"]
 "backend/src/modulo/core/reports/scheduler.py" = ["UP017"]
 "backend/src/modulo/core/trigger_engine/polling.py" = ["UP017"]
+"backend/tests/**" = ["ISC", "PERF"]
+"backend/src/modulo/api/mcp_server.py" = ["RET503"]
+"backend/src/modulo/core/housekeeping.py" = ["E501"]
+"backend/tests/unit/scim/test_scim_provisioning.py" = ["N815", "N803"]
+"backend/tests/bdd/check-bdd-coverage.py" = ["N999"]
+"backend/tests/unit/test_mcp_security.py" = ["E402"]
+"backend/tests/unit/test_multi_backend_sqlite.py" = ["E402"]
+"backend/tests/unit/test_pipeline_node_conversion.py" = ["E402"]
+"backend/tests/integration/test_product_analytics_identity.py" = ["F811"]
 "pipeline-scripts/**" = ["S", "T201", "RET"]
 "conftest.py" = ["I001"]

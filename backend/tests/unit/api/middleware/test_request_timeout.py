@@ -83,7 +83,9 @@ class TestDispatch:
             resp = await client.get("/slow-override")
         assert resp.status_code == 504
         assert resp.json() == {
-            "error": "gateway_timeout",
+            "type": "urn:problem:modulo:gateway_timeout",
+            "title": "Gateway Timeout",
+            "status": 504,
             "detail": "Request exceeded 0.05s timeout",
         }
 

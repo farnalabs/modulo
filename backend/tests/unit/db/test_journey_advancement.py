@@ -31,19 +31,19 @@ Part 3 wiring (FAR-143 part 3):
 import re
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy import Table, select
+from sqlalchemy import DateTime, Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core import pipeline_execution as pe
 from modulo.core.cost_controller.finalize import _advance_journeys_on_terminal, finalize_cost
-from modulo.core.lifecycle_map.advancement import _ADVANCE_SQL, advance_journeys
+from modulo.core.lifecycle_map.advancement import _ADVANCE_SQL, _evidence_timestamp, advance_journeys
 from modulo.core.pipeline_execution import (
     _advance_journeys_from_stored_refs,
     fail_run_terminal,
@@ -351,6 +351,42 @@ class TestQualifiedUpsertRegression:
             "FAR-622: _ADVANCE_SQL's DO UPDATE SET arm contains bare target-table "
             f"column references (Postgres 17 raises AmbiguousColumnError): {bare}"
         )
+
+
+class TestEvidenceTimestampBind:
+    """FAR-665 — the ``:evidence_ts`` bind must be a tz-aware UTC datetime.
+
+    Postgres infers the parameter as ``timestamptz`` (from the
+    ``:evidence_ts > journeys.updated_at`` comparison) and asyncpg refuses to
+    encode a Python str into it — binding the ISO string returned by the old
+    ``_evidence_timestamp`` raised ``asyncpg.DataError: invalid input for
+    query argument`` on EVERY advance, so journeys never advanced in
+    production. The upsert declares the bind as ``DateTime(timezone=True)``
+    (asyncpg encodes the datetime natively; SQLite's processor renders the
+    ORM's storage format, keeping the string comparison like-for-like) and
+    ``_evidence_timestamp`` returns a tz-aware UTC datetime. SQLite cannot
+    reproduce the asyncpg encoding failure, so this guard pins the contract
+    structurally; the REAL-Postgres regression lives in
+    ``tests/integration/test_journey_advancement.py``.
+    """
+
+    def test_evidence_bind_is_declared_as_tz_aware_datetime(self) -> None:
+        bind = _ADVANCE_SQL._bindparams["evidence_ts"]
+        assert isinstance(bind.type, DateTime)
+        assert bind.type.timezone is True
+
+    def test_evidence_timestamp_returns_tz_aware_utc(self) -> None:
+        # Naive seeds (SQLite) are interpreted as UTC wall-clock.
+        ts = _evidence_timestamp(_T2, _T1)
+        assert ts.tzinfo is not None
+        assert ts.utcoffset() == timedelta(0)
+        assert ts == _T2.replace(tzinfo=UTC)
+        # Fallback anchor for non-terminal runs (no completed_at yet).
+        assert _evidence_timestamp(None, _T1) == _T1.replace(tzinfo=UTC)
+
+    def test_evidence_timestamp_normalises_aware_input_to_utc(self) -> None:
+        tokyo = datetime(2026, 1, 5, 9, 0, 0, tzinfo=timezone(timedelta(hours=9)))
+        assert _evidence_timestamp(tokyo, _T1) == datetime(2026, 1, 5, 0, 0, 0, tzinfo=UTC)
 
 
 class TestNonAdvancing:

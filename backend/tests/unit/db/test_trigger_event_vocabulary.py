@@ -53,7 +53,7 @@ _MIGRATION_PATH = (
 # migration (0181_org_api_keys_scope) re-parented onto 0180, the hitl
 # active-sweep migration (0182_hitl_claims_active_sweep_indexes, renumbered
 # from 0181 after the org_api_keys_scope collision) re-parented onto
-# 0181_org_api_keys_scope as the chain head, followed by
+# 0181_org_api_keys_scope, followed by
 # 0183_triggers_add_polling_ongoing_agent_signal_indexes ->
 # 0184_trigger_events_indexes_and_type_check (this PR's trigger_events index +
 # type-check sweep, renumbered from 0182/0183 after the hitl_claims

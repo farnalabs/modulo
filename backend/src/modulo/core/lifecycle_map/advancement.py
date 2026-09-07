@@ -76,10 +76,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import DateTime, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.lifecycle_refs import canonical_work_item_id, validate_ref_entry
@@ -161,6 +161,17 @@ _ADVANCE_SQL = text(
     "updated_at = CASE "
     "  WHEN :evidence_ts > journeys.updated_at OR journeys.updated_at IS NULL THEN :evidence_ts "
     "  ELSE journeys.updated_at END"
+).bindparams(
+    # FAR-665: declare the :evidence_ts bind as a tz-aware DateTime so
+    # SQLAlchemy converts per backend. On Postgres the parameter is inferred
+    # as timestamptz (from the ``:evidence_ts > journeys.updated_at``
+    # comparison), and asyncpg refuses to encode a Python str into it —
+    # binding the ISO string raised ``asyncpg.DataError: invalid input for
+    # query argument`` on EVERY advance, so journeys never advanced in
+    # production. A datetime encodes natively. On SQLite the DateTime bind
+    # processor renders exactly the storage format the ORM uses for
+    # ``journeys.updated_at``, keeping the like-for-like string comparison.
+    bindparam("evidence_ts", type_=DateTime(timezone=True)),
 )
 
 
@@ -198,21 +209,28 @@ async def _resolve_stage_identity(
     return result.scalar_one_or_none()
 
 
-def _evidence_timestamp(completed_at: datetime | None, run_created_at: datetime) -> str:
+def _evidence_timestamp(completed_at: datetime | None, run_created_at: datetime) -> datetime:
     """Compare-and-set anchor: the run's ``completed_at``, falling back to its
     ``created_at`` when the run is not terminal (``awaiting_human``).
 
-    Returned as a space-separated ISO string (``isoformat(sep=" ")``) rather
-    than a ``datetime`` object: SQLAlchemy's SQLite DateTime processor stores
-    exactly that format, so the ``text()`` comparison ``:evidence_ts >
-    updated_at`` compares like-for-like on generic backends, while Postgres
-    coerces the ISO string to timestamptz natively. Binding a raw ``datetime``
-    into ``text()`` would route through the sqlite3 default datetime adapter,
-    which is deprecated on Python 3.12 (and the test suite raises
-    ``DeprecationWarning`` as an error).
+    Always returned as a tz-aware UTC ``datetime``. ``_ADVANCE_SQL`` declares
+    the ``:evidence_ts`` bind as ``DateTime(timezone=True)`` (FAR-665): asyncpg
+    infers the parameter as ``timestamptz`` and rejects a Python str with
+    ``DataError``, so the value MUST be a real datetime on Postgres; the
+    SQLite bind processor converts it to the same storage format the ORM uses
+    for ``journeys.updated_at``, so the ``:evidence_ts > updated_at``
+    compare-and-set stays like-for-like on generic backends (binding a raw
+    datetime through an untyped ``text()`` would instead route through the
+    sqlite3 default datetime adapter, which is deprecated on Python 3.12 —
+    the declared bindparam type avoids that path).
+
+    Naive datetimes (SQLite test seeds) are interpreted as UTC wall-clock;
+    aware datetimes are normalised to UTC.
     """
     anchor = completed_at if completed_at is not None else run_created_at
-    return anchor.isoformat(sep=" ")
+    if anchor.tzinfo is None:
+        return anchor.replace(tzinfo=UTC)
+    return anchor.astimezone(UTC)
 
 
 async def confirm_reported_refs(

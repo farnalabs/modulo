@@ -932,7 +932,8 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
             self.connect_calls += 1
             return stream
         # Every pinned IP failed to connect; re-raise the last connect error.
-        assert last_exc is not None
+        if last_exc is None:
+            raise RuntimeError("ssrf: round-robin failover exhausted with no recorded exception")
         raise last_exc
 
     async def connect_tcp(
