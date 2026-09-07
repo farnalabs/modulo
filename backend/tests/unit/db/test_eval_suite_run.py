@@ -759,7 +759,7 @@ def test_single_migration_head() -> None:
     # 0182_hitl_claims_active_sweep_indexes (FAR-604 active-sweep indexes) chains off 0181.
     chaining_off_0181 = [p for p in revisions if parents[p] == "0181_org_api_keys_scope"]
     assert [_basename(p) for p in chaining_off_0181] == ["0182_hitl_claims_active_sweep_indexes.py"]
-    # 0183_error_events_indexes_jsonb (promote context_json to JSONB + add indexes) chains off 0182.
+    # 0183_error_events_indexes_jsonb (add status/level indexes) chains off 0182.
     chaining_off_0182 = [p for p in revisions if parents[p] == "0182_hitl_claims_active_sweep_indexes"]
     assert [_basename(p) for p in chaining_off_0182] == ["0183_error_events_indexes_jsonb.py"]
     # Nothing chains off 0183_error_events_indexes_jsonb -> it is the single head.
