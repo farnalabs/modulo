@@ -35,7 +35,7 @@ from typing import Any
 
 from jwt import ExpiredSignatureError
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -294,7 +294,11 @@ class HITLManager:
             raise GateNotFoundError(run_id, gate_id)
         if gate_check.decision is not None:
             raise GateAlreadyDecidedError(run_id, gate_id)
-        if gate_check.account_id is not None:
+        # Same-account re-claim (FAR-686): a reviewer who reloaded the page
+        # lost their claim token (it lives only in frontend state). Allow the
+        # SAME account to re-claim (re-issuing a fresh token); raise only when
+        # ANOTHER account holds the claim.
+        if gate_check.account_id is not None and gate_check.account_id != claimant_id:
             raise AlreadyClaimedError(run_id, gate_id)
         # FAR-612: the run itself must be waiting for a human (or parked on a
         # human decision). An undecided gate on any other status is data rot
@@ -321,7 +325,7 @@ class HITLManager:
                 raise GateNotFoundError(run_id, gate_id)
             if locked_gate.decision is not None:
                 raise GateAlreadyDecidedError(run_id, gate_id)
-            if locked_gate.account_id is not None:
+            if locked_gate.account_id is not None and locked_gate.account_id != claimant_id:
                 raise AlreadyClaimedError(run_id, gate_id)
             tm_result = await session.execute(
                 select(TeamMembership).where(
@@ -358,7 +362,10 @@ class HITLManager:
                 HitlClaim.run_id == run_id,
                 HitlClaim.gate_id == gate_id,
                 HitlClaim.organisation_id == org_id,
-                HitlClaim.account_id.is_(None),
+                # Unclaimed OR held by the same account (re-claim re-issues a
+                # fresh token and resets the overdue-notification clock — the
+                # claimed_at restart is accepted).
+                or_(HitlClaim.account_id.is_(None), HitlClaim.account_id == claimant_id),
                 HitlClaim.decision.is_(None),
             )
             .values(
@@ -666,6 +673,8 @@ class HITLManager:
         self,
         session: AsyncSession,
         org_id: uuid.UUID,
+        *,
+        include_claimed: bool = True,
     ) -> list[HitlClaim]:
         """All undecided gates for the org whose run is still actionable.
 
@@ -675,15 +684,21 @@ class HITLManager:
         rows left by the since-fixed auto-approve bug), not pending work.
         Held (claimed) gates are included so consumers can render the
         claimed state; parked runs' gates stay listed so they are not lost.
+
+        Claimed-but-undecided gates are included by default (FAR-686: the
+        org review endpoint passes this through so a claimed gate stays
+        visible and actionable instead of vanishing on refresh); pass
+        ``include_claimed=False`` to restrict to UNCLAIMED gates only.
         """
+        filters: list[Any] = [
+            HitlClaim.organisation_id == org_id,
+            HitlClaim.decision.is_(None),
+            Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
+        ]
+        if not include_claimed:
+            filters.append(HitlClaim.account_id.is_(None))
         result = await session.execute(
-            select(HitlClaim)
-            .join(Run, HitlClaim.run_id == Run.id)
-            .where(
-                HitlClaim.organisation_id == org_id,
-                HitlClaim.decision.is_(None),
-                Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
-            )
+            select(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*filters)
         )
         return list(result.scalars())
 

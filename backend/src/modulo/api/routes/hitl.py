@@ -944,7 +944,9 @@ async def list_org_pending_gates(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            gates = await mgr.list_pending(session, principal.organisation_id)
+            # include_claimed (FAR-686): claimed-but-undecided gates stay on
+            # the review page so the reviewer can still act on them.
+            gates = await mgr.list_pending(session, principal.organisation_id, include_claimed=True)
 
             pipeline_ids = list({g.pipeline_id for g in gates})
             pipeline_map: dict[uuid.UUID, str] = {}
@@ -962,6 +964,10 @@ async def list_org_pending_gates(
             description_by_gate = await resolve_gate_descriptions(
                 session, gates=gates, org_id=principal.organisation_id
             )
+            # FAR-686: also resolve each gate's human label at org level so the
+            # shared gate card shows a readable name (frontend falls back to
+            # shortId when a label is missing).
+            gate_label_map = await _load_gate_label_map(session, gates)
     except ProgrammingError as exc:
         logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(
@@ -993,6 +999,7 @@ async def list_org_pending_gates(
                 g,
                 pipeline_name=pipeline_map.get(g.pipeline_id),
                 description=description_by_gate.get((g.run_id, g.gate_id)),
+                label=gate_label_map.get(g.gate_id),
             )
             for g in gates
         ]
@@ -1002,6 +1009,52 @@ async def list_org_pending_gates(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _load_gate_label_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[str, str]:
+    """Batched ``gate_id -> human label`` resolution for the org endpoint.
+
+    Resolves each pending gate's run -> snapshot -> ``hitl_gate_config.label``
+    with two set-based queries (runs, then snapshots). Graceful degradation:
+    a missing run/snapshot or a non-dict ``graph_json`` simply leaves that
+    gate without a label (frontend falls back to shortId) — one bad snapshot
+    never breaks the whole list. All lookups happen inside the caller's
+    transaction.
+    """
+    if not gates:
+        return {}
+    from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+    from modulo.db.models.run import Run
+
+    run_ids = list({g.run_id for g in gates})
+    run_rows = (await session.execute(select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids)))).all()
+    run_to_snapshot: dict[uuid.UUID, uuid.UUID] = {row[0]: row[1] for row in run_rows if row[1] is not None}
+    if not run_to_snapshot:
+        return {}
+
+    snapshot_ids = list(set(run_to_snapshot.values()))
+    snap_rows = (
+        await session.execute(select(SnapModel.id, SnapModel.graph_json).where(SnapModel.id.in_(snapshot_ids)))
+    ).all()
+    labels_by_snapshot: dict[uuid.UUID, dict[str, str]] = {}
+    for snap_id, graph_json in snap_rows:
+        if not isinstance(graph_json, dict):
+            continue
+        try:
+            labels_by_snapshot[snap_id] = _build_gate_label_map(graph_json)
+        except Exception:
+            # One corrupted snapshot must not break the whole pending list.
+            logger.exception("hitl.list_org_pending_gates.label_map_failed")
+
+    gate_label_map: dict[str, str] = {}
+    for g in gates:
+        snap_id = run_to_snapshot.get(g.run_id)
+        if snap_id is None:
+            continue
+        label = labels_by_snapshot.get(snap_id, {}).get(g.gate_id)
+        if label:
+            gate_label_map[g.gate_id] = label
+    return gate_label_map
 
 
 def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:

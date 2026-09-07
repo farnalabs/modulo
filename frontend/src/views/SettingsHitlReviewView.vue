@@ -120,123 +120,13 @@
           </span>
         </button>
         <div v-if="expandedKey === expandKey(gate)" class="border-t p-4">
-          <div v-if="actionLoading[expandKey(gate)]" class="flex items-center justify-center py-8">
-            <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          </div>
-          <template v-else>
-            <div class="grid grid-cols-2 gap-6">
-              <div>
-                <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsHitlReviewView.claim_metadata') }}</h3>
-                <div class="space-y-1 text-sm">
-                  <div class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.run_id') }}</span>
-                    <span class="font-mono text-xs">{{ shortId(gate.run_id) }}</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.node_label') }}</span>
-                    <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.pipeline_label') }}</span>
-                    <span>{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
-                    <span>{{ formatDate(gate.created_at || '') }}</span>
-                  </div>
-                  <div v-if="gate.claimed_at" class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.claimed_label') }}</span>
-                    <span>{{ formatDate(gate.claimed_at) }}</span>
-                  </div>
-                  <div v-if="gate.expires_at" class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.expires_label') }}</span>
-                    <span>{{ formatDate(gate.expires_at) }}</span>
-                  </div>
-                  <div v-if="gate.decision_at" class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.decided_label') }}</span>
-                    <span>{{ formatDate(gate.decision_at) }}</span>
-                  </div>
-                  <div v-if="gate.decision" class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.decision_label') }}</span>
-                    <span :class="gate.decision === 'approved' ? 'text-success' : 'text-destructive'">{{ gate.decision }}</span>
-                  </div>
-                  <div v-if="gate.claimed_by" class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.assignees_label') }}</span>
-                    <span>{{ gate.claimed_by }}</span>
-                  </div>
-                  <div v-if="gate.team_scope" class="flex justify-between">
-                    <span class="text-muted-foreground">{{ $t('views.SettingsHitlReviewView.team_label') }}</span>
-                    <span>{{ gate.team_scope }}</span>
-                  </div>
-                </div>
-              </div>
-              <div>
-                <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsHitlReviewView.actions_label') }}</h3>
-                <!-- FAR-613: the decision briefing — WHY the gate exists and
-                     WHAT the reviewer is looking at, above the controls. -->
-                <HitlBriefing :description="gate.description" :context="gate.context" class="mb-3" />
-                <div class="space-y-3">
-                  <div v-if="gateStatus(gate) === 'pending'">
-                    <Button :disabled="claiming[expandKey(gate)]" class="w-full" data-testid="hitl-review-claim" @click="claimGate(gate)">
-                      {{ claiming[expandKey(gate)] ? $t('views.SettingsHitlReviewView.claiming') : $t('views.SettingsHitlReviewView.claim_gate') }}
-                    </Button>
-                  </div>
-                  <div v-if="gateStatus(gate) === 'claimed' && claimTokens[expandKey(gate)]">
-                    <div class="space-y-2">
-                      <textarea :aria-label="$t('views.SettingsHitlReviewView.review_notes')"
-                        v-model="reviewNotes[expandKey(gate)]"
-                        rows="2"
-                        data-testid="hitl-review-notes"
-                        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        :placeholder="$t('views.SettingsHitlReviewView.review_notes')"
-                      />
-                      <div class="flex gap-2">
-                        <button
-                          type="button"
-                          :disabled="Boolean(actioning[expandKey(gate)])"
-                          data-testid="hitl-review-approve"
-                          class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
-                          @click="approveGate(gate)"
-                        >
-                          {{ actioning[expandKey(gate)] === 'approve' ? $t('views.SettingsHitlReviewView.approving') : $t('views.SettingsHitlReviewView.approve') }}
-                        </button>
-                        <button
-                          type="button"
-                          :disabled="Boolean(actioning[expandKey(gate)])"
-                          data-testid="hitl-review-reject"
-                          class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
-                          @click="rejectGate(gate)"
-                        >
-                          {{ actioning[expandKey(gate)] === 'reject' ? $t('views.SettingsHitlReviewView.rejecting') : $t('views.SettingsHitlReviewView.reject') }}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <!-- FAR-612: claimed by another session (no local claim token) is read-only —
-                       its approve/reject buttons could only ever fail with "no claim token". -->
-                  <div v-else-if="gateStatus(gate) === 'claimed'" data-testid="hitl-review-claimed-other" class="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
-                    {{ $t('views.SettingsHitlReviewView.claimed_by_other', { user: gate.claimed_by, time: formatDate(gate.claimed_at) }) }}
-                  </div>
-                  <div v-if="gateStatus(gate) === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success">
-                    {{ $t('views.SettingsHitlReviewView.approved_banner') }}
-                  </div>
-                  <div v-if="gateStatus(gate) === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                    {{ $t('views.SettingsHitlReviewView.rejected_banner') }}
-                  </div>
-                  <div v-if="gateStatus(gate) === 'claimed' && claimTokens[expandKey(gate)]">
-                    <div class="rounded-lg bg-muted p-3 text-xs">
-                      <p class="font-medium text-muted-foreground mb-1">{{ $t('views.SettingsHitlReviewView.claim_token_label') }}</p>
-                      <code class="break-all">{{ claimTokens[expandKey(gate)] }}</code>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div v-if="actionMessage[expandKey(gate)]" class="mt-4 text-sm" :class="actionMessage[expandKey(gate)]?.type === 'error' ? 'text-destructive' : 'text-success'">
-              {{ actionMessage[expandKey(gate)]?.text }}
-              </div>
-            </template>
-          </div>
+          <HitlGateCard
+            :gate="gate"
+            show-run-link
+            @claimed="clearClaimFailureBanner"
+            @claim-failed="onClaimFailed"
+            @decided="onGateDecided"
+          />
         </div>
       </div>
     </template>
@@ -245,24 +135,20 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
-import HitlBriefing from '../components/HitlBriefing.vue'
+import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
-import Button from 'primevue/button'
 import Select from 'primevue/select'
 
 const planStore = usePlanStore()
-const { t } = useI18n()
 
 interface GateItem {
   run_id: string
@@ -316,16 +202,12 @@ const dateFrom = ref('')
 const dateTo = ref('')
 
 const expandedKey = ref<string | null>(null)
-const claimTokens = ref<Record<string, string>>({})
-const claiming = ref<Record<string, boolean>>({})
-const actioning = ref<Record<string, string | null>>({})
-const actionLoading = ref<Record<string, boolean>>({})
-const actionMessage = ref<Record<string, { type: string; text: string } | null>>({})
-const reviewNotes = ref<Record<string, string>>({})
-// FAR-612: view-level claim-failure banner. Lives OUTSIDE the gate rows so
-// the immediate loadGates() refresh after a failed claim (which drops
-// terminal-run / already-decided gates from the pending list) cannot erase
-// the message.
+// FAR-612: view-level claim-failure banner. Cards may unmount on refresh
+// (terminal-run / already-decided gates drop out of the pending list), so a
+// claim failure is hoisted from the card's ``claim-failed`` emit and rendered
+// at view level where the refresh can never erase it before it renders.
+// Cleared on the next successful claim/decision, via the dismiss button, or
+// after 10s.
 const claimFailureBanner = ref<string | null>(null)
 let claimBannerTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -342,13 +224,13 @@ function clearClaimFailureBanner() {
   if (claimBannerTimer) { clearTimeout(claimBannerTimer); claimBannerTimer = null }
 }
 
+
 const refreshInterval = ref(30000)
 const refreshCountdown = ref(30)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 let refreshInFlight = false
 let disposed = false
-const actionMessageTimers: ReturnType<typeof setTimeout>[] = []
 
 function expandKey(gate: GateItem): string {
   return `${gate.run_id}:${gate.gate_id}`
@@ -359,13 +241,6 @@ function gateStatus(gate: GateItem): string {
   if (gate.decision === 'rejected') return 'rejected'
   if (gate.claimed_by) return 'claimed'
   return 'pending'
-}
-
-// Query data from vue-query is deep-readonly (FAR-630): patch gates by
-// replacing the whole array through the writable computed, never by
-// writing one element (gates.value[idx] = ... is silently dropped).
-function updateGate(key: string, patch: Partial<GateItem>) {
-  gates.value = gates.value.map(g => (expandKey(g) === key ? { ...g, ...patch } : g))
 }
 
 function statusBadgeClass(status: string): string {
@@ -427,133 +302,28 @@ const filteredGates = computed(() => {
     matchesStatus(gate) && matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
 })
 
-function claimFailureMessage(err: unknown): string {
-  // FAR-612: map the backend's claim-failure detail to a specific message so
-  // the operator knows what actually happened (conflict shapes from the claim
-  // endpoint: already claimed / already decided / run not awaiting).
-  const detail = formatApiError(err)
-  if (detail.includes('already claimed')) {
-    return t('views.SettingsHitlReviewView.claim_failed_already_claimed')
-  }
-  if (detail.includes('already has a decision')) {
-    return t('views.SettingsHitlReviewView.claim_failed_already_decided')
-  }
-  if (detail.includes('not awaiting a human decision')) {
-    return t('views.SettingsHitlReviewView.claim_failed_run_not_awaiting', { reason: detail })
-  }
-  return `${t('views.SettingsHitlReviewView.claim_failed')} ${detail}`
-}
+// FAR-686: claim/decide logic lives inside HitlGateCard (shared with
+// RunDetailView). The view only hoists the card's feedback: failures persist
+// in the view-level banner (FAR-612), successes clear it and refresh the list.
 
-async function claimGate(gate: GateItem) {
-  const key = expandKey(gate)
-  claiming.value[key] = true
-  actionMessage.value[key] = null
+async function onClaimFailed(text: string) {
+  showClaimFailureBanner(text)
+  // FAR-612: the list on screen is stale after a failed claim (another
+  // reviewer took it, the run moved on, the gate was decided). Re-fetch
+  // immediately so the list reflects reality instead of waiting for the 30s
+  // auto-refresh. Refresh failure must not mask the banner above.
   try {
-    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/claim', {
-      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
-      body: { expiry_minutes: 15 },
-    })
-    if (err) {
-      // View-level banner: the immediate refresh below may drop this gate
-      // (terminal run / already decided), which would erase a row-level
-      // message before it ever renders.
-      showClaimFailureBanner(claimFailureMessage(err))
-      // The row on screen is stale after a failed claim (another reviewer took
-      // it, the run moved on, the gate was decided). Re-fetch immediately so
-      // the list reflects reality instead of waiting for the 30s auto-refresh.
-      await loadGates()
-    } else if (data) {
-      clearClaimFailureBanner()
-      const d = data as any
-      claimTokens.value[key] = d.claim_token
-      updateGate(key, { claimed_by: t('views.SettingsHitlReviewView.claimed_by_you'), claimed_at: new Date().toISOString(), expires_at: d.expires_at })
-      actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_claimed_you_can_now_approve_or_reject') }
-      actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
-    }
-  } catch (e: unknown) {
-    // FAR-612: network errors land here. They also refresh: the claim may
-    // have landed before the connection dropped, leaving the row stale.
-    // vue-query's refetch never rejects, but wrap anyway so no unhandled
-    // rejection escapes claimGate.
-    showClaimFailureBanner(`${t('views.SettingsHitlReviewView.claim_failed')} ${formatApiError(e)}`)
-    try {
-      await loadGates()
-    } catch {
-      // Refresh failure must not mask the claim-failure banner above.
-    }
-  } finally {
-    claiming.value[key] = false
+    await loadGates()
+  } catch {
+    // Ignore — the claim-failure banner above already explains what happened.
   }
 }
 
-async function approveGate(gate: GateItem) {
-  const key = expandKey(gate)
-  const token = claimTokens.value[key]
-  if (!token) {
-    actionMessage.value[key] = { type: 'error', text: t('views.SettingsHitlReviewView.no_claim_token_claim_the_gate_first') }
-    return
-  }
-  actioning.value[key] = 'approve'
-  actionLoading.value[key] = true
-  actionMessage.value[key] = null
-  try {
-    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/approve', {
-      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
-      body: { claim_token: token, notes: reviewNotes.value[key] || null },
-    })
-    if (err) {
-      actionMessage.value[key] = {
-        type: 'error',
-        text: `${t('views.SettingsHitlReviewView.approve_failed')} ${formatApiError(err)}`,
-      }
-    } else {
-      clearClaimFailureBanner()
-      updateGate(key, { decision: 'approved', decision_at: new Date().toISOString() })
-      actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_approved_pipeline_resuming') }
-      actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
-    }
-  } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.approve_failed')} ${formatApiError(e)}` }
-  } finally {
-    actioning.value[key] = null
-    actionLoading.value[key] = false
-  }
+async function onGateDecided() {
+  clearClaimFailureBanner()
+  await loadGates()
 }
 
-async function rejectGate(gate: GateItem) {
-  const key = expandKey(gate)
-  const token = claimTokens.value[key]
-  if (!token) {
-    actionMessage.value[key] = { type: 'error', text: t('views.SettingsHitlReviewView.no_claim_token_claim_the_gate_first') }
-    return
-  }
-  const reason = reviewNotes.value[key] || t('views.SettingsHitlReviewView.rejected_by_reviewer')
-  actioning.value[key] = 'reject'
-  actionLoading.value[key] = true
-  actionMessage.value[key] = null
-  try {
-    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
-      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
-      body: { claim_token: token, reason },
-    })
-    if (err) {
-      actionMessage.value[key] = {
-        type: 'error',
-        text: `${t('views.SettingsHitlReviewView.reject_failed')} ${formatApiError(err)}`,
-      }
-    } else {
-      clearClaimFailureBanner()
-      updateGate(key, { decision: 'rejected', decision_at: new Date().toISOString() })
-      actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_rejected_pipeline_routed_to_reject_target') }
-      actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
-    }
-  } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.reject_failed')} ${formatApiError(e)}` }
-  } finally {
-    actioning.value[key] = null
-    actionLoading.value[key] = false
-  }
-}
 
 function toggleExpand(gate: GateItem) {
   const key = expandKey(gate)
@@ -595,7 +365,5 @@ onUnmounted(() => {
   disposed = true
   stopAutoRefresh()
   clearClaimFailureBanner()
-  actionMessageTimers.forEach(timer => clearTimeout(timer))
-  actionMessageTimers.length = 0
 })
 </script>

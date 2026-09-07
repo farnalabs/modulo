@@ -3229,6 +3229,11 @@ features:
         description: Guardrail policies
     feat-hitl:
         description: Human-in-the-loop approval gates and review
+        status: covered
+        behaviours:
+            - "[x] The org review endpoint (GET /api/v1/hitl/pending) lists claimed-but-undecided gates alongside unclaimed ones (include_claimed=True) so a claimed gate stays visible and actionable on /settings/hitl-review instead of vanishing on refresh; batched run->snapshot->label lookups resolve per-gate labels there, degrading gracefully to shortId when snapshot/graph data is unavailable"
+            - "[x] Same-account re-claim: claiming a gate already held by YOUR account succeeds and re-issues a fresh claim token (claim token lives only in frontend state, so a page reload must not deadlock the reviewer); claiming a gate held by ANOTHER account still 409s"
+            - "[x] A shared HitlGateCard component (frontend/src/components/hitl/HitlGateCard.vue) drives claim/approve/reject in BOTH the run-detail HITL section and the /settings/hitl-review expanded row, including a Re-claim button that recovers an action token after a page reload"
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
     feat-library:
