@@ -63,6 +63,8 @@ from modulo.db.crud.run import get_run, transition_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
@@ -1028,8 +1030,6 @@ async def _load_gate_label_map(session: AsyncSession, gates: list[HitlClaim]) ->
     """
     if not gates:
         return {}
-    from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-    from modulo.db.models.run import Run
 
     run_ids = list({g.run_id for g in gates})
     run_rows = (await session.execute(select(Run.id, Run.snapshot_id).where(Run.id.in_(run_ids)))).all()
