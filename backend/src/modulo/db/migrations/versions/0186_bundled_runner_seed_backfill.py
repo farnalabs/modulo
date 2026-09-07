@@ -41,6 +41,12 @@ down_revision: str | None = "0185_error_events_indexes_jsonb"
 branch_labels: str | None = None
 depends_on: str | None = None
 
+# The nil-UUID sentinel org seeded by 0172_seed_orphan_organisation backs
+# public error ingest — it has no account, no memberships and a NULL
+# created_by, so it can never resolve an account_id owner. It must not own a
+# Bundled Runner profile (it is not a tenant), hence the backfill excludes it.
+_ORPHAN_ORG_ID = "00000000-0000-0000-0000-000000000000"
+
 # Shipped template constants (mirror modulo/db/bundled_runner_template.py;
 # the release job's digest-drift guard asserts they never diverge).
 _TEMPLATE_NAME = "Bundled Runner (Docker)"
@@ -98,22 +104,25 @@ def upgrade() -> None:
                    'git_clone',
                    '[]'::json,
                     'ephemeral',
-                    'active',
-                    'org',
-                    now(), now()
-            FROM organisations o
-            WHERE NOT EXISTS (
-                SELECT 1 FROM environment_profiles ep
-                WHERE ep.organisation_id = o.id
-                  AND ep.provider_type = 'runner_docker'
-                  AND ep.deleted_at IS NULL
-            )
-            """
+                     'active',
+                     'org',
+                     now(), now()
+             FROM organisations o
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM environment_profiles ep
+                 WHERE ep.organisation_id = o.id
+                   AND ep.provider_type = 'runner_docker'
+                   AND ep.deleted_at IS NULL
+             )
+             -- The orphan sentinel org (0172) has no account owner; skip it.
+             AND o.id <> :orphan_org_id
+             """
         ),
         {
             "tpl_name": _TEMPLATE_NAME,
             "tpl_image": _TEMPLATE_IMAGE_REF,
             "tpl_config": _TEMPLATE_CONFIG_JSON,
+            "orphan_org_id": _ORPHAN_ORG_ID,
         },
     )
 
