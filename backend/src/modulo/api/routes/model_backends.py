@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.constants import MSG_NOT_FOUND, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
@@ -755,7 +755,7 @@ async def update_model_backend_endpoint(
                 updates["fallback_backend_ids"] = [str(fid) for fid in fallback_ids]
             existing = await get_model_backend(session, backend_id)
             if existing is None or existing.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
             mb = await update_model_backend(session, backend_id, updates)
             if mb is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
@@ -957,7 +957,7 @@ async def delete_model_backend_endpoint(
             # survive the row (a post-delete read would return nothing).
             existing = await get_model_backend(session, backend_id)
             if existing is None or existing.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
             if existing is not None:
                 audit_payload = {
                     "name": existing.name,

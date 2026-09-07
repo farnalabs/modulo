@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     deny_break_glass_mint,
@@ -29,7 +29,6 @@ from modulo.core.email_service import (
 from modulo.db.crud.organisation import get_organisation, update_organisation
 from modulo.settings import Settings, get_settings
 
-_MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
 _CODE_ADMIN_EMAIL_ADMIN_UPDATE = "admin_email.admin_update_email_settings"
 _CODE_ADMIN_EMAIL_ADMIN_TEST = "admin_email.admin_test_email_settings"
 
@@ -81,7 +80,7 @@ async def admin_get_email_settings(
         async with session.begin():
             org = await get_organisation(session, org_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
             cfg = org.settings_json or {}
     except ProgrammingError:
         logger.exception("admin_email.admin_get_email_settings")
@@ -159,7 +158,7 @@ async def admin_update_email_settings(
         ) from None
 
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
     settings_json = dict(org.settings_json or {})
     existing_email = dict(settings_json.get("email", {}))
@@ -251,7 +250,7 @@ async def admin_test_email_settings(
         ) from None
 
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
     if not _is_valid_recipient(req.to):
         raise HTTPException(

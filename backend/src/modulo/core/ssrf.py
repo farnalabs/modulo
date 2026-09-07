@@ -184,6 +184,11 @@ _RESOLVE_TTL_ENV = "SSRF_RESOLVE_TTL"
 # use it only where the proxy IS the trusted egress boundary.
 _TRUST_PROXY_ENV = "SSRF_TRUST_PROXY"
 
+# Error message raised when a URL carries no usable hostname — identical in
+# both the strict URL parser and the OIDC host extractor (same meaning, so one
+# constant; purely a message literal, no behaviour change).
+_URL_MISSING_HOSTNAME_MSG = "URL must have a valid hostname"
+
 # Bounded thread pool for the synchronous DNS path so socket.getaddrinfo runs
 # off the caller thread without unbounded thread creation. Worker threads are
 # created only on first use; the pool is tiny and never grows past max_workers.
@@ -579,10 +584,10 @@ def _parse_url_target(url: str) -> _UrlTarget:
 
     host = parsed.hostname
     if not host:
-        raise ValueError("URL must have a valid hostname")
+        raise ValueError(_URL_MISSING_HOSTNAME_MSG)
     host = host.rstrip(".").strip("[]")
     if not host:
-        raise ValueError("URL must have a valid hostname")
+        raise ValueError(_URL_MISSING_HOSTNAME_MSG)
 
     _reject_noncanonical_ip_literal(host)
     port = _validate_port(parsed)
@@ -1229,7 +1234,7 @@ def normalize_url_host(url: str) -> str:
         raise ValueError("URL must not contain userinfo credentials")
     host = (parsed.hostname or "").rstrip(".").strip("[]").lower()
     if not host:
-        raise ValueError("URL must have a valid hostname")
+        raise ValueError(_URL_MISSING_HOSTNAME_MSG)
     return host
 
 

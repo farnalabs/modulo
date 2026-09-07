@@ -28,6 +28,10 @@ from saq.queue.redis import RedisQueue
 REDIS_URL = "redis://localhost:6380/1"
 QUEUE_NAME = "spike"
 
+# Job key for the sweeper check (check 12): the deliberately-stuck job whose
+# heartbeat expires so the sweeper re-queues it.
+_KEY_SWEEP_STUCK = "run:sweepstuck"
+
 results: list[tuple[str, str, str]] = []
 
 
@@ -493,7 +497,7 @@ async def check12_sweeper(redis: aioredis.Redis, q: RedisQueue) -> None:
     # (a) stuck job: heartbeat=1s, worker sweeps every 1s -> aborts+retries a running job
     await q.enqueue(
         "spike_slow",
-        key="run:sweepstuck",
+        key=_KEY_SWEEP_STUCK,
         retries=2,
         retry_delay=5,
         retry_backoff=False,
@@ -506,7 +510,7 @@ async def check12_sweeper(redis: aioredis.Redis, q: RedisQueue) -> None:
     re_queued = False
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
-        cur = await q.job("run:sweepstuck")
+        cur = await q.job(_KEY_SWEEP_STUCK)
         # enqueued job is QUEUED with attempts=0; after dequeue ACTIVE attempts=1;
         # a re-queue after sweep-retry is QUEUED with attempts>=1
         if cur is not None and cur.status == Status.QUEUED and cur.attempts >= 1:
@@ -515,7 +519,7 @@ async def check12_sweeper(redis: aioredis.Redis, q: RedisQueue) -> None:
         await asyncio.sleep(0.1)
     await w.stop()
     await t
-    cur = await q.job("run:sweepstuck")
+    cur = await q.job(_KEY_SWEEP_STUCK)
     cur_attempts = cur.attempts if cur else None
     cur_status = cur.status if cur else None
 

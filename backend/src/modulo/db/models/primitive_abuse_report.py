@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import ONDELETE_SET_NULL, OrgScoped
 
 
 class PrimitiveAbuseReport(OrgScoped):
@@ -27,14 +27,14 @@ class PrimitiveAbuseReport(OrgScoped):
         index=True,
     )
     rating_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("primitive_ratings.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("primitive_ratings.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
     reporter_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewer_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )

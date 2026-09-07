@@ -59,6 +59,10 @@ OUTPUT_TOKEN_RATE = Decimal("0.00003")
 # formula-visible surface. The internal telemetry field for wall-clock is
 # ``wall_clock_elapsed_s`` (NEVER a registry identifier); ``wall_clock_hours``
 # is the SOLE wall-clock identifier.
+# Consumer tag for the reported-token family: surfaced in the breakdown basis
+# and operator formulas only (display-only; never a system money-math input).
+_CONSUMER_BREAKDOWN_FORMULAS = "breakdown basis + operator formulas"
+
 _PARAM_REGISTRY: dict[str, tuple[str, str, str]] = {
     "rate": ("Decimal", "rate_usd; null -> rate_fallback", "sandbox_infra"),
     "e2b_rate": ("Decimal", "Settings.e2b_sandbox_usd_per_hour", "sandbox_infra fallback"),
@@ -71,27 +75,27 @@ _PARAM_REGISTRY: dict[str, tuple[str, str, str]] = {
     "tokens_input_reported": (
         "int",
         "sum of agent-reported input tokens (display-only; never a system money-math input; formula-visible)",
-        "breakdown basis + operator formulas",
+        _CONSUMER_BREAKDOWN_FORMULAS,
     ),
     "tokens_output_reported": (
         "int",
         "sum of agent-reported output tokens (display-only; never a system money-math input; formula-visible)",
-        "breakdown basis + operator formulas",
+        _CONSUMER_BREAKDOWN_FORMULAS,
     ),
     "tokens_total_reported": (
         "int",
         "sum of agent-reported total tokens (display-only; never a system money-math input; formula-visible)",
-        "breakdown basis + operator formulas",
+        _CONSUMER_BREAKDOWN_FORMULAS,
     ),
     "tokens_cache_read_reported": (
         "int",
         "sum of agent-reported cache-read tokens (display-only; never a system money-math input; formula-visible)",
-        "breakdown basis + operator formulas",
+        _CONSUMER_BREAKDOWN_FORMULAS,
     ),
     "tokens_cache_write_reported": (
         "int",
         "sum of agent-reported cache-write tokens (display-only; never a system money-math input; formula-visible)",
-        "breakdown basis + operator formulas",
+        _CONSUMER_BREAKDOWN_FORMULAS,
     ),
     "node_count": ("int", "count of completed nodes", "llm_tokens basis + operator formulas"),
     "nodes_estimated": ("int", "count of estimated nodes", "llm_tokens basis + operator formulas"),

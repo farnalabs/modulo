@@ -80,6 +80,7 @@ from modulo.settings import get_settings
 from modulo.version import get_version
 
 _CODE_WEBHOOKS_RECEIVE_WEBHOOK = "webhooks.receive_webhook"
+_CODE_WEBHOOKS_REPLAY_WEBHOOK = "webhooks.replay_webhook"
 _MSG_TRIGGER_NOT_FOUND = "Trigger not found"
 
 
@@ -218,7 +219,7 @@ async def receive_webhook(
         # is distinguishable from a genuine 404.
         log_service_unavailable(
             "system_bootstrap_degraded",
-            route="webhooks.receive_webhook",
+            route=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
             detail="system database not provisioned; trigger delivery unavailable",
             level=logging.ERROR,
         )
@@ -412,7 +413,7 @@ async def receive_webhook(
         log_service_unavailable(
             "snapshot_lock_unavailable",
             exc,
-            route="webhooks.receive_webhook",
+            route=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
             detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
         )
         raise HTTPException(
@@ -466,7 +467,7 @@ async def receive_webhook(
         log_service_unavailable(
             "db_transient",
             exc,
-            route="webhooks.receive_webhook",
+            route=_CODE_WEBHOOKS_RECEIVE_WEBHOOK,
             detail="transient database error; webhook delivery failed closed",
         )
         raise HTTPException(
@@ -526,7 +527,7 @@ async def receive_webhook(
         503: {"description": "Service Unavailable"},
     },
 )
-@handle_db_errors("webhooks.replay_webhook")
+@handle_db_errors(_CODE_WEBHOOKS_REPLAY_WEBHOOK)
 async def replay_webhook(
     trigger_id: uuid.UUID,
     event_id: uuid.UUID,
@@ -574,7 +575,7 @@ async def replay_webhook(
         # is distinguishable from a genuine 404.
         log_service_unavailable(
             "system_bootstrap_degraded",
-            route="webhooks.replay_webhook",
+            route=_CODE_WEBHOOKS_REPLAY_WEBHOOK,
             detail="system database not provisioned; trigger delivery unavailable",
             level=logging.ERROR,
         )
@@ -732,7 +733,7 @@ async def replay_webhook(
         log_service_unavailable(
             "snapshot_lock_unavailable",
             exc,
-            route="webhooks.replay_webhook",
+            route=_CODE_WEBHOOKS_REPLAY_WEBHOOK,
             detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
         )
         raise HTTPException(
@@ -781,7 +782,7 @@ async def replay_webhook(
         log_service_unavailable(
             "db_transient",
             exc,
-            route="webhooks.replay_webhook",
+            route=_CODE_WEBHOOKS_REPLAY_WEBHOOK,
             detail="transient database error; webhook replay failed closed",
         )
         raise HTTPException(

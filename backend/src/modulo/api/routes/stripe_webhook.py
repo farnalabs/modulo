@@ -33,6 +33,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
+from modulo.api.constants import MSG_NOT_FOUND
 from modulo.core.stripe_fulfilment import fulfil_team_purchase
 from modulo.core.trigger_engine import TimestampExpiredError, verify_timestamp
 from modulo.settings import Settings, get_settings
@@ -133,7 +134,7 @@ async def stripe_webhook(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> StripeWebhookResponse:
     if not settings.stripe_enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
 
     raw_body = await request.body()
     signature_header = request.headers.get("Stripe-Signature")
