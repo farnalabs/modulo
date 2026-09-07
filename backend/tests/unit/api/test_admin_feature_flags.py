@@ -465,8 +465,10 @@ class TestOrgOverrideOrgIdGuard:
         ):
             if method == "get":
                 resp = no_org_client.get(url)
+            elif method == "put":
+                resp = no_org_client.put(url, json={"enabled": True})
             else:
-                resp = getattr(no_org_client, method)(url, json={"enabled": True})
+                resp = no_org_client.delete(url)
             assert resp.status_code == 403, (method, resp.status_code, resp.text)
             assert "Organisation ID required" in resp.text
 
