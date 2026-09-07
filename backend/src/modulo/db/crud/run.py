@@ -911,20 +911,6 @@ class _PinnedGuardrailState:
     saved_fingerprint: str | None
 
 
-@dataclass
-class _GuardrailGateOutcome:
-    """Carried run state from the guardrail enforcement gate (post-interception)."""
-
-    payload: dict[str, Any]
-    results: list[Any]
-    redactions: list[Any]
-    blocked: bool
-    block_message: str
-    blocking_eval_name: str
-    observed_by_eval: dict[uuid.UUID, bool]
-    summary_json: dict[str, int] | None
-
-
 async def _resolve_pinned_guardrail_state(
     session: AsyncSession,
     request: _InterceptionRequest,
@@ -972,7 +958,7 @@ async def _run_guardrail_gate(
     *,
     guardrail_rows: list[Any],
     pinned: _PinnedGuardrailState,
-) -> _GuardrailGateOutcome:
+) -> _GuardrailInterception:
     """Run the enforcement gate over the selected guardrail definitions.
 
     Stage order (FAR-208): definition selection → cap enforcement (fail
@@ -1091,7 +1077,7 @@ async def _run_guardrail_gate(
         guardrail_observed_by_eval=observed_by_eval,
     )
 
-    return _GuardrailGateOutcome(
+    return _GuardrailInterception(
         payload=payload,
         results=results,
         redactions=redactions,
@@ -1128,17 +1114,7 @@ async def _intercept_guardrails(
     pinned = await _resolve_pinned_guardrail_state(session, request, guardrail_rows)
 
     if _has_guardrail_work(guardrail_rows, pinned.pinned_defs, pinned.skipped_guardrails, pinned.blocked):
-        gate = await _run_guardrail_gate(session, request, guardrail_rows=guardrail_rows, pinned=pinned)
-        return _GuardrailInterception(
-            payload=gate.payload,
-            results=gate.results,
-            redactions=gate.redactions,
-            blocked=gate.blocked,
-            block_message=gate.block_message,
-            blocking_eval_name=gate.blocking_eval_name,
-            observed_by_eval=gate.observed_by_eval,
-            summary_json=gate.summary_json,
-        )
+        return await _run_guardrail_gate(session, request, guardrail_rows=guardrail_rows, pinned=pinned)
     return _GuardrailInterception(
         payload=request.payload,
         results=[],
