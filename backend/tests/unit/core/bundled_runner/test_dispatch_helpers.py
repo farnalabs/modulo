@@ -31,7 +31,8 @@ async def test_write_file_via_exec_success() -> None:
     await rd._write_file_via_exec(provider, "ref1", "/home/user/out.txt", "hello")
     assert provider.exec_command.await_count == 1
     cmd = provider.exec_command.call_args.args[1]
-    assert cmd[0] == "sh" and cmd[1] == "-c"
+    assert cmd[0] == "sh"
+    assert cmd[1] == "-c"
     assert "base64 -d" in cmd[2]
 
 
@@ -48,18 +49,18 @@ async def test_read_file_via_exec_success() -> None:
 
 async def test_read_file_via_exec_missing_file_returns_empty() -> None:
     provider = _FakeProvider(_FakeResult(exit_code=0, stdout=""))
-    assert await rd._read_file_via_exec(provider, "ref1", "/nope.txt") == ""
+    assert not await rd._read_file_via_exec(provider, "ref1", "/nope.txt")
 
 
 async def test_read_file_via_exec_error_returns_empty() -> None:
     provider = _FakeProvider(_FakeResult(exit_code=2, stderr="err"))
-    assert await rd._read_file_via_exec(provider, "ref1", "/x.txt") == ""
+    assert not await rd._read_file_via_exec(provider, "ref1", "/x.txt")
 
 
 def test_validate_e2b_dispatch_timeout_none_passes() -> None:
-    rd.validate_e2b_dispatch_timeout(None)
-    rd.validate_e2b_dispatch_timeout("")
-    rd.validate_e2b_dispatch_timeout(1800)
+    assert rd.validate_e2b_dispatch_timeout(None) is None
+    assert rd.validate_e2b_dispatch_timeout("") is None
+    assert rd.validate_e2b_dispatch_timeout(1800) is None
 
 
 def test_validate_e2b_dispatch_timeout_over_cap_raises() -> None:
