@@ -361,6 +361,76 @@ async def claim_gate(
     )
 
 
+async def _run_hitl_manager(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    gate_id: str,
+    *,
+    enforce_human_only: bool,
+    require_sandbox: bool,
+    mgr_method: str,
+    **call_kwargs: Any,
+) -> Any:
+    """Open a tenant-scoped transaction and invoke a HITLManager decision method.
+
+    Shared by the approve / approve-with-modification / reject / deliver-manual /
+    submit-manual route handlers so the ``async with session.begin()`` +
+    domain-exception-mapping boilerplate is not copy-pasted into every route.
+    ``org_id`` and ``actor_id`` come from the principal; callers pass only the
+    method-specific kwargs (``claim_token``, ``decision_payload``, ``output`` …).
+    """
+    mgr = HITLManager()
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            if enforce_human_only:
+                await _enforce_human_only_gate(session, principal, run_id, gate_id)
+            if require_sandbox:
+                await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
+            try:
+                return await getattr(mgr, mgr_method)(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    org_id=principal.organisation_id,
+                    actor_id=principal.account_id,
+                    **call_kwargs,
+                )
+            except GateNotFoundError as exc:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            except GateAlreadyDecidedError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except ClaimTokenInvalidError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except ClaimTokenExpiredError as exc:
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+            except NotTeamMemberError as exc:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except DecisionPayloadError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except ProgrammingError as exc:
+        logger.exception("hitl._run_hitl_manager")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.exception("hitl._run_hitl_manager")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl._run_hitl_manager.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+
 # ---------------------------------------------------------------------------
 # Approve
 # ---------------------------------------------------------------------------
@@ -390,52 +460,17 @@ async def approve_gate(
     if req.notes:
         resume_data["notes"] = req.notes
 
-    mgr = HITLManager()
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _enforce_human_only_gate(session, principal, run_id, gate_id)
-            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
-            try:
-                await mgr.approve(
-                    session,
-                    run_id=run_id,
-                    gate_id=gate_id,
-                    org_id=principal.organisation_id,
-                    claim_token=req.claim_token,
-                    actor_id=principal.account_id,
-                    decision_payload=resume_data,
-                )
-            except GateNotFoundError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except GateAlreadyDecidedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-            except ClaimTokenInvalidError as exc:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-            except ClaimTokenExpiredError as exc:
-                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
-            except DecisionPayloadError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-    except ProgrammingError as exc:
-        logger.exception("hitl.approve_gate")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        logger.exception("hitl.approve_gate")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("hitl.approve_gate.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        gate_id,
+        enforce_human_only=True,
+        require_sandbox=True,
+        mgr_method="approve",
+        claim_token=req.claim_token,
+        decision_payload=resume_data,
+    )
 
     try:
         executor = _build_resume_executor(engine)
@@ -480,7 +515,6 @@ async def approve_gate_with_modification(
     for downstream nodes.  A ``hitl.output_modified`` audit event is logged
     documenting the change.
     """
-    mgr = HITLManager()
     # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
     # The real writer contract: action "approved" + "modified_output" (there is
     # no "approved_with_modification" action). _decide would stamp the persisted
@@ -493,52 +527,18 @@ async def approve_gate_with_modification(
     }
     if req.notes:
         resume_data["notes"] = req.notes
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _enforce_human_only_gate(session, principal, run_id, gate_id)
-            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
-            try:
-                await mgr.approve_with_modification(
-                    session,
-                    run_id=run_id,
-                    gate_id=gate_id,
-                    org_id=principal.organisation_id,
-                    claim_token=req.claim_token,
-                    modified_output=req.modified_output,
-                    actor_id=principal.account_id,
-                    decision_payload=resume_data,
-                )
-            except GateNotFoundError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except GateAlreadyDecidedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-            except ClaimTokenInvalidError as exc:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-            except ClaimTokenExpiredError as exc:
-                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
-            except DecisionPayloadError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-    except ProgrammingError as exc:
-        logger.exception("hitl.approve_gate_with_modification")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        logger.exception("hitl.approve_gate_with_modification")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("hitl.approve_gate_with_modification.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        gate_id,
+        enforce_human_only=True,
+        require_sandbox=True,
+        mgr_method="approve_with_modification",
+        claim_token=req.claim_token,
+        modified_output=req.modified_output,
+        decision_payload=resume_data,
+    )
 
     try:
         executor = _build_resume_executor(engine)
@@ -579,55 +579,21 @@ async def reject_gate(
 ) -> dict[str, str]:
     """Reject an interrupted HITL gate and route to reject_target or fail."""
     # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
+    # No enforce_human_only / require_sandbox guards here (unlike the resume
+    # actions): rejecting routes the run to its reject_target or terminates it,
+    # so it must not be blocked because the org is at sandbox capacity.
     resume_data: dict[str, Any] = {"action": "rejected", "gate_id": gate_id, "reason": req.reason}
-    mgr = HITLManager()
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            # No org-sandbox-capacity gate here (unlike the resume actions):
-            # rejecting routes the run to its reject_target or terminates it —
-            # it must not be blocked (or 202-"queued") because the org is at
-            # sandbox capacity.
-            try:
-                await mgr.reject(
-                    session,
-                    run_id=run_id,
-                    gate_id=gate_id,
-                    org_id=principal.organisation_id,
-                    actor_id=principal.account_id,
-                    claim_token=req.claim_token,
-                    decision_payload=resume_data,
-                )
-            except GateNotFoundError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except GateAlreadyDecidedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-            except ClaimTokenInvalidError as exc:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-            except ClaimTokenExpiredError as exc:
-                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
-            except DecisionPayloadError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-    except ProgrammingError as exc:
-        logger.exception("hitl.reject_gate")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        logger.exception("hitl.reject_gate")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("hitl.reject_gate.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        gate_id,
+        enforce_human_only=False,
+        require_sandbox=False,
+        mgr_method="reject",
+        claim_token=req.claim_token,
+        decision_payload=resume_data,
+    )
 
     # Resume the graph with rejection data so the gate router picks the
     # reject_target branch.
@@ -683,53 +649,18 @@ async def deliver_manual_output(
     # _decide would stamp the persisted payload anyway; this explicit stamp
     # feeds the DIRECT executor.resume injection below, which bypasses _decide.
     resume_data: dict[str, Any] = {"action": "deliver_manual", "gate_id": gate_id, "output": req.output}
-    mgr = HITLManager()
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _enforce_human_only_gate(session, principal, run_id, gate_id)
-            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
-            try:
-                await mgr.deliver_manual(
-                    session,
-                    run_id=run_id,
-                    gate_id=gate_id,
-                    org_id=principal.organisation_id,
-                    claim_token=req.claim_token,
-                    output=req.output,
-                    actor_id=principal.account_id,
-                    decision_payload=resume_data,
-                )
-            except GateNotFoundError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except GateAlreadyDecidedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-            except ClaimTokenInvalidError as exc:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-            except ClaimTokenExpiredError as exc:
-                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
-            except DecisionPayloadError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-    except ProgrammingError as exc:
-        logger.exception("hitl.deliver_manual_output")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        logger.exception("hitl.deliver_manual_output")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("hitl.deliver_manual_output.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        gate_id,
+        enforce_human_only=True,
+        require_sandbox=True,
+        mgr_method="deliver_manual",
+        claim_token=req.claim_token,
+        output=req.output,
+        decision_payload=resume_data,
+    )
 
     try:
         executor = _build_resume_executor(engine)
@@ -774,54 +705,17 @@ async def submit_manual_output(
     # _decide would stamp the persisted payload anyway; this explicit stamp
     # feeds the DIRECT executor.resume injection below, which bypasses _decide.
     resume_data: dict[str, Any] = {"action": "manual_output", "gate_id": gate_id, "output": req.output}
-    mgr = HITLManager()
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await _enforce_human_only_gate(session, principal, run_id, gate_id)
-            await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
-            try:
-                await mgr.approve(
-                    session,
-                    run_id=run_id,
-                    gate_id=gate_id,
-                    org_id=principal.organisation_id,
-                    claim_token=req.claim_token,
-                    actor_id=principal.account_id,
-                    decision_payload=resume_data,
-                )
-            except GateNotFoundError as exc:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except GateAlreadyDecidedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-            except ClaimTokenInvalidError as exc:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-            except ClaimTokenExpiredError as exc:
-                raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
-            except NotTeamMemberError as exc:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-            except DecisionPayloadError as exc:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-    except ProgrammingError as exc:
-        logger.exception("hitl.submit_manual_output")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from exc
-    except SQLAlchemyError as exc:
-        logger.exception("hitl.submit_manual_output")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DB_ERROR_PLEASE_TRY,
-        ) from exc
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("hitl.submit_manual_output.unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
-        ) from e
+    await _run_hitl_manager(
+        session,
+        principal,
+        run_id,
+        gate_id,
+        enforce_human_only=True,
+        require_sandbox=True,
+        mgr_method="approve",
+        claim_token=req.claim_token,
+        decision_payload=resume_data,
+    )
 
     try:
         executor = _build_resume_executor(engine)
