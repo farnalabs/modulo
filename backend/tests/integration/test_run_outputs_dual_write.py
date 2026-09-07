@@ -207,8 +207,12 @@ def _hard_failure() -> OperationalError:
 
 
 def _retryable_failure() -> OperationalError:
-    err = OperationalError("stmt", {}, Exception("could not serialize"))
-    err.orig = type("_FakePG", (Exception,), {"sqlstate": "40001"})("40001 could not serialize")
+    """qa iteration-1: ONLY the statement timeout (57014) is savepoint-
+    retryable — the transaction-aborting states (40001/40P01/53300) go
+    straight to DualWriteError (re-entering a savepoint after them fails with
+    25P02)."""
+    err = OperationalError("stmt", {}, Exception("statement timeout"))
+    err.orig = type("_FakePG", (Exception,), {"sqlstate": "57014"})("57014 statement timeout")
     return err
 
 
@@ -477,11 +481,11 @@ async def test_transient_retry_succeeds_without_failure_event(
     real_replace = run_crud.replace_run_node_outputs
     calls: list[int] = []
 
-    async def _flaky_replace(*args: Any, **kwargs: Any) -> None:
+    async def _flaky_replace(*args: Any, **kwargs: Any) -> Any:
         calls.append(1)
         if len(calls) == 1:
             raise _retryable_failure()
-        await real_replace(*args, **kwargs)
+        return await real_replace(*args, **kwargs)
 
     with patch_replace(_flaky_replace):
         async with rls_app_session.begin():

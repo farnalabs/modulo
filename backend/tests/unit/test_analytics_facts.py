@@ -98,12 +98,10 @@ def _rls_probe_result() -> SimpleNamespace:
 
 
 def _blob_read_results() -> list[SimpleNamespace]:
-    """The executes ONE re-pointed byte-fact helper issues: rows fetch + the
-    read_rls_org GUC probe + the legacy fallback (x2 sides = 6)."""
+    """The executes the single re-pointed blobs read issues (qa M14 — ONE
+    read_run_blobs_with_fallback call feeds BOTH byte facts): rows fetch +
+    the read_rls_org GUC probe + the legacy fallback = 3."""
     return [
-        _empty_rows_result(),
-        _rls_probe_result(),
-        _empty_rows_result(),
         _empty_rows_result(),
         _rls_probe_result(),
         _empty_rows_result(),
@@ -285,7 +283,7 @@ class TestRecordRunFacts:
         await analytics_mod.record_run_facts(session, run)
 
         session.begin_nested.assert_called_once()
-        # snapshot dims + graph dims + the four blob-read executes + the upsert.
+        # snapshot dims + graph dims + the single blobs read (3 executes) + the upsert.
         assert session.execute.await_count == 3 + len(_blob_read_results())
         assert captured["model"] is analytics_mod.RunDailyFact
         assert len(captured["index_elements"]) == 1

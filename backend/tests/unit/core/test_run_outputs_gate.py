@@ -1,0 +1,616 @@
+"""Unit tests for the FAR-583 run-outputs chokepoint gates (qa iteration 1).
+
+Covers the chokepoint-side fixes that the repo/migration fix Worker did not
+own:
+
+* qa M7 — the node-runner marker savepoint is KILL-SWITCH-GATED: switch OFF →
+  zero new-table marker rows, a degraded note, and the legacy marker still
+  written;
+* qa rider (f) — a transaction-aborting savepoint failure (deadlock /
+  shutdown / connection loss) logs ``legacy_marker_also_lost`` (the legacy
+  write is rolled back too) instead of claiming the sweep heals;
+* qa M4/M5 — the FAR-228 gate read and the connector rewrite read consume the
+  repo's SINGLE fenced markers reader (``read_run_markers_fenced``): no
+  predicate SELECT outside the repo, one statement, lock-preserving;
+* qa M15's sibling contract pins live in ``tests/unit/api/test_runs_endpoint.py``;
+* qa M16 — the guard obligation: every blobs-passing ``update_run_status``
+  call site in ``backend/src`` is wrapped in ``guard_dual_write`` (AST pin),
+  and the docstrings document the Raises contract;
+* qa M18 — the recovery failure path carries the run's ``claim_token`` into
+  the orchestration (a successor's re-claim must never be terminalized).
+
+DB-backed cases run on in-memory SQLite with ``Base.metadata.create_all`` over
+the involved tables only (the ``test_run_outputs_dualwrite`` harness).
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+import logging
+import uuid
+from collections.abc import AsyncGenerator
+from pathlib import Path
+from typing import Any, Self
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import event, select, text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+from modulo.core.pipeline_engine.node_runner import (
+    _read_connector_idempotency_gate_state,
+    _read_run_raw_output_markers_for_gate,
+    _write_raw_output_marker,
+)
+from modulo.db.crud.run_node_outputs import DualWriteError
+from modulo.db.models.base import Base
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.run import Run
+from modulo.db.models.run_node_outputs import RunNodeOutput
+
+_SRC = Path(__file__).resolve().parent.parent.parent.parent / "src" / "modulo"
+
+_ORG = uuid.uuid4()
+_RUN_ID = uuid.uuid4()
+
+_RUN_AND_ORG_TABLES = (Organisation.__table__, Run.__table__, RunNodeOutput.__table__)
+
+
+# ---------------------------------------------------------------------------
+# SQLite harness (the test_run_outputs_dualwrite pattern)
+# ---------------------------------------------------------------------------
+
+
+async def _now_sqlite(engine: AsyncEngine) -> None:
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_now(dbapi_connection: Any, connection_record: Any) -> None:
+        dbapi_connection.create_function("now", 0, lambda: "now")
+
+
+@pytest_asyncio.fixture
+async def sqlite_engine() -> AsyncGenerator[AsyncEngine, None]:
+    eng = create_async_engine("sqlite+aiosqlite://", echo=False)
+    await _now_sqlite(eng)
+    async with eng.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_RUN_AND_ORG_TABLES))
+        await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+def sqlite_sessionmaker(sqlite_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(sqlite_engine, expire_on_commit=False, autobegin=False)
+
+
+async def _seed_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> None:
+    async with maker() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
+                "VALUES (:id, 'gate org', :slug, '{}', '{}')"
+            ),
+            {"id": str(_ORG), "slug": f"gate-{_ORG.hex[:12]}"},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
+                "run_number, input_hash, langgraph_thread_id, claim_token, cancellation_requested) "
+                "VALUES (:id, :oid, :pid, :sid, 'manual', 'running', 1, 'ih', :thread, 'tok-a', 0)"
+            ),
+            {
+                "id": run_id.hex,
+                "oid": _ORG.hex,
+                "pid": uuid.uuid4().hex,
+                "sid": uuid.uuid4().hex,
+                "thread": f"gate-{run_id}",
+            },
+        )
+
+
+async def _load_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> Run:
+    async with maker() as session, session.begin():
+        return (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+
+
+# ---------------------------------------------------------------------------
+# qa M7 — the marker savepoint is kill-switch-gated
+# ---------------------------------------------------------------------------
+
+
+class TestMarkerSavepointKillSwitchGate:
+    @pytest.mark.asyncio
+    async def test_switch_off_skips_new_table_and_writes_legacy_only(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Switch OFF: ZERO new-table marker rows, the edge-triggered degraded
+        note fires, and the legacy ``runs.raw_output_markers`` column still
+        carries the merged marker (the emergency valve is legacy-only)."""
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+        note = AsyncMock()
+        written = AsyncMock()
+
+        async def _switch_off() -> bool:
+            return False
+
+        with (
+            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_off),
+            patch("modulo.core.run_outputs_dualwrite.note_dual_write_disabled", note),
+            patch("modulo.db.crud.run_node_outputs.write_run_markers", written),
+        ):
+            await _write_raw_output_marker(
+                sqlite_sessionmaker,
+                org_uuid=_ORG,
+                run_id=str(run_id),
+                node_id="n1",
+                attempt_key=None,
+                marker={"status": "failed", "raw_output": "raw"},
+            )
+
+        note.assert_awaited_once_with(str(run_id), _ORG)
+        written.assert_not_awaited()
+        run = await _load_run(sqlite_sessionmaker, run_id)
+        assert run.raw_output_markers is not None, "the legacy marker write must survive the switch-off"
+        assert f"run:{run_id}:node:n1:fallback" in run.raw_output_markers
+
+    @pytest.mark.asyncio
+    async def test_switch_on_writes_the_merged_marker_row(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Switch ON (default): the savepoint leg runs the REAL
+        ``write_run_markers`` — one row per attempt key in the new table, and
+        the degraded note stays silent."""
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+        note = AsyncMock()
+
+        async def _switch_on() -> bool:
+            return True
+
+        with (
+            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on),
+            patch("modulo.core.run_outputs_dualwrite.note_dual_write_disabled", note),
+        ):
+            await _write_raw_output_marker(
+                sqlite_sessionmaker,
+                org_uuid=_ORG,
+                run_id=str(run_id),
+                node_id="n1",
+                attempt_key=None,
+                marker={"status": "failed", "raw_output": "raw"},
+            )
+
+        note.assert_not_awaited()
+        async with sqlite_sessionmaker() as check, check.begin():
+            rows = (await check.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run_id))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].attempt_key == f"run:{run_id}:node:n1:fallback"
+        assert rows[0].node_id == "n1"
+
+    @pytest.mark.asyncio
+    async def test_switch_read_failure_is_fail_closed_on(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+        written = AsyncMock()
+
+        async def _boom() -> bool:
+            raise RuntimeError("switch store down")
+
+        with (
+            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _boom),
+            patch("modulo.db.crud.run_node_outputs.write_run_markers", written),
+        ):
+            await _write_raw_output_marker(
+                sqlite_sessionmaker,
+                org_uuid=_ORG,
+                run_id=str(run_id),
+                node_id="n1",
+                attempt_key=None,
+                marker={"status": "failed", "raw_output": "raw"},
+            )
+        written.assert_awaited_once(), "a switch-read failure must NOT disable the new-table leg (fail-closed ON)"
+
+    @pytest.mark.asyncio
+    async def test_missing_org_is_an_explicit_runtime_error(
+        self,
+        sqlite_sessionmaker: async_sessionmaker[AsyncSession],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """qa rider (e): the org guard is an explicit RuntimeError (asserts
+        vanish under -O) — surfaced through the never-raise persist contract's
+        failure log."""
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+
+        async def _switch_on() -> bool:
+            return True
+
+        caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
+        with patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on):
+            await _write_raw_output_marker(
+                sqlite_sessionmaker,
+                org_uuid=None,
+                run_id=str(run_id),
+                node_id="n1",
+                attempt_key=None,
+                marker={"status": "failed", "raw_output": "raw"},
+            )
+        assert "requires a parsed organisation id" in caplog.text, (
+            "the explicit RuntimeError must surface through the persist-failure log"
+        )
+
+
+class TestMarkerSavepointLegacyLostClassification:
+    @pytest.mark.asyncio
+    async def test_txn_aborting_failure_logs_legacy_marker_also_lost(
+        self,
+        sqlite_sessionmaker: async_sessionmaker[AsyncSession],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """qa rider (f): a 40P01-class savepoint failure poisons the WHOLE
+        transaction — the log must say the legacy marker is lost too, not
+        claim the sweep heals."""
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+
+        def _failing_write(*args: Any, **kwargs: Any) -> Any:
+            err = OperationalError("stmt", {}, Exception("deadlock detected"))
+            err.orig = type("_FakePG", (Exception,), {"sqlstate": "40P01"})("deadlock detected")
+            raise err
+
+        caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
+        with (
+            patch("modulo.db.crud.run_node_outputs.write_run_markers", _failing_write),
+            patch("modulo.core.run_outputs_dualwrite.note_dual_write_marker_failure", new_callable=AsyncMock) as note,
+        ):
+            await _write_raw_output_marker(
+                sqlite_sessionmaker,
+                org_uuid=_ORG,
+                run_id=str(run_id),
+                node_id="n1",
+                attempt_key=None,
+                marker={"status": "failed", "raw_output": "raw"},
+            )
+        note.assert_awaited_once()
+        assert any("raw_output_marker_legacy_marker_also_lost" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_savepoint_scoped_failure_keeps_the_legacy_claim(
+        self,
+        sqlite_sessionmaker: async_sessionmaker[AsyncSession],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A savepoint-SCOPED failure (hard SQLSTATE) does NOT fire the
+        legacy-lost log — the legacy marker write above the savepoint still
+        commits."""
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+
+        def _failing_write(*args: Any, **kwargs: Any) -> Any:
+            err = OperationalError("stmt", {}, Exception("permission denied"))
+            err.orig = type("_FakePG", (Exception,), {"sqlstate": "42501"})("permission denied")
+            raise err
+
+        caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
+        with (
+            patch("modulo.db.crud.run_node_outputs.write_run_markers", _failing_write),
+            patch("modulo.core.run_outputs_dualwrite.note_dual_write_marker_failure", new_callable=AsyncMock) as note,
+        ):
+            await _write_raw_output_marker(
+                sqlite_sessionmaker,
+                org_uuid=_ORG,
+                run_id=str(run_id),
+                node_id="n1",
+                attempt_key=None,
+                marker={"status": "failed", "raw_output": "raw"},
+            )
+        note.assert_awaited_once()
+        assert not any("legacy_marker_also_lost" in r.message for r in caplog.records)
+        run = await _load_run(sqlite_sessionmaker, run_id)
+        assert run.raw_output_markers is not None, "the legacy marker survives a savepoint-scoped failure"
+
+
+# ---------------------------------------------------------------------------
+# qa M4/M5 — the gate reads consume the single fenced reader
+# ---------------------------------------------------------------------------
+
+
+class _CountingSession:
+    """A fake session that counts execute() calls (statement-count pins)."""
+
+    def __init__(self, rows: list[Any] | None = None) -> None:
+        self.execute_calls: list[Any] = []
+        self._rows = rows or []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> Self:
+        return self
+
+    async def execute(self, stmt: Any, *args: object, **kwargs: object) -> Any:
+        self.execute_calls.append(stmt)
+        rows = list(self._rows)
+
+        class _Result:
+            def fetchone(self) -> Any:
+                return rows[0] if rows else None
+
+            def all(self) -> list[Any]:
+                return rows
+
+        return _Result()
+
+
+class TestGateReadUsesFencedReader:
+    @pytest.mark.asyncio
+    async def test_gate_read_issues_no_statement_outside_the_repo(self) -> None:
+        """qa M4/M5: the FAR-228 gate read is ONE fenced repo call — no
+        predicate SELECT outside the repo reader (the old shape was a
+        predicate SELECT + a fat all-sides fallback read)."""
+        fenced_calls: list[dict[str, Any]] = []
+
+        async def _fenced(session: Any, **kwargs: Any) -> dict[str, Any] | None:
+            fenced_calls.append(kwargs)
+            return {"run:x:node:n1:1": {"delivery_done": True}}
+
+        session = _CountingSession()
+        with (
+            patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+            patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
+        ):
+            markers = await _read_run_raw_output_markers_for_gate(
+                lambda: session,
+                run_id=str(_RUN_ID),
+                org_id_raw=str(_ORG),
+                claim_lease="tok-1",
+                node_id="n1",
+            )
+        assert not session.execute_calls, "the gate read must not issue a statement outside the repo reader"
+        assert fenced_calls == [
+            {"run_id": _RUN_ID, "organisation_id": _ORG, "claim_token": "tok-1", "for_update": False}
+        ]
+        assert markers is not None
+        assert "run:x:node:n1:1" in markers
+
+    @pytest.mark.asyncio
+    async def test_gate_read_fence_miss_serves_none(self) -> None:
+        async def _fenced(session: Any, **kwargs: Any) -> None:
+            return None
+
+        session = _CountingSession()
+        with (
+            patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+            patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
+        ):
+            markers = await _read_run_raw_output_markers_for_gate(
+                lambda: session,
+                run_id=str(_RUN_ID),
+                org_id_raw=str(_ORG),
+                claim_lease="tok-stale",
+                node_id="n1",
+            )
+        assert markers is None, "a fence miss must serve None (byte-for-byte the old visibility)"
+
+    @pytest.mark.asyncio
+    async def test_connector_gate_read_uses_fenced_reader_with_row_lock(self) -> None:
+        """qa M5: the connector rewrite read reassembles the markers via the
+        fenced reader with ``for_update=True`` (the run-row lock preserved);
+        the persisted idempotency key still comes from the run row."""
+        fenced_calls: list[dict[str, Any]] = []
+
+        async def _fenced(session: Any, **kwargs: Any) -> dict[str, Any] | None:
+            fenced_calls.append(kwargs)
+            return {"run:x:node:n1:connector": {"delivery_done": True}}
+
+        session = _CountingSession(rows=[("run-row-id", "key-1")])
+        with (
+            patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+            patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
+        ):
+            markers, persisted_key = await _read_connector_idempotency_gate_state(
+                lambda: session,
+                run_id=str(_RUN_ID),
+                org_id_raw=str(_ORG),
+                node_id="n1",
+            )
+        assert persisted_key == "key-1"
+        assert fenced_calls == [
+            {"run_id": _RUN_ID, "organisation_id": _ORG, "claim_token": None, "for_update": True}
+        ], "the connector read must fence by other means (no claim token) WITH the row lock"
+        assert markers is not None
+        assert "run:x:node:n1:connector" in markers
+        assert len(session.execute_calls) == 1, "only the idempotency-key SELECT remains outside the repo"
+
+
+# ---------------------------------------------------------------------------
+# qa M16 — the guard obligation is enforced + documented
+# ---------------------------------------------------------------------------
+
+_GUARDED_SITES: set[tuple[str, str]] = {
+    ("core/cost_controller/finalize.py", "_fallback_write"),
+    ("core/cost_controller/finalize.py", "_reduced_escape"),
+    ("core/cost_controller/finalize.py", "_write_finalized_run"),
+}
+_UNGUARDED_SITES: set[tuple[str, str]] = {
+    ("core/cost_controller/finalize.py", "_write_empty_terminal"),
+    ("core/pipeline_engine/executor.py", "_check_capacity"),
+    ("core/pipeline_engine/executor.py", "_check_spend_ceiling_gate"),
+    ("core/pipeline_engine/executor.py", "_claim_run_and_audit"),
+    ("core/pipeline_engine/executor.py", "resume"),
+    ("core/dispatch.py", "_org_capacity_deferred"),
+    ("api/routes/hitl.py", "claim_gate"),
+}
+
+
+def _update_run_status_call_sites() -> set[tuple[str, str, bool]]:
+    """Every ``update_run_status(...)`` call site in backend/src with its
+    enclosing function and whether it sits inside ``async with guard_dual_write``."""
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.scope: list[str] = []
+            self.guard_depth = 0
+            self.findings: set[tuple[str, str, bool]] = set()
+
+        def _scoped(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+            self.scope.append(node.name)
+            self.generic_visit(node)
+            self.scope.pop()
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._scoped(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._scoped(node)
+
+        def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+            wrapped = (
+                len(node.items) == 1
+                and isinstance(node.items[0].context_expr, ast.Call)
+                and isinstance(node.items[0].context_expr.func, ast.Name)
+                and node.items[0].context_expr.func.id == "guard_dual_write"
+            )
+            if wrapped:
+                self.guard_depth += 1
+            self.generic_visit(node)
+            if wrapped:
+                self.guard_depth -= 1
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Name) and node.func.id == "update_run_status":
+                enclosing = self.scope[-1] if self.scope else "<module>"
+                self.findings.add((self._rel, enclosing, self.guard_depth > 0))
+            self.generic_visit(node)
+
+    findings: set[tuple[str, str, bool]] = set()
+    for path in sorted(_SRC.rglob("*.py")):
+        rel = path.relative_to(_SRC).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (SyntaxError, UnicodeDecodeError, OSError):  # pragma: no cover
+            continue
+        visitor = Visitor()
+        visitor._rel = rel  # type: ignore[attr-defined]
+        visitor.visit(tree)
+        findings |= visitor.findings
+    return findings
+
+
+class TestGuardContract:
+    def test_every_blobs_passing_call_site_is_guard_wrapped(self) -> None:
+        """qa M16: the NEXT blobs-passing ``update_run_status`` call site added
+        without ``guard_dual_write`` fails here. The wrapped set is pinned to
+        the sanctioned sites; the unwrapped set is pinned to the no-blobs
+        sites; anything else is an unreviewed drift."""
+        findings = _update_run_status_call_sites()
+        wrapped = {(rel, fn) for rel, fn, guarded in findings if guarded}
+        unwrapped = {(rel, fn) for rel, fn, guarded in findings if not guarded}
+        missing_guard = wrapped - _GUARDED_SITES
+        unguarded_drift = unwrapped - _UNGUARDED_SITES
+        assert not missing_guard, (
+            "update_run_status call sites wrapped in guard_dual_write that are NOT in the sanctioned "
+            f"list (review + extend the allowlist): {sorted(missing_guard)}"
+        )
+        assert not unguarded_drift, (
+            "UNGUARDED update_run_status call sites outside the known no-blobs set — if the new site "
+            f"passes outputs_json/node_telemetry_json it MUST be wrapped in guard_dual_write: "
+            f"{sorted(unguarded_drift)}"
+        )
+        assert wrapped >= _GUARDED_SITES, (
+            f"a sanctioned guard-wrapped site disappeared: {sorted(_GUARDED_SITES - wrapped)}"
+        )
+        assert unwrapped >= _UNGUARDED_SITES, (
+            f"a known no-blobs site became guarded (review the pin): {sorted(_UNGUARDED_SITES - unwrapped)}"
+        )
+
+    def test_update_run_status_docstring_documents_raises_and_guard(self) -> None:
+        from modulo.db.crud.run import update_run_status
+
+        doc = inspect.getdoc(update_run_status)
+        assert doc is not None
+        assert "DualWriteError" in doc, "the Raises contract must be documented at the chokepoint"
+        assert "guard_dual_write" in doc, "the guard obligation must be documented at the chokepoint"
+
+    def test_dual_write_helper_docstring_documents_the_contract(self) -> None:
+        from modulo.db.crud.run import dual_write_run_node_outputs
+
+        doc = inspect.getdoc(dual_write_run_node_outputs)
+        assert doc is not None
+        assert "DualWriteError" in doc
+        assert "Kill-switch" in doc
+
+
+# ---------------------------------------------------------------------------
+# qa M18 — the recovery failure path is claim-token fenced
+# ---------------------------------------------------------------------------
+
+
+class TestRecoveryClaimTokenFence:
+    @pytest.mark.asyncio
+    async def test_recovery_failure_carries_the_claim_token(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """qa M18: the recovery dual-write failure path passes
+        ``run.claim_token`` — without it the separate-session terminalize
+        could mark a SUCCESSOR's re-claim."""
+        from modulo.core.pipeline_engine.recovery import _apply_recovery_markers
+
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+        captured: dict[str, Any] = {}
+
+        async def _failing_dual_write(session: Any, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            raise DualWriteError(
+                "injected dual-write failure",
+                run_id=kwargs["run_id"],
+                organisation_id=kwargs["organisation_id"],
+                claim_token=kwargs["claim_token"],
+                origin=kwargs["origin"],
+            )
+
+        with patch("modulo.db.crud.run.dual_write_run_node_outputs", _failing_dual_write):
+            async with sqlite_sessionmaker() as session, session.begin():
+                loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+                with pytest.raises(DualWriteError) as caught:
+                    await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
+
+        assert captured["claim_token"] == "tok-a", "the loaded run's claim_token must fence the orchestration"
+        assert caught.value.claim_token == "tok-a"
+        assert caught.value.origin == "recovery.apply_recovery_markers"
+
+    @pytest.mark.asyncio
+    async def test_orchestration_uses_the_claim_token_for_terminalize(self) -> None:
+        """End-to-end through the orchestrator: the DualWriteError's claim
+        token reaches ``_mark_run_failed`` (the successor-reclaim fence)."""
+        from modulo.core.error_tracking import saq_hooks
+        from modulo.core.run_outputs_dualwrite import orchestrate_dual_write_failure
+
+        exc = DualWriteError(
+            "injected",
+            run_id=uuid.uuid4(),
+            organisation_id=_ORG,
+            claim_token="tok-owner",
+            sqlstate="42501",
+            origin="recovery.apply_recovery_markers",
+        )
+        with (
+            patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=1) as mark,
+            patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
+            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock),
+        ):
+            await orchestrate_dual_write_failure(exc)
+        assert mark.await_args.kwargs["claim_token"] == "tok-owner"

@@ -295,4 +295,9 @@ __all__ = [
     #     round-trip cases) so the two parsers cannot drift. vulture scans src/
     #     only so it cannot see the test call sites.
     "_parse_marker_node_id",
+    # --- FAR-583: the ops runbook's fleet-visible dual-write kill-switch flip.
+    #     No in-repo caller by design: an operator invokes it via a maintenance
+    #     REPL / script during a dual-write incident (writes the Redis key every
+    #     process reads per call). Tests exercise it; vulture scans src/ only.
+    "set_dual_write_enabled",
 ]

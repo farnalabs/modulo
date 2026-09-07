@@ -5,7 +5,8 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,6 +38,10 @@ _PIPELINE_ID = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
 _SNAPSHOT_ID = uuid.uuid4()
 _THREAD_ID = str(uuid.uuid4())
+
+# qa M15: the autouse ``_stub_gate_fired`` fixture swaps the module attribute;
+# tests that exercise the REAL single-transaction loader capture it at import.
+_REAL_DO_GET_RUN_WITH_GATE = runs_module._do_get_run_with_gate
 
 
 async def test_run_input_uses_legacy_target_when_new_target_is_null():
@@ -136,26 +141,25 @@ def _make_snapshot() -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _stub_gate_fired(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FAR-583: the detail endpoint's gate-fired flag derives in its own short
-    transaction (``_do_get_run_gate_fired``) and its markers leg reads through
-    the run_node_outputs repo reader — neither can run against the mocked
-    session. The stub re-derives from the run the test patched into
-    ``_do_get_run``, with the markers stub serving the run's raw_output_markers
-    exactly as the real reader reassembles them."""
+    """FAR-583: the detail endpoint's gate-fired flag derives inside
+    ``_do_get_run_with_gate``'s single transaction (qa M15 — the removed
+    second-txn helper is gone) and its markers leg reads through the
+    run_node_outputs repo reader — neither can run against the mocked session.
+    The stub re-derives from the run the test patched into ``_do_get_run``,
+    with the markers stub serving the run's raw_output_markers exactly as the
+    real reader reassembles them."""
     import modulo.api.routes.runs as runs_module
 
-    async def _gate(factory: Any, principal: Any, run_id: Any) -> Any:
-        run = getattr(runs_module._do_get_run, "return_value", None)
-        if run is None:
-            raise runs_module.RunNotFoundError(run_id)
-        return await runs_module._run_gate_fired(None, run)
+    async def _detail(factory: Any, principal: Any, run_id: Any) -> tuple[Any, bool]:
+        run = await runs_module._do_get_run(factory, principal, run_id)
+        return run, await runs_module._run_gate_fired(None, run)
 
     async def _markers(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         run = getattr(runs_module._do_get_run, "return_value", None)
         markers = getattr(run, "raw_output_markers", None) if run is not None else None
         return markers if isinstance(markers, dict) else None
 
-    monkeypatch.setattr(runs_module, "_do_get_run_gate_fired", _gate)
+    monkeypatch.setattr(runs_module, "_do_get_run_with_gate", _detail)
     monkeypatch.setattr(runs_module, "read_run_markers_with_fallback", _markers)
 
     # The io/diff endpoints reassemble the blobs through the repo reader too
@@ -728,6 +732,62 @@ def test_run_response_gate_fired_false_for_plain_complete(client: TestClient) ->
     body = resp.json()
     assert body["gate_fired"] is False
     assert body["run_classification"]["reason"] == "no_work"
+
+
+async def test_run_detail_with_gate_derives_flag_in_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """qa M15: the run row AND the gate-fired flag derive in ONE transaction.
+
+    The removed second-txn helper re-opened a session and re-SELECTed the run
+    per GET /runs/{id} (a TOCTOU window vs terminalize + an extra read); the
+    loader now derives the flag from the SAME open transaction — pinned here
+    by (a) the helper's absence, (b) the gate derivation receiving the SAME
+    session the loader opened, and (c) exactly ONE run SELECT in the loader.
+    """
+    import modulo.api.routes.runs as runs_module
+
+    # Helper removal pin: the single-transaction loader replaced it.
+    with pytest.raises(AttributeError):
+        runs_module._do_get_run_gate_fired  # noqa: B018 — the AttributeError IS the assertion
+
+    run = _make_run(status="complete", error_code="harness.idempotency_gate")
+    gate_calls: list[tuple[Any, Any]] = []
+
+    async def _gate_fired(session: Any, row: Any) -> bool:
+        gate_calls.append((session, row))
+        return True
+
+    executed: list[Any] = []
+
+    class _Result:
+        def scalar_one_or_none(self) -> Any:
+            return run
+
+    class _Session:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *args: object) -> bool:
+            return False
+
+        def begin(self) -> Self:
+            return self
+
+        async def execute(self, stmt: Any, *args: object, **kwargs: object) -> _Result:
+            executed.append(stmt)
+            return _Result()
+
+    session = _Session()
+    principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="owner")
+    monkeypatch.setattr(runs_module, "set_rls_org", AsyncMock())
+    monkeypatch.setattr(runs_module, "set_rls_user_context", AsyncMock())
+    monkeypatch.setattr(runs_module, "_run_gate_fired", _gate_fired)
+
+    loaded, gate = await _REAL_DO_GET_RUN_WITH_GATE(lambda: session, principal, _RUN_ID)
+
+    assert loaded is run
+    assert gate is True
+    assert gate_calls == [(session, run)], "the flag must derive on the SAME open transaction/session"
+    assert len(executed) == 1, "one run SELECT — the loader must not re-SELECT the run"
 
 
 def test_run_response_populates_guardrail_summary(client: TestClient) -> None:

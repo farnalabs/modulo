@@ -260,15 +260,20 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "run_api_key_errors": 0,
     "rollback_thresholds_checked": 0,
     "rollback_thresholds_flagged": 0,
-    # FAR-583 run_node_outputs migration counters. dual_write_* are bumped by
-    # the app-process chokepoint orchestration (core.run_outputs_dualwrite) via
-    # read-modify-writes of the shared Redis stats key; the sweep_* keys are
+    # FAR-583 run_node_outputs migration counters. The dual_write_* keys are
+    # NOT tick counters and are NOT bumped here: the app-process chokepoint
+    # orchestration (core.run_outputs_dualwrite) INCRs DEDICATED cumulative
+    # Redis keys (``saq:run_outputs:counters:<name>`` — qa M10: the old
+    # read-modify-write of this shared blob was wiped by the tick's
+    # wholesale rewrite every 60s), and the tick READS them into the summary
+    # at tick end (see _overlay_dual_write_counters). The sweep_* keys are
     # populated by the catch-up sweep leg wired into _reconcile_org (pass 2b).
     "outputs_dual_write_failed": 0,
     "outputs_dual_write_retries": 0,
     "outputs_dual_write_degraded": 0,
+    "outputs_dual_write_sentinel_filtered": 0,
+    "outputs_dual_write_skipped_no_org": 0,
     "outputs_sweep_healed": 0,
-    "outputs_sweep_failed": 0,
     "outputs_sweep_org_failed": 0,
 }
 
@@ -302,11 +307,19 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["run_api_key_errors"] = stats.get("run_api_key_errors", 0)
     _dispatcher_reconcile_stats["rollback_thresholds_checked"] = stats.get("rollback_thresholds_checked", 0)
     _dispatcher_reconcile_stats["rollback_thresholds_flagged"] = stats.get("rollback_thresholds_flagged", 0)
+    # qa M10: the dual_write_* values arrive pre-read from the dedicated
+    # cumulative Redis counters (the summary carries them; the tick does not
+    # own or reset them). outputs_sweep_failed is DEAD —
+    # backfill_run_node_outputs_batch never returns a ``runs_failed`` key, so
+    # the field was always 0; outputs_sweep_org_failed is the failure channel.
     _dispatcher_reconcile_stats["outputs_dual_write_failed"] = stats.get("outputs_dual_write_failed", 0)
     _dispatcher_reconcile_stats["outputs_dual_write_retries"] = stats.get("outputs_dual_write_retries", 0)
     _dispatcher_reconcile_stats["outputs_dual_write_degraded"] = stats.get("outputs_dual_write_degraded", 0)
+    _dispatcher_reconcile_stats["outputs_dual_write_sentinel_filtered"] = stats.get(
+        "outputs_dual_write_sentinel_filtered", 0
+    )
+    _dispatcher_reconcile_stats["outputs_dual_write_skipped_no_org"] = stats.get("outputs_dual_write_skipped_no_org", 0)
     _dispatcher_reconcile_stats["outputs_sweep_healed"] = stats.get("outputs_sweep_healed", 0)
-    _dispatcher_reconcile_stats["outputs_sweep_failed"] = stats.get("outputs_sweep_failed", 0)
     _dispatcher_reconcile_stats["outputs_sweep_org_failed"] = stats.get("outputs_sweep_org_failed", 0)
 
 
@@ -4797,6 +4810,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         if not org_ids:
             # Still record the run so /healthz/ready sees a fresh last_run_at
             # even in an empty-org environment (the cron keeps ticking every 60s).
+            await _overlay_dual_write_counters(redis_client, summary)
             set_dispatcher_reconcile_stats(summary)
             await write_dispatcher_reconcile_stats(redis_client, summary)
             return summary
@@ -4848,6 +4862,10 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         for run_id, run_org_id in terminalized_run_ids:
             await _record_fact_for_terminalized_run(run_id, run_org_id)
         await _run_reconcile_sweeps(redis_client, summary)
+        # qa M10: overlay the dedicated dual-write counters into the summary
+        # BEFORE the stats persist — /healthz reads the counters' current
+        # values from the summary, and the tick never owns or resets them.
+        await _overlay_dual_write_counters(redis_client, summary)
         # Record the outcome for /healthz/ready BEFORE the client is closed:
         # the shared Redis key is what the WEB process reads (the in-process
         # dict lives only in this worker process).
@@ -4886,12 +4904,20 @@ def _dispatcher_summary() -> dict[str, Any]:
         "run_api_key_scanned": 0,
         "run_api_key_revoked": 0,
         "run_api_key_errors": 0,
-        # FAR-583 catch-up sweep counters — bumped per org by the sweep leg
-        # inside _reconcile_org; the dual_write_* keys are NOT tick counters
-        # (the app-process chokepoint orchestration bumps them on the shared
-        # Redis key directly — core.run_outputs_dualwrite).
+        # FAR-583 counters. The dual_write_* keys are NOT tick counters: the
+        # app-side chokepoint orchestration INCRs dedicated cumulative Redis
+        # keys (core.run_outputs_dualwrite) and the tick READS them into these
+        # summary fields at tick end (qa M10 — _overlay_dual_write_counters):
+        # /healthz keeps showing the numbers, the tick never owns or resets
+        # them. The sweep keys ARE tick-owned (bumped per org by the sweep leg
+        # inside _reconcile_org); outputs_sweep_failed is dead (the batch
+        # helper never returned ``runs_failed``) and is gone.
+        "outputs_dual_write_failed": 0,
+        "outputs_dual_write_retries": 0,
+        "outputs_dual_write_degraded": 0,
+        "outputs_dual_write_sentinel_filtered": 0,
+        "outputs_dual_write_skipped_no_org": 0,
         "outputs_sweep_healed": 0,
-        "outputs_sweep_failed": 0,
         "outputs_sweep_org_failed": 0,
     }
 
@@ -4903,6 +4929,27 @@ def _dispatcher_summary() -> dict[str, Any]:
 # healed) selects zero rows because the helper's NOT-EXISTS trigger legs keep
 # healed runs out of the selection. 500 mirrors the repo helper's default cap.
 _OUTPUTS_SWEEP_TICK_CAP = 500
+
+
+async def _overlay_dual_write_counters(redis_client: AsyncRedis, summary: dict[str, Any]) -> None:
+    """READ the dedicated dual-write counters into the tick's summary (qa M10).
+
+    The app-side chokepoint orchestration INCRs cumulative keys the tick never
+    touches; the tick copies their CURRENT values into the summary's
+    outputs_dual_write_* fields so /healthz keeps showing them. Best-effort:
+    a Redis failure leaves the summary's zero defaults (the counters reappear
+    on the next healthy tick) — never fails the tick.
+    """
+    from modulo.core.run_outputs_dualwrite import read_dual_write_counters
+
+    try:
+        counters = await read_dual_write_counters(redis_client)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.dual_write_counter_read_failed", exc_info=True)
+        return
+    summary.update(counters)
 
 
 async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any]) -> None:
@@ -4925,7 +4972,6 @@ async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any])
 
     factory = _open_system_factory()
     healed = 0
-    failed = 0
     skipped_healed = 0
     skipped_ghost = 0
     quarantined = 0
@@ -4944,7 +4990,6 @@ async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any])
                 )
             selected = int(result["runs_selected"])
             healed += int(result["runs_backfilled"])
-            failed += int(result.get("runs_failed", 0))
             skipped_healed += int(result.get("runs_skipped_healed", 0))
             skipped_ghost += int(result.get("runs_skipped_ghost", 0))
             quarantined += int(result.get("runs_quarantined", 0))
@@ -4965,15 +5010,16 @@ async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any])
         summary["outputs_sweep_org_failed"] += 1
         _log.exception("dispatcher_reconcile.outputs_sweep_org_failed (org %s)", org_id)
         return
-    if healed or failed or quarantined or skipped_ghost:
+    if healed or quarantined or skipped_ghost:
+        # qa M10b: outputs_sweep_failed is GONE — backfill_run_node_outputs_batch
+        # never returned a ``runs_failed`` key, so the counter was always 0;
+        # per-org failures are counted on outputs_sweep_org_failed above.
         summary["outputs_sweep_healed"] += healed
-        summary["outputs_sweep_failed"] += failed
         _log.info(
             "dispatcher_reconcile.outputs_sweep",
             extra={
                 "org_id": str(org_id),
                 "healed": healed,
-                "failed": failed,
                 "skipped_healed": skipped_healed,
                 "skipped_ghost": skipped_ghost,
                 "quarantined": quarantined,

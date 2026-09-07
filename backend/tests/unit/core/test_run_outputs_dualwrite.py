@@ -34,10 +34,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.error_tracking import saq_hooks
 from modulo.core.run_outputs_dualwrite import (
+    DUAL_WRITE_COUNTERS,
     DUAL_WRITE_ENABLED_KEY,
+    _redis_incr_window,
+    _redis_set_nx,
+    bump_dual_write_counter,
     guard_dual_write,
     is_dual_write_enabled,
+    note_dual_write_disabled,
     orchestrate_dual_write_failure,
+    read_dual_write_counters,
+    set_dual_write_enabled,
 )
 from modulo.core.runtime_config.store import get_runtime_config_store
 from modulo.db.crud.run_node_outputs import DualWriteError
@@ -69,40 +76,178 @@ def _dual_write_error(**overrides: Any) -> DualWriteError:
 # ---------------------------------------------------------------------------
 
 
+class _FakeRedis:
+    """A scripted async Redis double for the switch/counter helpers."""
+
+    def __init__(self, *, get_value: Any = None, get_error: Exception | None = None) -> None:
+        self.get_value = get_value
+        self.get_error = get_error
+        self.set_calls: list[dict[str, Any]] = []
+        self.get_calls: list[Any] = []
+        self.closed = False
+
+    async def get(self, key: Any) -> Any:
+        self.get_calls.append(key)
+        if self.get_error is not None:
+            raise self.get_error
+        return self.get_value
+
+    async def set(self, key: Any, value: Any, **kwargs: Any) -> Any:
+        self.set_calls.append({"key": key, "value": value, **kwargs})
+        return True
+
+    async def incr(self, key: Any) -> int:
+        self.set_calls.append({"key": key, "value": "__incr__"})
+        return 1
+
+    async def incrby(self, key: Any, amount: int) -> int:
+        self.set_calls.append({"key": key, "value": f"__incrby__{amount}"})
+        return amount
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _redis_client(**kwargs: Any) -> _FakeRedis:
+    return _FakeRedis(**kwargs)
+
+
 class TestKillSwitch:
+    """qa C3: the switch is FLEET-VISIBLE — the Redis key is read first, the
+    process-local runtime-config override is the fallback leg, default ON."""
+
     def setup_method(self) -> None:
         get_runtime_config_store().clear_all_overrides()
+        import modulo.core.run_outputs_dualwrite as module
+
+        module._BOOT_OFF_WARNING_EMITTED = False
 
     def teardown_method(self) -> None:
         get_runtime_config_store().clear_all_overrides()
 
-    def test_default_is_on(self) -> None:
-        assert is_dual_write_enabled() is True
+    @pytest.mark.asyncio
+    async def test_default_is_on(self) -> None:
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
+            assert await is_dual_write_enabled() is True
 
-    def test_false_disables(self) -> None:
-        get_runtime_config_store().set_override(DUAL_WRITE_ENABLED_KEY, "false")
-        assert is_dual_write_enabled() is False
+    @pytest.mark.asyncio
+    async def test_redis_key_off_disables_fleet_wide(self) -> None:
+        """The fleet path: the SAQ worker machines never see an admin API
+        flip, but they DO see the Redis key — '0' disables dual-write."""
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value="0")):
+            assert await is_dual_write_enabled() is False
 
-    def test_value_is_read_per_call_not_cached_at_import(self) -> None:
-        assert is_dual_write_enabled() is True
-        # Flip BETWEEN calls — the next read must observe the new value.
+    @pytest.mark.asyncio
+    async def test_redis_key_false_disables_and_present_value_enables(self) -> None:
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value="false")):
+            assert await is_dual_write_enabled() is False
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value="1")):
+            assert await is_dual_write_enabled() is True
+
+    @pytest.mark.asyncio
+    async def test_redis_error_falls_through_to_override_then_default(self) -> None:
+        """A Redis outage falls through: the override still governs the local
+        process, and with no override the fail-closed default keeps ON."""
+        with (
+            patch(
+                "modulo.core.run_outputs_dualwrite._open_redis",
+                return_value=_redis_client(get_error=RuntimeError("down")),
+            ),
+            patch("modulo.core.runtime_config.store.get_runtime_config_store") as store_factory,
+        ):
+            store = store_factory.return_value
+            store.get.return_value = "false"
+            assert await is_dual_write_enabled() is False
+            store.get.return_value = None
+            assert await is_dual_write_enabled() is True
+
+    @pytest.mark.asyncio
+    async def test_redis_absent_key_honors_override(self) -> None:
+        """The process-local leg stays honoured when the Redis key is absent —
+        the web-process/tests flip path keeps working."""
         get_runtime_config_store().set_override(DUAL_WRITE_ENABLED_KEY, "false")
-        assert is_dual_write_enabled() is False
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
+            assert await is_dual_write_enabled() is False
         get_runtime_config_store().clear_override(DUAL_WRITE_ENABLED_KEY)
-        assert is_dual_write_enabled() is True
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
+            assert await is_dual_write_enabled() is True
 
-    def test_case_insensitive_false_only_disables(self) -> None:
-        get_runtime_config_store().set_override(DUAL_WRITE_ENABLED_KEY, " False ")
-        assert is_dual_write_enabled() is False
-        get_runtime_config_store().set_override(DUAL_WRITE_ENABLED_KEY, "off")
-        # Fail-closed: anything but the literal "false" keeps dual-write ON.
-        assert is_dual_write_enabled() is True
+    @pytest.mark.asyncio
+    async def test_redis_precedence_beats_override(self) -> None:
+        """The fleet key wins: an OFF Redis key disables even where the local
+        override says ON."""
+        get_runtime_config_store().set_override(DUAL_WRITE_ENABLED_KEY, "true")
+        try:
+            with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value="0")):
+                assert await is_dual_write_enabled() is False
+        finally:
+            get_runtime_config_store().clear_override(DUAL_WRITE_ENABLED_KEY)
 
-    def test_store_read_failure_is_fail_closed_on(self) -> None:
-        store = MagicMock()
-        store.get.side_effect = RuntimeError("store unavailable")
-        with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
-            assert is_dual_write_enabled() is True
+    @pytest.mark.asyncio
+    async def test_override_leg_literal_false_only_disables(self) -> None:
+        """On the process-local leg only the literal "false" (any case)
+        disables — anything else, including "off", keeps dual-write ON."""
+        store = get_runtime_config_store()
+        store.set_override(DUAL_WRITE_ENABLED_KEY, " False ")
+        try:
+            with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
+                assert await is_dual_write_enabled() is False
+        finally:
+            store.clear_override(DUAL_WRITE_ENABLED_KEY)
+        store.set_override(DUAL_WRITE_ENABLED_KEY, "off")
+        try:
+            with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
+                assert await is_dual_write_enabled() is True
+        finally:
+            store.clear_override(DUAL_WRITE_ENABLED_KEY)
+
+    @pytest.mark.asyncio
+    async def test_store_read_failure_is_fail_closed_on(self) -> None:
+        with (
+            patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)),
+            patch("modulo.core.runtime_config.store.get_runtime_config_store") as store_factory,
+        ):
+            store = store_factory.return_value
+            store.get.side_effect = RuntimeError("store unavailable")
+            assert await is_dual_write_enabled() is True
+
+    @pytest.mark.asyncio
+    async def test_boot_warning_emitted_once_on_first_off_read(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The FIRST process-local OFF read logs the loud degraded-combo
+        warning (readers serve the new table, writes legacy-only, sweep
+        heals); later OFF reads stay silent."""
+        caplog.set_level("WARNING", logger="modulo.core.run_outputs_dualwrite")
+        get_runtime_config_store().set_override(DUAL_WRITE_ENABLED_KEY, "false")
+        try:
+            with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
+                assert await is_dual_write_enabled() is False
+                assert await is_dual_write_enabled() is False
+        finally:
+            get_runtime_config_store().clear_override(DUAL_WRITE_ENABLED_KEY)
+        warnings = [r for r in caplog.records if "dual_write_switch_off_degraded_combo" in r.message]
+        assert len(warnings) == 1
+        assert "LEGACY-ONLY" in warnings[0].message
+        assert "sweep" in warnings[0].message
+
+    @pytest.mark.asyncio
+    async def test_boot_warning_fires_for_redis_off_too(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level("WARNING", logger="modulo.core.run_outputs_dualwrite")
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value="0")):
+            assert await is_dual_write_enabled() is False
+        assert any("dual_write_switch_off_degraded_combo" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_set_dual_write_enabled_writes_fleet_key(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The ops runbook flip: SET the fleet key (no NX — an explicit
+        re-issue overwrites), bounded by the TTL; the call is loud."""
+        caplog.set_level("WARNING", logger="modulo.core.run_outputs_dualwrite")
+        client = _redis_client()
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+            await set_dual_write_enabled(False, ttl_seconds=1800)
+            await set_dual_write_enabled(True, ttl_seconds=60)
+        assert client.set_calls[0] == {"key": "saq:run_outputs:dual_write_enabled", "value": "0", "ex": 1800}
+        assert client.set_calls[1] == {"key": "saq:run_outputs:dual_write_enabled", "value": "1", "ex": 60}
+        assert any("dual_write_switch_flipped" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +262,7 @@ class TestOrchestration:
         with (
             patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=1) as mark,
             patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
-            patch("modulo.core.run_outputs_dualwrite.bump_dispatcher_reconcile_counter", new_callable=AsyncMock),
+            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock),
         ):
             rowcount = await orchestrate_dual_write_failure(exc)
         assert rowcount == 1
@@ -134,7 +279,7 @@ class TestOrchestration:
         with (
             patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=0) as mark,
             patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
-            patch("modulo.core.run_outputs_dualwrite.bump_dispatcher_reconcile_counter", new_callable=AsyncMock),
+            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock),
         ):
             rowcount = await orchestrate_dual_write_failure(exc)
         assert rowcount == 0
@@ -150,7 +295,7 @@ class TestOrchestration:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("ingest down"),
             ),
-            patch("modulo.core.run_outputs_dualwrite.bump_dispatcher_reconcile_counter", new_callable=AsyncMock),
+            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock),
         ):
             rowcount = await orchestrate_dual_write_failure(exc)
         assert rowcount == 1
@@ -167,7 +312,7 @@ class TestOrchestration:
             ),
             patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
             patch(
-                "modulo.core.run_outputs_dualwrite.bump_dispatcher_reconcile_counter",
+                "modulo.core.run_outputs_dualwrite.bump_dual_write_counter",
                 new_callable=AsyncMock,
             ) as bump,
         ):
@@ -495,8 +640,11 @@ class TestDualWriteHelperSentinelAbort:
 
 class TestDualWriteHelperRetryable:
     @pytest.mark.asyncio
-    async def test_retryable_sqlstate_retries_once_then_succeeds(self, sqlite_sessionmaker: Any) -> None:
-        """A 40001-class failure once → the retry leg runs the REAL write."""
+    async def test_statement_timeout_57014_retries_once_then_succeeds(self, sqlite_sessionmaker: Any) -> None:
+        """A 57014 (statement timeout) failure once → the retry leg runs the
+        REAL write. ONLY 57014 stays retryable — the transaction-aborting
+        states abort the whole transaction on Postgres, so re-entering a
+        savepoint after them would fail with 25P02 (qa iteration-1)."""
         from sqlalchemy.exc import OperationalError
 
         from modulo.db.crud import run as run_crud
@@ -509,20 +657,20 @@ class TestDualWriteHelperRetryable:
         real_replace = run_crud.replace_run_node_outputs
         calls: list[int] = []
 
-        async def _flaky_replace(*args: Any, **kwargs: Any) -> None:
+        async def _flaky_replace(*args: Any, **kwargs: Any) -> Any:
             calls.append(1)
             if len(calls) == 1:
-                err = OperationalError("stmt", {}, Exception("serialization"))
-                err.orig = type("_FakePG", (Exception,), {"sqlstate": "40001"})("serialization")
+                err = OperationalError("stmt", {}, Exception("statement timeout"))
+                err.orig = type("_FakePG", (Exception,), {"sqlstate": "57014"})("statement timeout")
                 raise err
-            await real_replace(*args, **kwargs)
+            return await real_replace(*args, **kwargs)
 
         async with maker() as session, session.begin():
             await set_rls_org_for_test(session, _ORG)
             with (
                 patch.object(run_crud, "replace_run_node_outputs", _flaky_replace),
                 patch(
-                    "modulo.core.run_outputs_dualwrite.bump_dispatcher_reconcile_counter",
+                    "modulo.core.run_outputs_dualwrite.bump_dual_write_counter",
                     new_callable=AsyncMock,
                 ),
             ):
@@ -536,6 +684,50 @@ class TestDualWriteHelperRetryable:
         assert len(calls) == 2
 
     @pytest.mark.asyncio
+    async def test_serialization_failure_40001_raises_immediately(self, sqlite_sessionmaker: Any) -> None:
+        """40001 aborts the WHOLE Postgres transaction — a savepoint retry
+        after it would fail with 25P02 (doomed round-trip), so the helper goes
+        STRAIGHT to DualWriteError (ONE replace attempt, no retry leg)."""
+        from sqlalchemy.exc import OperationalError
+
+        from modulo.db.crud import run as run_crud
+        from modulo.db.crud.run import dual_write_run_node_outputs
+
+        maker = sqlite_sessionmaker
+        run_id = uuid.uuid4()
+        await _seed_run(maker, run_id)
+
+        calls: list[int] = []
+
+        async def _failing(*args: Any, **kwargs: Any) -> None:
+            calls.append(1)
+            err = OperationalError("stmt", {}, Exception("could not serialize"))
+            err.orig = type("_FakePG", (Exception,), {"sqlstate": "40001"})("could not serialize")
+            raise err
+
+        async with maker() as session, session.begin():
+            await set_rls_org_for_test(session, _ORG)
+            with (
+                patch.object(run_crud, "replace_run_node_outputs", _failing),
+                patch(
+                    "modulo.core.run_outputs_dualwrite.bump_dual_write_counter",
+                    new_callable=AsyncMock,
+                ) as bump,
+                pytest.raises(DualWriteError) as caught,
+            ):
+                await dual_write_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=_ORG,
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
+        assert calls == [1], "40001 must NOT be retried in-session"
+        assert caught.value.sqlstate == "40001"
+        fields = {call.args[0] for call in bump.await_args_list}
+        assert "outputs_dual_write_retries" not in fields
+
+    @pytest.mark.asyncio
     async def test_retryable_sqlstate_twice_raises_dual_write_error(self, sqlite_sessionmaker: Any) -> None:
         from sqlalchemy.exc import OperationalError
 
@@ -547,8 +739,8 @@ class TestDualWriteHelperRetryable:
         await _seed_run(maker, run_id)
 
         async def _always_failing(*args: Any, **kwargs: Any) -> None:
-            err = OperationalError("stmt", {}, Exception("deadlock"))
-            err.orig = type("_FakePG", (Exception,), {"sqlstate": "40P01"})("deadlock")
+            err = OperationalError("stmt", {}, Exception("statement timeout"))
+            err.orig = type("_FakePG", (Exception,), {"sqlstate": "57014"})("statement timeout")
             raise err
 
         async with maker() as session, session.begin():
@@ -556,7 +748,7 @@ class TestDualWriteHelperRetryable:
             with (
                 patch.object(run_crud, "replace_run_node_outputs", _always_failing),
                 patch(
-                    "modulo.core.run_outputs_dualwrite.bump_dispatcher_reconcile_counter",
+                    "modulo.core.run_outputs_dualwrite.bump_dual_write_counter",
                     new_callable=AsyncMock,
                 ),
                 pytest.raises(DualWriteError) as caught,
@@ -568,4 +760,354 @@ class TestDualWriteHelperRetryable:
                     outputs={"n1": {"a": 1}},
                     telemetry=None,
                 )
+        assert caught.value.sqlstate == "57014"
+
+    @pytest.mark.asyncio
+    async def test_deadlock_40p01_raises_immediately(self, sqlite_sessionmaker: Any) -> None:
+        """40P01 (deadlock) aborts the transaction → straight to
+        DualWriteError, no doomed savepoint retry."""
+        from sqlalchemy.exc import OperationalError
+
+        from modulo.db.crud import run as run_crud
+        from modulo.db.crud.run import dual_write_run_node_outputs
+
+        maker = sqlite_sessionmaker
+        run_id = uuid.uuid4()
+        await _seed_run(maker, run_id)
+
+        calls: list[int] = []
+
+        async def _always_failing(*args: Any, **kwargs: Any) -> None:
+            calls.append(1)
+            err = OperationalError("stmt", {}, Exception("deadlock"))
+            err.orig = type("_FakePG", (Exception,), {"sqlstate": "40P01"})("deadlock")
+            raise err
+
+        async with maker() as session, session.begin():
+            await set_rls_org_for_test(session, _ORG)
+            with (
+                patch.object(run_crud, "replace_run_node_outputs", _always_failing),
+                patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock),
+                pytest.raises(DualWriteError) as caught,
+            ):
+                await dual_write_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=_ORG,
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
+        assert calls == [1]
         assert caught.value.sqlstate == "40P01"
+
+
+# ---------------------------------------------------------------------------
+# qa iteration-1 riders: dedicated counters, Redis races, degraded signal
+# ---------------------------------------------------------------------------
+
+
+class TestRedisHelpers:
+    """qa M12/M13 + riders (a): bounded Redis, TTL-at-creation, loud failures."""
+
+    def test_socket_timeout_is_bounded(self) -> None:
+        """qa M13: _open_redis bounds BOTH socket timeouts — a hung Redis
+        (accept but never answer) must not stall the abort path forever."""
+        import redis.asyncio as redis_module
+
+        from modulo.core.run_outputs_dualwrite import _open_redis
+
+        created: dict[str, Any] = {}
+
+        def _from_url(url: str, **kwargs: Any) -> Any:
+            created.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch.object(redis_module, "Redis") as redis_cls,
+            patch("modulo.settings.get_settings", return_value=MagicMock(redis_url="redis://localhost:6379/0")),
+        ):
+            redis_cls.from_url = _from_url
+            _open_redis()
+        assert created["socket_connect_timeout"] == 2
+        assert created["socket_timeout"] == 2
+
+    @pytest.mark.asyncio
+    async def test_incr_window_stamps_ttl_at_creation(self) -> None:
+        """qa M12: the window TTL is stamped by a SET NX EX BEFORE the INCR —
+        a process death between the two leaves a key that still expires, so
+        the dual_write_failed event channel can never be suppressed forever."""
+        client = _FakeRedis()
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+            count = await _redis_incr_window("saq:run_outputs:dual_write_failed_window:o1", 60)
+        assert count == 1
+        assert client.set_calls[0] == {
+            "key": "saq:run_outputs:dual_write_failed_window:o1",
+            "value": 0,
+            "ex": 60,
+            "nx": True,
+        }
+        assert client.set_calls[1] == {"key": "saq:run_outputs:dual_write_failed_window:o1", "value": "__incr__"}
+
+    @pytest.mark.asyncio
+    async def test_incr_window_failure_between_set_and_incr_still_expires(self) -> None:
+        """Injected failure AFTER the SET NX EX but before/during the INCR:
+        the TTL is already stamped (the SET landed) — the key still expires."""
+        client = _FakeRedis()
+
+        async def _boom(key: Any) -> int:
+            raise RuntimeError("process dies here")
+
+        client.incr = _boom  # type: ignore[method-assign]
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+            assert await _redis_incr_window("k", 60) is None
+        assert client.set_calls[0]["ex"] == 60, "the TTL survived the injected failure"
+
+    @pytest.mark.asyncio
+    async def test_set_nx_failure_returns_none_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        """qa rider (a): a Redis failure is LOGGED (never silent None)."""
+        caplog.set_level("WARNING", logger="modulo.core.run_outputs_dualwrite")
+        client = _FakeRedis()
+
+        async def _boom(key: Any, value: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("redis down")
+
+        client.set = _boom  # type: ignore[method-assign]
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+            assert await _redis_set_nx("k", 60) is None
+        assert any("redis_set_nx_failed" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_incr_window_failure_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level("WARNING", logger="modulo.core.run_outputs_dualwrite")
+        client = _FakeRedis()
+
+        async def _boom(key: Any) -> int:
+            raise RuntimeError("redis down")
+
+        client.incr = _boom  # type: ignore[method-assign]
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+            assert await _redis_incr_window("k", 60) is None
+        assert any("redis_incr_window_failed" in r.message for r in caplog.records)
+
+
+class TestDedicatedCounters:
+    """qa M10: the dual-write counters live on DEDICATED cumulative keys the
+    reconcile tick's wholesale blob-rewrite never touches."""
+
+    @pytest.mark.asyncio
+    async def test_bump_targets_dedicated_key_with_ttl_at_creation(self) -> None:
+        client = _FakeRedis()
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+            await bump_dual_write_counter("outputs_dual_write_failed", delta=3)
+        prefix = "saq:run_outputs:counters:"
+        assert client.set_calls[0] == {
+            "key": f"{prefix}outputs_dual_write_failed",
+            "value": 0,
+            "ex": 7 * 24 * 3600,
+            "nx": True,
+        }
+        assert client.set_calls[1] == {"key": f"{prefix}outputs_dual_write_failed", "value": "__incrby__3"}
+
+    @pytest.mark.asyncio
+    async def test_unknown_counter_name_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="unknown dual-write counter"):
+            await bump_dual_write_counter("not_a_counter")
+
+    @pytest.mark.asyncio
+    async def test_bump_failure_is_swallowed_with_a_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level("WARNING", logger="modulo.core.run_outputs_dualwrite")
+        client = _FakeRedis()
+
+        async def _boom(key: Any, value: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("redis down")
+
+        client.set = _boom  # type: ignore[method-assign]
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+            await bump_dual_write_counter("outputs_dual_write_failed")  # must not raise
+        assert any("dual_write_counter_bump_failed" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_read_counters_maps_missing_keys_to_zero(self) -> None:
+        client = _FakeRedis()
+
+        async def _mget(keys: list[str]) -> list[Any]:
+            assert keys == [f"saq:run_outputs:counters:{name}" for name in DUAL_WRITE_COUNTERS]
+            return [b"7", None, b"2", None, b"0"]
+
+        client.mget = _mget  # type: ignore[method-assign]
+        counters = await read_dual_write_counters(client)
+        assert list(counters) == list(DUAL_WRITE_COUNTERS)
+        assert counters["outputs_dual_write_failed"] == 7
+        assert counters["outputs_dual_write_retries"] == 0
+        assert counters["outputs_dual_write_degraded"] == 2
+
+    @pytest.mark.asyncio
+    async def test_orchestration_bumps_dedicated_counter(self) -> None:
+        exc = _dual_write_error()
+        with (
+            patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=1),
+            patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
+            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock) as bump,
+        ):
+            await orchestrate_dual_write_failure(exc)
+        assert bump.await_args.args == ("outputs_dual_write_failed",)
+
+
+class TestNoteDualWriteDisabled:
+    """qa riders (b)/(c): per-org edge key + the unthrottled fallback."""
+
+    @pytest.mark.asyncio
+    async def test_edge_key_is_per_org(self) -> None:
+        client = _FakeRedis()
+        with (
+            patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client),
+            patch("modulo.core.run_outputs_dualwrite._emit_error_event", new_callable=AsyncMock),
+        ):
+            await note_dual_write_disabled("run-1", _ORG)
+        assert not client.get_calls  # set_nx, not get
+        assert client.set_calls[0]["key"] == f"saq:run_outputs:dual_write:degraded_edge:{_ORG}"
+        assert client.set_calls[0]["nx"] is True
+        assert client.set_calls[0]["ex"] == 3600
+
+    @pytest.mark.asyncio
+    async def test_org_less_edge_key_has_no_suffix(self) -> None:
+        client = _FakeRedis()
+        with (
+            patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client),
+            patch("modulo.core.run_outputs_dualwrite._emit_error_event", new_callable=AsyncMock),
+        ):
+            await note_dual_write_disabled("run-1", None)
+        assert client.set_calls[0]["key"] == "saq:run_outputs:dual_write:degraded_edge"
+
+    @pytest.mark.asyncio
+    async def test_redis_down_emits_event_unthrottled(self) -> None:
+        """qa rider (b): edge=None (Redis down) emits the degraded event
+        UNTHROTTLED — a Redis outage must not silence the event channel."""
+        client = _FakeRedis()
+
+        async def _raising_set(key: Any, value: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("redis down")
+
+        client.set = _raising_set  # type: ignore[method-assign]
+        emit = AsyncMock()
+        with (
+            patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client),
+            patch("modulo.core.run_outputs_dualwrite._emit_error_event", emit),
+            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock) as bump,
+        ):
+            await note_dual_write_disabled("run-1", _ORG)
+            await note_dual_write_disabled("run-2", _ORG)
+        assert emit.await_count == 2, "Redis down → every write emits (unthrottled fallback)"
+        # The counter bump needs Redis; the event must not depend on it.
+        bump.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_edge_seen_recently_bumps_counter_without_event(self) -> None:
+        client = _FakeRedis()
+
+        async def _false_set(key: Any, value: Any, **kwargs: Any) -> Any:
+            return False
+
+        client.set = _false_set  # type: ignore[method-assign]
+        emit = AsyncMock()
+        with (
+            patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client),
+            patch("modulo.core.run_outputs_dualwrite._emit_error_event", emit),
+            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock) as bump,
+        ):
+            await note_dual_write_disabled("run-1", _ORG)
+        emit.assert_not_awaited()
+        bump.assert_awaited_once_with("outputs_dual_write_degraded")
+
+
+class TestFailureEventDetailHygiene:
+    """qa rider (d): the dual_write_failed event's error_detail is sanitized
+    AND truncated — blob content must never land verbatim in error_events."""
+
+    @pytest.mark.asyncio
+    async def test_detail_is_sanitized_and_truncated(self) -> None:
+        from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+
+        dirty = "x" * 3000 + "\x00" + "password=hunter2 secret-key=abc"
+        exc = _dual_write_error(sqlstate="42501", origin="update_run_status.orm")
+        captured: dict[str, Any] = {}
+
+        async def _emit(org_id: Any, *, level: str, message: str, context_json: dict[str, Any]) -> None:
+            captured["context_json"] = context_json
+
+        with (
+            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
+            patch("modulo.core.run_outputs_dualwrite._emit_error_event", _emit),
+        ):
+            await _emit_dual_write_failed_event(exc, rowcount=1, error_detail=dirty)
+        detail = captured["context_json"]["error_detail"]
+        assert detail is not None
+        assert len(detail) <= 2001, "truncated before embedding"
+        assert "\x00" not in detail
+        assert "hunter2" not in detail, "secret patterns are redacted"
+        assert detail.endswith("…")
+
+    @pytest.mark.asyncio
+    async def test_clean_short_detail_passes_verbatim(self) -> None:
+        from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+
+        exc = _dual_write_error()
+        captured: dict[str, Any] = {}
+
+        async def _emit(org_id: Any, *, level: str, message: str, context_json: dict[str, Any]) -> None:
+            captured["context_json"] = context_json
+
+        with (
+            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
+            patch("modulo.core.run_outputs_dualwrite._emit_error_event", _emit),
+        ):
+            await _emit_dual_write_failed_event(exc, rowcount=0, error_detail="permission denied for table runs")
+        assert captured["context_json"]["error_detail"] == "permission denied for table runs"
+
+
+class TestOrgLessSkipCounter:
+    """qa rider (g): the org-less dual-write skip bumps its dedicated counter."""
+
+    @pytest.mark.asyncio
+    async def test_no_rls_org_skip_bumps_counter(self, sqlite_sessionmaker: Any) -> None:
+        from modulo.db.crud.run import dual_write_run_node_outputs
+
+        maker = sqlite_sessionmaker
+        run_id = uuid.uuid4()
+        await _seed_run(maker, run_id)
+        with patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock) as bump:
+            async with maker() as session, session.begin():
+                await dual_write_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=_ORG,
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
+        bump.assert_awaited_once_with("outputs_dual_write_skipped_no_org")
+
+
+class TestSentinelFilteredCounterWiring:
+    @pytest.mark.asyncio
+    async def test_filtered_keys_bump_the_dedicated_counter(self, sqlite_sessionmaker: Any) -> None:
+        """The replace helper's ``outputs_dual_write_sentinel_filtered`` count
+        is wired into the dedicated counters (qa M10) — inherited sentinel
+        keys are filtered (kept on the legacy column) and counted."""
+        from modulo.db.crud.run import dual_write_run_node_outputs
+
+        maker = sqlite_sessionmaker
+        run_id = uuid.uuid4()
+        await _seed_run(maker, run_id)
+        with patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock) as bump:
+            async with maker() as session, session.begin():
+                await set_rls_org_for_test(session, _ORG)
+                await dual_write_run_node_outputs(
+                    session,
+                    run_id=run_id,
+                    organisation_id=_ORG,
+                    outputs={"__inherited__": {"legacy": True}, "n1": {"a": 1}},
+                    telemetry=None,
+                    inherited_outputs={"__inherited__": {"legacy": True}},
+                )
+        bumps = [(call.args[0], call.args[1]) for call in bump.await_args_list]
+        assert ("outputs_dual_write_sentinel_filtered", 1) in bumps

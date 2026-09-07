@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, text
+from sqlalchemy import Select, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SA_TimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -160,6 +160,15 @@ async def _run_with_retry[R](
     return await fn()
 
 
+def _run_detail_statement(principal: TenantPrincipal, run_id: uuid.UUID) -> Select[tuple[Run]]:
+    """The org-scoped run SELECT shared by the detail/with-gate loaders."""
+    return (
+        select(Run)
+        .options(selectinload(Run.pipeline))
+        .where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
+    )
+
+
 async def _do_get_run(
     factory: async_sessionmaker[AsyncSession],
     principal: TenantPrincipal,
@@ -168,36 +177,33 @@ async def _do_get_run(
     async with factory() as session, session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
-        stmt = (
-            select(Run)
-            .options(selectinload(Run.pipeline))
-            .where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
-        )
-        run = (await session.execute(stmt)).scalar_one_or_none()
+        run = (await session.execute(_run_detail_statement(principal, run_id))).scalar_one_or_none()
         if run is None:
             raise RunNotFoundError(run_id)
         return run
 
 
-async def _do_get_run_gate_fired(
+async def _do_get_run_with_gate(
     factory: async_sessionmaker[AsyncSession],
     principal: TenantPrincipal,
     run_id: uuid.UUID,
-) -> bool:
-    """Derive the run's FAR-228 gate-fired flag in its own short transaction.
+) -> tuple[Run, bool]:
+    """Load the run AND derive its FAR-228 gate-fired flag in ONE transaction.
 
-    The markers leg of the derivation reads through the ``run_node_outputs``
-    repo reader (FAR-583), which needs an open transaction — this helper
-    provides one (the run row itself was loaded by :func:`_do_get_run` in its
-    own transaction).
+    qa M15: the removed ``_do_get_run_gate_fired`` helper re-opened a session
+    and re-SELECTed the run on every GET /runs/{id} — a TOCTOU window against
+    terminalize (the flag could be derived from a DIFFERENT row revision than
+    the response served) plus an extra read. The flag now derives from the
+    SAME transaction the run row is loaded in, computed after the load and
+    before the session closes.
     """
     async with factory() as session, session.begin():
         await set_rls_org(session, principal.organisation_id)
-        stmt = select(Run).where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
-        run = (await session.execute(stmt)).scalar_one_or_none()
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        run = (await session.execute(_run_detail_statement(principal, run_id))).scalar_one_or_none()
         if run is None:
             raise RunNotFoundError(run_id)
-        return await _run_gate_fired(session, run)
+        return run, await _run_gate_fired(session, run)
 
 
 async def _do_get_child_run_rollup(
@@ -1204,8 +1210,9 @@ async def get_run_status(
     principal: TenantPrincipal = require_permission_any_credential("run.status"),
 ) -> RunResponse:
     try:
-        run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
-        gate_fired = await _run_with_retry(lambda: _do_get_run_gate_fired(factory, principal, run_id))
+        # qa M15: run + gate_fired derive in ONE transaction (the removed
+        # second-txn helper re-opened a session and re-SELECTed the run).
+        run, gate_fired = await _run_with_retry(lambda: _do_get_run_with_gate(factory, principal, run_id))
         child_cost, child_count = await _run_with_retry(lambda: _do_get_child_run_rollup(factory, principal, run_id))
         otlp_endpoint = await _do_get_otel_endpoint(factory, principal.organisation_id)
         trigger_actor, capacity, child_runs = await _run_with_retry(

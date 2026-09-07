@@ -1225,6 +1225,14 @@ async def _persist_raw_output_marker(
     return True
 
 
+# qa rider f: SQLSTATEs whose failure aborts the WHOLE Postgres transaction
+# (deadlock 40P01, admin shutdown 57P01, connection-loss 08xxx classes). A
+# marker-savepoint failure with one of these has ALSO lost the legacy marker
+# write (the outer transaction rolls back), so the "legacy survives, sweep
+# heals" claim is false — the failure logs ``legacy_marker_also_lost``.
+_MARKER_TXN_ABORTING_SQLSTATES = frozenset({"40P01", "57P01", "08000", "08001", "08003", "08004", "08006"})
+
+
 async def _write_raw_output_marker(
     session_factory: Callable[..., Any],
     *,
@@ -1253,8 +1261,15 @@ async def _write_raw_output_marker(
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
             await set_rls_execution_context(session)
+            # Coerce the string run id to its UUID form for the row lookup:
+            # production callers always pass ``str(run.id)``, and a Uuid-typed
+            # column cannot bind a raw string on the generic (non-native-uuid)
+            # backends. A non-uuid run id (defensive) keeps the raw string.
+            run_id_filter: Any = run_id
+            with suppress(ValueError):
+                run_id_filter = uuid.UUID(run_id)
             run = (
-                await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id).with_for_update())
+                await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id_filter).with_for_update())
             ).scalar_one_or_none()
             if run is None:
                 _log.warning(
@@ -1306,21 +1321,64 @@ async def _write_raw_output_marker(
             # legacy write above still commits. Log + counter, never raise
             # (the persist's never-raise contract is preserved); the sweep +
             # the 0177 repair heal the missing row.
+            #
+            # qa M7: the new-table leg is KILL-SWITCH-GATED like every other
+            # chokepoint — with the switch OFF the write is legacy-only (the
+            # contract promises it), noted edge-triggered via
+            # note_dual_write_disabled.
+            from modulo.core.run_outputs_dualwrite import is_dual_write_enabled, note_dual_write_disabled
+
             try:
-                async with session.begin_nested():
-                    assert org_uuid is not None  # set_rls_org above required it
-                    await write_run_markers(
-                        session,
-                        run_id=run.id,
-                        organisation_id=org_uuid,
-                        markers=markers,
-                    )
+                dual_write_on = await is_dual_write_enabled()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                from modulo.core.run_outputs_dualwrite import note_dual_write_marker_failure
+                # Fail-closed: a switch-read failure must not disable the leg.
+                _log.exception("sandbox_agent.raw_output_marker_switch_read_failed")
+                dual_write_on = True
+            if not dual_write_on:
+                await note_dual_write_disabled(run_id, org_uuid)
+            else:
+                # qa rider e: an explicit guard instead of `assert` — asserts
+                # vanish under -O and the failure mode would be an opaque
+                # None-org write into the repo gate.
+                if org_uuid is None:
+                    raise RuntimeError(
+                        "raw-output marker persist requires a parsed organisation id for the run_node_outputs leg"
+                    )
+                try:
+                    async with session.begin_nested():
+                        await write_run_markers(
+                            session,
+                            run_id=run.id,
+                            organisation_id=org_uuid,
+                            markers=markers,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    from sqlalchemy.exc import SQLAlchemyError
 
-                await note_dual_write_marker_failure(run_id, node_id, key)
+                    from modulo.core.run_outputs_dualwrite import note_dual_write_marker_failure
+                    from modulo.db.crud.run import _sqlstate_of
+
+                    sqlstate = _sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+                    if sqlstate in _MARKER_TXN_ABORTING_SQLSTATES:
+                        # qa rider f: a transaction-aborting failure (deadlock,
+                        # admin shutdown, connection loss) poisons the WHOLE
+                        # transaction — the legacy marker write above is rolled
+                        # back with it, so "legacy survives, sweep heals" is
+                        # FALSE here. The outer handler logs the lost persist;
+                        # the claim must be loud.
+                        _log.exception(
+                            "sandbox_agent.raw_output_marker_legacy_marker_also_lost "
+                            "run=%s node_id=%s attempt_key=%s sqlstate=%s",
+                            run_id,
+                            node_id,
+                            key,
+                            sqlstate,
+                        )
+                    await note_dual_write_marker_failure(run_id, node_id, key)
             _log.info(
                 "sandbox_agent.raw_output_marker_persisted",
                 extra={
@@ -1461,13 +1519,17 @@ async def _read_run_raw_output_markers_for_gate(
     a successor's markers as its own. This is a SEPARATE read from the atomic
     dispatch marker (A4) — do NOT fuse them.
 
-    FAR-583: the decision logic (the fence predicates above, the dict-or-None
-    contract below) is byte-for-byte unchanged — only the STORAGE SOURCE
-    moved: the markers are reassembled from ``run_node_outputs`` rows via the
-    repo reader, with the empty/mismatch fallback to the legacy
-    ``runs.raw_output_markers`` column (the same read today's single-column
-    SELECT served) when the new-table marker set is absent or key-set
-    mismatched. LOCK-FREE exactly as before (no FOR UPDATE on this read).
+    FAR-583: the decision logic (the dict-or-None contract below) is
+    byte-for-byte unchanged — only the STORAGE SOURCE + STATEMENT SHAPE moved
+    (qa M4/M5): the old predicate SELECT + fat all-sides fallback reader (two
+    statements, a TOCTOU window vs terminalize, and every blob side fetched on
+    the per-node hot path) is replaced by the repo's SINGLE fenced
+    markers-scoped reader :func:`modulo.db.crud.run_node_outputs.read_run_markers_fenced`
+    — the fence predicates (id + org + claim_token + ``status='running'``)
+    moved INTO that one statement, which reassembles the markers with the
+    direction-aware legacy fallback and serves ``None`` on a fence miss
+    (byte-for-byte the same visibility the fenced single-column gate read
+    had). LOCK-FREE exactly as before (no FOR UPDATE on this read).
     """
     if session_factory is None or not claim_lease:
         return None
@@ -1477,30 +1539,23 @@ async def _read_run_raw_output_markers_for_gate(
         org_uuid = None
     if org_uuid is None:
         return None
-    from sqlalchemy import text as _sql_text
-
-    from modulo.db.crud.run_node_outputs import read_run_markers_with_fallback
+    from modulo.db.crud.run_node_outputs import read_run_markers_fenced
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async def _read() -> dict[str, Any] | None:
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
             await set_rls_execution_context(session)
-            row = (
-                await session.execute(
-                    _sql_text(
-                        "SELECT id FROM runs WHERE id=:rid AND organisation_id=:oid "
-                        "AND claim_token=:tok AND status='running'"
-                    ),
-                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
-                )
-            ).fetchone()
-            if row is None:
-                return None
-            # Storage re-point (FAR-583): the fenced predicate above decides
-            # VISIBILITY byte-for-byte identically; the marker VALUES now
-            # reassemble from the new table with the legacy fallback.
-            return await read_run_markers_with_fallback(session, run_id=uuid.UUID(run_id), organisation_id=org_uuid)
+            # Storage re-point (FAR-583 qa M4/M5): ONE fenced statement — the
+            # run-row predicate SELECT above is gone; the fence lives inside
+            # the repo reader.
+            return await read_run_markers_fenced(
+                session,
+                run_id=uuid.UUID(run_id),
+                organisation_id=org_uuid,
+                claim_token=claim_lease,
+                for_update=False,
+            )
 
     try:
         return await asyncio.wait_for(_read(), timeout=_IDEMPOTENCY_GATE_READ_TIMEOUT)
@@ -1570,7 +1625,7 @@ async def _read_connector_idempotency_gate_state(
         return None, None
     from sqlalchemy import text as _sql_text
 
-    from modulo.db.crud.run_node_outputs import read_run_markers_with_fallback
+    from modulo.db.crud.run_node_outputs import read_run_markers_fenced
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async def _read() -> tuple[dict[str, Any] | None, str | None]:
@@ -1585,13 +1640,19 @@ async def _read_connector_idempotency_gate_state(
             ).fetchone()
             if row is None:
                 return None, None
-            # FAR-583 storage re-point: the run-row lock (FOR UPDATE OF runs)
-            # and the fencing semantics are unchanged; the marker VALUES now
-            # reassemble from the new table with the legacy fallback, read on
-            # the SAME locked transaction so the gate decision cannot read
-            # past an in-progress concurrent stamp.
-            markers_dict = await read_run_markers_with_fallback(
-                session, run_id=uuid.UUID(run_id), organisation_id=org_uuid
+            # FAR-583 storage re-point (qa M5): the run-row lock (FOR UPDATE OF
+            # runs) and the fencing semantics are unchanged; the marker VALUES
+            # now reassemble via the repo's SINGLE fenced markers-scoped reader
+            # (for_update=True re-takes the run-row lock the raw SELECT above
+            # already holds — a no-op same-transaction re-lock), read on the
+            # SAME locked transaction so the gate decision cannot read past an
+            # in-progress concurrent stamp.
+            markers_dict = await read_run_markers_fenced(
+                session,
+                run_id=uuid.UUID(run_id),
+                organisation_id=org_uuid,
+                claim_token=None,
+                for_update=True,
             )
             persisted_key = row[1]
             return markers_dict, (str(persisted_key) if persisted_key else None)

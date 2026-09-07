@@ -115,6 +115,14 @@ class _RetentionResult:
         return self._row
 
     def all(self) -> list[Any]:
+        # The FAR-583 fenced JOIN read (``read_run_markers_fenced`` — qa M4/M5
+        # gate reads) selects the runs row LEFT-JOINed to its new-table marker
+        # rows; the fake serves the legacy column as the runs side with NO
+        # new-table marker rows (markers reassemble from the legacy fallback).
+        if "FROM runs" in self._statement and "run_node_outputs" in self._statement:
+            if self._row is None or "raw_output_markers" not in self._statement:
+                return []
+            return [(self._row.raw_output_markers, None, None)]
         # The FAR-583 repo readers batch the new-table rows via .all(); the
         # fake serves an EMPTY new table (markers reassemble from the legacy
         # fallback below).

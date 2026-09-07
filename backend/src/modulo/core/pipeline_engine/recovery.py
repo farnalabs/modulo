@@ -291,12 +291,18 @@ async def _apply_recovery_markers(
 
     from modulo.db.crud.run import dual_write_run_node_outputs
 
+    # qa M18: the run's claim_token fences the failure orchestration — without
+    # it a DualWriteError's separate-session terminalize could mark a
+    # SUCCESSOR's re-claim of this run (the successor re-claimed with a fresh
+    # token while the poisoned transaction was aborting). None passes through
+    # (the fence idiom skips the token predicate when the run has no token).
     await dual_write_run_node_outputs(
         session,
         run_id=run.id,
         organisation_id=run.organisation_id,
         outputs=outputs,
         telemetry=telemetry,
+        claim_token=run.claim_token,
         origin="recovery.apply_recovery_markers",
     )
 

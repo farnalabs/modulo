@@ -1975,9 +1975,15 @@ def _apply_run_output_fields(run: Run, update: _RunStatusUpdate) -> None:
 # ---------------------------------------------------------------------------
 
 # Retryable SQLSTATEs for the ONE bounded in-session retry of the new-table
-# leg (serialization failure, deadlock, connection exhaustion, statement
-# timeout). Hard errors (42501 RLS, 23503 FK, 23505 unique) fail immediately.
-_DUAL_WRITE_RETRYABLE_SQLSTATES = frozenset({"40001", "40P01", "53300", "57014"})
+# leg (qa iteration-1 correction): ONLY the statement timeout (57014) is
+# genuinely savepoint-recoverable — the transaction-aborting states (40001
+# serialization failure, 40P01 deadlock, 53300 connection exhaustion) abort
+# the WHOLE transaction on Postgres, so re-entering a savepoint after catching
+# them fails with 25P02 (a doomed extra round-trip); they go STRAIGHT to
+# DualWriteError (the caller's full rollback + orchestration is the correct
+# recovery for them). Hard errors (42501 RLS, 23503 FK, 23505 unique) also
+# fail immediately.
+_DUAL_WRITE_RETRYABLE_SQLSTATES = frozenset({"57014"})
 
 
 def _sqlstate_of(exc: BaseException) -> str | None:
@@ -2015,24 +2021,31 @@ async def dual_write_run_node_outputs(
     write). Semantics (FAR-583 design §DUAL-WRITE):
 
     * Kill-switch read PER CALL via ``core.run_outputs_dualwrite`` (the
-      sanctioned db→core lazy-import seam; ``.importlinter`` exempted).
-      OFF → no-op (the caller's legacy-only write proceeds unchanged — the
-      flag is a true emergency valve) with an edge-triggered degraded note.
+      sanctioned db→core lazy-import seam; ``.importlinter`` exempted) —
+      FLEET-VISIBLE: the Redis key first, the process-local runtime-config
+      override second, default ON. OFF → no-op (the caller's legacy-only
+      write proceeds unchanged — the flag is a true emergency valve) with an
+      edge-triggered degraded note.
     * ON → the ``run_node_outputs`` REPLACE write
       (:func:`replace_run_node_outputs` — upsert ``__final__``/metadata rows
       + delete-absent ordered AFTER upserts, metadata flags re-derived) in a
       SAVEPOINT inside the caller's transaction. *inherited_outputs* /
       *inherited_telemetry* carry the caller-captured PRE-WRITE legacy
       dicts so qa-M19 inherited ``__``-prefixed keys are filtered from the
-      new-table leg instead of raising (kept on the legacy column).
+      new-table leg instead of raising (kept on the legacy column); the
+      number of filtered keys is wired into the dedicated
+      ``outputs_dual_write_sentinel_filtered`` counter.
     * On new-table failure: ONE bounded in-session retry for the retryable
-      SQLSTATEs; a hard error (or a second failure) raises
-      :class:`DualWriteError` with the savepoint rolled back — the caller's
-      transaction is left intact-but-poisoned so ITS rollback completes and
-      the legacy run row is never half-written (the core-side orchestrator
-      terminalizes the run and re-raises past the caller's transaction).
+      SQLSTATEs (statement timeout only — see
+      ``_DUAL_WRITE_RETRYABLE_SQLSTATES``); a transaction-aborting or hard
+      error (or a second failure) raises :class:`DualWriteError` with the
+      savepoint rolled back — the caller's transaction is left
+      intact-but-poisoned so ITS rollback completes and the legacy run row
+      is never half-written (the core-side orchestrator terminalizes the run
+      and re-raises past the caller's transaction).
     * A session with NO RLS org context skips the new-table leg entirely
-      (debug log): the repo's write gate requires a bound org, Postgres'
+      (debug log + the dedicated ``outputs_dual_write_skipped_no_org``
+      counter): the repo's write gate requires a bound org, Postgres'
       strict fail-closed policy would kill the INSERT with 42501 anyway, and
       the only org-less sessions are unit tests / maintenance sessions where
       the legacy write governs. A MISMATCHED org context raises
@@ -2043,18 +2056,20 @@ async def dual_write_run_node_outputs(
         return
 
     from modulo.core.run_outputs_dualwrite import (
+        bump_dual_write_counter,
         is_dual_write_enabled,
         note_dual_write_disabled,
         note_dual_write_retry,
     )
 
-    if not is_dual_write_enabled():
+    if not await is_dual_write_enabled():
         await note_dual_write_disabled(run_id, organisation_id)
         return
 
     session_org = await read_rls_org(session)
     if session_org is None:
         _log.debug("run_outputs.dual_write_skipped_no_rls_org run=%s origin=%s", run_id, origin)
+        await bump_dual_write_counter("outputs_dual_write_skipped_no_org")
         return
     if organisation_id is None:
         organisation_id = session_org
@@ -2068,7 +2083,7 @@ async def dual_write_run_node_outputs(
         savepoint = session.begin_nested()
         try:
             async with savepoint:
-                await replace_run_node_outputs(
+                replace_result = await replace_run_node_outputs(
                     session,
                     run_id=run_id,
                     organisation_id=organisation_id,
@@ -2077,6 +2092,9 @@ async def dual_write_run_node_outputs(
                     inherited_outputs=inherited_outputs,
                     inherited_telemetry=inherited_telemetry,
                 )
+            filtered = int(replace_result.get("outputs_dual_write_sentinel_filtered", 0))
+            if filtered:
+                await bump_dual_write_counter("outputs_dual_write_sentinel_filtered", filtered)
             return
         except asyncio.CancelledError:
             raise
@@ -2114,6 +2132,35 @@ async def update_run_status(
     from_status: str | None = None,
     not_status: str | None = None,
 ) -> Run | None:
+    """Write a run's status (optionally + blobs) — the FAR-583 dual-write
+    chokepoint.
+
+    When *outputs_json* / *node_telemetry_json* are passed, the write ALSO
+    mirrors the staged legacy columns into ``run_node_outputs`` inside THIS
+    transaction (REPLACE semantics) — which makes this function raise
+    :class:`~modulo.db.crud.run_node_outputs.DualWriteError` when the
+    new-table leg fails (qa M16 guard obligation): the caller's transaction
+    must be rolled back cleanly (fail-closed abort) and the run terminalized
+    ``dual_write_failed`` by the core orchestrator.
+
+    GUARD OBLIGATION — every blobs-passing call site MUST wrap the call in
+    :func:`modulo.core.run_outputs_dualwrite.guard_dual_write` (catch →
+    rollback → orchestrate → re-raise). The sanctioned wrapped sites:
+
+    * ``core.cost_controller.finalize._write_finalized_run`` (the single
+      finalization write);
+    * ``core.cost_controller.finalize._fallback_write`` (the legacy fallback
+      branch);
+    * ``core.cost_controller.finalize._reduced_escape`` (the reduced escape —
+      blobs arrive via ``**finalize_fields``).
+
+    Sites passing NO blobs (``core.dispatch._org_capacity_deferred``, the
+    ``executor`` claim/capacity/ceiling writes, ``api.routes.hitl.claim_gate``,
+    ``finalize._write_empty_terminal``) cannot raise DualWriteError and need
+    no guard. A new blobs-passing call site added without the guard aborts
+    un-orchestrated (no terminalize, no event, no counter) — the
+    ``test_run_outputs_gate`` architecture pin fails it.
+    """
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
     update = _RunStatusUpdate(
