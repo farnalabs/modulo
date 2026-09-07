@@ -27,9 +27,9 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
-# Current chain head (tracks the latest migration; 0120 is still the
-# org-FK hardening migration the OrgFkHardening tests below inspect).
-_CHAIN_HEAD_MIGRATION = "0185_bundled_runner_seed_backfill"
+# Current chain head (tracks the latest migration; 0186 adds the Bundled Runner
+# seed backfill, re-parented onto the 0185 error_events head).
+_CHAIN_HEAD_MIGRATION = "0186_bundled_runner_seed_backfill"
 
 
 def _source(name: str) -> str:

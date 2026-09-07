@@ -1,7 +1,7 @@
 """Backfill the Bundled Runner (Docker) profile per org + re-point modulo-dev (FAR-590 D4).
 
-Revision ID: 0185_bundled_runner_seed_backfill
-Revises: 0184_trigger_events_indexes_and_type_check
+Revision ID: 0186_bundled_runner_seed_backfill
+Revises: 0185_error_events_indexes_jsonb
 Create Date: 2026-09-06
 
 What this revision changes
@@ -36,8 +36,8 @@ import json
 
 from alembic import op
 
-revision: str = "0185_bundled_runner_seed_backfill"
-down_revision: str | None = "0184_trigger_events_indexes_and_type_check"
+revision: str = "0186_bundled_runner_seed_backfill"
+down_revision: str | None = "0185_error_events_indexes_jsonb"
 branch_labels: str | None = None
 depends_on: str | None = None
 
