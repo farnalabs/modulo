@@ -507,14 +507,12 @@ LEGACY_ALIASES: dict[str, str] = {
     # signal); the typed wrapper and the raw core class name both publish.
     "SandboxBindingResolutionError": _CODE_SANDBOX_BINDING_RESOLUTION,
     "AgentBindingResolutionError": _CODE_SANDBOX_BINDING_RESOLUTION,
-    "sandbox.binding_resolution": _CODE_SANDBOX_BINDING_RESOLUTION,
     # FAR-592 (D6): the Local tier refusal maps to the terminal
     # ``sandbox.tier_refused`` code. Both the node-runner wrapper (what the
     # executor sees via ``type(exc).__name__``) and the raw core class name
     # publish.
     "SandboxTierRefusedError": _CODE_SANDBOX_TIER_REFUSED,
     "LocalProviderBindingsRefusedError": _CODE_SANDBOX_TIER_REFUSED,
-    "sandbox.tier_refused": _CODE_SANDBOX_TIER_REFUSED,
     "executor_setup_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_heartbeat_lost": "harness.executor_heartbeat_lost",
