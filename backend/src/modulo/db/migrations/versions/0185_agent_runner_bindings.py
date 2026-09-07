@@ -1,7 +1,7 @@
 """agent_runner_bindings — per-agent Model Backend env-var bindings (FAR-592 / D6).
 
-Revision ID: 0183_agent_runner_bindings
-Revises: 0182_hitl_claims_active_sweep_indexes
+Revision ID: 0185_agent_runner_bindings
+Revises: 0184_trigger_events_indexes_and_type_check
 Create Date: 2026-09-06
 
 What this migration does:
@@ -32,8 +32,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0183_agent_runner_bindings"
-down_revision: str | None = "0182_hitl_claims_active_sweep_indexes"
+revision: str = "0185_agent_runner_bindings"
+down_revision: str | None = "0184_trigger_events_indexes_and_type_check"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

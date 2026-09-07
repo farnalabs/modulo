@@ -15128,10 +15128,22 @@ export interface components {
             /** Error */
             error?: string | null;
         };
-        /** SandboxConcurrencyResponse */
+        /**
+         * SandboxConcurrencyResponse
+         * @description Public admin response (name frozen — FAR-589 D3b).
+         *
+         *     ``is_default`` is additive: it marks the ABSENT-key case so the UI can
+         *     render "4 (default)" and distinguish an explicit ``null`` (no gate) from
+         *     the Docker-tier default.
+         */
         SandboxConcurrencyResponse: {
             /** Sandbox Concurrency Limit */
             sandbox_concurrency_limit?: number | null;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
         };
         /** SaveAsCompositeRequest */
         SaveAsCompositeRequest: {

@@ -17,11 +17,15 @@ and the SAQ task_failure writer — one redaction primitive, no drift.
 
 from __future__ import annotations
 
+import logging
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any
 
 from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -553,12 +557,92 @@ LEGACY_ALIASES: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Unmapped-fallback signal (FAR-589 D3b) + map-key uniqueness guard
+# ---------------------------------------------------------------------------
+
+# The ``harness.unknown`` fallback choke point emits a DISTINCT, queryable
+# signal carrying the unmapped code (usually an exception class name the
+# executor's generic catch published). Analytics canonicalizes unknown classes
+# away, so the log event is the only place the raw name survives. Emitted once
+# per distinct code per process: read surfaces (analytics bucketing, runs list,
+# present_error) hit ``map_legacy_code`` per row, so an unconditional warning
+# would flood the log — the FIRST occurrence per code per process is the
+# signal, and a bounded seen-set keeps memory flat.
+_UNMAPPED_CODE_SIGNAL_MAX = 256
+_unmapped_code_signal_seen: set[str] = set()
+_unmapped_code_signal_lock = threading.Lock()
+
+
+def _emit_unmapped_code_signal(code: str) -> None:
+    """Emit ``harness.unknown.fallback`` once per distinct unmapped code.
+
+    The event extra carries the unmapped code verbatim (the class name a
+    map-miss would otherwise lose) so the fallback is queryable and the
+    rollbacks' ``unmapped-fallback events > 0`` tripwires have a defined
+    signal to read.
+    """
+    with _unmapped_code_signal_lock:
+        if code in _unmapped_code_signal_seen or len(_unmapped_code_signal_seen) >= _UNMAPPED_CODE_SIGNAL_MAX:
+            return
+        _unmapped_code_signal_seen.add(code)
+    _log.warning(
+        "harness.unknown.fallback",
+        extra={"unmapped_code": code},
+    )
+
+
+def _reset_unmapped_code_signal_for_tests() -> None:
+    """Clear the per-process seen-set (test isolation only)."""
+    with _unmapped_code_signal_lock:
+        _unmapped_code_signal_seen.clear()
+
+
+def error_code_map_conflicts() -> list[str]:
+    """Bare-name uniqueness guard over the registry + alias maps (FAR-589 D3b).
+
+    The registry and alias tables map both dotted codes and BARE names
+    (exception class names / legacy snake_case spellings). Python silently
+    drops a duplicated literal key at import, and :func:`map_legacy_code`
+    checks ``LEGACY_ALIASES`` FIRST — so one bare name claimed by both maps
+    with different targets changes meaning depending on lookup order, and a
+    bare name must never be silently ambiguous. Returns human-readable
+    conflict descriptions; an EMPTY list is a clean map:
+
+    1. a key present in BOTH maps whose canonical resolutions differ
+       (the alias silently shadows the registry entry);
+    2. an alias key that duplicates a registry key even to the SAME target
+       (the bare name is ambiguous about which table owns it);
+    3. an alias target that does not resolve through the registry
+       (``class_for``/``is_retryable`` would silently degrade to
+       ``"unknown"`` / non-retryable).
+
+    The unit-test suite asserts this stays empty on every change to either
+    map — a guard test, not a runtime raise (an import-time raise would turn
+    a map edit into a fleet-wide import failure).
+    """
+    conflicts = [
+        f"key {key!r} exists in both ERROR_CODE_REGISTRY and LEGACY_ALIASES "
+        f"(registry passthrough vs alias target {LEGACY_ALIASES[key]!r})"
+        for key in sorted(set(ERROR_CODE_REGISTRY) & set(LEGACY_ALIASES))
+    ]
+    conflicts.extend(
+        f"alias {alias!r} -> {target!r} is not a registry key"
+        for alias, target in sorted(LEGACY_ALIASES.items())
+        if target not in ERROR_CODE_REGISTRY
+    )
+    return conflicts
+
+
 def map_legacy_code(code: str | None) -> str:
     """Map a (legacy or already-dotted) error code to its canonical dotted code.
 
     Legacy codes are resolved through :data:`LEGACY_ALIASES`; already-dotted
     registry codes pass through unchanged. Unmapped codes fall back to
-    ``harness.unknown`` (§3.2) so presentation always has a resolvable code.
+    ``harness.unknown`` (§3.2) so presentation always has a resolvable code —
+    and each FIRST unmapped code per process emits the distinct
+    ``harness.unknown.fallback`` signal carrying the raw name (usually the
+    exception class name analytics canonicalizes away).
     """
     if not code:
         return _CODE_HARNESS_UNKNOWN
@@ -567,6 +651,7 @@ def map_legacy_code(code: str | None) -> str:
         return resolved
     if code in ERROR_CODE_REGISTRY:
         return code
+    _emit_unmapped_code_signal(code)
     return _CODE_HARNESS_UNKNOWN
 
 

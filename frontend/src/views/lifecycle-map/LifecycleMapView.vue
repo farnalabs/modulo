@@ -88,112 +88,117 @@
         <div class="rounded-xl border border-border bg-card overflow-hidden" style="height: 600px">
           <LifecycleMapRenderer
             :map-data="mapData"
-            :journeys="store.journeys"
+            :journeys="journeysEnabled ? store.journeys : []"
             :on-modulo-stage-click="handleModuloStageClick"
             :on-external-stage-click="handleExternalStageClick"
             @journey-open="openJourneyDetail"
           />
         </div>
 
-        <section
-          v-if="unattributedJourneys.length"
-          class="mt-4 rounded-xl border border-dashed border-border bg-card p-4"
-          aria-label="Unattributed journeys"
-        >
-          <h2 class="text-sm font-semibold text-foreground">
-            {{ $t('views.LifecycleMapView.journey.unattributed_hint', { count: unattributedJourneys.length }) }}
-          </h2>
-          <p class="mt-1 text-xs text-muted-foreground">
-            {{ $t('views.LifecycleMapView.journey.unattributed_desc') }}
-          </p>
-          <div class="mt-3 flex flex-wrap gap-2">
-            <div
-              v-for="journey in unattributedJourneys"
-              :key="`${journey.kind}:${journey.ref}`"
-              class="w-[240px]"
-            >
-              <JourneyCard :journey="journey" @open="openJourneyDetail(journey)" />
-            </div>
-          </div>
-        </section>
-
-        <div
-          v-if="store.hasMoreJourneys"
-          class="mt-4 flex items-center justify-center"
-          data-testid="lifecycle-map-journeys-pagination"
-        >
-          <Button
-            severity="secondary"
-            outlined
-            size="small"
-            :loading="store.isLoadingMoreJourneys"
-            :disabled="store.isLoadingMoreJourneys"
-            :aria-label="$t('views.LifecycleMapView.journey.load_more')"
-            data-testid="lifecycle-map-journeys-load-more"
-            @click="loadMoreJourneys"
+        <!-- FAR-654: all journey UI is gated behind the default-OFF
+             lifecycle_map_journeys flag. The map (stages/edges) renders
+             normally either way. -->
+        <template v-if="journeysEnabled">
+          <section
+            v-if="unattributedJourneys.length"
+            class="mt-4 rounded-xl border border-dashed border-border bg-card p-4"
+            aria-label="Unattributed journeys"
           >
-            {{ store.isLoadingMoreJourneys ? $t('views.LifecycleMapView.journey.loading_more') : $t('views.LifecycleMapView.journey.load_more') }}
-          </Button>
-        </div>
-
-        <ErrorAlert
-          v-if="journeysError"
-          :message="journeysError"
-          :on-retry="loadJourneys"
-          class="mt-4"
-        />
-
-        <section
-          v-if="selectedJourneyKey"
-          class="mt-4 rounded-xl border border-border bg-card p-4"
-          aria-label="Journey details"
-        >
-          <div class="flex items-center justify-between gap-2">
             <h2 class="text-sm font-semibold text-foreground">
-              {{ $t('views.LifecycleMapView.journey.detail_title', { journey: selectedJourneyLabel }) }}
+              {{ $t('views.LifecycleMapView.journey.unattributed_hint', { count: unattributedJourneys.length }) }}
             </h2>
-            <Button severity="secondary" outlined size="small" :aria-label="$t('views.LifecycleMapView.journey.close')" @click="closeJourneyDetail">
-              {{ $t('views.LifecycleMapView.journey.close') }}
+            <p class="mt-1 text-xs text-muted-foreground">
+              {{ $t('views.LifecycleMapView.journey.unattributed_desc') }}
+            </p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <div
+                v-for="journey in unattributedJourneys"
+                :key="`${journey.kind}:${journey.ref}`"
+                class="w-[240px]"
+              >
+                <JourneyCard :journey="journey" @open="openJourneyDetail(journey)" />
+              </div>
+            </div>
+          </section>
+
+          <div
+            v-if="store.hasMoreJourneys"
+            class="mt-4 flex items-center justify-center"
+            data-testid="lifecycle-map-journeys-pagination"
+          >
+            <Button
+              severity="secondary"
+              outlined
+              size="small"
+              :loading="store.isLoadingMoreJourneys"
+              :disabled="store.isLoadingMoreJourneys"
+              :aria-label="$t('views.LifecycleMapView.journey.load_more')"
+              data-testid="lifecycle-map-journeys-load-more"
+              @click="loadMoreJourneys"
+            >
+              {{ store.isLoadingMoreJourneys ? $t('views.LifecycleMapView.journey.loading_more') : $t('views.LifecycleMapView.journey.load_more') }}
             </Button>
           </div>
 
           <ErrorAlert
-            v-if="journeyDetailError"
-            :message="journeyDetailError"
-            :on-retry="retryJourneyDetail"
-            class="mt-3"
+            v-if="journeysError"
+            :message="journeysError"
+            :on-retry="loadJourneys"
+            class="mt-4"
           />
 
-          <p
-            v-else-if="journeyDetail && journeyDetail.runs.length === 0"
-            class="mt-3 text-sm text-muted-foreground"
+          <section
+            v-if="selectedJourneyKey"
+            class="mt-4 rounded-xl border border-border bg-card p-4"
+            aria-label="Journey details"
           >
-            {{ $t('views.LifecycleMapView.journey.no_runs') }}
-          </p>
+            <div class="flex items-center justify-between gap-2">
+              <h2 class="text-sm font-semibold text-foreground">
+                {{ $t('views.LifecycleMapView.journey.detail_title', { journey: selectedJourneyLabel }) }}
+              </h2>
+              <Button severity="secondary" outlined size="small" :aria-label="$t('views.LifecycleMapView.journey.close')" @click="closeJourneyDetail">
+                {{ $t('views.LifecycleMapView.journey.close') }}
+              </Button>
+            </div>
 
-          <ul v-else-if="journeyDetail" class="mt-3 divide-y divide-border">
-            <li
-              v-for="run in journeyDetail.runs"
-              :key="run.run_id"
-              class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+            <ErrorAlert
+              v-if="journeyDetailError"
+              :message="journeyDetailError"
+              :on-retry="retryJourneyDetail"
+              class="mt-3"
+            />
+
+            <p
+              v-else-if="journeyDetail && journeyDetail.runs.length === 0"
+              class="mt-3 text-sm text-muted-foreground"
             >
-              <span :class="statusBadgeClass(run.status ?? '')" class="badge capitalize">
-                {{ statusLabel(run.status ?? '') }}
-              </span>
-              <ProvenanceBadge :provenance="run.provenance" />
-              <span class="text-muted-foreground">{{ formatRunDate(run.completed_at) }}</span>
-            </li>
-          </ul>
+              {{ $t('views.LifecycleMapView.journey.no_runs') }}
+            </p>
 
-          <div
-            v-else
-            class="mt-3 flex items-center gap-2 text-sm text-muted-foreground"
-            role="status"
-          >
-            <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            {{ $t('views.LifecycleMapView.journey.loading') }}
-          </div>
-        </section>
+            <ul v-else-if="journeyDetail" class="mt-3 divide-y divide-border">
+              <li
+                v-for="run in journeyDetail.runs"
+                :key="run.run_id"
+                class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+              >
+                <span :class="statusBadgeClass(run.status ?? '')" class="badge capitalize">
+                  {{ statusLabel(run.status ?? '') }}
+                </span>
+                <ProvenanceBadge :provenance="run.provenance" />
+                <span class="text-muted-foreground">{{ formatRunDate(run.completed_at) }}</span>
+              </li>
+            </ul>
+
+            <div
+              v-else
+              class="mt-3 flex items-center gap-2 text-sm text-muted-foreground"
+              role="status"
+            >
+              <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              {{ $t('views.LifecycleMapView.journey.loading') }}
+            </div>
+          </section>
+        </template>
       </template>
 
       <div v-else class="text-center py-20 text-muted-foreground">
@@ -255,11 +260,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
+import { usePlanStore } from '../../stores/planStore'
 import LifecycleMapRenderer from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
 import ProvenanceBadge from '../../components/lifecycle-map/ProvenanceBadge.vue'
 import JourneyCard from '../../components/lifecycle-map/JourneyCard.vue'
@@ -277,7 +283,14 @@ import { formatApiError } from '../../lib/api/formatError'
 const route = useRoute()
 const router = useRouter()
 const store = useLifecycleMapsStore()
+const planStore = usePlanStore()
 const { t } = useI18n()
+
+// FAR-654: the journeys display (journey cards on stage nodes, the
+// Unattributed journeys section, load-more pagination, and the journey
+// detail panel) is gated behind the default-OFF `lifecycle_map_journeys`
+// feature flag. The map itself (stages/edges) renders normally either way.
+const journeysEnabled = computed(() => planStore.featureEnabled('lifecycle_map_journeys'))
 
 const mapId = computed(() => route.params.id as string)
 const selectedVersion = ref<number | null>(null)
@@ -471,14 +484,28 @@ async function handleImportConfirm(): Promise<void> {
   }
 }
 
-onMounted(() => {
-  if (mapId.value) {
-    store.fetchMap(mapId.value).then(() => {
-      if (store.currentMap) {
-        selectedVersion.value = store.currentMap.current_version
-      }
-      loadJourneys()
-    })
+onMounted(async () => {
+  if (!mapId.value) return
+  await store.fetchMap(mapId.value)
+  if (store.currentMap) {
+    selectedVersion.value = store.currentMap.current_version
+  }
+  // Resolve the plan (dedup with any in-flight fetch) so the flag state is
+  // known before deciding whether to load journeys at all.
+  if (!planStore.loaded) {
+    await planStore.fetchPlan()
+  }
+  if (journeysEnabled.value) {
+    loadJourneys()
+  }
+})
+
+// If the flag flips ON while the view is open (e.g. an admin org override
+// followed by a plan re-sync), load the journeys the mount-time decision
+// skipped. fetchJourneys is idempotent and guards against concurrency.
+watch(journeysEnabled, (enabled) => {
+  if (enabled && mapId.value) {
+    loadJourneys()
   }
 })
 </script>

@@ -22,6 +22,7 @@ import pytest
 
 import modulo.core.feature_flags as feature_flags_module
 from modulo.core.feature_flags import (
+    DEFAULT_OFF_FLAGS,
     TIER_RANK,
     CommunityTier,
     DbPlanContext,
@@ -720,7 +721,7 @@ class TestGoldenPins:
     def test_community_tier_activates_only_community_flags(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
         # Flags intentionally shipped default-OFF regardless of tier.
-        forced_off = {"mobile_sidebar_rail", "dashboard_charts", "saved_views", "user_scoped_mcp_keys"}
+        forced_off = DEFAULT_OFF_FLAGS
         for flag in registry.list_flags():
             if flag.name in forced_off:
                 assert flag.currently_active is False, f"{flag.name} is forced OFF"
@@ -732,7 +733,7 @@ class TestGoldenPins:
     def test_team_tier_activates_all_flags_except_inactive_experiments(self) -> None:
         registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
         # Flags intentionally shipped default-OFF regardless of tier.
-        forced_off = {"mobile_sidebar_rail", "dashboard_charts", "saved_views", "user_scoped_mcp_keys"}
+        forced_off = DEFAULT_OFF_FLAGS
         for flag in registry.list_flags():
             if flag.name in forced_off:
                 assert flag.currently_active is False, f"{flag.name} is forced OFF"
