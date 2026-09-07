@@ -2475,7 +2475,7 @@ export default {
       "view_type": "View Type",
       "duplicate_view": "'Duplicate view'",
       "created_by": "Created By",
-      "edit_view_1": "Edit view",
+      "edit_view_1": "Edit View",
       "sort_by": "Sort By",
       "new_view": "New View",
       "delete_view": "'Delete view'",
