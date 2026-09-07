@@ -41,6 +41,7 @@ from modulo.core.hitl_manager import (
     GateNotFoundError,
     HITLManager,
     NotTeamMemberError,
+    RunNotAwaitingError,
 )
 from modulo.core.notifier import Notifier
 from modulo.core.pipeline_engine.executor import (
@@ -55,10 +56,9 @@ from modulo.db.crud.hitl_gate_config import (
     make_gate_id,
     resolve_hitl_gate_config,
 )
-from modulo.db.crud.run import get_run, update_run_status
+from modulo.db.crud.run import get_run, transition_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import HITL_PARKED_STATUS
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
@@ -258,7 +258,15 @@ async def claim_gate(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("hitl.claim"),
 ) -> ClaimResponse:
-    """Atomically claim a HITL gate. Returns a claim_token for approve/reject."""
+    """Atomically claim a HITL gate. Returns a claim_token for approve/reject.
+
+    The post-claim run-status flip to ``claimed`` is fenced to runs still in
+    ``awaiting_human`` (``transition_run`` with ``allowed_from``): if the run
+    goes terminal between the claim's status pre-check and the flip, the fenced
+    miss no-ops — the terminal status is preserved, the gate drops out of the
+    pending list on the next refresh, and the claim token simply expires
+    unused.
+    """
     mgr = HITLManager()
     try:
         async with session.begin():
@@ -276,21 +284,34 @@ async def claim_gate(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except AlreadyClaimedError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except RunNotAwaitingError as exc:
+                # FAR-612: a terminal/still-executing run must never be flipped
+                # to "claimed" by a stale gate claim -- 409 with the run's
+                # actual status so the operator sees why.
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
             except NotTeamMemberError as exc:
                 logger.warning("hitl.claim_gate.team_access_denied: %s", exc)
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
-            # Guarded write (qa F7): the run flips to "claimed" UNLESS it is
-            # parked (FAR-604 D2/D3) — a ``hitl_parked`` run stays parked
-            # while its gate is claimed-but-undecided (a claim is not a
-            # decision; the claim-expiry sweep must never un-park it via the
-            # claimed→awaiting_human reset). The un-park happens at decision
-            # time (``HITLManager._decide``). The guard lives INSIDE the
-            # status write (``not_status``) instead of a read-then-write here:
-            # the pre-read could not see the park sweep's concurrent commit,
-            # so a run parked between the read and the write used to be
-            # flipped to ``claimed`` (the parked state lost).
-            await update_run_status(session, run_id, "claimed", not_status=HITL_PARKED_STATUS)
+            # FAR-612: flip the run to "claimed" through the fenced transition
+            # authority, guarded on the source status. A run that is not
+            # awaiting a human decision is never clobbered by a claim: a run
+            # that went terminal between claim()'s status pre-check and this
+            # write no-ops (terminal status preserved — the gate drops out of
+            # the pending list on the next refresh and the claim token simply
+            # expires unused), and a ``hitl_parked`` run stays parked while its
+            # gate is claimed-but-undecided (FAR-604: a claim is not a
+            # decision; the un-park happens at decision time in
+            # ``HITLManager._decide``). The guard lives INSIDE the conditional
+            # UPDATE (``allowed_from``), so the park sweep's concurrent commit
+            # is fenced out the same way ``not_status`` fenced it.
+            await transition_run(
+                session,
+                run_id,
+                principal.organisation_id,
+                target_status="claimed",
+                allowed_from=frozenset({"awaiting_human"}),
+            )
     except ProgrammingError as exc:
         logger.exception("hitl.claim_gate")
         raise HTTPException(
@@ -885,7 +906,13 @@ async def list_org_pending_gates(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("hitl.list"),
 ) -> PendingGatesResponse:
-    """List all pending HITL gates across the organisation."""
+    """List pending HITL gates across the organisation.
+
+    Gates on terminal runs are excluded (they are data rot, not pending work):
+    the manager joins ``runs`` and keeps only undecided gates whose run is in
+    ``awaiting_human``, ``claimed``, or ``hitl_parked`` status (FAR-612,
+    FAR-604).
+    """
     mgr = HITLManager()
     try:
         async with session.begin():

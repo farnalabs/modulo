@@ -50,6 +50,7 @@
            dedicated detail sections below. -->
       <div
         v-if="runLevelWarnings.length > 0"
+        id="warnings"
         data-testid="run-detail-warnings-strip"
         role="status"
         aria-live="polite"
@@ -669,20 +670,6 @@
         </template>
       </section>
 
-      <!-- Run Warnings -->
-      <section
-        v-if="runWarnings.length > 0"
-        id="warnings"
-        data-testid="run-detail-warnings"
-        aria-live="polite"
-        class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning"
-      >
-        <h2 class="mb-3 flex items-center gap-2 text-base font-semibold tracking-tight">
-          {{ $t('views.RunDetailView.warnings', { count: runWarnings.length }) }}
-        </h2>
-        <RunWarningsList :warnings="runWarnings" />
-      </section>
-
       <!-- Prompt Reveal Dialog -->
       <Dialog v-if="selectedPrompt" :visible="!!selectedPrompt" :modal="true" :dismissable-mask="true" :style="{ width: '48rem' }" @update:visible="closePromptDialog">
         <template #header>
@@ -765,7 +752,6 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
-import RunWarningsList, { type RunWarning } from '../components/shared/RunWarningsList.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
@@ -792,8 +778,6 @@ type RunResponse = components['schemas']['RunResponse'] & {
   work_item_refs?: WorkItemRef[] | null
   child_runs?: ChildRunRef[] | null
   capacity?: RunCapacity | null
-  warnings?: RunWarning[] | null
-  warnings_count?: number
 }
 type RunIOResponse = components['schemas']['RunIOResponse']
 
@@ -1293,41 +1277,6 @@ const breakdownPresent = computed(() => breakdownRaw.value.length > 0)
 
 const breakdownTotalClamped = computed(() => breakdownRaw.value.some((e) => e.total_clamped === true))
 
-const runWarnings = computed<RunWarning[]>(() =>
-  Array.isArray(run.value?.warnings) ? (run.value.warnings as RunWarning[]) : [],
-)
-
-// Whether to auto-scroll to the #warnings anchor. Set when arriving from the
-// runs list badge (``?warn=1``) or a deep-link hash (``#warnings``); a
-// scrollBehavior-driven hash navigation is handled by the router, so only the
-// query-intent path needs a programmatic scroll here.
-const shouldScrollToWarnings = computed(
-  () => route.query?.warn !== undefined || (typeof window !== 'undefined' && window.location.hash === '#warnings'),
-)
-let hasScrolledToWarnings = false
-
-watch(
-  runWarnings,
-  async (warnings) => {
-    if (hasScrolledToWarnings) return
-    if (!shouldScrollToWarnings.value || warnings.length === 0) return
-    // The warnings <section id="warnings"> may still be settling in the DOM on
-    // the reactive pass that populates ``runWarnings`` (deferred cost_breakdown
-    // load, async GET). Retry across a few ticks so a momentarily-missing target
-    // doesn't make the scroll silently no-op.
-    for (let attempt = 0; attempt < 5; attempt++) {
-      await nextTick()
-      const el = document.getElementById('warnings')
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        break
-      }
-    }
-    hasScrolledToWarnings = true
-  },
-  { immediate: true, flush: 'post' },
-)
-
 function parseBreakdownAmount(value: string | number | undefined): number {
   if (value == null || value === '') return 0
   const n = Number(value)
@@ -1739,6 +1688,37 @@ const runLevelWarnings = computed<RunLevelWarning[]>(() => {
   }
   return warnings
 })
+
+// Whether to auto-scroll to the #warnings anchor (the top warnings strip). Set
+// when arriving from the runs list badge (``?warn=1``) or a deep-link hash
+// (``#warnings``); a scrollBehavior-driven hash navigation is handled by the
+// router, so only the query-intent path needs a programmatic scroll here.
+const shouldScrollToWarnings = computed(
+  () => route.query?.warn !== undefined || (typeof window !== 'undefined' && window.location.hash === '#warnings'),
+)
+let hasScrolledToWarnings = false
+
+watch(
+  runLevelWarnings,
+  async (warnings) => {
+    if (hasScrolledToWarnings) return
+    if (!shouldScrollToWarnings.value || warnings.length === 0) return
+    // The warnings strip (``<div id="warnings">``) may still be settling in the
+    // DOM on the reactive pass that populates ``runLevelWarnings`` (deferred
+    // cost_breakdown load, async GET). Retry across a few ticks so a
+    // momentarily-missing target doesn't make the scroll silently no-op.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await nextTick()
+      const el = document.getElementById('warnings')
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        break
+      }
+    }
+    hasScrolledToWarnings = true
+  },
+  { immediate: true, flush: 'post' },
+)
 
 function scrollToWarning(targetId: string) {
   document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })

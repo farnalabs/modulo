@@ -27,6 +27,8 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/scheduling.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/webhook_trigger.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../../bdd/features/pipelines/checkpoint_resume.feature")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -646,9 +648,14 @@ def resume_run(client, run_id: str, request: pytest.FixtureRequest, patches: lis
     scenario's checkpoint state (last checkpoint node + 1 is the restart
     node), keeping the BDD scenario meaningful against the real engine
     semantics.
+
+    When the scenario set up a failed run via ``Given a run that failed at
+    node N`` (which records ``_failed_at_node`` instead of a live
+    ``_last_checkpoint_node``), the restart node is the failed node itself.
     """
     last = getattr(request.node, "_last_checkpoint_node", None)
-    restart_node = last + 1 if last is not None else None
+    failed_at = getattr(request.node, "_failed_at_node", None)
+    restart_node = last + 1 if last is not None else (failed_at if failed_at is not None else None)
     from tests.bdd.conftest import _mock_resp
 
     resp = _mock_resp(202, {"run_id": run_id, "restart_node": restart_node})

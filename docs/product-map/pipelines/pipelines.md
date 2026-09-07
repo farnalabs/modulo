@@ -29,6 +29,7 @@ bdd:
   - backend/tests/bdd/features/pipelines/error_recovery.feature
   - backend/tests/bdd/features/pipelines/scheduling.feature
   - backend/tests/bdd/features/pipelines/webhook_trigger.feature
+  - backend/tests/bdd/features/pipelines/checkpoint_resume.feature
   - backend/tests/bdd/features/admin/node-categories.feature
   - backend/tests/bdd/steps/test_pipelines.py
   - backend/tests/bdd/steps/test_alpha_pipelines.py
@@ -65,8 +66,9 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       unit-covered (`tests/unit/graph_validator`, `test_pipelines_endpoint.py`)
 - [x] Scheduling and webhook triggers start runs from the authored graph
       (`scheduling.feature`, `webhook_trigger.feature`); checkpoint/resume replays a
-      failed run from its last checkpoint (`tests/unit/pipeline_engine` recovery
-      suite)
+      failed run from its last checkpoint — now BDD-exercised end to end
+      (`checkpoint_resume.feature`) and unit-covered
+      (`tests/unit/pipeline_engine` recovery suite)
 - [x] Node categories: deleting an unreferenced category succeeds, deleting one still
       referenced by a pipeline node is refused (409) with the referencing pipeline listed,
       and viewers cannot delete categories (403) (`admin/node-categories.feature`)
@@ -84,17 +86,23 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   behaviour; they are exercised by the same step suite and are not re-listed here to keep
   the run surfaces owned by `feat-runs`.
 - **No executing BDD surface for graph validation, pipeline-config validation or
-  checkpoint/resume** — `pipelines/validation.feature`,
-  `pipelines/pipeline_config_validation.feature` and
-  `pipelines/checkpoint_resume.feature` ship under `tests/bdd/features/pipelines/`
+  checkpoint/resume** — `pipelines/validation.feature` and
+  `pipelines/pipeline_config_validation.feature` ship under `tests/bdd/features/pipelines/`
   but `steps/test_pipelines.py` does not register them via `scenarios(...)`, so they
   never execute and are no longer cited as coverage here. The behaviours are
   unit-covered (`tests/unit/graph_validator`, `tests/unit/pipeline_engine`,
   `test_pipelines_endpoint.py`); wiring the feature files up needs their missing step
-  definitions written.
+  definitions written. `checkpoint_resume.feature` is now registered and exercises the
+  replay-from-last-checkpoint contract (`steps/test_pipelines.py`).
 
 ## QA History
 
+- 2026-09-07: **improve-architecture (feature-gap walk)** — registered
+  `checkpoint_resume.feature` in `steps/test_pipelines.py` (previously shipped but never
+  executed) and aligned the resume step so a `Given a run that failed at node N` derives
+  the restart node from the failure point. The three checkpoint/resume scenarios now
+  collect and pass; the graph/config-validation BDD gap remains for
+  `validation.feature` / `pipeline_config_validation.feature`.
 - 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-pipelines`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/pipelines.py`,

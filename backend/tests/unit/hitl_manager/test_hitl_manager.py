@@ -20,6 +20,7 @@ from modulo.core.hitl_manager import (
     HITLError,
     HITLManager,
     NotTeamMemberError,
+    RunNotAwaitingError,
 )
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.team_membership import TeamMembership
@@ -80,18 +81,44 @@ def _session_get(return_value: Any = None) -> AsyncMock:
     return session
 
 
+def _run_mock(status: str | None) -> MagicMock:
+    """A runs-row mock for claim()'s org-scoped run-status SELECT (FAR-612)."""
+    run = MagicMock()
+    run.status = status
+    return run
+
+
+def _runs_result(status: str = "awaiting_human") -> MagicMock:
+    """Execute-result for the run-status SELECT (scalar_one_or_none -> run mock)."""
+    r = MagicMock()
+    r.scalar_one_or_none.return_value = _run_mock(status)
+    return r
+
+
+def _is_runs_select(stmt: Any) -> bool:
+    """Whether the statement SELECTs from ``runs`` (not ``hitl_claims``)."""
+    sql = str(stmt)
+    return "runs" in sql and "hitl_claims" not in sql
+
+
 def _session_update(
     *,
     rows_returned: int = 1,
     gate: HitlClaim | None = None,
     pre_check_gate: HitlClaim | None = None,
+    run_status: str | None = "awaiting_human",
 ) -> AsyncMock:
     """Session that simulates a claim() flow with pre-check + UPDATE + refetch.
 
     Call sequence:
       1. Pre-check SELECT (returns ``pre_check_gate`` or falls back to ``gate``)
-      2. UPDATE … RETURNING  (returns claimed id if rows_returned > 0)
-      3. Re-fetch SELECT     (returns ``gate``)
+      2. Run-status SELECT against ``runs`` (returns status ``run_status``;
+         ``None`` simulates a missing run row)
+      3. UPDATE … RETURNING  (returns claimed id if rows_returned > 0)
+      4. Re-fetch SELECT     (returns ``gate``)
+
+    The ``runs`` SELECT is dispatched by statement shape, not position, so the
+    gate/response sequencing above is unaffected by where the run check fires.
     """
     session = AsyncMock()
     session.add = MagicMock()
@@ -104,21 +131,26 @@ def _session_update(
     row = type("Row", (), {"run_id": _RUN, "gate_id": _GATE})
     update_result.all.return_value = [row()] * rows_returned
 
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = _run_mock(run_status) if run_status is not None else None
+
     get_result = MagicMock()
     get_result.scalar_one_or_none.return_value = gate
 
     pre_check_result = MagicMock()
     pre_check_result.scalar_one_or_none.return_value = pre_check_gate
 
-    call_count = 0
+    gate_call_count = 0
 
     async def _execute(stmt: Any) -> Any:
-        nonlocal call_count
-        call_count += 1
-        # First execute is the pre-check SELECT; second is the UPDATE; third is the re-fetch
-        if call_count == 1:
+        nonlocal gate_call_count
+        if _is_runs_select(stmt):
+            return run_result
+        gate_call_count += 1
+        # First gate execute is the pre-check SELECT; second is the UPDATE; third is the re-fetch
+        if gate_call_count == 1:
             return pre_check_result if pre_check_gate is not None else get_result
-        if call_count == 2:
+        if gate_call_count == 2:
             return update_result
         return get_result
 
@@ -386,14 +418,18 @@ async def test_claim_custom_expiry_minutes_is_applied():
     get_result.scalar_one_or_none.return_value = pre_check
     pre_check_result = MagicMock()
     pre_check_result.scalar_one_or_none.return_value = pre_check
-    call_count = 0
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = _run_mock("awaiting_human")
+    gate_call_count = 0
 
     async def _execute(stmt: Any) -> Any:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
+        nonlocal gate_call_count
+        if _is_runs_select(stmt):
+            return run_result
+        gate_call_count += 1
+        if gate_call_count == 1:
             return pre_check_result
-        if call_count == 2:
+        if gate_call_count == 2:
             captured.append(stmt)
             return update_result
         return get_result
@@ -450,6 +486,85 @@ async def test_claim_update_race_raises():
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
+@pytest.mark.parametrize("run_status", ["complete", "failed", "running", "cancelled"])
+async def test_claim_on_non_awaiting_run_raises(run_status: str):
+    """FAR-612: claiming a gate whose run is not awaiting_human is refused.
+
+    The route maps this to 409 with the run's actual status in the detail, so
+    a stale/orphaned gate can never flip a terminal run to "claimed".
+    """
+    gate = _gate(account_id=None)
+    session = _session_update(rows_returned=1, gate=gate, pre_check_gate=gate, run_status=run_status)
+    mgr = HITLManager()
+    with pytest.raises(RunNotAwaitingError, match=f"status: {run_status}"):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_on_parked_run_succeeds():
+    """FAR-604/FAR-612: a gate on a ``hitl_parked`` run is actionable and claimable.
+
+    ``hitl_parked`` is in ``HITL_ACTIONABLE_RUN_STATUSES`` (deliberately — parked
+    runs' gates stay listed), so claim() must succeed exactly as on ``awaiting_human``
+    rather than raising ``RunNotAwaitingError``.
+    """
+    pre_check = _gate(account_id=None)
+    claimed_gate = _gate(
+        account_id=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check, run_status="hitl_parked")
+    mgr = HITLManager()
+    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert result is claimed_gate
+
+
+async def test_claim_when_run_row_missing_raises_gate_not_found():
+    """An undecided gate whose run row is gone (org-scoped lookup misses) is 404 data, not claimable."""
+    gate = _gate(account_id=None)
+    session = _session_update(rows_returned=1, gate=gate, pre_check_gate=gate, run_status=None)
+    mgr = HITLManager()
+    with pytest.raises(GateNotFoundError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_run_lookup_is_org_scoped():
+    """FAR-612: the run-status SELECT filters by organisation_id (never probes another org's run)."""
+    gate = _gate(account_id=None)
+    session = _session_update(rows_returned=1, gate=gate, pre_check_gate=gate)
+    run_select: list[Any] = []
+
+    original_execute = session.execute
+
+    async def _capture(stmt: Any) -> Any:
+        if _is_runs_select(stmt):
+            run_select.append(stmt)
+        return await original_execute(stmt)
+
+    session.execute = _capture
+    mgr = HITLManager()
+    await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert len(run_select) == 1
+    sql = str(run_select[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "organisation_id" in sql
+
+
+async def test_claim_after_expiry_reset_succeeds():
+    """Re-claim works after claim expiry: the expiry sweep resets the gate to
+    unclaimed AND the run back to ``awaiting_human`` (hitl_manager.expiry_job
+    step 4), so the FAR-612 run-status precondition holds again."""
+    reset_gate = _gate(account_id=None)  # post-expiry state written by expire_stale_claims
+    claimed = _gate(
+        account_id=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = _session_update(rows_returned=1, gate=claimed, pre_check_gate=reset_gate, run_status="awaiting_human")
+    mgr = HITLManager()
+    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert result is claimed
+
+
 # ---------------------------------------------------------------------------
 # Team-scoped gates
 # ---------------------------------------------------------------------------
@@ -489,6 +604,8 @@ async def test_claim_team_member_can_claim():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no, team_check_count
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no == 1:
             # Pre-check SELECT
@@ -553,6 +670,8 @@ async def test_claim_team_membership_query_restricts_to_runner_or_operator_role(
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no in (1, 2):
             # Gate pre-check SELECT + FOR UPDATE row lock
@@ -598,6 +717,8 @@ async def test_claim_team_viewer_role_denied():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no, membership_check_hit
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no in (1, 2):
             # Gate pre-check SELECT + FOR UPDATE row lock
@@ -643,6 +764,8 @@ async def test_claim_team_role_lost_between_check_and_update_undoes_claim():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no in (1, 2):
             r = MagicMock()
@@ -704,6 +827,8 @@ async def test_claim_membership_lost_between_check_and_update_undoes_claim():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no == 1:
             r = MagicMock()
@@ -758,6 +883,8 @@ async def test_claim_non_team_member_raises():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no, team_check_hit
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no == 1:
             # Pre-check SELECT
@@ -796,6 +923,8 @@ async def test_claim_locked_gate_vanished_raises():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no == 1:
             # Pre-check SELECT
@@ -828,6 +957,8 @@ async def test_claim_locked_gate_already_decided_raises():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no == 1:
             r = MagicMock()
@@ -858,6 +989,8 @@ async def test_claim_locked_gate_already_claimed_raises():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no == 1:
             r = MagicMock()
@@ -891,6 +1024,8 @@ async def test_claim_no_required_team_still_works():
 
     async def _execute(stmt: Any) -> Any:
         nonlocal call_no
+        if _is_runs_select(stmt):
+            return _runs_result()
         call_no += 1
         if call_no == 1:
             # Pre-check SELECT — gate exists, no required_team_id
@@ -1583,8 +1718,28 @@ async def test_get_gate_returns_existing():
     assert result is gate
 
 
-async def test_list_pending_returns_unclaimed_gates():
-    gate = _gate()
+async def test_list_pending_returns_undecided_gates():
+    """Both unclaimed and held (claimed) undecided gates pass through, so the UI
+    can render the claimed state (FAR-612)."""
+    unclaimed = _gate(account_id=None)
+    held = _gate(account_id=_USER, claim_token="tok")
+    session = AsyncMock()
+    scalars = MagicMock()
+    scalars.__iter__ = lambda self: iter([unclaimed, held])
+    execute_result = MagicMock()
+    execute_result.scalars.return_value = scalars
+    session.execute = AsyncMock(return_value=execute_result)
+
+    mgr = HITLManager()
+    result = await mgr.list_pending(session, _ORG)
+    assert result == [unclaimed, held]
+
+
+async def test_list_pending_filters_to_actionable_run_statuses():
+    """FAR-612: list_pending joins runs and keeps only gates whose run is in
+    ``awaiting_human`` or ``claimed`` status — undecided gates on terminal runs
+    (data rot) are excluded from the org pending list."""
+    gate = _gate(account_id=None)
     session = AsyncMock()
     scalars = MagicMock()
     scalars.__iter__ = lambda self: iter([gate])
@@ -1593,8 +1748,12 @@ async def test_list_pending_returns_unclaimed_gates():
     session.execute = AsyncMock(return_value=execute_result)
 
     mgr = HITLManager()
-    result = await mgr.list_pending(session, _ORG)
-    assert result == [gate]
+    await mgr.list_pending(session, _ORG)
+    sql = str(session.execute.call_args[0][0].compile(compile_kwargs={"literal_binds": True}))
+    assert "JOIN runs" in sql, f"list_pending must join runs, got: {sql}"
+    assert "awaiting_human" in sql, f"run-status filter missing awaiting_human, got: {sql}"
+    assert "claimed" in sql, f"run-status filter missing claimed, got: {sql}"
+    assert "complete" not in sql, f"terminal status must not be an allowed value, got: {sql}"
 
 
 # ---------------------------------------------------------------------------
@@ -1787,6 +1946,10 @@ async def _claim_capture() -> tuple[HITLManager, AsyncMock, list[Any]]:
 
     async def _execute(stmt: Any) -> Any:
         captured.append(stmt)
+        if _is_runs_select(stmt):
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = _run_mock("awaiting_human")
+            return r
         if len(captured) == 1:
             r = MagicMock()
             r.scalar_one_or_none.return_value = unclaimed
@@ -1811,7 +1974,7 @@ async def test_claim_update_has_atomic_where_clause():
     """The claim UPDATE atomically guards unclaimed + undecided in its WHERE, so
     a concurrent claimer cannot double-claim (no TOCTOU between check and update)."""
     _mgr, _session, captured = await _claim_capture()
-    update_stmt = captured[1]  # execute call 2 is the UPDATE ... RETURNING
+    update_stmt = captured[2]  # gate statements: pre-check SELECT, run SELECT, then the UPDATE ... RETURNING
     sql = str(update_stmt.compile(compile_kwargs={"literal_binds": True}))
     assert "hitl_claims" in sql
     assert "account_id IS NULL" in sql
@@ -1822,7 +1985,7 @@ async def test_claim_update_returns_id_for_atomic_race_detection():
     """The claim UPDATE uses RETURNING id so the caller can detect a lost race:
     no returned id ⇒ someone else claimed first ⇒ AlreadyClaimedError."""
     _mgr, _session, captured = await _claim_capture()
-    update_stmt = captured[1]  # execute call 2 is the UPDATE ... RETURNING
+    update_stmt = captured[2]  # gate statements: pre-check SELECT, run SELECT, then the UPDATE ... RETURNING
     sql = str(update_stmt.compile(compile_kwargs={"literal_binds": True}))
     assert "RETURNING" in sql, f"claim UPDATE missing RETURNING id, got: {sql}"
     assert "hitl_claims.id" in sql, f"claim UPDATE missing hitl_claims.id, got: {sql}"
@@ -1866,7 +2029,7 @@ async def test_hitl_queries_are_org_scoped():
     """Every hitl_claims query (claim UPDATE, list_pending SELECT, decide UPDATE)
     is filtered by organisation_id so one org can never see another org's gates."""
     _mgr, _session, captured = await _claim_capture()
-    claim_update = captured[1]
+    claim_update = captured[2]
     claim_sql = str(claim_update.compile(compile_kwargs={"literal_binds": True}))
     assert "organisation_id" in claim_sql
 
@@ -1903,6 +2066,8 @@ async def test_manager_instance_is_stateless_across_concurrent_claims():
 
         async def _execute(stmt: Any) -> Any:
             captured.append(stmt)
+            if _is_runs_select(stmt):
+                return _runs_result()
             if len(captured) == 1:
                 r = MagicMock()
                 r.scalar_one_or_none.return_value = gate

@@ -750,7 +750,12 @@ export default {
       "claim_failed": "Claim failed:",
       "approve_failed": "Approve failed:",
       "reject_failed": "Reject failed:",
-      "claimed_by_you": "You"
+      "claimed_by_you": "You",
+      "claim_failed_already_claimed": "This gate is already claimed by another reviewer. It becomes claimable again when their claim expires.",
+      "claim_failed_already_decided": "This gate already has a final decision and can no longer be claimed.",
+      "claim_failed_run_not_awaiting": "This run is no longer waiting for a human decision ({reason}).",
+      "dismiss": "Dismiss",
+      "claimed_by_other": "Claimed by {user} at {time}. Waiting for their decision."
     },
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
@@ -1440,9 +1445,6 @@ export default {
       "not_reported": "not reported",
       "eval_error_badge": "eval error",
       "no_model_cost_reported_basis": "No model cost reported by the agent",
-      "warnings": "1 warning | {count} warnings",
-      "warning_missing_self_report": "No model cost was reported by the agent for this run.",
-      "warning_generic": "Run warning.",
       "warnings_strip_title": "1 run warning | {count} run warnings",
       "warnings_strip_unreported_cost": "Some cost components were not reported by the agent.",
       "warnings_strip_clamped_total": "The run total was clamped to column capacity — true spend is higher.",

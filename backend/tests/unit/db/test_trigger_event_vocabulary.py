@@ -60,8 +60,8 @@ _MIGRATION_PATH = (
 # 0185_error_events_indexes_jsonb (error_events status/level partial indexes),
 # re-parented onto the 0184 trigger_events head, then main's improve-database
 # migrations 0186_pipeline_check_constraints_deleted_by and
-# 0187_pipeline_performance_indexes, and this PR's 0189_agent_runner_bindings
-# re-parented onto 0187 as the chain head.
+# 0187_pipeline_performance_indexes, main's 0188_pipeline_run_context_defaults_default,
+# and this PR's 0189_agent_runner_bindings re-parented onto 0188 as the chain head.
 _CHAIN_HEAD_MIGRATION_NAME = "0189_agent_runner_bindings"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 

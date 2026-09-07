@@ -1133,7 +1133,7 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('renders the #warnings section when the run carries warnings', async () => {
+  it('does not render the duplicate bottom #warnings section when the run carries warnings', async () => {
     const wrapper = await mountWithDetail({
       ...baseDetail(),
       warnings: [
@@ -1141,37 +1141,54 @@ describe('RunDetailView', () => {
       ],
     })
 
-    const section = wrapper.find('[data-testid="run-detail-warnings"]')
-    expect(section.exists()).toBe(true)
-    const warningItem = wrapper.find('[data-testid="run-detail-warning-missing_self_report-0"]')
-    expect(warningItem.exists()).toBe(true)
-    expect(wrapper.text()).toContain('No model cost was reported')
+    // The bottom warnings section was removed (FAR-682): the top strip is the
+    // single warnings surface, so a run with backend warnings must not render
+    // the old section or its per-warning items anywhere.
+    expect(wrapper.find('[data-testid="run-detail-warnings"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-warning-missing_self_report-0"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('No model cost was reported by the agent for this run.')
     wrapper.unmount()
   })
 
-  it('auto-scrolls to #warnings when arriving with ?warn=1', async () => {
+  it('auto-scrolls to the #warnings strip when arriving with ?warn=1', async () => {
     const originalScroll = Element.prototype.scrollIntoView
     const scrollSpy = vi.fn()
     Element.prototype.scrollIntoView = scrollSpy
+    let wrapper: Awaited<ReturnType<typeof mountWithDetail>> | null = null
 
     Object.assign(testRoute, { query: { warn: '1' } })
     try {
-      const wrapper = await mountWithDetail({
+      // The payload still carries the backend warnings array to prove it does
+      // not duplicate into a second surface — only the strip (driven by the
+      // breakdown's missing_self_report) renders.
+      wrapper = await mountWithDetail({
         ...baseDetail(),
         warnings: [
           { code: 'missing_self_report', severity: 'warning', message: 'No model cost was reported by the agent for this run.' },
         ],
+        cost_breakdown: [
+          {
+            component: 'model_cost',
+            display_name: 'Model cost',
+            source: 'self_reported',
+            amount_usd: '0.000000',
+            missing_self_report: true,
+          },
+        ],
       })
-      // Let the run load, the warnings section render, and the async scroll
+      // Let the run load, the warnings strip render, and the async scroll
       // watcher (which awaits its own nextTick) fire.
       await flushPromises()
       await nextTick()
       await flushPromises()
       await nextTick()
 
+      // The strip is the deep-link target and the single warnings surface.
+      expect(wrapper.find('[data-testid="run-detail-warnings-strip"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="run-detail-warnings"]').exists()).toBe(false)
       expect(scrollSpy).toHaveBeenCalled()
-      wrapper.unmount()
     } finally {
+      wrapper?.unmount()
       Object.assign(testRoute, { query: {} })
       Element.prototype.scrollIntoView = originalScroll
     }

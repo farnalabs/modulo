@@ -495,23 +495,23 @@ async def test_pipeline_check_constraints_reject_non_positive_values(
     from sqlalchemy.exc import IntegrityError
 
     pid = uuid.uuid4()
-    await rls_session.execute(
-        text(
-            "INSERT INTO pipelines (id, organisation_id, name, account_id, max_duration_seconds) "
-            "VALUES (:id, :oid, :name, :aid, 0)"
-        ),
-        {"id": str(pid), "oid": str(test_org), "name": "bad-duration", "aid": str(test_user)},
-    )
     with pytest.raises(IntegrityError):
-        await rls_session.flush()
+        await rls_session.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_duration_seconds, "
+                "run_context_defaults) VALUES (:id, :oid, :name, :aid, 0, '{}'::json)"
+            ),
+            {"id": str(pid), "oid": str(test_org), "name": "bad-duration", "aid": str(test_user)},
+        )
 
     await rls_session.rollback()
 
     nullable_pid = uuid.uuid4()
     await rls_session.execute(
         text(
-            "INSERT INTO pipelines (id, organisation_id, name, account_id, max_steps, token_budget, "
-            "circuit_breaker_threshold) VALUES (:id, :oid, :name, :aid, NULL, NULL, NULL)"
+            "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, "
+            "max_steps, token_budget, circuit_breaker_threshold) "
+            "VALUES (:id, :oid, :name, :aid, '{}'::jsonb, NULL, NULL, NULL)"
         ),
         {"id": str(nullable_pid), "oid": str(test_org), "name": "nullable-ok", "aid": str(test_user)},
     )
