@@ -30,19 +30,29 @@ module is what makes that abort survivable:
   no-op fleet-wide). Read order:
 
   1. the Redis key ``saq:run_outputs:dual_write_enabled`` (the fleet path —
-     set via :func:`set_dual_write_enabled`, the ops runbook's flip
-     procedure); a present value of ``"0"``/``"false"`` turns dual-write OFF,
-     anything else present turns it ON;
-  2. the ``modulo_run_outputs_dual_write`` runtime-config override
-     (process-local — the web process + tests only; a Redis outage or an
-     absent key falls through to it);
-  3. default ON (fail-closed).
+      set via :func:`set_dual_write_enabled` or a raw Redis SET; a present
+      value of ``"0"``/``"false"`` turns dual-write OFF, anything else
+      present turns it ON);
+   2. the ``modulo_run_outputs_dual_write`` runtime-config override — a
+      TEST/LOCAL-ONLY injection leg (process-local memory). It is
+      deliberately NOT registered in ``core.runtime_config.store``'s
+      KNOWN_KEYS, so the admin runtime-config API can never set it: a
+      web-process-only partial flip would be invisible to the SAQ workers
+      and worse than useless during an incident (qa Major 2 — there is
+      exactly ONE operator lever for this switch, the Redis key);
+   3. default ON (fail-closed).
 
   Any read failure keeps dual-write ON; only an explicit OFF value disables
-  it. NEVER cached at import — every dual-write call re-reads. The FIRST
-  process-local read of OFF emits a loud boot-time degraded-combo warning:
-  readers now serve the new table while writes are legacy-only, and the
-  catch-up sweep heals the gap.
+  it. Resolved values are served through a small in-process TTL cache
+  (~1 second, qa Minor 5): a bounded-staleness window that keeps an
+  emergency flip practically immediate while removing the fresh Redis
+  client + GET per chokepoint call — the marker write holds the run row
+  FOR UPDATE, and a hung Redis must not stall it per call.
+  :func:`set_dual_write_enabled` invalidates the cache so the flipping
+  process sees its own flip immediately. The FIRST process-local read of
+  OFF emits a loud boot-time degraded-combo warning: readers now serve the
+  new table while writes are legacy-only, and the catch-up sweep heals the
+  gap.
 * :func:`note_dual_write_disabled` — the kill-switch-OFF degraded signal:
   legacy-only writes continue, and an EDGE-TRIGGERED (first occurrence per
   org per flag-off window) ``dual_write_degraded`` warning event + counter
@@ -71,6 +81,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -82,12 +93,13 @@ from modulo.version import get_version
 
 _log = logging.getLogger(__name__)
 
-# The runtime-config key backing the dual-write kill-switch's PROCESS-LOCAL
-# leg. Registered in ``core.runtime_config.store``'s KNOWN_KEYS (default
-# ``"true"``, hot_reloadable). Read PER CALL — never cached at import — but
-# only AFTER the fleet-visible Redis key (see the module docstring): the
-# runtime-config store is per-process memory, so it can never carry a
-# fleet-wide emergency flip.
+# The runtime-config key backing the dual-write kill-switch's TEST/LOCAL-ONLY
+# injection leg (qa Major 2). Deliberately ABSENT from
+# ``core.runtime_config.store``'s KNOWN_KEYS — the admin runtime-config API
+# rejects unknown keys, so no operator (and no web-process-only partial flip)
+# can set it; only tests / local processes inject through the process-local
+# store override. Read only AFTER the fleet-visible Redis key (see the module
+# docstring); the ONE operator lever is the Redis key.
 DUAL_WRITE_ENABLED_KEY = "modulo_run_outputs_dual_write"
 
 # Dual-write kill-switch default: ON (fail-closed). Only the literal "false"
@@ -99,8 +111,8 @@ _REDIS_SWITCH_OFF_VALUES = frozenset({"0", "false"})
 # The FLEET-VISIBLE kill-switch key (qa C3): every process — web AND SAQ
 # worker — reads this Redis key first, so an operator flip reaches the whole
 # fleet immediately. Written by :func:`set_dual_write_enabled` (the ops
-# runbook's flip procedure); expires so an emergency OFF cannot silently
-# outlive its incident (the runtime-config override is the persistent leg).
+# runbook's flip procedure) or a raw Redis SET — the switch's ONLY operator
+# levers; expires so an emergency OFF cannot silently outlive its incident.
 _REDIS_SWITCH_KEY = "saq:run_outputs:dual_write_enabled"
 
 # Redis edge-gate keys + windows. The degraded edge is PER-ORG per flag-off
@@ -160,17 +172,15 @@ def _warn_switch_off_degraded_once() -> None:
     _log.warning(
         "run_outputs.dual_write_switch_off_degraded_combo readers serve run_node_outputs "
         "while writes are LEGACY-ONLY — the catch-up sweep heals the skipped rows. "
-        "Flip the switch back on (Redis key %r or the %r runtime-config override) "
-        "once the write path is healthy.",
+        "Flip the switch back on (Redis key %r) once the write path is healthy.",
         _REDIS_SWITCH_KEY,
-        DUAL_WRITE_ENABLED_KEY,
     )
 
 
 async def _read_redis_switch_value() -> str | None:
     """The fleet-visible Redis switch value (qa C3); ``None`` when Redis is
     unreachable OR the key is absent (the caller falls through to the
-    process-local override)."""
+    test/local runtime-config injection, never an operator surface)."""
     client: Any = None
     try:
         client = _open_redis()
@@ -188,16 +198,51 @@ async def _read_redis_switch_value() -> str | None:
             await client.aclose()
 
 
-async def is_dual_write_enabled() -> bool:
-    """Read the dual-write kill-switch PER CALL (fail-closed ON, fleet-visible).
+# The switch-read TTL cache (qa Minor 5): :func:`is_dual_write_enabled` runs
+# at every dual-write chokepoint AND per marker write — the marker persist
+# holds the run row FOR UPDATE, so a fresh Redis client + GET per call lets a
+# hung Redis (2s bounded timeout) stall the write path per call. A ~1s
+# process-local cache bounds the flip's worst-case staleness at ~1s per
+# process (emergency immediacy preserved) while collapsing the per-call
+# client churn. Single-event-loop semantics — no lock; a racing refresh
+# costs at most one extra Redis read. Tests reset it via
+# :func:`_reset_switch_read_cache`.
+_SWITCH_CACHE_TTL_SECONDS = 1.0
+_SWITCH_CACHE: tuple[float, bool] | None = None
 
-    Read order (see the module docstring): (1) the Redis key
-    ``saq:run_outputs:dual_write_enabled`` — the fleet path every process
-    honours; (2) the process-local runtime-config override (web process +
-    tests); (3) default ON. An explicit OFF value on either leg (plus the
-    once-per-process boot warning) is the ONLY way dual-write turns off; a
-    Redis error, an absent key, or a store-read failure all keep it ON.
+
+def _reset_switch_read_cache() -> None:
+    """Drop the cached kill-switch read (test isolation + post-flip immediacy)."""
+    global _SWITCH_CACHE
+    _SWITCH_CACHE = None
+
+
+async def is_dual_write_enabled() -> bool:
+    """Read the dual-write kill-switch (fail-closed ON, fleet-visible, ~1s
+    TTL-cached — qa Minor 5).
+
+    Resolution order on a cache miss (see the module docstring):
+    (1) the Redis key ``saq:run_outputs:dual_write_enabled`` — the fleet path
+    every process honours and the ONLY operator lever; (2) the process-local
+    runtime-config override — TEST/LOCAL-ONLY injection, deliberately not an
+    admin-API surface; (3) default ON. An explicit OFF value on either leg
+    (plus the once-per-process boot warning) is the ONLY way dual-write turns
+    off; a Redis error, an absent key, or a store-read failure all keep it
+    ON. A resolved value (whichever leg produced it) is cached for
+    ``_SWITCH_CACHE_TTL_SECONDS`` so the bounded staleness applies uniformly;
+    :func:`set_dual_write_enabled` invalidates the cache.
     """
+    global _SWITCH_CACHE
+    cached = _SWITCH_CACHE
+    if cached is not None and time.monotonic() < cached[0]:
+        return cached[1]
+    enabled = await _resolve_dual_write_enabled()
+    _SWITCH_CACHE = (time.monotonic() + _SWITCH_CACHE_TTL_SECONDS, enabled)
+    return enabled
+
+
+async def _resolve_dual_write_enabled() -> bool:
+    """The UNCACHED switch resolution (Redis key → test/local override → ON)."""
     value = await _read_redis_switch_value()
     if value is not None:
         enabled = value.strip().lower() not in _REDIS_SWITCH_OFF_VALUES
@@ -221,14 +266,17 @@ async def is_dual_write_enabled() -> bool:
 
 
 async def set_dual_write_enabled(enabled: bool, ttl_seconds: int) -> None:
-    """The ops runbook's fleet-visible kill-switch flip (qa C3).
+    """The ops runbook's fleet-visible kill-switch flip (qa C3) — the switch's
+    ONE operator lever (qa Major 2; a raw Redis SET of the same key is the
+    equivalent manual procedure).
 
-    Writes the Redis key every process reads per dual-write call, so the flip
-    reaches web AND SAQ worker machines immediately. *ttl_seconds* bounds the
-    emergency state: an OFF must not silently outlive its incident (re-issue
-    the flip or persist it via the ``modulo_run_outputs_dual_write``
-    runtime-config override when a state must outlive the TTL). Raises on a
-    Redis failure — the operator must KNOW the flip did not land.
+    Writes the Redis key every process reads per dual-write call (through the
+    ~1s TTL cache), so the flip reaches web AND SAQ worker machines
+    immediately. *ttl_seconds* bounds the emergency state: an OFF must not
+    silently outlive its incident (re-issue the flip when a state must outlive
+    the TTL). Raises on a Redis failure — the operator must KNOW the flip did
+    not land. The local cache is invalidated so the flipping process observes
+    its own flip without waiting out the TTL.
     """
     client: Any = None
     try:
@@ -237,6 +285,7 @@ async def set_dual_write_enabled(enabled: bool, ttl_seconds: int) -> None:
     finally:
         if client is not None:
             await client.aclose()
+    _reset_switch_read_cache()
     _log.warning(
         "run_outputs.dual_write_switch_flipped enabled=%s ttl_seconds=%s (fleet-visible Redis key %s)",
         enabled,

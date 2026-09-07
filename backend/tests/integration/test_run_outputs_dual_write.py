@@ -515,9 +515,14 @@ async def test_kill_switch_off_legacy_only_write_with_degraded_event(
     rls_app_session: AsyncSession,
     dual_write_tenant: _Tenant,
 ) -> None:
+    from modulo.core import run_outputs_dualwrite as dualwrite_module
+
     run_id = await _insert_run(db_engine, dual_write_tenant)
     store = get_runtime_config_store()
     store.set_override(DUAL_WRITE_ENABLED_KEY, "false")
+    # qa Minor 5: the switch read is TTL-cached — drop any cached ON value so
+    # this OFF flip is observed immediately.
+    dualwrite_module._reset_switch_read_cache()
     try:
         async with rls_app_session.begin():
             await set_rls_org(rls_app_session, dual_write_tenant.org_id)
@@ -529,6 +534,7 @@ async def test_kill_switch_off_legacy_only_write_with_degraded_event(
             )
     finally:
         store.clear_override(DUAL_WRITE_ENABLED_KEY)
+        dualwrite_module._reset_switch_read_cache()
 
     legacy = await _fetch_run_row(db_engine, run_id)
     assert legacy["status"] == "complete"
@@ -548,6 +554,9 @@ async def test_kill_switch_off_edge_triggered_degraded_event(
     run_id = await _insert_run(db_engine, dual_write_tenant)
     store = get_runtime_config_store()
     store.set_override(DUAL_WRITE_ENABLED_KEY, "false")
+    # qa Minor 5: drop any cached switch value so the OFF flip is observed
+    # immediately (and never leaks past the test).
+    module._reset_switch_read_cache()
     edge_counter = itertools.count()
     edge_values = itertools.cycle([True, False, False])
 
@@ -568,6 +577,7 @@ async def test_kill_switch_off_edge_triggered_degraded_event(
                     )
     finally:
         store.clear_override(DUAL_WRITE_ENABLED_KEY)
+        module._reset_switch_read_cache()
 
     events = await _fetch_error_events(db_engine, dual_write_tenant.org_id, "%dual-write disabled%")
     assert len(events) == 1

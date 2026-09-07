@@ -1055,22 +1055,34 @@ async def read_run_markers_fenced(
     organisation_id: uuid.UUID,
     claim_token: str | None,
     for_update: bool = False,
+    fence_status: bool = True,
 ) -> dict[str, Any] | None:
     """Fenced, single-statement markers read (qa M4/M5).
 
     ONE statement: the ``runs`` row is fetched under the fence predicates
-    (``id``, ``organisation_id``, ``claim_token`` when given,
-    ``status = 'running'``) and LEFT-JOINed to the run's marker rows
-    (``attempt_key != '__final__'`` AND ``raw_output_markers IS NOT NULL``);
-    the markers reassemble flat in the same Python pass. A fence miss (wrong
-    claim token / wrong status / missing run) yields ZERO rows — the caller
-    gets ``None``, byte-for-byte the same visibility the fenced single-column
-    gate read had (FAR-228 predicate-fenced gate).
+    (``id``, ``organisation_id``, ``claim_token`` when given, and — by
+    default — ``status = 'running'``) and LEFT-JOINed to the run's marker
+    rows (``attempt_key != '__final__'`` AND ``raw_output_markers IS NOT
+    NULL``); the markers reassemble flat in the same Python pass. A fence
+    miss (wrong claim token / wrong status / missing run) yields ZERO rows —
+    the caller gets ``None``, byte-for-byte the same visibility the fenced
+    single-column gate read had (FAR-228 predicate-fenced gate).
 
     ``for_update=True`` adds ``FOR UPDATE OF runs`` (Postgres) so the
     connector-caller's gate decision serialises on the run row exactly like
     its previous raw ``SELECT ... FOR UPDATE``; SQLite renders no FOR UPDATE
     (no-op — matching every other generic-backend read).
+
+    ``fence_status=False`` (qa Minor 4) drops the ``status = 'running'``
+    predicate — ONLY the connector-caller path (``for_update=True``) uses it,
+    preserving the OLD connector rewrite read's semantics exactly: that read
+    had NO status predicate, so during a concurrent cancel it still served
+    the suppression evidence (a ``delivery_done`` marker) instead of a
+    fence-miss ``None`` — a ``None`` there would suppress nothing and risk a
+    DUPLICATE connector write. The FAR-228 dispatch gate keeps the default
+    ``fence_status=True`` (its predicate-fenced read always included the
+    status check — a cancelled run must gate-serve nothing). The id + org
+    (+ claim-token when given) predicates are ALWAYS applied on both paths.
 
     The DIRECTION-AWARE legacy fallback (qa M2/M3) is part of the contract:
     the legacy ``runs.raw_output_markers`` column is selected FROM THE SAME
@@ -1086,8 +1098,9 @@ async def read_run_markers_fenced(
     fence: list[Any] = [
         Run.id == run_id,
         Run.organisation_id == organisation_id,
-        Run.status == _FENCED_RUNNING_STATUS,
     ]
+    if fence_status:
+        fence.append(Run.status == _FENCED_RUNNING_STATUS)
     if claim_token is not None:
         fence.append(Run.claim_token == claim_token)
 

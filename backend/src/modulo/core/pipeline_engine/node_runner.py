@@ -1226,11 +1226,19 @@ async def _persist_raw_output_marker(
 
 
 # qa rider f: SQLSTATEs whose failure aborts the WHOLE Postgres transaction
-# (deadlock 40P01, admin shutdown 57P01, connection-loss 08xxx classes). A
-# marker-savepoint failure with one of these has ALSO lost the legacy marker
-# write (the outer transaction rolls back), so the "legacy survives, sweep
-# heals" claim is false — the failure logs ``legacy_marker_also_lost``.
-_MARKER_TXN_ABORTING_SQLSTATES = frozenset({"40P01", "57P01", "08000", "08001", "08003", "08004", "08006"})
+# (deadlock 40P01, admin shutdown 57P01, crash shutdown 57P02, connection-loss
+# 08xxx classes — 08000/08001/08003/08004/08006/08007). A marker-savepoint
+# failure with one of these has ALSO lost the legacy marker write (the outer
+# transaction rolls back), so the "legacy survives, sweep heals" claim is
+# false — the failure logs ``legacy_marker_also_lost``.
+#
+# qa Minor 7 rider: this set stays LOCAL to node_runner for now — it
+# consolidates into the shared SQLSTATE classification module at B1 (alongside
+# ``crud.run._DUAL_WRITE_RETRYABLE_SQLSTATES``); do not grow it ad hoc beyond
+# completing the txn-aborting vocabulary.
+_MARKER_TXN_ABORTING_SQLSTATES = frozenset(
+    {"40P01", "57P01", "57P02", "08000", "08001", "08003", "08004", "08006", "08007"}
+)
 
 
 async def _write_raw_output_marker(
@@ -1591,9 +1599,12 @@ async def _read_connector_idempotency_gate_state(
     ``(None, None)`` (the write proceeds, no suppression) on any failure — the
     gate must never block a connector write. Reads the run row directly (no
     claim-token fencing — a connector node has no dispatch lease), so only the
-    run id + org id are required. Returns the parsed markers dict (or ``None``)
-    and the persisted ``idempotency_key`` (or ``None`` when the run is missing
-    or carries no persisted key).
+    run id + org id are required; the fenced markers read passes
+    ``fence_status=False`` (qa Minor 4) because the old connector rewrite read
+    had NO status predicate either — a concurrently-cancelled run must still
+    serve its suppression evidence. Returns the parsed markers dict (or
+    ``None``) and the persisted ``idempotency_key`` (or ``None`` when the run
+    is missing or carries no persisted key).
 
     FENCING (FAR-458 MAJOR 3): the marker read is taken under
     ``SELECT ... FOR UPDATE`` so concurrent re-runs of the same UNKNOWN write
@@ -1640,19 +1651,27 @@ async def _read_connector_idempotency_gate_state(
             ).fetchone()
             if row is None:
                 return None, None
-            # FAR-583 storage re-point (qa M5): the run-row lock (FOR UPDATE OF
-            # runs) and the fencing semantics are unchanged; the marker VALUES
-            # now reassemble via the repo's SINGLE fenced markers-scoped reader
-            # (for_update=True re-takes the run-row lock the raw SELECT above
-            # already holds — a no-op same-transaction re-lock), read on the
-            # SAME locked transaction so the gate decision cannot read past an
-            # in-progress concurrent stamp.
+            # FAR-583 storage re-point (qa M5), semantics pinned precisely (qa
+            # Minor 4): what is PRESERVED from the old connector rewrite read
+            # is (a) the run-row lock (the raw SELECT ... FOR UPDATE above;
+            # for_update=True re-takes it inside the same transaction — a
+            # no-op same-transaction re-lock) and (b) the ABSENCE of a status
+            # predicate — the old read had none, so fence_status=False keeps
+            # it that way: during a concurrent cancel the read still serves
+            # the suppression evidence (delivery_done markers) instead of a
+            # fence-miss None (which would suppress nothing → duplicate
+            # connector write). What was NEVER here stays absent: no
+            # claim-token fence (a connector node has no dispatch lease).
+            # Marker VALUES reassemble via the repo's SINGLE fenced
+            # markers-scoped reader, on the SAME locked transaction so the
+            # gate decision cannot read past an in-progress concurrent stamp.
             markers_dict = await read_run_markers_fenced(
                 session,
                 run_id=uuid.UUID(run_id),
                 organisation_id=org_uuid,
                 claim_token=None,
                 for_update=True,
+                fence_status=False,
             )
             persisted_key = row[1]
             return markers_dict, (str(persisted_key) if persisted_key else None)

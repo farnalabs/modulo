@@ -22,7 +22,7 @@ the involved tables only (no migrations): the raw UPDATE's Postgres-style
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,6 +32,7 @@ import pytest_asyncio
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core import run_outputs_dualwrite as dualwrite_module
 from modulo.core.error_tracking import saq_hooks
 from modulo.core.run_outputs_dualwrite import (
     DUAL_WRITE_COUNTERS,
@@ -112,6 +113,16 @@ def _redis_client(**kwargs: Any) -> _FakeRedis:
     return _FakeRedis(**kwargs)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_switch_cache() -> Generator[None, None, None]:
+    """qa Minor 5: reset the ~1s switch-read TTL cache around EVERY test —
+    the module-level cache would otherwise leak an OFF (or ON) resolution
+    across tests and make switch-dependent suites order-flaky."""
+    dualwrite_module._reset_switch_read_cache()
+    yield
+    dualwrite_module._reset_switch_read_cache()
+
+
 class TestKillSwitch:
     """qa C3: the switch is FLEET-VISIBLE — the Redis key is read first, the
     process-local runtime-config override is the fallback leg, default ON."""
@@ -141,6 +152,7 @@ class TestKillSwitch:
     async def test_redis_key_false_disables_and_present_value_enables(self) -> None:
         with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value="false")):
             assert await is_dual_write_enabled() is False
+        dualwrite_module._reset_switch_read_cache()
         with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value="1")):
             assert await is_dual_write_enabled() is True
 
@@ -158,6 +170,7 @@ class TestKillSwitch:
             store = store_factory.return_value
             store.get.return_value = "false"
             assert await is_dual_write_enabled() is False
+            dualwrite_module._reset_switch_read_cache()
             store.get.return_value = None
             assert await is_dual_write_enabled() is True
 
@@ -169,6 +182,7 @@ class TestKillSwitch:
         with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
             assert await is_dual_write_enabled() is False
         get_runtime_config_store().clear_override(DUAL_WRITE_ENABLED_KEY)
+        dualwrite_module._reset_switch_read_cache()
         with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
             assert await is_dual_write_enabled() is True
 
@@ -194,6 +208,7 @@ class TestKillSwitch:
                 assert await is_dual_write_enabled() is False
         finally:
             store.clear_override(DUAL_WRITE_ENABLED_KEY)
+        dualwrite_module._reset_switch_read_cache()
         store.set_override(DUAL_WRITE_ENABLED_KEY, "off")
         try:
             with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
@@ -221,6 +236,7 @@ class TestKillSwitch:
         try:
             with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=_redis_client(get_value=None)):
                 assert await is_dual_write_enabled() is False
+                dualwrite_module._reset_switch_read_cache()
                 assert await is_dual_write_enabled() is False
         finally:
             get_runtime_config_store().clear_override(DUAL_WRITE_ENABLED_KEY)
@@ -248,6 +264,79 @@ class TestKillSwitch:
         assert client.set_calls[0] == {"key": "saq:run_outputs:dual_write_enabled", "value": "0", "ex": 1800}
         assert client.set_calls[1] == {"key": "saq:run_outputs:dual_write_enabled", "value": "1", "ex": 60}
         assert any("dual_write_switch_flipped" in r.message for r in caplog.records)
+
+
+class TestSwitchReadCache:
+    """qa Minor 5: the switch read is served through a ~1s in-process TTL
+    cache — one Redis read per window instead of a fresh client + GET per
+    chokepoint call (the marker write holds the run row FOR UPDATE, so a hung
+    Redis must not stall it per call)."""
+
+    @pytest.mark.asyncio
+    async def test_two_calls_within_ttl_read_redis_once(self) -> None:
+        factory = MagicMock(return_value=_redis_client(get_value="1"))
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", factory):
+            assert await is_dual_write_enabled() is True
+            assert await is_dual_write_enabled() is True
+        assert factory.call_count == 1, "the second call inside the TTL must be served from the cache"
+
+    @pytest.mark.asyncio
+    async def test_off_value_is_cached_within_ttl(self) -> None:
+        factory = MagicMock(return_value=_redis_client(get_value="0"))
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", factory):
+            assert await is_dual_write_enabled() is False
+            assert await is_dual_write_enabled() is False
+        assert factory.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_ttl_expiry_rereads_and_serves_the_new_value(self) -> None:
+        with patch(
+            "modulo.core.run_outputs_dualwrite._open_redis",
+            MagicMock(return_value=_redis_client(get_value="0")),
+        ):
+            assert await is_dual_write_enabled() is False
+        cached = dualwrite_module._SWITCH_CACHE
+        assert cached is not None
+        # Backdate the cached read past the TTL (no wall-clock sleeps).
+        dualwrite_module._SWITCH_CACHE = (
+            cached[0] - dualwrite_module._SWITCH_CACHE_TTL_SECONDS - 1.0,
+            cached[1],
+        )
+        with patch(
+            "modulo.core.run_outputs_dualwrite._open_redis",
+            MagicMock(return_value=_redis_client(get_value="1")),
+        ):
+            assert await is_dual_write_enabled() is True
+
+    @pytest.mark.asyncio
+    async def test_reset_helper_forces_a_reread(self) -> None:
+        with patch(
+            "modulo.core.run_outputs_dualwrite._open_redis",
+            MagicMock(return_value=_redis_client(get_value="1")),
+        ):
+            assert await is_dual_write_enabled() is True
+        dualwrite_module._reset_switch_read_cache()
+        with patch(
+            "modulo.core.run_outputs_dualwrite._open_redis",
+            MagicMock(return_value=_redis_client(get_value="0")),
+        ):
+            assert await is_dual_write_enabled() is False
+
+    @pytest.mark.asyncio
+    async def test_set_dual_write_enabled_invalidates_the_cache(self) -> None:
+        """The flip must be observable immediately in the flipping process —
+        without the invalidation the ~1s cache would serve the pre-flip value."""
+        with patch(
+            "modulo.core.run_outputs_dualwrite._open_redis",
+            MagicMock(return_value=_redis_client(get_value="1")),
+        ):
+            assert await is_dual_write_enabled() is True
+        with patch(
+            "modulo.core.run_outputs_dualwrite._open_redis",
+            MagicMock(return_value=_redis_client(get_value="0")),
+        ):
+            await set_dual_write_enabled(False, ttl_seconds=60)
+            assert await is_dual_write_enabled() is False
 
 
 # ---------------------------------------------------------------------------

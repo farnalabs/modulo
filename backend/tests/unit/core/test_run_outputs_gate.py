@@ -31,7 +31,7 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -45,11 +45,12 @@ from modulo.core.pipeline_engine.node_runner import (
     _read_run_raw_output_markers_for_gate,
     _write_raw_output_marker,
 )
-from modulo.db.crud.run_node_outputs import DualWriteError
+from modulo.db.crud.run_node_outputs import DualWriteError, read_run_markers_fenced
 from modulo.db.models.base import Base
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.db.rls import set_rls_org
 
 _SRC = Path(__file__).resolve().parent.parent.parent.parent / "src" / "modulo"
 
@@ -86,7 +87,12 @@ def sqlite_sessionmaker(sqlite_engine: AsyncEngine) -> async_sessionmaker[AsyncS
     return async_sessionmaker(sqlite_engine, expire_on_commit=False, autobegin=False)
 
 
-async def _seed_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> None:
+async def _seed_run(
+    maker: async_sessionmaker[AsyncSession],
+    run_id: uuid.UUID,
+    *,
+    status: str = "running",
+) -> None:
     async with maker() as session, session.begin():
         await session.execute(
             text(
@@ -99,13 +105,14 @@ async def _seed_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) 
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
                 "run_number, input_hash, langgraph_thread_id, claim_token, cancellation_requested) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'running', 1, 'ih', :thread, 'tok-a', 0)"
+                "VALUES (:id, :oid, :pid, :sid, 'manual', :status, 1, 'ih', :thread, 'tok-a', 0)"
             ),
             {
                 "id": run_id.hex,
                 "oid": _ORG.hex,
                 "pid": uuid.uuid4().hex,
                 "sid": uuid.uuid4().hex,
+                "status": status,
                 "thread": f"gate-{run_id}",
             },
         )
@@ -428,11 +435,77 @@ class TestGateReadUsesFencedReader:
             )
         assert persisted_key == "key-1"
         assert fenced_calls == [
-            {"run_id": _RUN_ID, "organisation_id": _ORG, "claim_token": None, "for_update": True}
-        ], "the connector read must fence by other means (no claim token) WITH the row lock"
+            {
+                "run_id": _RUN_ID,
+                "organisation_id": _ORG,
+                "claim_token": None,
+                "for_update": True,
+                "fence_status": False,
+            }
+        ], (
+            "the connector read must fence by other means (no claim token) WITH the row lock, "
+            "and WITHOUT the status fence (qa Minor 4 — the old read had no status predicate)"
+        )
         assert markers is not None
         assert "run:x:node:n1:connector" in markers
         assert len(session.execute_calls) == 1, "only the idempotency-key SELECT remains outside the repo"
+
+
+class TestFenceStatusVisibilityDuringCancel:
+    """qa Minor 4: the connector rewrite read (fence_status=False) preserves
+    the OLD read's no-status-predicate semantics — during a concurrent cancel
+    it still serves the suppression evidence; the FAR-228 gate read
+    (fence_status=True) keeps the status fence — a cancelled run serves it
+    NOTHING. Exercised against the REAL reader on the SQLite harness."""
+
+    _MARKERS: ClassVar[dict[str, Any]] = {"k1": {"raw": "a"}}
+
+    async def _seed_cancelled_run(self, maker: async_sessionmaker[AsyncSession]) -> uuid.UUID:
+        run_id = uuid.uuid4()
+        await _seed_run(maker, run_id, status="cancelled")
+        # The markers land via the ORM so the JSON column serializes the dict.
+        async with maker() as session, session.begin():
+            run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+            run.raw_output_markers = self._MARKERS
+        return run_id
+
+    @pytest.mark.asyncio
+    async def test_connector_shape_read_serves_markers_of_a_cancelled_run(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The connector caller's shape (for_update=True, claim_token=None,
+        fence_status=False) — a cancelled run's markers are STILL served, so
+        a delivery_done stamped just before the cancel keeps suppressing the
+        duplicate connector write exactly like the old no-status read."""
+        run_id = await self._seed_cancelled_run(sqlite_sessionmaker)
+        async with sqlite_sessionmaker() as session, session.begin():
+            await set_rls_org(session, _ORG)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run_id,
+                organisation_id=_ORG,
+                claim_token=None,
+                for_update=True,
+                fence_status=False,
+            )
+        assert served == self._MARKERS
+
+    @pytest.mark.asyncio
+    async def test_gate_shape_read_serves_none_for_a_cancelled_run(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The FAR-228 gate caller's shape (fence_status=True default) — the
+        status fence holds: a cancelled run's markers are NOT served."""
+        run_id = await self._seed_cancelled_run(sqlite_sessionmaker)
+        async with sqlite_sessionmaker() as session, session.begin():
+            await set_rls_org(session, _ORG)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run_id,
+                organisation_id=_ORG,
+                claim_token="tok-a",
+            )
+        assert served is None
 
 
 # ---------------------------------------------------------------------------

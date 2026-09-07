@@ -50,6 +50,7 @@ from sqlalchemy import bindparam, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run_node_outputs import (
+    QUARANTINE_TABLE,
     RunBlobs,
     read_node_output_blob_bytes,
     read_run_blobs_with_fallback,
@@ -540,7 +541,11 @@ async def purge_terminal_runs(
       ``notification_delivery_log``) are deleted before the runs themselves.
       FK CASCADE tables (``eval_results``, ``hitl_claims``,
       ``node_observations``, ``feedback_records``, ``run_evidence``) are
-      cleaned up by the database.
+      cleaned up by the database. The ``run_node_outputs_quarantine`` rows
+      for the batch's run ids are deleted too (qa Major 3a — best-effort, see
+      :func:`_delete_quarantine_rows`: the table deliberately has no FK, so
+      without an explicit delete every purged run would leave a permanent
+      orphaned blob copy).
     * Idempotent: re-running produces zero because the runs no longer match.
 
     Returns ``{purged_runs, purged_checkpoints, freed_estimated_bytes}``.
@@ -581,6 +586,7 @@ async def purge_terminal_runs(
         try:
             async with session.begin_nested():
                 await _delete_checkpoints(session, thread_ids, org_id)
+                await _delete_quarantine_rows(session, ids)
                 await _delete_run_id_rows(session, ids)
                 await session.execute(
                     text("DELETE FROM runs WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
@@ -741,3 +747,33 @@ async def _delete_run_id_rows(session: AsyncSession, run_ids: list[Any]) -> None
     # rows even when the run_id list accidentally overlaps.
     await session.execute(delete(NotificationDeliveryLog).where(NotificationDeliveryLog.run_id.in_(run_ids)))
     await session.execute(delete(TriggerEvent).where(TriggerEvent.run_id.in_(run_ids)))
+
+
+async def _delete_quarantine_rows(session: AsyncSession, run_ids: list[Any]) -> None:
+    """Best-effort DELETE of the batch's ``run_node_outputs_quarantine`` rows
+    (qa Major 3a).
+
+    The quarantine table deliberately has NO foreign key to ``runs``
+    (migration 0190), so purged runs leave their quarantined blob copies
+    orphaned forever unless the purge deletes them explicitly. It is also an
+    ops/remediation surface with no app-role grant on Postgres (default
+    REVOKE) and no ORM mapping, so the delete mirrors the
+    :func:`_delete_checkpoints` best-effort pattern rather than the hard
+    ``_delete_run_id_rows`` one: it runs in its OWN savepoint, and a
+    privilege / missing-table failure is logged and swallowed — the run purge
+    must never abort because the evidence copy could not be reclaimed. The
+    run_ids come from the org-scoped terminal batch, so the delete cannot
+    leak across orgs regardless of the table's missing RLS policy.
+    """
+
+    if not run_ids:
+        return
+    try:
+        async with session.begin_nested():
+            await session.execute(delete(QUARANTINE_TABLE).where(QUARANTINE_TABLE.c.run_id.in_(run_ids)))
+    except Exception:
+        _log.warning(
+            "run_retention.quarantine_delete_unavailable",
+            exc_info=True,
+            extra={"batch_runs": len(run_ids)},
+        )
