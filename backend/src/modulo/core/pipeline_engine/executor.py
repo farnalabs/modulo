@@ -1312,6 +1312,25 @@ def _terminal_failure(
     return status, code, detail, node_token_usage or None
 
 
+def _connector_scope_agent_ids(graph_json: dict[str, Any]) -> list[uuid.UUID]:
+    """Distinct Agent ids referenced by the graph's nodes (for the fetch scope).
+
+    Non-dict nodes and unparseable agent ids are skipped — a malformed node
+    must never abort hub construction.
+    """
+    agent_ids: list[uuid.UUID] = []
+    for node in graph_json.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        agent_id = node.get("agent_id")
+        if agent_id:
+            try:
+                agent_ids.append(uuid.UUID(str(agent_id)))
+            except (TypeError, ValueError):
+                continue
+    return agent_ids
+
+
 @dataclass
 class _StreamState:
     """Mutable per-run stream accumulators for ``_stream_graph``.
@@ -2114,6 +2133,152 @@ class PipelineExecutor:
             hub = None
         return hub
 
+    async def _resolve_run_connector_scope(
+        self,
+        session: Any,
+        org_id: uuid.UUID,
+        graph_json: dict[str, Any] | None,
+    ) -> list[str] | None:
+        """Resolve the run-level fetch scope (deny-by-default, FAR-435 on FAR-418).
+
+        With *graph_json* (the run-start path) the scope is the union of every
+        node's ``capability_scope.allowed_connectors`` and the referenced
+        Agents' ``connector_type_refs`` grants; it is cached on the executor
+        (``_run_connector_scope``) and reused by the compensation path (which
+        has no graph).
+        """
+        if graph_json is None:
+            return self._run_connector_scope
+
+        from sqlalchemy import select
+
+        from modulo.core.capability_scope import (
+            agent_granted_connector_types,
+            compute_run_fetch_scope,
+        )
+        from modulo.db.models.agent import Agent
+
+        agent_ids = _connector_scope_agent_ids(graph_json)
+        grants: dict[str, set[str]] = {}
+        if agent_ids:
+            agent_rows = (
+                (
+                    await session.execute(
+                        select(Agent).where(
+                            Agent.id.in_(agent_ids),
+                            Agent.organisation_id == org_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for agent in agent_rows:
+                grants[str(agent.id)] = agent_granted_connector_types(agent.connector_type_refs)
+        allowed_connectors = compute_run_fetch_scope(graph_json, grants)
+        self._run_connector_scope = allowed_connectors
+        return allowed_connectors
+
+    async def _persist_connector_degraded_markers(self, session: Any, hub: Any) -> None:
+        """FAR-495 degraded-marker persistence (best-effort, own savepoint).
+
+        Persists a degraded marker for the skipped instances and clears stale
+        markers for instances that initialised successfully (a connector fixed
+        via a config/plugin change stops being flagged degraded), inside its
+        own savepoint so a failure here can NEVER fail or roll back the
+        run-start transaction (the hub itself already logged the skips). Only
+        instances actually attempted this run appear in ``hub.skipped`` /
+        ``hub.healthy``, so out-of-scope instances are never touched.
+        """
+        from modulo.db.crud.connector_instance import (
+            clear_degraded_markers,
+            mark_instances_degraded,
+        )
+
+        try:
+            async with session.begin_nested():
+                if hub.skipped:
+                    await mark_instances_degraded(session, hub.skipped)
+                if hub.healthy:
+                    await clear_degraded_markers(session, hub.healthy)
+        except Exception:
+            # No run id in scope here (_init_connector_hub is
+            # org-scoped); the instance ids are the correlatable
+            # identifiers.
+            _log.warning(
+                "pipeline.connector_degraded_marker_failed skipped=%s healthy=%s",
+                sorted(str(i) for i in hub.skipped),
+                sorted(str(i) for i in hub.healthy),
+                exc_info=True,
+            )
+
+    async def _build_connector_hub(
+        self,
+        session: Any,
+        org_id: uuid.UUID,
+        rows: list[Any],
+        allowed_connectors: list[str] | None,
+        request_visibility: str | None,
+    ) -> Any:
+        """Build, enter and initialise the ConnectorHub for the active rows.
+
+        Connectors confirmed configured — any failure below re-raises
+        (fail closed) via the configured path. FAR-587: the runtime-provider
+        hub stays reachable for the teardown path via the ConnectorHub
+        constructor seam (``runtime_provider=`` -> ``_runtime_provider``);
+        _teardown_hub acloses it there, disposing provider-tracked workspaces
+        e.g. billable E2B sandboxes.
+        """
+        from modulo.core.connector_hub import ConnectorHub
+        from modulo.core.pipeline_engine.decorator import set_connector_hub
+        from modulo.core.runtime_provider import create_default_hub
+        from modulo.core.secrets_backend import create_secrets_backend
+        from modulo.settings import get_settings
+
+        _settings = get_settings()
+        secrets_backend = create_secrets_backend(
+            fernet_key=_settings.fernet_key,
+            session=session,
+        )
+        runtime_hub = create_default_hub()
+        hub = ConnectorHub(
+            secrets_backend=secrets_backend,
+            runtime_provider=runtime_hub,
+            org_id=str(org_id),
+            request_visibility=request_visibility,
+        )
+        await hub.__aenter__()
+        await hub.initialise(rows, allowed_connectors=allowed_connectors)
+        if hub.skipped or hub.healthy:
+            await self._persist_connector_degraded_markers(session, hub)
+        set_connector_hub(hub)
+        return hub
+
+    async def _hub_init_failure_hub(self, connectors_configured: bool, hub: Any) -> Any | None:
+        """Fail-closed teardown for a generic hub-init failure; returns the final hub.
+
+        *connectors_configured* means connectors ARE configured, OR we could
+        NOT establish that they are NOT (a read/query error with the
+        fail-closed default). A run that may require connector work must never
+        fall through to ``hub=None`` — the node_runner would treat it as
+        vacuous success, silently no-op'ing a configured remote integration
+        and finalising the run GREEN. Re-raise so the run terminalises as
+        FAILED.
+
+        Defensive: ``connectors_configured`` is False ONLY on a confirmed
+        empty result, which never raises — this branch is otherwise
+        unreachable. Keep the vacuous-success return for safety.
+        """
+        if connectors_configured:
+            _log.exception("pipeline.connector_hub_init_failed_configured")
+            if hub is not None:
+                await _teardown_hub(hub)
+            raise
+        _log.exception("pipeline.connector_hub_init_failed")
+        if hub is not None:
+            await _teardown_hub(hub)
+        return None
+
     async def _init_connector_hub(
         self,
         org_id: uuid.UUID,
@@ -2166,45 +2331,9 @@ class PipelineExecutor:
                 await set_rls_execution_context(session)
                 from sqlalchemy import select
 
-                from modulo.core.capability_scope import (
-                    agent_granted_connector_types,
-                    compute_run_fetch_scope,
-                )
-                from modulo.db.models.agent import Agent
                 from modulo.db.models.connector_instance import ConnectorInstance
 
-                allowed_connectors: list[str] | None = None
-                if graph_json is not None:
-                    agent_ids: list[uuid.UUID] = []
-                    for node in graph_json.get("nodes", []) or []:
-                        if not isinstance(node, dict):
-                            continue
-                        agent_id = node.get("agent_id")
-                        if agent_id:
-                            try:
-                                agent_ids.append(uuid.UUID(str(agent_id)))
-                            except (TypeError, ValueError):
-                                continue
-                    grants: dict[str, set[str]] = {}
-                    if agent_ids:
-                        agent_rows = (
-                            (
-                                await session.execute(
-                                    select(Agent).where(
-                                        Agent.id.in_(agent_ids),
-                                        Agent.organisation_id == org_id,
-                                    )
-                                )
-                            )
-                            .scalars()
-                            .all()
-                        )
-                        for agent in agent_rows:
-                            grants[str(agent.id)] = agent_granted_connector_types(agent.connector_type_refs)
-                    allowed_connectors = compute_run_fetch_scope(graph_json, grants)
-                    self._run_connector_scope = allowed_connectors
-                else:
-                    allowed_connectors = self._run_connector_scope
+                allowed_connectors = await self._resolve_run_connector_scope(session, org_id, graph_json)
 
                 rows = (
                     (
@@ -2219,65 +2348,8 @@ class PipelineExecutor:
                     .all()
                 )
                 if isinstance(rows, list) and rows:
-                    # Connectors confirmed configured: build the hub. Any failure
-                    # below re-raises (fail closed) via the configured path.
-                    from modulo.core.connector_hub import ConnectorHub
-                    from modulo.core.pipeline_engine.decorator import set_connector_hub
-                    from modulo.core.runtime_provider import create_default_hub
-                    from modulo.core.secrets_backend import create_secrets_backend
-                    from modulo.db.crud.connector_instance import (
-                        clear_degraded_markers,
-                        mark_instances_degraded,
-                    )
-                    from modulo.settings import get_settings
-
-                    _settings = get_settings()
-                    secrets_backend = create_secrets_backend(
-                        fernet_key=_settings.fernet_key,
-                        session=session,
-                    )
-                    runtime_hub = create_default_hub()
-                    hub = ConnectorHub(
-                        secrets_backend=secrets_backend,
-                        runtime_provider=runtime_hub,
-                        org_id=str(org_id),
-                        request_visibility=request_visibility,
-                    )
-                    # FAR-587: the runtime-provider hub stays reachable for
-                    # the teardown path via the ConnectorHub constructor seam
-                    # (``runtime_provider=`` -> ``_runtime_provider``);
-                    # _teardown_hub acloses it there, disposing
-                    # provider-tracked workspaces e.g. billable E2B sandboxes.
-                    await hub.__aenter__()
-                    await hub.initialise(rows, allowed_connectors=allowed_connectors)
-                    if hub.skipped or hub.healthy:
-                        # FAR-495: persist a degraded marker for the skipped
-                        # instances and clear stale markers for instances that
-                        # initialised successfully (a connector fixed via a
-                        # config/plugin change stops being flagged degraded),
-                        # best-effort inside its own savepoint so a failure here
-                        # can NEVER fail or roll back the run-start transaction
-                        # (the hub itself already logged the skips). Only
-                        # instances actually attempted this run appear in
-                        # ``hub.skipped``/``hub.healthy``, so out-of-scope
-                        # instances are never touched.
-                        try:
-                            async with session.begin_nested():
-                                if hub.skipped:
-                                    await mark_instances_degraded(session, hub.skipped)
-                                if hub.healthy:
-                                    await clear_degraded_markers(session, hub.healthy)
-                        except Exception:
-                            # No run id in scope here (_init_connector_hub is
-                            # org-scoped); the instance ids are the correlatable
-                            # identifiers.
-                            _log.warning(
-                                "pipeline.connector_degraded_marker_failed skipped=%s healthy=%s",
-                                sorted(str(i) for i in hub.skipped),
-                                sorted(str(i) for i in hub.healthy),
-                                exc_info=True,
-                            )
-                    set_connector_hub(hub)
+                    # Connectors confirmed configured: build the hub (fail-closed).
+                    hub = await self._build_connector_hub(session, org_id, rows, allowed_connectors, request_visibility)
                 else:
                     # Confirmed-EMPTY result (no error): the ONE genuine "no
                     # connectors configured" case. ``connectors_configured`` False
@@ -2297,25 +2369,7 @@ class PipelineExecutor:
                 await _teardown_hub(hub)
             raise
         except Exception:
-            if connectors_configured:
-                # Fail closed, loudly: connectors ARE configured, OR we could NOT
-                # establish that they are NOT (a read/query error with the
-                # fail-closed default). A run that may require connector work must
-                # never fall through to ``hub=None`` — the node_runner would treat
-                # it as vacuous success, silently no-op'ing a configured remote
-                # integration and finalising the run GREEN. Re-raise so the run
-                # terminalises as FAILED.
-                _log.exception("pipeline.connector_hub_init_failed_configured")
-                if hub is not None:
-                    await _teardown_hub(hub)
-                raise
-            # Defensive: ``connectors_configured`` is False ONLY on a confirmed
-            # empty result, which never raises — this branch is otherwise
-            # unreachable. Keep the vacuous-success return for safety.
-            _log.exception("pipeline.connector_hub_init_failed")
-            if hub is not None:
-                await _teardown_hub(hub)
-            hub = None
+            hub = await self._hub_init_failure_hub(connectors_configured, hub)
         return hub
 
     async def _compensate_blocked_run_best_effort(
