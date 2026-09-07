@@ -51,7 +51,7 @@ BUNDLED_RUNNER_PLACEHOLDER_DIGEST = "sha256:" + "0" * 64
 
 def is_placeholder_bundled_runner_image_ref(image_ref: str | None) -> bool:
     """True when ``image_ref`` still carries the un-landed placeholder digest."""
-    return bool(image_ref) and image_ref.endswith(BUNDLED_RUNNER_PLACEHOLDER_DIGEST)
+    return image_ref is not None and image_ref.endswith(BUNDLED_RUNNER_PLACEHOLDER_DIGEST)
 
 
 # Template-owned fields (drift-keyed): provider, digest, hardening, and

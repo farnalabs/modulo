@@ -1,7 +1,7 @@
 """Backfill the Bundled Runner (Docker) profile per org + re-point modulo-dev (FAR-590 D4).
 
-Revision ID: 0189_bundled_runner_seed_backfill
-Revises: 0188_pipeline_run_context_defaults_default
+Revision ID: 0190_bundled_runner_seed_backfill
+Revises: 0189_agent_runner_bindings
 Create Date: 2026-09-06
 
 What this revision changes
@@ -24,7 +24,7 @@ Runner profile.
    live ``runner_docker`` row (operator-pinned older digests SURVIVE). The
    rows SELECTED for re-point have their pre-migration identity (original
    name / description / config_json) captured into a scratch table
-   (``_migration_0189_repoint_state``) so the downgrade can revert EXACTLY
+   (``_migration_0190_repoint_state``) so the downgrade can revert EXACTLY
    those rows and restore their original values.
 
 Rollback (additive on upgrade / SAFE on downgrade): the inserted
@@ -45,8 +45,8 @@ import json
 
 from alembic import op
 
-revision: str = "0189_bundled_runner_seed_backfill"
-down_revision: str | None = "0188_pipeline_run_context_defaults_default"
+revision: str = "0190_bundled_runner_seed_backfill"
+down_revision: str | None = "0189_agent_runner_bindings"
 branch_labels: str | None = None
 depends_on: str | None = None
 
@@ -90,7 +90,7 @@ def upgrade() -> None:
     bind.execute(
         _sql(
             """
-            INSERT INTO _migration_0189_repoint_state (profile_id, prev_name, prev_description, prev_config_json)
+            INSERT INTO _migration_0190_repoint_state (profile_id, prev_name, prev_description, prev_config_json)
             SELECT ep.id, ep.name, ep.description, ep.config_json
             FROM environment_profiles ep
             WHERE ep.name = 'modulo-dev'
@@ -215,12 +215,12 @@ def downgrade() -> None:
                 description = s.prev_description,
                 config_json = s.prev_config_json,
                 updated_at = now()
-            FROM _migration_0189_repoint_state s
+            FROM _migration_0190_repoint_state s
             WHERE ep.id = s.profile_id
             """
         )
     )
-    bind.execute(_sql("DROP TABLE IF EXISTS _migration_0189_repoint_state"))
+    bind.execute(_sql("DROP TABLE IF EXISTS _migration_0190_repoint_state"))
 
 
 def _create_repoint_state_table(bind: object) -> None:
@@ -233,7 +233,7 @@ def _create_repoint_state_table(bind: object) -> None:
     bind.execute(  # type: ignore[attr-defined]
         _sql(
             """
-            CREATE TABLE IF NOT EXISTS _migration_0189_repoint_state (
+            CREATE TABLE IF NOT EXISTS _migration_0190_repoint_state (
                 profile_id uuid PRIMARY KEY,
                 prev_name text NOT NULL,
                 prev_description text,

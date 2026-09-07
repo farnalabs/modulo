@@ -1,4 +1,4 @@
-"""Structural tests for migration 0189_bundled_runner_seed_backfill (FAR-590 D4).
+"""Structural tests for migration 0190_bundled_runner_seed_backfill (FAR-590 D4).
 
 Source-only (no database): assert the migration pins its chain and — critically —
 that the **downgrade** reverts only the captured re-point rows (by primary key,
@@ -12,10 +12,10 @@ from pathlib import Path
 from types import ModuleType
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0189_bundled_runner_seed_backfill"
+_MIGRATION_NAME = "0190_bundled_runner_seed_backfill"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
-_STATE_TABLE = "_migration_0189_repoint_state"
+_STATE_TABLE = "_migration_0190_repoint_state"
 
 
 def _load_migration() -> ModuleType:
@@ -37,16 +37,20 @@ def _source_code() -> str:
 def test_metadata_pins_chain() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
-    assert module.down_revision == "0188_pipeline_run_context_defaults_default"
+    assert module.down_revision == "0189_agent_runner_bindings"
     assert module.branch_labels is None
     assert module.depends_on is None
 
 
 def test_upgrade_captures_repoint_identity() -> None:
-    code = _source_code().split("def upgrade", 1)[1].split("def downgrade", 1)[0]
+    full = _source_code()
+    code = full.split("def upgrade", 1)[1].split("def downgrade", 1)[0]
     # The pre-upgrade identity of the modulo-dev re-points is captured into a
-    # scratch table so the downgrade can target EXACTLY those rows.
-    assert f"CREATE TABLE IF NOT EXISTS {_STATE_TABLE}" in code
+    # scratch table so the downgrade can target EXACTLY those rows. The table is
+    # created by the _create_repoint_state_table helper (called from upgrade),
+    # whose literal DDL lives outside the upgrade slice.
+    assert f"CREATE TABLE IF NOT EXISTS {_STATE_TABLE}" in full
+    assert "_create_repoint_state_table(bind)" in code
     assert f"INSERT INTO {_STATE_TABLE} (profile_id, prev_name, prev_description, prev_config_json)" in code
     assert "'modulo-dev'" in code
     assert "'local_docker'" in code
