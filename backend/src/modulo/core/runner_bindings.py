@@ -185,16 +185,22 @@ async def resolve_agent_bindings(
 
         settings = get_settings()
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-        referenced_rows = [backends_by_id[binding.model_backend_id] for binding in bindings]
+        # Resolve the referenced backends up front so a binding whose backend is
+        # no longer visible to the org raises the typed, retryable error (rather
+        # than an uncaught KeyError inside the initialise/list-comprehension).
+        resolved_backend_rows: list[ModelBackend] = []
+        for binding in bindings:
+            backend_row = backends_by_id.get(binding.model_backend_id)
+            if backend_row is None:
+                raise AgentBindingResolutionError(
+                    "bound model backend is no longer visible to the organisation",
+                    backend_id=binding.model_backend_id,
+                )
+            resolved_backend_rows.append(backend_row)
         async with ModelBackendHub() as hub:
-            await hub.initialise(referenced_rows, secrets_backend=secrets_backend)
+            await hub.initialise(resolved_backend_rows, secrets_backend=secrets_backend)
             for binding in bindings:
-                backend_row = backends_by_id.get(binding.model_backend_id)
-                if backend_row is None:
-                    raise AgentBindingResolutionError(
-                        "bound model backend is no longer visible to the organisation",
-                        backend_id=binding.model_backend_id,
-                    )
+                backend_row = backends_by_id[binding.model_backend_id]
                 creds = hub.creds_for(binding.model_backend_id)
                 if not creds or binding.source_field not in creds:
                     raise AgentBindingResolutionError(
