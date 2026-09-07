@@ -49,6 +49,10 @@ async def test_run_context_defaults_server_default_allows_raw_insert_without_col
     # Roll back the aborted transaction; this also undoes the DROP DEFAULT so the
     # migrated schema (with the 0188 default) is restored for the positive case.
     await rls_session.rollback()
+    # The rollback closes the transaction, but set_rls_org requires an active
+    # transaction (rls.py guards against silent no-ops). Begin a fresh one so the
+    # positive-case insert below runs with org scoping established.
+    await rls_session.begin()
     await set_rls_org(rls_session, test_org)
 
     # Post-0188: the default fills run_context_defaults with an empty object.
