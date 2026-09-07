@@ -610,16 +610,7 @@ class RestConnector(ConnectorBase):
         self._config = config or {}
         self._creds = creds or {}
         self._transport = transport
-        # ``timeout_seconds`` config overrides the ``timeout`` constructor arg
-        # (which the composition root uses to inject a global default); the
-        # connector never uses a config default that would surprise the hub.
-        raw_timeout = self._config.get("timeout_seconds", timeout)
-        self._timeout = float(raw_timeout or _DEFAULT_TIMEOUT)
-        # ``verify_tls`` config (default True) controls whether the pooled client
-        # verifies the server certificate. A self-hosted operator pointing at a
-        # private registry with a self-signed cert may disable it — the SSRF
-        # guard still blocks loopback/metadata targets regardless.
-        self._verify_tls = bool(verify_tls if verify_tls is not None else self._config.get("verify_tls", True))
+        self._timeout, self._verify_tls = self._resolve_transport_options(timeout, verify_tls)
         # Single injected clock (FAR-413): ``clock`` is used for latency
         # instrumentation and any reset-delay math; ``sleep`` is the retry
         # backoff sleeper. Tests inject fake ``clock``/``sleep`` so timing tests
@@ -644,22 +635,54 @@ class RestConnector(ConnectorBase):
         self._max_connections = int(max_connections)
         self._max_keepalive = int(max_keepalive_connections)
         self._cached_client: httpx.AsyncClient | None = None
+        self._validate_on_unknown_configs()
+        self._init_fanout_config()
+        self._init_rate_limit_config(redis_client, tenant_id)
 
-        # FAR-458: the connector-write idempotency gate's ``on_unknown`` mode,
-        # validated at config-parse time. The top-level value is the default for
-        # every op (re-applied per-op via the ``_operation_spec`` merge); a
-        # per-resource ``operations[<resource>]`` override is also validated here
-        # (fail fast on a config error), and the effective value is resolved
-        # per-op via :meth:`on_unknown_for` / ``_operation_spec``.
+    def _resolve_transport_options(self, timeout: float, verify_tls: bool | None) -> tuple[float, bool]:
+        """Resolve the request timeout and TLS-verification flag from config.
+
+        ``timeout_seconds`` config overrides the ``timeout`` constructor arg
+        (which the composition root uses to inject a global default); the
+        connector never uses a config default that would surprise the hub.
+        ``verify_tls`` config (default True) controls whether the pooled client
+        verifies the server certificate. A self-hosted operator pointing at a
+        private registry with a self-signed cert may disable it — the SSRF
+        guard still blocks loopback/metadata targets regardless.
+        """
+        raw_timeout = self._config.get("timeout_seconds", timeout)
+        resolved_timeout = float(raw_timeout or _DEFAULT_TIMEOUT)
+        resolved_verify_tls = bool(verify_tls if verify_tls is not None else self._config.get("verify_tls", True))
+        return resolved_timeout, resolved_verify_tls
+
+    def _validate_on_unknown_configs(self) -> None:
+        """Validate the FAR-458 write-idempotency ``on_unknown`` config at parse time.
+
+        The top-level value is the default for every op (re-applied per-op via
+        the ``_operation_spec`` merge); a per-resource ``operations[<resource>]``
+        override is also validated here (fail fast on a config error), and the
+        effective value is resolved per-op via :meth:`on_unknown_for` /
+        ``_operation_spec``.
+        """
         _normalise_on_unknown(self._config.get("on_unknown"))
-        _ops = self._config.get("operations")
-        if isinstance(_ops, dict):
-            for _spec in _ops.values():
-                if isinstance(_spec, dict) and "on_unknown" in _spec:
-                    _normalise_on_unknown(_spec["on_unknown"])
+        ops = self._config.get("operations")
+        if isinstance(ops, dict):
+            for op_spec in ops.values():
+                if isinstance(op_spec, dict) and "on_unknown" in op_spec:
+                    _normalise_on_unknown(op_spec["on_unknown"])
 
-        # FAR-411 fan-out / iterator config. ``fan_out`` is optional; when absent
-        # or disabled the connector behaves exactly as before (single call).
+    def _init_fanout_config(self) -> None:
+        """Parse the FAR-411 fan-out / iterator config.
+
+        ``fan_out`` is optional; when absent or disabled the connector behaves
+        exactly as before (single call). ``max_retries`` is counted in RETRIES
+        (attempts = max_retries + 1): the connector's own ``_send`` loop runs
+        ``_MAX_RETRIES`` (3) attempts, so the default of ``_MAX_RETRIES - 1``
+        retries keeps the vendor reconciliation (``attempts = max_retries + 1``)
+        in lockstep. The configured value is clamped to a sane upper bound
+        (honoured, not verbatim) because backoff/Retry-After waits make a huge
+        budget pathological within a finite per-item timeout.
+        """
         raw_fanout = self._config.get("fan_out")
         self._fanout_config: dict[str, Any] = raw_fanout if isinstance(raw_fanout, dict) else {}
         self._fanout_enabled = bool(self._fanout_config.get("enabled") or self._fanout_config.get("items_path"))
@@ -673,25 +696,21 @@ class RestConnector(ConnectorBase):
             )
         self._max_fanout_cardinality = raw_cardinality
         self._fanout_per_item_timeout = float(self._fanout_config.get("per_item_timeout", self._timeout))
-        # max_retries (retries, not attempts); attempts = max_retries + 1. The
-        # connector's own ``_send`` loop runs ``_MAX_RETRIES`` (3) attempts, so
-        # the default of ``_MAX_RETRIES - 1`` retries keeps the vendor
-        # reconciliation (``attempts = max_retries + 1``) in lockstep. The
-        # configured value is clamped to a sane upper bound (honoured, not
-        # verbatim) because backoff/Retry-After waits make a huge budget
-        # pathological within a finite per-item timeout.
         self._fanout_max_retries = int(self._fanout_config.get("max_retries", _MAX_RETRIES - 1))
         if self._fanout_max_retries < 0:
             raise ValueError("REST fan_out.max_retries must be >= 0")
         self._fanout_max_retries = min(self._fanout_max_retries, _MAX_SANE_RETRIES)
 
-        # FAR-411 per-destination token bucket (single outbound enforcement point).
-        # FAR-439: shared Redis-backed limiter when a ``redis_client`` is supplied
-        # at the composition root (multi-worker/fleet enforces ONE budget per
-        # <tenant, destination>); otherwise the same per-process local bucket is
-        # used for single-worker dev, where no fleet-wide budget exists to
-        # multiply. A Redis outage on a configured limiter does NOT degrade to the
-        # local bucket — the limiter stays fail-closed (see _rate_bucket).
+    def _init_rate_limit_config(self, redis_client: Any, tenant_id: str | None) -> None:
+        """Parse the FAR-411 per-destination token-bucket config (one enforcement point).
+
+        FAR-439: shared Redis-backed limiter when a ``redis_client`` is supplied
+        at the composition root (multi-worker/fleet enforces ONE budget per
+        <tenant, destination>); otherwise the same per-process local bucket is
+        used for single-worker dev, where no fleet-wide budget exists to
+        multiply. A Redis outage on a configured limiter does NOT degrade to the
+        local bucket — the limiter stays fail-closed (see _rate_bucket).
+        """
         raw_rate = self._config.get("rate_limit")
         self._rate_limit_config: dict[str, Any] = raw_rate if isinstance(raw_rate, dict) else {}
         self._rate_buckets: dict[str, TokenBucket] = {}
