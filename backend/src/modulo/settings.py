@@ -285,7 +285,11 @@ class Settings(BaseSettings):
     saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # Budget of successful-claim cycles for claimed-but-nodeless SAQ zombies
     # whose retry_policy does not cover "stall" (dispatcher_reconcile nodeless
-    # repair, FAR-509). A nodeless zombie executed ZERO nodes, so a re-dispatch
+    # repair, FAR-509). FAR-649: an absent-`on` policy (key missing or null)
+    # with a VALID budget > 0 is stall-covered (the all-events default) and
+    # honors the POLICY budget instead — only absent-`on` rows with a
+    # malformed or 0 budget still land here (fail-closed = no stall coverage).
+    # A nodeless zombie executed ZERO nodes, so a re-dispatch
     # cannot double-execute anything. This bounds the CLAIM CYCLES a zombie
     # gets (terminal-fail once claim_count exceeds it) — it does NOT bound the
     # enqueue rate: the rate is throttled separately to at most one re-dispatch

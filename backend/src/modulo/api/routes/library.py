@@ -1036,6 +1036,12 @@ def _bind_model_backends_to_agents(
         mb_name = agent.get("model_backend_name", "")
         if mb_name and mb_name in mb_id_by_name:
             agent["model_backend_id"] = mb_id_by_name[mb_name]
+        # FAR-592 (D6): runner bindings rebind by the SAME name-based
+        # mechanism — each binding spec carries model_backend_name.
+        for binding in agent.get("model_backend_bindings", []):
+            binding_name = binding.get("model_backend_name", "")
+            if binding_name and binding_name in mb_id_by_name:
+                binding["_resolved_model_backend_id"] = mb_id_by_name[binding_name]
 
 
 async def _read_zip_upload(file: UploadFile) -> bytes:

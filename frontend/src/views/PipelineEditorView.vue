@@ -128,7 +128,37 @@
                 <div class="mb-2 text-[10px] text-muted-foreground">
                   {{ $t('views.PipelineEditorView.retry_policy_description') }}
                 </div>
-                <div class="space-y-1">
+                <!-- FAR-649: coverage mode. "All errors" (the default) saves the
+                     policy WITHOUT the `on` key (absent on = all retryable
+                     events at runtime); "Choose specific errors" saves the
+                     explicit event list. -->
+                <div
+                  class="mb-2 space-y-1"
+                  role="radiogroup"
+                  :aria-label="$t('views.PipelineEditorView.retry_policy_mode_label')"
+                >
+                  <label class="flex min-h-6 items-center gap-2 text-xs">
+                    <input
+                      type="radio"
+                      value="all"
+                      v-model="retryPolicyMode"
+                      class="h-4 w-4"
+                      data-testid="pipeline-editor-retry-mode-all"
+                    />
+                    {{ $t('views.PipelineEditorView.retry_policy_mode_all') }}
+                  </label>
+                  <label class="flex min-h-6 items-center gap-2 text-xs">
+                    <input
+                      type="radio"
+                      value="specific"
+                      v-model="retryPolicyMode"
+                      class="h-4 w-4"
+                      data-testid="pipeline-editor-retry-mode-specific"
+                    />
+                    {{ $t('views.PipelineEditorView.retry_policy_mode_specific') }}
+                  </label>
+                </div>
+                <div v-if="retryPolicyMode === 'specific'" class="space-y-1">
                   <label
                     v-for="opt in retryPolicyOptions"
                     :key="opt.value"
@@ -226,7 +256,7 @@
                   <button
                     type="button"
                     class="rounded-md border border-input bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="retryPolicySaving"
+                    :disabled="retryPolicySaving || retryPolicySaveBlocked"
                     @click="saveRetryPolicy"
                     data-testid="pipeline-editor-retry-policy-save"
                   >
@@ -753,6 +783,7 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.env_vars') }}</dt>
               <dd class="font-mono text-[10px] break-all">{{ Object.keys(selectedNodeData.env_vars).join(', ') }}</dd>
             </div>
+            <AgentRunnerBindings :agent-id="selectedNodeData.agent_id" />
             <div v-if="selectedNodeData.context_files && Object.keys(selectedNodeData.context_files).length > 0">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.context_files') }}</dt>
               <dd><ul class="list-inside list-disc text-xs text-muted-foreground"><li v-for="(content, fpath) in selectedNodeData.context_files" :key="fpath">{{ fpath }} <span class="text-[10px] opacity-60">({{ content.length }} bytes)</span></li></ul></dd>
@@ -1231,6 +1262,7 @@ import { usePlanStore } from '../stores/planStore'
 import FormDialog from '../components/shared/FormDialog.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
+import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
@@ -1358,6 +1390,10 @@ const maxDurationInput = ref<number | undefined>(undefined)
 
 const retryPolicyOpen = ref(false)
 const retryPolicySaving = ref(false)
+// FAR-649: coverage mode. 'all' = All errors (the default; saves the policy
+// WITHOUT the `on` key, which the runtime resolves to all retryable events).
+// 'specific' = granular (saves the explicit event list).
+const retryPolicyMode = ref<'all' | 'specific'>('all')
 const retryPolicyEvents = ref<string[]>([])
 const retryPolicyMaxRetries = ref(0)
 const retryPolicyDelaySeconds = ref(45)
@@ -1388,20 +1424,48 @@ type PipelineRetryPolicySource = {
 }
 
 const retryPolicyNoRetriesWarning = computed(() => {
-  if (retryPolicyEvents.value.length > 0 && (Number(retryPolicyMaxRetries.value) || 0) === 0) {
+  const max = Number(retryPolicyMaxRetries.value) || 0
+  // FAR-649: granular with ZERO events selected = retry effectively off —
+  // the zero-selected warning (save is blocked too, no silent inert policy).
+  if (retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0) {
+    return t('views.PipelineEditorView.retry_policy_warning_no_events')
+  }
+  if (max === 0) {
     return t('views.PipelineEditorView.retry_policy_warning_no_max')
   }
   return null
 })
 
+// FAR-649: granular with zero events selected cannot save (disable-save with
+// warning, never a silent inert policy). All-errors mode is never blocked by
+// this (a 0 budget there is the explicit "retry nothing" state).
+const retryPolicySaveBlocked = computed(
+  () => retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0,
+)
+
 function syncRetryPolicyFromPipeline() {
   const rp = (pipeline.value as PipelineRetryPolicySource | null)?.retry_policy
   retryPolicyScheduleWarning.value = null
   if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
-    const events = Array.isArray(rp.on)
-      ? rp.on.filter((e: string): e is string => retryPolicyEventValues.includes(e))
-      : []
-    retryPolicyEvents.value = events
+    // FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
+    // missing or null) renders as All-errors — the runtime resolves it to all
+    // retryable events. An explicit `on` list renders as granular (a stored
+    // empty list is retry-effectively-off, surfaced by the zero-selected
+    // warning). A malformed non-list `on` fail-closes at runtime (no retry),
+    // so it renders as granular with nothing selected to surface the warning.
+    const stored = rp as Record<string, unknown>
+    if (stored.on === undefined || stored.on === null) {
+      retryPolicyMode.value = 'all'
+      retryPolicyEvents.value = []
+    } else if (Array.isArray(stored.on)) {
+      retryPolicyMode.value = 'specific'
+      retryPolicyEvents.value = (stored.on as unknown[]).filter((e): e is string =>
+        retryPolicyEventValues.includes(e as string),
+      )
+    } else {
+      retryPolicyMode.value = 'specific'
+      retryPolicyEvents.value = []
+    }
     const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
     retryPolicyMaxRetries.value = Math.min(5, Math.max(0, max))
 
@@ -1446,6 +1510,7 @@ function syncRetryPolicyFromPipeline() {
       retryPolicyScheduleWarning.value = t('views.PipelineEditorView.retry_policy_schedule_clamped_warning')
     }
   } else {
+    retryPolicyMode.value = 'all'
     retryPolicyEvents.value = []
     retryPolicyMaxRetries.value = 0
     retryPolicyLegacyBackoff.value = undefined
@@ -1495,19 +1560,31 @@ async function saveRetryPolicy() {
   if (retryPolicySaving.value) return
   retryPolicyError.value = null
   const max = Math.min(5, Math.max(0, Number(retryPolicyMaxRetries.value) || 0))
+  const granular = retryPolicyMode.value === 'specific'
   const on = [...retryPolicyEvents.value]
-  if (on.length > 0 && max === 0) {
+  if (granular && on.length === 0) {
+    // FAR-649: no silent inert policy — granular with zero events selected is
+    // blocked (the save button is disabled; this guard also blocks direct
+    // invocation). Switch to All-errors or select at least one event.
+    retryPolicyError.value = t('views.PipelineEditorView.retry_policy_warning_no_events')
+    return
+  }
+  if (granular && on.length > 0 && max === 0) {
     retryPolicyError.value = t('views.PipelineEditorView.retry_policy_warning_no_max')
     return
   }
   // FAR-525: rebuild the policy from a whitelist so no API-set key is silently
   // destroyed: the legacy node-level `backoff` is preserved explicitly, and the
   // run-level `backoff_schedule` is rebuilt from the panel inputs (never spread
-  // from the stored object, so junk inner keys are dropped). An empty `on`
-  // stays inert at runtime but must still carry the schedule through.
+  // from the stored object, so junk inner keys are dropped). FAR-649: All-errors
+  // mode saves WITHOUT the `on` key (absent `on` = all retryable events at
+  // runtime); granular mode saves the explicit event list.
   const delay = Math.min(300, Math.max(1, Math.round(Number(retryPolicyDelaySeconds.value) || 0)))
   const multiplier = Math.min(10, Math.max(1, Number(retryPolicyMultiplier.value) || 0))
-  const policy: RetryPolicy = { on, max_retries: max }
+  const policy: RetryPolicy = { max_retries: max }
+  if (granular) {
+    policy.on = on
+  }
   if (retryPolicyLegacyBackoff.value !== undefined) {
     policy.backoff = retryPolicyLegacyBackoff.value
   }

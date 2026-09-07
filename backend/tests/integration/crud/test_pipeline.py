@@ -498,8 +498,8 @@ async def test_pipeline_check_constraints_reject_non_positive_values(
     with pytest.raises(IntegrityError):
         await rls_session.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_duration_seconds, "
-                "run_context_defaults) VALUES (:id, :oid, :name, :aid, 0, '{}'::json)"
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, "
+                "max_duration_seconds) VALUES (:id, :oid, :name, :aid, '{}'::jsonb, 0)"
             ),
             {"id": str(pid), "oid": str(test_org), "name": "bad-duration", "aid": str(test_user)},
         )

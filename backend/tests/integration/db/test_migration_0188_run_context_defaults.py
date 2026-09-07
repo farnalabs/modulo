@@ -71,5 +71,5 @@ async def test_run_context_defaults_server_default_allows_raw_insert_without_col
         {"id": str(ok_pid)},
     )
     assert not stored.scalar_one()
-
-    # The fixture rolls the session back, removing the row and leaving the schema at head.
+    # Discard the positive-insert row; the fixture's final rollback is a no-op.
+    await rls_session.rollback()

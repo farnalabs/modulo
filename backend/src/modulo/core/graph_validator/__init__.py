@@ -2796,9 +2796,23 @@ class GraphValidator:
     def check_retry_policy(policy: Any, result: ValidationResult) -> None:
         """Validate a pipeline's ``retry_policy``, emitting an ERROR when malformed.
 
-        Valid shape: ``{"on": ["stall"|"timeout"|"failure"|"eval_failed"], "max_retries": 0-5}``.
+        Valid shape: ``{"on": ["stall"|"timeout"|"failure"|"eval_failed"],
+        "max_retries": 0-5}`` (``on`` may be absent or explicitly ``null``).
         ``None``/``{}`` (no policy) passes. A malformed policy would silently
         disable retries at run time, so it is surfaced as a hard error here.
+
+        FAR-649: an ABSENT ``on`` key — missing, or explicitly ``null`` (both
+        treated identically here) — with a valid ``max_retries`` > 0 is VALID
+        and means ALL retryable events (the intuitive default — this shape was
+        previously write-valid but runtime-inert): absent or explicitly null
+        ``on`` = all retryable events (the default); an explicit list is
+        granular; an explicit empty list (``on: []``) means "no retry".
+        Accepting explicit ``null`` here (previously RETRY_POLICY_MALFORMED —
+        a 422 at the write sites and, via the run-start gate re-running this
+        same check, a GraphValidationError) makes the validator coherent with
+        the shipped OpenAPI text and un-bricks legacy/hand-edited null rows,
+        which now run with all-events retries (a deliberate fix, not a
+        regression). A non-list non-null ``on`` (string, int) stays malformed.
         """
         if policy is None or policy == {}:
             return
@@ -2809,8 +2823,13 @@ class GraphValidator:
                 "{'on': ['stall','timeout','failure','eval_failed'], 'max_retries': 0-5}",
             )
             return
-        events = policy.get("on", [])
-        if not isinstance(events, list) or any(not isinstance(e, str) for e in events):
+        events = policy.get("on")
+        if events is None:
+            # FAR-649 (qa gate): an explicit `null` `on` is treated the SAME as
+            # an absent key — valid, all-events semantics. Skip the list-shape
+            # checks entirely (there is no list to validate).
+            pass
+        elif not isinstance(events, list) or any(not isinstance(e, str) for e in events):
             result.error(
                 "RETRY_POLICY_MALFORMED",
                 "retry_policy 'on' must be a list of strings from ['stall','timeout','failure','eval_failed']",
