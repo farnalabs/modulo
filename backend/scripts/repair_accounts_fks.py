@@ -58,52 +58,66 @@ import sys
 
 import asyncpg  # type: ignore[import-untyped]  # asyncpg does not publish a py.typed marker
 
+# FK on-delete action shared by the nullable-account FKs below: deleting the
+# account nulls the child column rather than cascading.
+ON_DELETE_SET_NULL = "SET NULL"
+
 # (child_table, constraint_name, fk_column, on_delete_action) -- snapshot of
 # the 46 FKs referencing public.accounts (prod, 2026-08-04). Keep in sync with
 # the migrations when the schema changes.
 ACCOUNTS_FKS: tuple[tuple[str, str, str, str], ...] = (
     ("agents", "agents_account_id_fkey", "account_id", "RESTRICT"),
-    ("audit_events", "audit_events_account_id_fkey", "account_id", "SET NULL"),
+    ("audit_events", "audit_events_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
     ("chat_sessions", "chat_sessions_user_id_fkey", "user_id", "CASCADE"),
     ("composite_templates", "composite_templates_account_id_fkey", "account_id", "RESTRICT"),
     ("connector_instances", "connector_instances_account_id_fkey", "account_id", "RESTRICT"),
     ("dismissals", "dismissals_dismissed_by_user_id_fkey", "dismissed_by_user_id", "CASCADE"),
     ("environment_profiles", "environment_profiles_account_id_fkey", "account_id", "RESTRICT"),
-    ("error_groups", "error_groups_assigned_to_fkey", "assigned_to", "SET NULL"),
+    ("error_groups", "error_groups_assigned_to_fkey", "assigned_to", ON_DELETE_SET_NULL),
     ("eval_definitions", "eval_definitions_account_id_fkey", "account_id", "RESTRICT"),
     ("feedback_records", "feedback_records_account_id_fkey", "account_id", "RESTRICT"),
-    ("hitl_claims", "hitl_claims_account_id_fkey", "account_id", "SET NULL"),
-    ("library_primitives", "library_primitives_account_id_fkey", "account_id", "SET NULL"),
+    ("hitl_claims", "hitl_claims_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
+    ("library_primitives", "library_primitives_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
     ("lifecycle_maps", "lifecycle_maps_account_id_fkey", "account_id", "RESTRICT"),
     ("mcp_setup_tokens", "fk_mcp_setup_tokens_created_by", "created_by", "RESTRICT"),
     ("model_backends", "model_backends_account_id_fkey", "account_id", "RESTRICT"),
     ("node_categories", "node_categories_account_id_fkey", "account_id", "RESTRICT"),
-    ("node_observations", "node_observations_account_id_fkey", "account_id", "SET NULL"),
+    ("node_observations", "node_observations_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
     ("nodes", "nodes_account_id_fkey", "account_id", "RESTRICT"),
-    ("notification_endpoints", "notification_endpoints_account_id_fkey", "account_id", "SET NULL"),
-    ("notifications", "notifications_target_user_id_fkey", "target_user_id", "SET NULL"),
+    ("notification_endpoints", "notification_endpoints_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
+    ("notifications", "notifications_target_user_id_fkey", "target_user_id", ON_DELETE_SET_NULL),
     ("oauth_authorization_codes", "fk_oauth_authorization_codes_account_id", "account_id", "CASCADE"),
-    ("oauth_clients", "oauth_clients_account_id_fkey", "account_id", "SET NULL"),
-    ("oauth_consent_states", "oauth_consent_states_account_id_fkey", "account_id", "SET NULL"),
+    ("oauth_clients", "oauth_clients_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
+    ("oauth_consent_states", "oauth_consent_states_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
     ("org_api_keys", "org_api_keys_account_id_fkey", "account_id", "RESTRICT"),
     ("org_memberships", "org_memberships_account_id_fkey", "account_id", "CASCADE"),
     ("parameter_schemas", "parameter_schemas_account_id_fkey", "account_id", "RESTRICT"),
     ("parameter_sets", "parameter_sets_account_id_fkey", "account_id", "RESTRICT"),
     ("pipeline_folders", "pipeline_folders_account_id_fkey", "account_id", "RESTRICT"),
     ("pipelines", "pipelines_account_id_fkey", "account_id", "RESTRICT"),
-    ("pipeline_snapshots", "pipeline_snapshots_account_id_fkey", "account_id", "SET NULL"),
-    ("primitive_abuse_reports", "primitive_abuse_reports_reviewer_account_id_fkey", "reviewer_account_id", "SET NULL"),
-    ("primitive_abuse_reports", "primitive_abuse_reports_reporter_account_id_fkey", "reporter_account_id", "SET NULL"),
-    ("primitive_ratings", "primitive_ratings_account_id_fkey", "account_id", "SET NULL"),
+    ("pipeline_snapshots", "pipeline_snapshots_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
+    (
+        "primitive_abuse_reports",
+        "primitive_abuse_reports_reviewer_account_id_fkey",
+        "reviewer_account_id",
+        ON_DELETE_SET_NULL,
+    ),
+    (
+        "primitive_abuse_reports",
+        "primitive_abuse_reports_reporter_account_id_fkey",
+        "reporter_account_id",
+        ON_DELETE_SET_NULL,
+    ),
+    ("primitive_ratings", "primitive_ratings_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
     ("remy_context_sources", "remy_context_sources_user_id_fkey", "user_id", "CASCADE"),
     ("remy_skills", "remy_skills_user_id_fkey", "user_id", "CASCADE"),
-    ("runs", "runs_account_id_fkey", "account_id", "SET NULL"),
+    ("runs", "runs_account_id_fkey", "account_id", ON_DELETE_SET_NULL),
     ("saved_views", "saved_views_account_id_fkey", "account_id", "RESTRICT"),
-    ("scheduled_reports", "scheduled_reports_created_by_fkey", "created_by", "SET NULL"),
+    ("scheduled_reports", "scheduled_reports_created_by_fkey", "created_by", ON_DELETE_SET_NULL),
     ("schemas", "schemas_account_id_fkey", "account_id", "RESTRICT"),
     ("schema_versions", "schema_versions_account_id_fkey", "account_id", "RESTRICT"),
     ("stages", "stages_account_id_fkey", "account_id", "RESTRICT"),
-    ("system_config", "fk_system_config_updated_by", "updated_by", "SET NULL"),
+    ("system_config", "fk_system_config_updated_by", "updated_by", ON_DELETE_SET_NULL),
     ("team_memberships", "team_memberships_account_id_fkey", "account_id", "CASCADE"),
     ("teams", "teams_account_id_fkey", "account_id", "RESTRICT"),
     ("token_families", "token_families_account_id_fkey", "account_id", "CASCADE"),
@@ -124,7 +138,7 @@ _ACCOUNTS_GRANTS: tuple[str, ...] = (
     'ALTER TABLE public.accounts OWNER TO "modulo_migrate"',
 )
 
-_ON_DELETE_ACTIONS = frozenset({"RESTRICT", "CASCADE", "SET NULL", "NO ACTION", "SET DEFAULT"})
+_ON_DELETE_ACTIONS = frozenset({"RESTRICT", "CASCADE", ON_DELETE_SET_NULL, "NO ACTION", "SET DEFAULT"})
 
 
 def _resolve_db_url(raw: str) -> str:
