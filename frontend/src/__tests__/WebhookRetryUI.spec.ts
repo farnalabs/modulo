@@ -165,6 +165,30 @@ describe('WebhookRetryUI', () => {
       expect(wrapper.text()).toContain('Cannot retry: missing endpoint ID')
     })
 
+    it('shows error message when retry returns an API error', async () => {
+      mockPost.mockResolvedValueOnce({ data: null, error: { status: 500, detail: 'boom' } })
+      const wrapper = mountWithItems([failedEntry])
+      await flushPromises()
+      await nextTick()
+      const btn = wrapper.find('[data-testid="admin-notification-log-retry"]')
+      await btn.trigger('click')
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.text()).toContain('Retry failed:')
+    })
+
+    it('shows error message when retry request throws', async () => {
+      mockPost.mockRejectedValueOnce(new Error('network down'))
+      const wrapper = mountWithItems([failedEntry])
+      await flushPromises()
+      await nextTick()
+      const btn = wrapper.find('[data-testid="admin-notification-log-retry"]')
+      await btn.trigger('click')
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.text()).toContain('Retry request failed:')
+    })
+
     it('disables button while retrying', async () => {
       mockPost.mockImplementationOnce(() => new Promise(() => {}))
       const wrapper = mountWithItems([failedEntry])
@@ -266,6 +290,30 @@ describe('WebhookRetryUI', () => {
       const msg = wrapper.find('[data-testid="admin-notification-log-retry-success"]')
       expect(msg.exists()).toBe(true)
       expect(msg.text()).toContain('2 deliveries retried with 1 error')
+    })
+
+    it('shows error message when retry-all returns an API error', async () => {
+      mockPost.mockResolvedValueOnce({ data: null, error: { status: 500, detail: 'boom' } })
+      const wrapper = mountWithItems([failedEntry])
+      await flushPromises()
+      await nextTick()
+      const btn = wrapper.find('[data-testid="admin-notification-log-retry-all"]')
+      await btn.trigger('click')
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.text()).toContain('Retry all failed:')
+    })
+
+    it('shows error message when retry-all request throws', async () => {
+      mockPost.mockRejectedValueOnce(new Error('network down'))
+      const wrapper = mountWithItems([failedEntry])
+      await flushPromises()
+      await nextTick()
+      const btn = wrapper.find('[data-testid="admin-notification-log-retry-all"]')
+      await btn.trigger('click')
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.text()).toContain('Retry all request failed:')
     })
   })
 })
