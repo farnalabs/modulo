@@ -3989,6 +3989,8 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         ``"stall"``: terminal-fail — never re-dispatch a nodeless zombie for a
         trigger it does not cover.
     """
+    from modulo.core.pipeline_engine.retry_compensation import RETRY_MAX_ATTEMPTS_BOUND
+
     retry_policy = getattr(row, "retry_policy", None)
     if isinstance(retry_policy, dict):
         # FAR-649: an ABSENT `on` (key missing or null) with a VALID budget > 0
@@ -3998,7 +4000,11 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         # event-content branches below (budget-default repair for an empty
         # `on`, matching the no-policy treatment of unusable data).
         raw_budget = retry_policy.get("max_retries", 0)
-        budget_is_valid_int = isinstance(raw_budget, int) and not isinstance(raw_budget, bool) and 1 <= raw_budget <= 5
+        budget_is_valid_int = (
+            isinstance(raw_budget, int)
+            and not isinstance(raw_budget, bool)
+            and 1 <= raw_budget <= RETRY_MAX_ATTEMPTS_BOUND
+        )
         if budget_is_valid_int and ("on" not in retry_policy or retry_policy["on"] is None):
             return bool(row.claim_count <= raw_budget)
         on = retry_policy.get("on") or []
