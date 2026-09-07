@@ -35,7 +35,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any
+from typing import Any, NoReturn
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
@@ -4325,6 +4325,151 @@ class PipelineExecutor:
                 )
         return error_code, error_detail
 
+    async def _read_retry_attempt_state(
+        self,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> tuple[int, str | None]:
+        """Read the run's attempt count + current claim token for the retry check."""
+        node_attempt_count = 0
+        current_claim_token: str | None = None
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            current_run = await get_run(session, run_id)
+            if current_run is not None:
+                node_attempt_count = int(current_run.node_attempt_count or 0)
+                current_claim_token = current_run.claim_token
+        return node_attempt_count, current_claim_token
+
+    async def _probe_script_lease(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> bool:
+        """FAR-296 Phase 2 stale-claim lease probe before ANY requeue of script mode.
+
+        Proves no script process could still be alive. A probe evaluation
+        error fails CLOSED (returns False, logged) — an unknown side-effect
+        state must never be re-dispatched.
+        """
+        try:
+            ok = await _script_lease_probe_ok(self._session_factory, str(run_id), org_id, self._claim_token)
+        except Exception:
+            _log.warning(
+                "script.lease_probe_eval_failed_retry_policy",
+                extra={"run_id": str(run_id)},
+                exc_info=True,
+            )
+            ok = False
+        if not ok:
+            _log.warning(
+                "script.lease_probe.blocked_retry_policy",
+                extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
+            )
+        return ok
+
+    def _publish_script_side_effect_unknown(self, broker: RunEventBroker, run_id: uuid.UUID) -> str:
+        """FAR-296 Phase 2: terminal-fail with ``script.side_effect_unknown``.
+
+        The lease probe blocked the requeue — a script process may have run
+        with unknown side-effect state. Terminal-fail (never retried) so the
+        run reaches a needs-human state instead of silently looping or being
+        left stuck in ``running``.
+        """
+        _log.warning(
+            "script.lease_probe.terminal_side_effect_unknown",
+            extra={"run_id": str(run_id), "error_code": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN},
+        )
+        error_detail_value = _sanitize_detail(
+            "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
+            "not retried — needs human review.",
+            limit=5000,
+        )
+        broker.publish("run_failed", {"error": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, "detail": error_detail_value})
+        return "side_effect_unknown"
+
+    async def _redispatch_after_policy(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        node_attempt_count: int,
+        retry_budget: int,
+        pipeline_retry_policy: dict[str, Any],
+        model_backend_hub: ModelBackendHub | None,
+        connector_hub: Any | None,
+    ) -> NoReturn:
+        """Fenced pending-reset + backoff + ``RunRetryPolicyError`` re-dispatch.
+
+        Control never returns: the re-raise propagates out of execute() BEFORE
+        the post-stream try/finally, so the run's cleanup runs HERE (clear the
+        cancellation check + hubs and close the run's broker so the retry
+        re-entry gets a fresh broker and no stale contextvars).
+        """
+        from modulo.settings import get_settings
+
+        # FAR-525: resolve the run-level backoff_schedule EARLY — the pure
+        # computation MUST happen BEFORE the fenced pending-reset so a
+        # resolver defect can never strand a run that was already reset.
+        # Total fail-open: an invalid/out-of-bounds schedule falls back to
+        # the hardcoded default schedule (45s x 2.0, cap 300, jitter).
+        schedule_present, schedule_delay, schedule_multiplier, schedule_reason = rc.resolve_backoff_schedule(
+            pipeline_retry_policy
+        )
+        if schedule_reason is not None:
+            _log.warning(
+                "pipeline.retry_policy_schedule_fail_open",
+                extra={
+                    "run_id": str(run_id),
+                    "reason": schedule_reason,
+                    "offending": rc.sanitize_retry_policy_snippet(
+                        pipeline_retry_policy.get("backoff_schedule")
+                        if isinstance(pipeline_retry_policy, dict)
+                        else None
+                    ),
+                },
+            )
+        schedule_state = "absent" if not schedule_present else ("failopen" if schedule_reason else "valid")
+        # ONE jitter draw: the delay is computed ONCE here and threaded to
+        # BOTH the log line and the asyncio.sleep below (no re-resolution).
+        effective_sleep = _retry_backoff_seconds(
+            node_attempt_count, base=schedule_delay, multiplier=schedule_multiplier
+        )
+        _log.warning(
+            "pipeline.retry_policy",
+            extra={
+                "run_id": str(run_id),
+                "status": final_status,
+                "error_code": error_code,
+                "attempt": node_attempt_count,
+                "budget": retry_budget,
+                # FAR-525 observability: the effective post-cap post-jitter
+                # sleep, the schedule state, and the SAQ delay component.
+                "sleep_seconds": round(effective_sleep, 3),
+                "schedule_state": schedule_state,
+                "saq_retry_delay": int(getattr(get_settings(), "saq_retry_delay", 0)),
+            },
+        )
+        reset_rowcount = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+        await self._cleanup_run_resources(
+            model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
+        )
+        # FAR-136 Gap 1: jittered, capped backoff before the re-dispatch.
+        # Without it a policy-triggered retry re-fires back-to-back,
+        # hammering the queue/gateway on a persistent failure. The delay
+        # grows with the attempt count and is bounded by the retry
+        # budget (the loop above only re-dispatches while
+        # node_attempt_count <= retry_budget), so the schedule can never
+        # extend beyond max_retries. `_retry_backoff_seconds` is a pure
+        # function of the attempt number — covered by unit tests.
+        # FAR-525: the delay honours the run-level ``backoff_schedule``
+        # (resolved EARLY above; fail-open to the hardcoded default).
+        if reset_rowcount:
+            # FAR-525 observability: count only CONFIRMED resets — a fence
+            # loss (rowcount 0) means a successor already owns the run.
+            _record_retry_redispatch(reason=final_status, schedule_state=schedule_state, delay_seconds=effective_sleep)
+        await asyncio.sleep(effective_sleep)
+        raise RunRetryPolicyError(final_status, retry_budget)
+
     async def _maybe_retry_after_policy(
         self,
         *,
@@ -4359,15 +4504,7 @@ class PipelineExecutor:
         # narrowing keeps mypy strict-clean without introducing an ``assert``.
         if retry_budget is None:
             return "none"
-        node_attempt_count = 0
-        current_claim_token: str | None = None
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            current_run = await get_run(session, run_id)
-            if current_run is not None:
-                node_attempt_count = int(current_run.node_attempt_count or 0)
-                current_claim_token = current_run.claim_token
+        node_attempt_count, current_claim_token = await self._read_retry_attempt_state(org_id, run_id)
         superseded = (
             self._claim_token is not None
             and current_claim_token is not None
@@ -4384,112 +4521,21 @@ class PipelineExecutor:
         # no script process could still be alive (stale-claim lease probe).
         script_retry_probe_ok = True
         if _graph_has_script_mode(graph_json):
-            try:
-                script_retry_probe_ok = await _script_lease_probe_ok(
-                    self._session_factory, str(run_id), org_id, self._claim_token
-                )
-            except Exception:
-                _log.warning(
-                    "script.lease_probe_eval_failed_retry_policy",
-                    extra={"run_id": str(run_id)},
-                    exc_info=True,
-                )
-                script_retry_probe_ok = False
-            if not script_retry_probe_ok:
-                _log.warning(
-                    "script.lease_probe.blocked_retry_policy",
-                    extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
-                )
+            script_retry_probe_ok = await self._probe_script_lease(run_id=run_id, org_id=org_id)
         if _can_retry_after_policy(node_attempt_count, retry_budget, superseded, script_retry_probe_ok):
-            from modulo.settings import get_settings
-
-            # FAR-525: resolve the run-level backoff_schedule EARLY — the pure
-            # computation MUST happen BEFORE the fenced pending-reset so a
-            # resolver defect can never strand a run that was already reset.
-            # Total fail-open: an invalid/out-of-bounds schedule falls back to
-            # the hardcoded default schedule (45s x 2.0, cap 300, jitter).
-            schedule_present, schedule_delay, schedule_multiplier, schedule_reason = rc.resolve_backoff_schedule(
-                pipeline_retry_policy
+            await self._redispatch_after_policy(
+                run_id=run_id,
+                org_id=org_id,
+                final_status=final_status,
+                error_code=error_code,
+                node_attempt_count=node_attempt_count,
+                retry_budget=retry_budget,
+                pipeline_retry_policy=pipeline_retry_policy,
+                model_backend_hub=model_backend_hub,
+                connector_hub=connector_hub,
             )
-            if schedule_reason is not None:
-                _log.warning(
-                    "pipeline.retry_policy_schedule_fail_open",
-                    extra={
-                        "run_id": str(run_id),
-                        "reason": schedule_reason,
-                        "offending": rc.sanitize_retry_policy_snippet(
-                            pipeline_retry_policy.get("backoff_schedule")
-                            if isinstance(pipeline_retry_policy, dict)
-                            else None
-                        ),
-                    },
-                )
-            schedule_state = "absent" if not schedule_present else ("failopen" if schedule_reason else "valid")
-            # ONE jitter draw: the delay is computed ONCE here and threaded to
-            # BOTH the log line and the asyncio.sleep below (no re-resolution).
-            effective_sleep = _retry_backoff_seconds(
-                node_attempt_count, base=schedule_delay, multiplier=schedule_multiplier
-            )
-            _log.warning(
-                "pipeline.retry_policy",
-                extra={
-                    "run_id": str(run_id),
-                    "status": final_status,
-                    "error_code": error_code,
-                    "attempt": node_attempt_count,
-                    "budget": retry_budget,
-                    # FAR-525 observability: the effective post-cap post-jitter
-                    # sleep, the schedule state, and the SAQ delay component.
-                    "sleep_seconds": round(effective_sleep, 3),
-                    "schedule_state": schedule_state,
-                    "saq_retry_delay": int(getattr(get_settings(), "saq_retry_delay", 0)),
-                },
-            )
-            reset_rowcount = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
-            # The re-raise below propagates out of execute() BEFORE the
-            # post-stream try/finally, so run its cleanup here: clear the
-            # cancellation check + hubs and close the run's broker so the
-            # retry re-entry gets a fresh broker and no stale contextvars.
-            await self._cleanup_run_resources(
-                model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
-            )
-            # FAR-136 Gap 1: jittered, capped backoff before the re-dispatch.
-            # Without it a policy-triggered retry re-fires back-to-back,
-            # hammering the queue/gateway on a persistent failure. The delay
-            # grows with the attempt count and is bounded by the retry
-            # budget (the loop above only re-dispatches while
-            # node_attempt_count <= retry_budget), so the schedule can never
-            # extend beyond max_retries. `_retry_backoff_seconds` is a pure
-            # function of the attempt number — covered by unit tests.
-            # FAR-525: the delay honours the run-level ``backoff_schedule``
-            # (resolved EARLY above; fail-open to the hardcoded default).
-            if reset_rowcount:
-                # FAR-525 observability: count only CONFIRMED resets — a fence
-                # loss (rowcount 0) means a successor already owns the run.
-                _record_retry_redispatch(
-                    reason=final_status, schedule_state=schedule_state, delay_seconds=effective_sleep
-                )
-            await asyncio.sleep(effective_sleep)
-            raise RunRetryPolicyError(final_status, retry_budget)
         if not script_retry_probe_ok:
-            # FAR-296 Phase 2: the lease probe blocked the requeue — a
-            # script process may have run with unknown side-effect state.
-            # Terminal-fail with ``script.side_effect_unknown`` (never
-            # retried) so the run reaches a needs-human state instead of
-            # silently looping or being left stuck in ``running``.
-            _log.warning(
-                "script.lease_probe.terminal_side_effect_unknown",
-                extra={"run_id": str(run_id), "error_code": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN},
-            )
-            error_detail_value = _sanitize_detail(
-                "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
-                "not retried — needs human review.",
-                limit=5000,
-            )
-            broker.publish(
-                "run_failed", {"error": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, "detail": error_detail_value}
-            )
-            return "side_effect_unknown"
+            return self._publish_script_side_effect_unknown(broker, run_id)
         return "none"
 
     async def _run_post_stream_tail(
