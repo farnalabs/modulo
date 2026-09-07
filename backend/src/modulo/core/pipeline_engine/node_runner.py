@@ -3851,6 +3851,194 @@ def _guard_connector_secret_output(result: Any, node_id: str) -> dict[str, Any] 
     return None
 
 
+def _state_run_id(state: dict[str, Any]) -> str:
+    """The run id carried in state, as a string ("" when absent)."""
+    return str(state.get("_run_id", "") or "")
+
+
+def _conformance_instance_ids(instance_id: uuid.UUID | None) -> list[uuid.UUID]:
+    """Singleton list for the conformance gate, or an empty list."""
+    return [instance_id] if instance_id is not None else []
+
+
+async def _connector_write_gate_phase(
+    state: dict[str, Any],
+    session_factory: Callable[..., Any] | None,
+    node_id: str,
+    connector: Any,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+) -> tuple[dict[str, Any] | None, bool]:
+    """FAR-458 / FAR-531 pre-write phase for a connector WRITE.
+
+    Only a WRITE is side-effecting; a query never double-submits. The gate
+    reads the run's persisted idempotency key + markers, and suppresses a
+    CONFIRMED-delivered duplicate (matching key + ``delivery_done``) in EVERY
+    mode, and additionally suppresses an AMBIGUOUS (matching key, no
+    ``delivery_done``, no ``no_delivery_confirmed``) write when the
+    connector's ``on_unknown`` policy is ``fail_closed``. Fail-open in every
+    direction — no run id / session factory / persisted key, the killswitch,
+    a DB error, or ``on_unknown="off"`` all proceed to send the write
+    normally; default ``fail_open`` lets an unconfirmed write fire.
+
+    FAR-531 intent marker (write-before / stamp-after): persisted AFTER the
+    gate proceeds and BEFORE the upstream write fires, in the SAME slot the
+    delivery stamp updates. A crash/timeout between here and the stamp leaves
+    the marker in-flight — the ambiguous state fail_closed suppresses on a
+    later attempt (the headline fix; fail_open re-fires, unchanged). Guarded
+    by the killswitch + ``on_unknown != off`` — pointless when the gate can
+    never suppress. Best-effort: an intent-write failure never fails the node.
+
+    Returns ``(suppression_envelope, intent_active)``; a non-None envelope
+    means the write must NOT fire (duplicate suppressed) and is returned from
+    the node directly.
+    """
+    run_id = _state_run_id(state)
+    on_unknown_mode = _connector_on_unknown(connector, resource)
+    gate_result = await _connector_write_gate(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=state.get("_org_id"),
+        node_id=node_id,
+        resource=resource,
+        filters=filters,
+        data=data,
+        on_unknown=on_unknown_mode,
+    )
+    if gate_result is not None:
+        return gate_result, False
+    intent_active = _connector_intent_marker_enabled(on_unknown_mode)
+    if intent_active:
+        # QA Fix 5: the intent persist (incl. its payload-hash computation)
+        # must never fail the node BEFORE the write — any failure degrades to
+        # "no marker" and the write still fires.
+        try:
+            await _persist_connector_write_intent(
+                session_factory,
+                run_id=run_id,
+                org_id_raw=state.get("_org_id"),
+                node_id=node_id,
+                resource=resource,
+                filters=filters,
+                data=data,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "connector.connector_write_intent_persist_failed",
+                extra={"run_id": run_id, "node_id": node_id},
+            )
+    return None, intent_active
+
+
+async def _connector_write_outcome_for_state(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    result: Any = None,
+    intent_active: bool = False,
+    exception: BaseException | None = None,
+) -> None:
+    """Resolve the connector-write marker for THIS node's run context (FAR-458)."""
+    await _resolve_connector_write_outcome(
+        session_factory,
+        connector=connector,
+        run_id=_state_run_id(state),
+        org_id_raw=state.get("_org_id"),
+        node_id=node_id,
+        resource=resource,
+        filters=filters,
+        data=data,
+        result=result,
+        intent_active=intent_active,
+        exception=exception,
+    )
+
+
+async def _connector_action_failure(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    intent_active: bool,
+    exc: Exception,
+) -> dict[str, Any]:
+    """QA Fix 1: classify a RAISED connector error, then return the failure envelope.
+
+    The raised connector error is classified by the SINGLE authority
+    (``_resolve_connector_write_outcome``) as AMBIGUOUS — a raise cannot tell
+    whether the write landed (read-timeout after dispatch vs pre-dispatch
+    validation failure), so the in-flight intent marker is left AS-IS:
+    fail_closed suppresses the re-fire ("possible silent miss"), fail_open
+    re-fires (unchanged). No no-delivery evidence is persisted for a raise.
+    """
+    await _connector_write_outcome_for_state(
+        session_factory,
+        connector,
+        state,
+        node_id,
+        resource,
+        filters,
+        data,
+        result=None,
+        intent_active=intent_active,
+        exception=exc,
+    )
+    return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
+
+
+async def _connector_success_phase(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    op: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    intent_active: bool,
+    result: Any,
+) -> dict[str, Any] | None:
+    """FAR-458 / FAR-531 AC6 post-action phase: stamp a confirmed write, guard output.
+
+    A successful connector WRITE genuinely reached upstream — stamp the
+    delivery marker (bounded, fail-open) so a re-run reusing the SAME
+    persisted key suppresses the duplicate. The full write identity
+    (resource + filters + data) is folded into the derived key on BOTH the
+    gate and the stamp so a target/content edit derives a fresh key. Whether a
+    non-raising result actually delivered is the connector's call
+    (``write_reported_failure`` hook) — a reported failure is a DEFINITE
+    no-delivery (the intent marker resolves to ``no_delivery_confirmed``),
+    never a delivery stamp.
+
+    Then enforces the FAR-418 secret-output hygiene guard. Returns the block
+    envelope on violation, else ``None``.
+    """
+    if op == "write":
+        await _connector_write_outcome_for_state(
+            session_factory,
+            connector,
+            state,
+            node_id,
+            resource,
+            filters,
+            data,
+            result=result,
+            intent_active=intent_active,
+        )
+    return _guard_connector_secret_output(result, node_id)
+
+
 def make_connector_fn(
     node_def: dict[str, Any],
     *,
@@ -3918,7 +4106,7 @@ def make_connector_fn(
         await _run_conformance_gate(
             state,
             node_id=node_id,
-            connector_instance_ids=[instance_id] if instance_id is not None else [],
+            connector_instance_ids=_conformance_instance_ids(instance_id),
         )
 
         scope_block = _enforce_connector_scope(binding, node_id, connector_type, allowed_connectors)
@@ -3936,115 +4124,46 @@ def make_connector_fn(
         resource, filters, data = _connector_inputs(binding, state)
 
         # FAR-458 connector-write UNKNOWN-recovery: the read-before-write dedupe
-        # decision point. Only a WRITE is side-effecting; a query never double-
-        # submits. The gate reads the run's persisted idempotency key + markers,
-        # and suppresses a CONFIRMED-delivered duplicate (matching key +
-        # ``delivery_done``) in EVERY mode, and additionally suppresses an
-        # AMBIGUOUS (matching key, no ``delivery_done``, no
-        # ``no_delivery_confirmed``) write when the connector's ``on_unknown``
-        # policy is ``fail_closed``. Fail-open in every direction — no run id /
-        # session factory / persisted key, the killswitch, a DB error, or
-        # ``on_unknown="off"`` all proceed to send the write normally; default
-        # ``fail_open`` lets an unconfirmed write fire.
+        # decision point (gate + FAR-531 intent marker), extracted to
+        # ``_connector_write_gate_phase``. Only a WRITE is side-effecting.
+        suppress_envelope: dict[str, Any] | None = None
         intent_active = False
         if op == "write":
-            run_id = str(state.get("_run_id", "") or "")
-            on_unknown_mode = _connector_on_unknown(connector, resource)
-            gate_result = await _connector_write_gate(
-                session_factory,
-                run_id=run_id,
-                org_id_raw=state.get("_org_id"),
-                node_id=node_id,
-                resource=resource,
-                filters=filters,
-                data=data,
-                on_unknown=on_unknown_mode,
+            suppress_envelope, intent_active = await _connector_write_gate_phase(
+                state, session_factory, node_id, connector, resource, filters, data
             )
-            if gate_result is not None:
-                return gate_result
-            # FAR-531 intent marker (write-before / stamp-after): persisted
-            # AFTER the gate proceeds and BEFORE the upstream write fires, in
-            # the SAME slot the delivery stamp updates. A crash/timeout between
-            # here and the stamp leaves the marker in-flight — the ambiguous
-            # state fail_closed suppresses on a later attempt (the headline
-            # fix; fail_open re-fires, unchanged). Guarded by the killswitch +
-            # ``on_unknown != off`` — pointless when the gate can never
-            # suppress. Best-effort: an intent-write failure never fails the
-            # node.
-            intent_active = _connector_intent_marker_enabled(on_unknown_mode)
-            if intent_active:
-                # QA Fix 5: the intent persist (incl. its payload-hash
-                # computation) must never fail the node BEFORE the write — any
-                # failure degrades to "no marker" and the write still fires.
-                try:
-                    await _persist_connector_write_intent(
-                        session_factory,
-                        run_id=run_id,
-                        org_id_raw=state.get("_org_id"),
-                        node_id=node_id,
-                        resource=resource,
-                        filters=filters,
-                        data=data,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception(
-                        "connector.connector_write_intent_persist_failed",
-                        extra={"run_id": run_id, "node_id": node_id},
-                    )
+        if suppress_envelope is not None:
+            return suppress_envelope
 
         try:
             result = await _run_connector_action(connector, op, resource, filters, data)
         except Exception as exc:
-            # QA Fix 1: the raised connector error is classified by the SINGLE
-            # authority (``_resolve_connector_write_outcome``) as AMBIGUOUS — a
-            # raise cannot tell whether the write landed (read-timeout after
-            # dispatch vs pre-dispatch validation failure), so the in-flight
-            # intent marker is left AS-IS: fail_closed suppresses the re-fire
-            # ("possible silent miss"), fail_open re-fires (unchanged). No
-            # no-delivery evidence is persisted for a raise.
-            await _resolve_connector_write_outcome(
+            return await _connector_action_failure(
                 session_factory,
-                connector=connector,
-                run_id=str(state.get("_run_id", "") or ""),
-                org_id_raw=state.get("_org_id"),
-                node_id=node_id,
-                resource=resource,
-                filters=filters,
-                data=data,
-                result=None,
-                intent_active=intent_active,
-                exception=exc,
-            )
-            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
-
-        # FAR-458: a successful connector WRITE genuinely reached upstream —
-        # stamp the delivery marker (bounded, fail-open) so a re-run reusing the
-        # SAME persisted key suppresses the duplicate. The full write identity
-        # (resource + filters + data) is folded into the derived key on BOTH the
-        # gate and the stamp so a target/content edit derives a fresh key.
-        # FAR-531 AC6: whether a non-raising result actually delivered is the
-        # connector's call (``write_reported_failure`` hook) — a reported
-        # failure is a DEFINITE no-delivery (the intent marker resolves to
-        # ``no_delivery_confirmed``), never a delivery stamp.
-        if op == "write":
-            await _resolve_connector_write_outcome(
-                session_factory,
-                connector=connector,
-                run_id=str(state.get("_run_id", "") or ""),
-                org_id_raw=state.get("_org_id"),
-                node_id=node_id,
-                resource=resource,
-                filters=filters,
-                data=data,
-                result=result,
-                intent_active=intent_active,
+                connector,
+                state,
+                node_id,
+                resource,
+                filters,
+                data,
+                intent_active,
+                exc,
             )
 
-        scope_block = _guard_connector_secret_output(result, node_id)
-        if scope_block is not None:
-            return scope_block
+        success_block = await _connector_success_phase(
+            session_factory,
+            connector,
+            state,
+            node_id,
+            op,
+            resource,
+            filters,
+            data,
+            intent_active,
+            result,
+        )
+        if success_block is not None:
+            return success_block
 
         return {
             "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
