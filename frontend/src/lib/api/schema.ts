@@ -2678,6 +2678,13 @@ export interface paths {
         /**
          * Claim Gate
          * @description Atomically claim a HITL gate. Returns a claim_token for approve/reject.
+         *
+         *     The post-claim run-status flip to ``claimed`` is fenced to runs still in
+         *     ``awaiting_human`` (``transition_run`` with ``allowed_from``): if the run
+         *     goes terminal between the claim's status pre-check and the flip, the fenced
+         *     miss no-ops — the terminal status is preserved, the gate drops out of the
+         *     pending list on the next refresh, and the claim token simply expires
+         *     unused.
          */
         post: operations["claim_gate_api_v1_runs__run_id__hitl__gate_id__claim_post"];
         delete?: never;
@@ -2823,7 +2830,12 @@ export interface paths {
         };
         /**
          * List Org Pending Gates
-         * @description List all pending HITL gates across the organisation.
+         * @description List pending HITL gates across the organisation.
+         *
+         *     Gates on terminal runs are excluded (they are data rot, not pending work):
+         *     the manager joins ``runs`` and keeps only undecided gates whose run is in
+         *     ``awaiting_human``, ``claimed``, or ``hitl_parked`` status (FAR-612,
+         *     FAR-604).
          */
         get: operations["list_org_pending_gates_api_v1_hitl_pending_get"];
         put?: never;

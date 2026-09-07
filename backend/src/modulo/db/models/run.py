@@ -88,6 +88,17 @@ PIPELINE_CAPACITY_STATUSES: frozenset[str] = frozenset(
     ACTIVE_RUN_STATUSES - {"pending", AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS}
 )
 
+# Run statuses under which an undecided HITL gate is actionable work (FAR-612).
+# ``awaiting_human`` gates are claimable now; ``claimed`` gates are held by a
+# reviewer and legitimately render as claimed. ``hitl_parked`` is a non-terminal
+# parked state (FAR-604 D2) whose gate stays OPEN AND CLAIMABLE — park != decide,
+# so a parked run's gate remains undecided work until a decision un-parks it via
+# ``dispatcher_reconcile``. Every other status makes an undecided gate data rot
+# (e.g. orphaned rows left by the since-fixed auto-approve bug), so both
+# pending-gate surfaces (REST org-wide queue and MCP ``list_pending_hitl``) filter
+# to this exact set.
+HITL_ACTIONABLE_RUN_STATUSES: frozenset[str] = frozenset({"awaiting_human", "claimed", HITL_PARKED_STATUS})
+
 # In-flight run statuses for the ``ongoing`` trigger type (FAR-158). An ongoing
 # trigger keeps its pipeline topped up to ``max_concurrent_runs`` runs whose
 # status is in this set. pending = "queued" (the user-facing semantics — a
