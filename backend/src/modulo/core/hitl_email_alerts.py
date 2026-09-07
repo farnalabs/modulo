@@ -63,6 +63,9 @@ from modulo.db.crud.account import PREFERENCE_KEY  # noqa: E402  (db layer owns 
 
 _SUBJECT_TEMPLATE = "HITL gate awaiting review - {gate_label}"
 
+# Log prefix for every swallowed dispatch failure (warning level).
+_DISPATCH_FAILED_LOG = "hitl_email.dispatch_failed: %s"
+
 # The claim permission whose holders are eligible recipients, and the org
 # roles that satisfy it (role level >= the permission's minimum role, per the
 # same registry/hierarchy the REST ``require_permission`` gate consults).
@@ -189,11 +192,11 @@ async def send_hitl_email_alerts(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                _log.warning("hitl_email.dispatch_failed: %s", exc, extra=extra)
+                _log.warning(_DISPATCH_FAILED_LOG, exc, extra=extra)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _log.warning("hitl_email.dispatch_failed: %s", exc, extra=extra)
+        _log.warning(_DISPATCH_FAILED_LOG, exc, extra=extra)
 
 
 async def dispatch_hitl_email_alerts(
@@ -220,7 +223,7 @@ async def dispatch_hitl_email_alerts(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _log.warning("hitl_email.dispatch_failed: %s", exc, extra=extra)
+        _log.warning(_DISPATCH_FAILED_LOG, exc, extra=extra)
         return
     await send_hitl_email_alerts(recipients, run_id, gate_label)
 
@@ -260,7 +263,7 @@ async def _run_hitl_email_dispatch(
         raise
     except Exception as exc:
         _log.warning(
-            "hitl_email.dispatch_failed: %s",
+            _DISPATCH_FAILED_LOG,
             exc,
             extra={
                 "org_id": str(org_id),

@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -380,7 +380,7 @@ async def set_org_spend_limit(
             await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
             org.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
             await session.flush()
     except ProgrammingError:
@@ -573,7 +573,7 @@ async def update_cost_controls(
             await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
             _apply_cost_control_updates(org, req)
 
@@ -711,7 +711,7 @@ async def set_spend_ceiling(
             await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
             # ``exclude_unset`` distinguishes "field not sent" (leave unchanged,
             # so a partial update never clobbers the other ceiling) from an
             # explicit ``null`` (clear this ceiling back to unlimited). An empty

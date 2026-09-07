@@ -61,6 +61,8 @@ _log = logging.getLogger(__name__)
 
 DEMO_ORG_NAME = "Demo"
 
+DEMO_PIPELINE_NAME = "Demo Governance Pipeline"
+
 # SQLAlchemy DBAPIError/StatementError str() and repr() embed the failed
 # statement's bind parameters as a "[parameters: (...)]" section. The demo
 # account INSERT binds include the demo user's bcrypt password_hash, so every
@@ -396,14 +398,14 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
     its natural key (see _seed_demo_schemas).
     """
     pipeline_result = await session.execute(
-        select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == "Demo Governance Pipeline")
+        select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == DEMO_PIPELINE_NAME)
     )
     pipeline = pipeline_result.scalar_one_or_none()
     if pipeline is None:
         nodes = _demo_pipeline_graph()
         pipeline = Pipeline(
             organisation_id=org.id,
-            name="Demo Governance Pipeline",
+            name=DEMO_PIPELINE_NAME,
             description="Demo sample pipeline — read-only demo data (FAR-535).",
             account_id=account.id,
             visibility="org",
@@ -418,7 +420,7 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
                 await session.flush()
         except IntegrityError:
             pipeline_result = await session.execute(
-                select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == "Demo Governance Pipeline")
+                select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == DEMO_PIPELINE_NAME)
             )
             pipeline = pipeline_result.scalar_one_or_none()
             if pipeline is None:

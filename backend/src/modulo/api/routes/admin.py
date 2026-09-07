@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import modulo.db.crud.account as account_crud
 from modulo.api.constants import (
     MSG_FEATURE_NOT_AVAILABLE,
+    MSG_ORGANISATION_NOT_FOUND,
     MSG_RESOURCE_ALREADY_EXISTS,
     MSG_THIS_FEATURE_NOT_AVAILABLE,
     MSG_UNEXPECTED_ERROR,
@@ -107,7 +108,6 @@ _CODE_ROUTES_ADMIN = "routes.admin"
 _MSG_TEAM_NAME_ALREADY_EXISTS = "A team with this name already exists in your organisation"
 _MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable. Please try again."
 _CODE_ADMIN_ADMIN_CREATE_TEAM = "admin.admin_create_team"
-_MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
 _MSG_USER_NOT_FOUND = "User not found"
 _MSG_USER_NOT_FOUND_IN_ORGANISATION = "User not found in this organisation"
 _MSG_BREAK_GLASS_ACCOUNTS_CANNOT = "Break-glass accounts cannot be managed via the admin API"
@@ -906,7 +906,7 @@ async def admin_get_org(
             if org is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_ORGANISATION_NOT_FOUND,
+                    detail=MSG_ORGANISATION_NOT_FOUND,
                 )
     except IntegrityError:
         logger.exception("admin_get_org IntegrityError", extra={"org_id": str(current_user.organisation_id)})
@@ -945,7 +945,7 @@ async def admin_update_org(
             if org is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_ORGANISATION_NOT_FOUND,
+                    detail=MSG_ORGANISATION_NOT_FOUND,
                 )
 
             updates: dict[str, object] = {}
@@ -2314,7 +2314,7 @@ async def admin_billing_overview(
             if org is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_ORGANISATION_NOT_FOUND,
+                    detail=MSG_ORGANISATION_NOT_FOUND,
                 )
 
             org_id = current_user.organisation_id
@@ -3556,7 +3556,7 @@ async def admin_update_retention(
             )
             org = result.scalar_one_or_none()
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
             _update_org_setting(org, "retention_days", req.retention_days)
             await session.flush()
     except asyncio.CancelledError:
@@ -3675,7 +3675,7 @@ async def admin_update_sandbox_concurrency(
             )
             org = result.scalar_one_or_none()
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
             settings = dict(org.settings_json) if org.settings_json else {}
             settings["sandbox_concurrency_limit"] = req.sandbox_concurrency_limit
             org.settings_json = settings
@@ -3839,7 +3839,7 @@ async def admin_update_run_concurrency(
             await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
             settings = dict(org.settings_json) if org.settings_json else {}
             settings["run_concurrency_limit"] = req.run_concurrency_limit
             org.settings_json = settings

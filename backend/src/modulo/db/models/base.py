@@ -1,8 +1,14 @@
 import uuid
 from datetime import datetime
+from typing import Final
 
 from sqlalchemy import DateTime, ForeignKey, Uuid, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+# SQL referential action shared by every nullable FK across the model layer:
+# when the referenced row is deleted, the column is nulled rather than cascading.
+# Single home so model modules import it instead of re-declaring the literal.
+ONDELETE_SET_NULL: Final[str] = "SET NULL"
 
 
 class Base(DeclarativeBase):
