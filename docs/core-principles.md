@@ -37,7 +37,7 @@ Deterministic data-safety checks also run on the **input** side: before a run's 
 ## 5. Humans in the loop where it matters
 HITL gates are atomic (claim, decide, record); `human_only` gates cannot be approved by the agent under review; team-scoped claims. Autonomy is earned, not assumed.
 **Why:** governance is permissions plus gates plus audit; automation never gets a blank check.
-**Where:** `modulo/core/hitl_manager/`, BDD `backend/tests/bdd/features/hitl/human_only_gate.feature`.
+**Where:** `modulo/core/hitl_manager/`, BDD `backend/tests/bdd/features/hitl/{claim,approve,reject}.feature`.
 **Benefit:** you can scale agents without surrendering control.
 
 ## 6. Secret hygiene
