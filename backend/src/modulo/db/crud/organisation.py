@@ -92,6 +92,18 @@ async def delete_organisation(
     org = await get_organisation(session, org_id)
     if org is None:
         return False
+    # FAR-592 (D6): agent_runner_bindings model_backends FK is ON DELETE
+    # RESTRICT; the agent cascade removes most rows, but a binding row that
+    # still references a live org backend would abort the hard org delete.
+    # Delete the binding rows explicitly FIRST so teardown is unconditional.
+    import uuid as _uuid
+
+    from modulo.db.crud.agent_runner_binding import delete_org_binding_rows
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
+
+    await set_rls_org(session, _uuid.UUID(str(org_id)))
+    await set_rls_execution_context(session)
+    await delete_org_binding_rows(session, org_id)
     await session.delete(org)
     await session.flush()
     return True

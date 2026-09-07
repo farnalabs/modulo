@@ -610,16 +610,7 @@ class RestConnector(ConnectorBase):
         self._config = config or {}
         self._creds = creds or {}
         self._transport = transport
-        # ``timeout_seconds`` config overrides the ``timeout`` constructor arg
-        # (which the composition root uses to inject a global default); the
-        # connector never uses a config default that would surprise the hub.
-        raw_timeout = self._config.get("timeout_seconds", timeout)
-        self._timeout = float(raw_timeout or _DEFAULT_TIMEOUT)
-        # ``verify_tls`` config (default True) controls whether the pooled client
-        # verifies the server certificate. A self-hosted operator pointing at a
-        # private registry with a self-signed cert may disable it — the SSRF
-        # guard still blocks loopback/metadata targets regardless.
-        self._verify_tls = bool(verify_tls if verify_tls is not None else self._config.get("verify_tls", True))
+        self._timeout, self._verify_tls = self._resolve_transport_options(timeout, verify_tls)
         # Single injected clock (FAR-413): ``clock`` is used for latency
         # instrumentation and any reset-delay math; ``sleep`` is the retry
         # backoff sleeper. Tests inject fake ``clock``/``sleep`` so timing tests
@@ -644,22 +635,54 @@ class RestConnector(ConnectorBase):
         self._max_connections = int(max_connections)
         self._max_keepalive = int(max_keepalive_connections)
         self._cached_client: httpx.AsyncClient | None = None
+        self._validate_on_unknown_configs()
+        self._init_fanout_config()
+        self._init_rate_limit_config(redis_client, tenant_id)
 
-        # FAR-458: the connector-write idempotency gate's ``on_unknown`` mode,
-        # validated at config-parse time. The top-level value is the default for
-        # every op (re-applied per-op via the ``_operation_spec`` merge); a
-        # per-resource ``operations[<resource>]`` override is also validated here
-        # (fail fast on a config error), and the effective value is resolved
-        # per-op via :meth:`on_unknown_for` / ``_operation_spec``.
+    def _resolve_transport_options(self, timeout: float, verify_tls: bool | None) -> tuple[float, bool]:
+        """Resolve the request timeout and TLS-verification flag from config.
+
+        ``timeout_seconds`` config overrides the ``timeout`` constructor arg
+        (which the composition root uses to inject a global default); the
+        connector never uses a config default that would surprise the hub.
+        ``verify_tls`` config (default True) controls whether the pooled client
+        verifies the server certificate. A self-hosted operator pointing at a
+        private registry with a self-signed cert may disable it — the SSRF
+        guard still blocks loopback/metadata targets regardless.
+        """
+        raw_timeout = self._config.get("timeout_seconds", timeout)
+        resolved_timeout = float(raw_timeout or _DEFAULT_TIMEOUT)
+        resolved_verify_tls = bool(verify_tls if verify_tls is not None else self._config.get("verify_tls", True))
+        return resolved_timeout, resolved_verify_tls
+
+    def _validate_on_unknown_configs(self) -> None:
+        """Validate the FAR-458 write-idempotency ``on_unknown`` config at parse time.
+
+        The top-level value is the default for every op (re-applied per-op via
+        the ``_operation_spec`` merge); a per-resource ``operations[<resource>]``
+        override is also validated here (fail fast on a config error), and the
+        effective value is resolved per-op via :meth:`on_unknown_for` /
+        ``_operation_spec``.
+        """
         _normalise_on_unknown(self._config.get("on_unknown"))
-        _ops = self._config.get("operations")
-        if isinstance(_ops, dict):
-            for _spec in _ops.values():
-                if isinstance(_spec, dict) and "on_unknown" in _spec:
-                    _normalise_on_unknown(_spec["on_unknown"])
+        ops = self._config.get("operations")
+        if isinstance(ops, dict):
+            for op_spec in ops.values():
+                if isinstance(op_spec, dict) and "on_unknown" in op_spec:
+                    _normalise_on_unknown(op_spec["on_unknown"])
 
-        # FAR-411 fan-out / iterator config. ``fan_out`` is optional; when absent
-        # or disabled the connector behaves exactly as before (single call).
+    def _init_fanout_config(self) -> None:
+        """Parse the FAR-411 fan-out / iterator config.
+
+        ``fan_out`` is optional; when absent or disabled the connector behaves
+        exactly as before (single call). ``max_retries`` is counted in RETRIES
+        (attempts = max_retries + 1): the connector's own ``_send`` loop runs
+        ``_MAX_RETRIES`` (3) attempts, so the default of ``_MAX_RETRIES - 1``
+        retries keeps the vendor reconciliation (``attempts = max_retries + 1``)
+        in lockstep. The configured value is clamped to a sane upper bound
+        (honoured, not verbatim) because backoff/Retry-After waits make a huge
+        budget pathological within a finite per-item timeout.
+        """
         raw_fanout = self._config.get("fan_out")
         self._fanout_config: dict[str, Any] = raw_fanout if isinstance(raw_fanout, dict) else {}
         self._fanout_enabled = bool(self._fanout_config.get("enabled") or self._fanout_config.get("items_path"))
@@ -673,25 +696,21 @@ class RestConnector(ConnectorBase):
             )
         self._max_fanout_cardinality = raw_cardinality
         self._fanout_per_item_timeout = float(self._fanout_config.get("per_item_timeout", self._timeout))
-        # max_retries (retries, not attempts); attempts = max_retries + 1. The
-        # connector's own ``_send`` loop runs ``_MAX_RETRIES`` (3) attempts, so
-        # the default of ``_MAX_RETRIES - 1`` retries keeps the vendor
-        # reconciliation (``attempts = max_retries + 1``) in lockstep. The
-        # configured value is clamped to a sane upper bound (honoured, not
-        # verbatim) because backoff/Retry-After waits make a huge budget
-        # pathological within a finite per-item timeout.
         self._fanout_max_retries = int(self._fanout_config.get("max_retries", _MAX_RETRIES - 1))
         if self._fanout_max_retries < 0:
             raise ValueError("REST fan_out.max_retries must be >= 0")
         self._fanout_max_retries = min(self._fanout_max_retries, _MAX_SANE_RETRIES)
 
-        # FAR-411 per-destination token bucket (single outbound enforcement point).
-        # FAR-439: shared Redis-backed limiter when a ``redis_client`` is supplied
-        # at the composition root (multi-worker/fleet enforces ONE budget per
-        # <tenant, destination>); otherwise the same per-process local bucket is
-        # used for single-worker dev, where no fleet-wide budget exists to
-        # multiply. A Redis outage on a configured limiter does NOT degrade to the
-        # local bucket — the limiter stays fail-closed (see _rate_bucket).
+    def _init_rate_limit_config(self, redis_client: Any, tenant_id: str | None) -> None:
+        """Parse the FAR-411 per-destination token-bucket config (one enforcement point).
+
+        FAR-439: shared Redis-backed limiter when a ``redis_client`` is supplied
+        at the composition root (multi-worker/fleet enforces ONE budget per
+        <tenant, destination>); otherwise the same per-process local bucket is
+        used for single-worker dev, where no fleet-wide budget exists to
+        multiply. A Redis outage on a configured limiter does NOT degrade to the
+        local bucket — the limiter stays fail-closed (see _rate_bucket).
+        """
         raw_rate = self._config.get("rate_limit")
         self._rate_limit_config: dict[str, Any] = raw_rate if isinstance(raw_rate, dict) else {}
         self._rate_buckets: dict[str, TokenBucket] = {}
@@ -905,64 +924,104 @@ class RestConnector(ConnectorBase):
             )
         return self._rate_limiter
 
-    async def _acquire_rate_token(self, destination: str, *, deadline_seconds: float | None = None) -> None:
-        """Consume one token from the per-destination bucket (fail-closed).
+    def _rate_limit_params(self) -> tuple[float, int] | None:
+        """Resolve + validate the configured rate (requests/s) and burst.
 
-        Each call waits until a token is available (refill is continuous).
-        *deadline_seconds*, when provided, bounds the wait: if a token cannot be
-        supplied within that window a :class:`RESTRateLimitTimeoutError` is
-        raised rather than spinning forever (the per-item fan-out budget). The
-        deadline is enforced DURING each ``consume`` (via ``asyncio.wait_for``),
-        not just between hops, so a slow Redis round-trip cannot overshoot it. A
-        missing/disabled ``rate_limit`` config is a no-op. When a ``redis_client``
-        is supplied the shared Redis bucket is authoritative (one budget across
-        workers) and FAILS CLOSED on a Redis outage — it never mints from an
-        uncounted per-process bucket; otherwise the per-process connector-local
-        bucket is used.
-
-        Constraint (intentional fail-loud): ``requests_per_second`` must be ``> 0``
-        and ``burst`` must be ``>= 1``. A ``0``/negative rate or ``< 1`` burst is a
-        hard ``ValueError`` at request time — it deliberately replaces the previous
-        silent "disable the limiter" behaviour (an undocumented ``rate_limit:
-        requests_per_second: 0`` is not a supported way to turn limiting off; omit
-        the ``rate_limit`` block to disable it). Configure these at save time and
-        treat a ``ValueError`` here as a misconfiguration, not a runtime surprise.
+        Returns ``None`` when no ``rate_limit`` config is present (limiting is
+        off). Constraint (intentional fail-loud): ``requests_per_second`` must be
+        ``> 0`` and ``burst`` must be ``>= 1``. A ``0``/negative rate or ``< 1``
+        burst is a hard ``ValueError`` at request time — it deliberately replaces
+        the previous silent "disable the limiter" behaviour (an undocumented
+        ``rate_limit: requests_per_second: 0`` is not a supported way to turn
+        limiting off; omit the ``rate_limit`` block to disable it). Configure
+        these at save time and treat a ``ValueError`` here as a misconfiguration,
+        not a runtime surprise.
         """
         rate = self._rate_limit_config.get("requests_per_second")
         if rate is None:
-            return
+            return None
         requests_per_second = float(rate)
         if requests_per_second <= 0:
             raise ValueError(f"REST rate_limit.requests_per_second must be > 0 (got {requests_per_second})")
         burst = int(self._rate_limit_config.get("burst", max(1, int(requests_per_second))))
         if burst < 1:
             raise ValueError(f"REST rate_limit.burst must be >= 1 (got {burst})")
+        return requests_per_second, burst
 
-        limiter = self._get_rate_limiter(requests_per_second, burst)
-        deadline = time.monotonic() + max(0.0, deadline_seconds) if deadline_seconds is not None else None
-        # consume() returns False when the budget is exhausted (consuming nothing);
-        # wait out a bounded refill hop and retry. The deadline bounds EACH Redis
-        # hop via wait_for, so a Redis socket timeout cannot overshoot the deadline.
+    async def _consume_one_hop(
+        self,
+        limiter: PerDestinationRateLimiter,
+        destination: str,
+        requests_per_second: float,
+        deadline: float | None,
+        deadline_seconds: float | None,
+    ) -> tuple[float, bool]:
+        """One bounded consume attempt; returns ``(refill_hop_seconds, acquired)``.
+
+        When a *deadline* is set the wait is enforced DURING each ``consume``
+        (via ``asyncio.wait_for``), not just between hops, so a slow Redis
+        round-trip cannot overshoot it; an exhausted deadline raises
+        :class:`RESTRateLimitTimeoutError`.
+        """
+        if deadline is None:
+            ok = await limiter.consume(destination)
+            return min(1.0 / requests_per_second, 1.0), ok
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            raise RESTRateLimitTimeoutError(
+                f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
+            )
+        try:
+            ok = await asyncio.wait_for(limiter.consume(destination), timeout=remaining)
+        except TimeoutError as exc:
+            raise RESTRateLimitTimeoutError(
+                f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
+            ) from exc
+        return min(1.0 / requests_per_second, 1.0, remaining), ok
+
+    async def _wait_for_rate_token(
+        self,
+        limiter: PerDestinationRateLimiter,
+        destination: str,
+        requests_per_second: float,
+        deadline: float | None,
+        deadline_seconds: float | None,
+    ) -> None:
+        """Wait until a token is available (refill is continuous), bounded by the deadline.
+
+        ``consume()`` returns False when the budget is exhausted (consuming
+        nothing); wait out a bounded refill hop and retry. The deadline bounds
+        EACH Redis hop via wait_for (see :meth:`_consume_one_hop`), so a Redis
+        socket timeout cannot overshoot the deadline.
+        """
         while True:
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0.0:
-                    raise RESTRateLimitTimeoutError(
-                        f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
-                    )
-                try:
-                    ok = await asyncio.wait_for(limiter.consume(destination), timeout=remaining)
-                except TimeoutError as exc:
-                    raise RESTRateLimitTimeoutError(
-                        f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
-                    ) from exc
-                hop = min(1.0 / requests_per_second, 1.0, remaining)
-            else:
-                ok = await limiter.consume(destination)
-                hop = min(1.0 / requests_per_second, 1.0)
-            if ok:
+            hop, acquired = await self._consume_one_hop(
+                limiter, destination, requests_per_second, deadline, deadline_seconds
+            )
+            if acquired:
                 return
             await asyncio.sleep(hop)
+
+    async def _acquire_rate_token(self, destination: str, *, deadline_seconds: float | None = None) -> None:
+        """Consume one token from the per-destination bucket (fail-closed).
+
+        Each call waits until a token is available (refill is continuous).
+        *deadline_seconds*, when provided, bounds the wait: if a token cannot be
+        supplied within that window a :class:`RESTRateLimitTimeoutError` is
+        raised rather than spinning forever (the per-item fan-out budget). A
+        missing/disabled ``rate_limit`` config is a no-op. When a ``redis_client``
+        is supplied the shared Redis bucket is authoritative (one budget across
+        workers) and FAILS CLOSED on a Redis outage — it never mints from an
+        uncounted per-process bucket; otherwise the per-process connector-local
+        bucket is used.
+        """
+        params = self._rate_limit_params()
+        if params is None:
+            return
+        requests_per_second, burst = params
+        limiter = self._get_rate_limiter(requests_per_second, burst)
+        deadline = time.monotonic() + max(0.0, deadline_seconds) if deadline_seconds is not None else None
+        await self._wait_for_rate_token(limiter, destination, requests_per_second, deadline, deadline_seconds)
 
     async def _fanout_write(
         self,
@@ -1140,28 +1199,43 @@ class RestConnector(ConnectorBase):
         if mode == "bearer":
             auth["token"] = str(creds["token"])
         elif mode == "basic":
-            auth["username"] = str(creds["username"])
-            auth["password"] = str(creds["password"])
+            auth.update(RestConnector._basic_auth_fields(creds))
         else:  # api_key — auth identity pre-validated by validate_credentials
-            auth["api_key"] = str(creds["api_key"])
-            auth_in = creds.get("in")
-            auth["in"] = str(auth_in if auth_in is not None else "header").lower()
-            if auth["in"] == "header":
-                header_name = creds.get("header_name")
-                # An empty/whitespace-only name is UNSET, not a name: an empty
-                # header name makes every request fail (httpx rejects it), so
-                # coerce it to None and fall back to the default instead.
-                if isinstance(header_name, str) and not header_name.strip():
-                    header_name = None
-                auth["header_name"] = str(header_name) if header_name is not None else "X-API-Key"
-            else:
-                query_param_name = creds.get("query_param_name")
-                # Same unset treatment for the query parameter name: an empty
-                # value must never be used verbatim as a query key.
-                if isinstance(query_param_name, str) and not query_param_name.strip():
-                    query_param_name = None
-                auth["query_param_name"] = str(query_param_name) if query_param_name is not None else "api_key"
+            auth.update(RestConnector._api_key_auth_fields(creds))
         return auth
+
+    @staticmethod
+    def _basic_auth_fields(creds: dict[str, Any]) -> dict[str, Any]:
+        """The basic-auth fields (identity already validated by ``validate_credentials``)."""
+        return {"username": str(creds["username"]), "password": str(creds["password"])}
+
+    @staticmethod
+    def _api_key_auth_fields(creds: dict[str, Any]) -> dict[str, Any]:
+        """The api_key-auth fields (identity already validated by ``validate_credentials``)."""
+        auth_in = creds.get("in")
+        target = str(auth_in if auth_in is not None else "header").lower()
+        fields: dict[str, Any] = {"api_key": str(creds["api_key"]), "in": target}
+        if target == "header":
+            fields["header_name"] = RestConnector._credential_name(creds.get("header_name"), "X-API-Key")
+        else:
+            fields["query_param_name"] = RestConnector._credential_name(creds.get("query_param_name"), "api_key")
+        return fields
+
+    @staticmethod
+    def _credential_name(raw: Any, default: str) -> str:
+        """The header/query name for an api_key credential, with the unset default.
+
+        An empty/whitespace-only name is UNSET, not a name: an empty header name
+        makes every request fail (httpx rejects it), so it falls back to the
+        default instead of being used verbatim. The same unset treatment applies
+        to the query parameter name — an empty value must never be used verbatim
+        as a query key.
+        """
+        if raw is None:
+            return default
+        if isinstance(raw, str) and not raw.strip():
+            return default
+        return str(raw)
 
     @property
     def _protected_header_names(self) -> frozenset[str]:
@@ -1202,33 +1276,54 @@ class RestConnector(ConnectorBase):
         Values shorter than 4 chars are ignored — redacting a 1-2 char secret
         would mangle every occurrence of the common substring it appears in.
         """
+        secrets = self._raw_credential_values()
+        auth = self._auth
+        mode = auth.get("mode")
+        if mode == "basic":
+            self._collect_basic_secrets(auth, secrets)
+        elif mode == "bearer":
+            self._collect_bearer_secrets(auth, secrets)
+        elif mode == "api_key":
+            self._collect_api_key_secrets(auth, secrets)
+        # Deduplicate while preserving order (raw value + derived forms can overlap).
+        return list(dict.fromkeys(secrets))
+
+    def _raw_credential_values(self) -> list[str]:
+        """The raw credential-field values (>= 4 chars) from the creds dict."""
         secrets: list[str] = []
         for key in ("username", "token", "api_key", "password", "secret"):
             value = self._creds.get(key)
             if isinstance(value, str) and len(value) >= 4:
                 secrets.append(value)
-        auth = self._auth
-        mode = auth.get("mode")
-        if mode == "basic":
-            raw = f"{auth.get('username', '')}:{auth.get('password', '')}"
-            b64 = base64.b64encode(raw.encode()).decode()
-            if len(raw) >= 4:
-                secrets.append(raw)
-            if len(b64) >= 4:
-                secrets.extend([b64, f"Basic {b64}"])
-        elif mode == "bearer":
-            token = auth.get("token")
-            if token:
-                secrets.append(f"Bearer {token}")
-        elif mode == "api_key":
-            api_key = auth.get("api_key")
-            if api_key:
-                if auth.get("in") == "header":
-                    secrets.append(f"{auth.get('header_name', '')}: {api_key}")
-                else:
-                    secrets.append(f"{auth.get('query_param_name', '')}={api_key}")
-        # Deduplicate while preserving order (raw value + derived forms can overlap).
-        return list(dict.fromkeys(secrets))
+        return secrets
+
+    @staticmethod
+    def _collect_basic_secrets(auth: dict[str, Any], secrets: list[str]) -> None:
+        """Append the basic-auth wire forms (raw pair, base64 blob, header value)."""
+        raw = f"{auth.get('username', '')}:{auth.get('password', '')}"
+        b64 = base64.b64encode(raw.encode()).decode()
+        if len(raw) >= 4:
+            secrets.append(raw)
+        if len(b64) >= 4:
+            secrets.extend([b64, f"Basic {b64}"])
+
+    @staticmethod
+    def _collect_bearer_secrets(auth: dict[str, Any], secrets: list[str]) -> None:
+        """Append the bearer wire form (the full ``Bearer <token>`` header value)."""
+        token = auth.get("token")
+        if token:
+            secrets.append(f"Bearer {token}")
+
+    @staticmethod
+    def _collect_api_key_secrets(auth: dict[str, Any], secrets: list[str]) -> None:
+        """Append the api_key wire form (``<header>: <key>`` or ``<param>=<key>``)."""
+        api_key = auth.get("api_key")
+        if not api_key:
+            return
+        if auth.get("in") == "header":
+            secrets.append(f"{auth.get('header_name', '')}: {api_key}")
+        else:
+            secrets.append(f"{auth.get('query_param_name', '')}={api_key}")
 
     def _redact(self, text: str) -> str:
         """Strip credential values from *text* so error detail never echoes secrets.
@@ -1324,6 +1419,58 @@ class RestConnector(ConnectorBase):
 
     # ── Request builder (injection guard) ──────────────────────────────────
 
+    def _rendered_headers(self, spec: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
+        """Render the configured header templates, rejecting injection overrides.
+
+        Header names/values must not contain CR/LF or control chars, and a
+        rendered header may not override an auth/transport (protected) header.
+        """
+        headers: dict[str, str] = {}
+        rendered_headers = self._render(spec["headers"], context)
+        if isinstance(rendered_headers, dict):
+            for name, value in rendered_headers.items():
+                name_str = str(name)
+                value_str = str(value)
+                _reject_control_chars(name_str, what="header name")
+                _reject_control_chars(value_str, what="header value")
+                if name_str.lower() in self._protected_header_names:
+                    raise ValueError(f"REST rendered header overrides protected header {name_str!r}")
+                headers[name_str] = value_str
+        return headers
+
+    def _rendered_params(self, spec: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        """Render the configured query-param templates (None values dropped)."""
+        params: dict[str, Any] = {}
+        rendered_params = self._render(spec["params"], context)
+        if isinstance(rendered_params, dict):
+            for key, value in rendered_params.items():
+                if value is not None:
+                    params[str(key)] = value
+        return params
+
+    def _screen_write_payloads(
+        self,
+        resource: str,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any],
+        body: Any,
+    ) -> None:
+        """Screen the write-surface wire payload with the injection guard.
+
+        The prompt-injection TEXT classifier is a write-side concern (the hub
+        guards write payloads with filter_payload_for_injection). On the READ
+        surface it only adds false positives — a legitimate agent-supplied search
+        term like ``q=import os`` would otherwise throw OutputRejectedError. The
+        read surface relies on the real HTTP controls above (control-char
+        rejection, protected-header set, SSRF/allowlist).
+        """
+        screened: list[str] = [url]
+        screened.extend(headers.values())
+        screened.extend(str(v) for v in params.values())
+        screened.extend(_collect_strings(body))
+        self._security_guard.filter_strings(screened, resource=resource)
+
     async def _build_request(
         self,
         resource: str,
@@ -1346,25 +1493,8 @@ class RestConnector(ConnectorBase):
         default_method = "GET" if surface == "read" else "POST"
         spec = self._operation_spec(resource, default_method=default_method)
 
-        headers: dict[str, str] = {}
-        rendered_headers = self._render(spec["headers"], context)
-        if isinstance(rendered_headers, dict):
-            for name, value in rendered_headers.items():
-                name_str = str(name)
-                value_str = str(value)
-                _reject_control_chars(name_str, what="header name")
-                _reject_control_chars(value_str, what="header value")
-                if name_str.lower() in self._protected_header_names:
-                    raise ValueError(f"REST rendered header overrides protected header {name_str!r}")
-                headers[name_str] = value_str
-
-        params: dict[str, Any] = {}
-        rendered_params = self._render(spec["params"], context)
-        if isinstance(rendered_params, dict):
-            for key, value in rendered_params.items():
-                if value is not None:
-                    params[str(key)] = value
-
+        headers = self._rendered_headers(spec, context)
+        params = self._rendered_params(spec, context)
         body: Any = None
         if spec["body"] is not None:
             body = self._render(spec["body"], context)
@@ -1376,19 +1506,8 @@ class RestConnector(ConnectorBase):
 
         await self._validate_target_url(url)
 
-        # Write-path-style injection screening of everything that reaches the wire.
-        # The prompt-injection TEXT classifier is a write-side concern (the hub
-        # guards write payloads with filter_payload_for_injection). On the READ
-        # surface it only adds false positives — a legitimate agent-supplied search
-        # term like ``q=import os`` would otherwise throw OutputRejectedError. The
-        # read surface relies on the real HTTP controls above (control-char
-        # rejection, protected-header set, SSRF/allowlist).
         if surface == "write":
-            screened: list[str] = [url]
-            screened.extend(headers.values())
-            screened.extend(str(v) for v in params.values())
-            screened.extend(_collect_strings(body))
-            self._security_guard.filter_strings(screened, resource=resource)
+            self._screen_write_payloads(resource, url, headers, params, body)
 
         return RestRequest(
             method=spec["method"],
@@ -1514,6 +1633,45 @@ class RestConnector(ConnectorBase):
             client, request, kwargs, rate_wait_timeout, request_timeout, retries + 1, host, start
         )
 
+    def _retry_status_or_raise(
+        self,
+        exc: RESTStatusError,
+        attempt: int,
+        attempts: int,
+        start: float,
+        host: str,
+        request: RestRequest,
+    ) -> tuple[float, str]:
+        """Handle a status error inside the retry loop: retry, or record + re-raise.
+
+        Returns ``(next_delay, retry_reason)`` when another attempt should run;
+        records the terminal outcome and re-raises otherwise.
+        """
+        retry_reason = "http_429" if exc.status_code == 429 else "http_5xx"
+        if not self._is_status_retryable(exc, attempt, attempts):
+            self._record_operation(start, host, request, rest_metrics.classify_status(exc.status_code))
+            raise exc
+        return self._retry_delay(exc, attempt), retry_reason
+
+    def _retry_connect_or_raise(
+        self,
+        exc: RESTConnectError,
+        attempt: int,
+        attempts: int,
+        start: float,
+        host: str,
+        request: RestRequest,
+    ) -> tuple[float, str]:
+        """Handle a transport error inside the retry loop: retry, or record + re-raise.
+
+        Returns ``(next_delay, retry_reason)`` when another attempt should run;
+        records the terminal outcome and re-raises on the final attempt.
+        """
+        if attempt == attempts - 1:
+            self._record_operation(start, host, request, exc.cause_code)
+            raise exc
+        return self._backoff(attempt), "transport"
+
     async def _send_retryable(
         self,
         client: httpx.AsyncClient,
@@ -1544,18 +1702,10 @@ class RestConnector(ConnectorBase):
             try:
                 resp, body_text = await self._perform_request(client, request, kwargs, request_timeout=request_timeout)
             except RESTStatusError as exc:
-                retry_reason = "http_429" if exc.status_code == 429 else "http_5xx"
-                if not self._is_status_retryable(exc, attempt, attempts):
-                    self._record_operation(start, host, request, rest_metrics.classify_status(exc.status_code))
-                    raise
-                last_delay = self._retry_delay(exc, attempt)
+                last_delay, retry_reason = self._retry_status_or_raise(exc, attempt, attempts, start, host, request)
                 continue
             except RESTConnectError as exc:
-                retry_reason = "transport"
-                if attempt == attempts - 1:
-                    self._record_operation(start, host, request, exc.cause_code)
-                    raise
-                last_delay = self._backoff(attempt)
+                last_delay, retry_reason = self._retry_connect_or_raise(exc, attempt, attempts, start, host, request)
                 continue
             except RESTResponseTooLargeError:
                 self._record_operation(start, host, request, rest_metrics.CAUSE_TOO_LARGE)
@@ -1715,6 +1865,59 @@ class RestConnector(ConnectorBase):
         body = self._redact(body_text[:200])
         return f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body}"
 
+    @staticmethod
+    def _parse_json_body(body_text: str, content_type: str) -> Any:
+        """Parse a JSON body (declared by content type or brace/bracket-prefixed); else ``None``."""
+        if "json" in content_type.lower() or body_text.lstrip().startswith(("{", "[")):
+            try:
+                return json.loads(body_text)
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def _dict_records(self, parsed: dict[str, Any], request: RestRequest) -> tuple[list[dict[str, Any]], str | None]:
+        """Resolve ``records`` (via ``records_path`` JMESPath or the whole object) + cursor."""
+        records_path = request.records_path
+        records = self._records_via_jmespath(parsed, records_path) if records_path else ([parsed] if parsed else [])
+        next_cursor = self._extract_cursor(parsed, request.next_cursor_path)
+        return records, next_cursor
+
+    def _records_via_jmespath(self, parsed: dict[str, Any], records_path: str) -> list[dict[str, Any]]:
+        """Apply the ``records_path`` JMESPath expression to a JSON object response."""
+        source = self._search_jmespath(records_path, parsed)
+        if isinstance(source, list):
+            return safe_records_list(source)
+        if isinstance(source, dict):
+            return [source]
+        return []
+
+    def _resolve_records(
+        self,
+        request: RestRequest,
+        resp: httpx.Response,
+        body_text: str,
+        content_type: str,
+        parsed: Any,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Resolve ``(records, next_cursor)`` from the parsed body per the request config.
+
+        ``passthrough`` forces a single raw-body record wrap even for JSON
+        bodies; a top-level array is taken verbatim; a JSON object uses
+        ``records_path`` (JMESPath) or wraps the whole object; a non-JSON body
+        without a ``records_path`` falls back to the passthrough wrap.
+        """
+        records: list[dict[str, Any]] = []
+        next_cursor: str | None = None
+        if request.passthrough:
+            records = self._passthrough_record(resp, body_text, content_type)
+        elif isinstance(parsed, list):
+            records = safe_records_list(parsed)
+        elif isinstance(parsed, dict):
+            records, next_cursor = self._dict_records(parsed, request)
+        elif parsed is None and not request.records_path:
+            records = self._passthrough_record(resp, body_text, content_type)
+        return records, next_cursor
+
     def _transform(self, request: RestRequest, resp: httpx.Response, body_text: str) -> ConnectorResult:
         """Map a REST response onto :class:`ConnectorResult`.
 
@@ -1726,32 +1929,8 @@ class RestConnector(ConnectorBase):
         JMESPath consumer still gets a uniform list-of-dicts shape.
         """
         content_type = resp.headers.get("content-type", "")
-        parsed: Any = None
-        if "json" in content_type.lower() or body_text.lstrip().startswith(("{", "[")):
-            try:
-                parsed = json.loads(body_text)
-            except json.JSONDecodeError:
-                parsed = None
-
-        records: list[dict[str, Any]] = []
-        next_cursor: str | None = None
-        if request.passthrough:
-            records = self._passthrough_record(resp, body_text, content_type)
-        elif isinstance(parsed, list):
-            records = safe_records_list(parsed)
-        elif isinstance(parsed, dict):
-            records_path = request.records_path
-            if records_path:
-                source = self._search_jmespath(records_path, parsed)
-                if isinstance(source, list):
-                    records = safe_records_list(source)
-                elif isinstance(source, dict):
-                    records = [source]
-            else:
-                records = [parsed] if parsed else []
-            next_cursor = self._extract_cursor(parsed, request.next_cursor_path)
-        elif parsed is None and not request.records_path:
-            records = self._passthrough_record(resp, body_text, content_type)
+        parsed = self._parse_json_body(body_text, content_type)
+        records, next_cursor = self._resolve_records(request, resp, body_text, content_type, parsed)
 
         metadata: dict[str, Any] = {
             "status_code": resp.status_code,

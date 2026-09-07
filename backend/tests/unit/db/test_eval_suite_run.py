@@ -771,22 +771,28 @@ def test_single_migration_head() -> None:
     # chains off 0184.
     chaining_off_0184 = [p for p in revisions if parents[p] == "0184_trigger_events_indexes_and_type_check"]
     assert [_basename(p) for p in chaining_off_0184] == ["0185_error_events_indexes_jsonb.py"]
-    # 0186_pipeline_check_constraints_deleted_by (main's FK/check sweep) chains off 0185.
-    chaining_off_0185 = [p for p in revisions if parents[p] == "0185_error_events_indexes_jsonb"]
-    assert [_basename(p) for p in chaining_off_0185] == ["0186_pipeline_check_constraints_deleted_by.py"]
-    # 0187_pipeline_performance_indexes (main's index sweep) chains off 0186.
+    # 0186_pipeline_check_constraints_deleted_by (improve-database FK/check sweep) chains
+    # off 0185_error_events_indexes_jsonb.
+    chaining_off_0185_error_events = [p for p in revisions if parents[p] == "0185_error_events_indexes_jsonb"]
+    assert [_basename(p) for p in chaining_off_0185_error_events] == ["0186_pipeline_check_constraints_deleted_by.py"]
+    # 0187_pipeline_performance_indexes (improve-database index sweep) chains off 0186.
     chaining_off_0186 = [p for p in revisions if parents[p] == "0186_pipeline_check_constraints_deleted_by"]
     assert [_basename(p) for p in chaining_off_0186] == ["0187_pipeline_performance_indexes.py"]
     # 0188_pipeline_run_context_defaults_default (main's server_default sweep) chains off 0187.
     chaining_off_0187 = [p for p in revisions if parents[p] == "0187_pipeline_performance_indexes"]
     assert [_basename(p) for p in chaining_off_0187] == ["0188_pipeline_run_context_defaults_default.py"]
-    # 0189_bundled_runner_seed_backfill (FAR-590 D4 Bundled Runner seed backfill,
-    # re-parented onto the 0188_pipeline_run_context_defaults_default head) chains off 0188.
+    # 0189_agent_runner_bindings (main's D6 runner-bindings migration) chains off 0188 and is
+    # now the penultimate link.
     chaining_off_0188 = [p for p in revisions if parents[p] == "0188_pipeline_run_context_defaults_default"]
-    assert [_basename(p) for p in chaining_off_0188] == ["0189_bundled_runner_seed_backfill.py"]
-    # Nothing chains off 0189_bundled_runner_seed_backfill -> it is the single head.
-    chaining_off_0189 = [p for p in revisions if parents[p] == "0189_bundled_runner_seed_backfill"]
-    assert chaining_off_0189 == []
+    assert [_basename(p) for p in chaining_off_0188] == ["0189_agent_runner_bindings.py"]
+    # 0190_bundled_runner_seed_backfill (this PR, FAR-590 D4 Bundled Runner seed backfill,
+    # renumbered from 0189 to avoid the collision with main's 0189_agent_runner_bindings and
+    # re-parented onto 0189_agent_runner_bindings) chains off 0189 and is the single head.
+    chaining_off_0189 = [p for p in revisions if parents[p] == "0189_agent_runner_bindings"]
+    assert [_basename(p) for p in chaining_off_0189] == ["0190_bundled_runner_seed_backfill.py"]
+    # Nothing chains off 0190_bundled_runner_seed_backfill -> it is the single head.
+    chaining_off_0190 = [p for p in revisions if parents[p] == "0190_bundled_runner_seed_backfill"]
+    assert chaining_off_0190 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

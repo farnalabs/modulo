@@ -325,6 +325,82 @@ def test_policy_from_pipeline_default_fail_closed_on_missing_vocabulary() -> Non
         assert not policy.events
 
 
+def test_policy_from_pipeline_default_absent_on_inherits_all_node_events() -> None:
+    """FAR-649 (qa gate): an ABSENT ``on`` key with a valid budget inherits at
+    the NODE level with ALL node retry events — coverage-equivalent to the
+    explicit four-event run-level list, which maps to the same node set.
+
+    Prove-the-fix: the pre-gate implementation branched on
+    ``not isinstance(pipeline_retry_policy.get("on"), list)`` and returned the
+    fail-closed policy (max_attempts=1, no events) for this exact input — zero
+    node-level retries. The old decision is reproduced below so this pin
+    demonstrates a real behaviour change, not a vacuous pass.
+    """
+    policy_dict = {"max_retries": 2}
+    policy = rc._policy_from_pipeline_default(policy_dict)
+    assert policy.max_attempts == 3  # max_retries 2 -> ceiling 3 (same as explicit list)
+    assert policy.events == frozenset(rc.RETRY_EVENTS)
+    # The OLD code path: `events_raw = policy.get("on")` is None, so the old
+    # `not isinstance(events_raw, list)` branch fired and fail-closed.
+    old_events_raw = policy_dict.get("on")
+    assert not isinstance(old_events_raw, list)
+    old_style = rc.NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
+    assert policy != old_style
+
+
+def test_policy_from_pipeline_default_null_on_inherits_all_node_events() -> None:
+    """FAR-649 (qa gate): an explicitly-``null`` ``on`` behaves identically to
+    an absent key — all-events node-level inheritance (the write sites now
+    accept null, and legacy/hand-edited null rows must inherit too)."""
+    policy = rc._policy_from_pipeline_default({"on": None, "max_retries": 2})
+    assert policy.max_attempts == 3
+    assert policy.events == frozenset(rc.RETRY_EVENTS)
+
+
+def test_policy_from_pipeline_default_absent_on_matches_explicit_four_event_list() -> None:
+    """Coverage equivalence (FAR-649): the editor's All-errors default shape
+    (absent ``on``) must resolve to the SAME node-level policy as the explicit
+    four-event run-level list at the node level — same attempt ceiling, same
+    node event set, same backoff."""
+    absent = rc._policy_from_pipeline_default({"max_retries": 2, "backoff": 1.5})
+    explicit = rc._policy_from_pipeline_default(
+        {"on": ["stall", "timeout", "failure", "eval_failed"], "max_retries": 2, "backoff": 1.5}
+    )
+    assert absent == explicit
+
+
+def test_policy_from_pipeline_default_explicit_empty_on_stays_no_retry() -> None:
+    """An explicit ``on: []`` stays fail-closed (no node retry) — it must NOT
+    be collapsed into the all-events default."""
+    policy = rc._policy_from_pipeline_default({"on": [], "max_retries": 2})
+    assert policy.max_attempts == 1
+    assert not policy.events
+
+
+def test_policy_from_pipeline_default_zero_budget_stays_no_retry() -> None:
+    """A 0 budget fail-closes even for the absent-`on` all-events shape."""
+    policy = rc._policy_from_pipeline_default({"max_retries": 0})
+    assert policy.max_attempts == 1
+    assert not policy.events
+
+
+def test_policy_from_pipeline_default_out_of_bounds_budget_fails_closed() -> None:
+    """The budget bounds match the executor's (int, non-bool, 1-5): an
+    out-of-bounds budget fail-closes instead of clamping."""
+    for bad in (6, True, "lots", 2.5):
+        policy = rc._policy_from_pipeline_default({"max_retries": bad})
+        assert policy.max_attempts == 1
+        assert not policy.events
+
+
+def test_policy_from_pipeline_default_malformed_non_list_on_fails_closed() -> None:
+    """A malformed non-list, non-null ``on`` (e.g. a string) still fail-closes
+    — only absent/null join the all-events default."""
+    policy = rc._policy_from_pipeline_default({"on": "stall", "max_retries": 2})
+    assert policy.max_attempts == 1
+    assert not policy.events
+
+
 # ---------------------------------------------------------------------------
 # FAR-525 — resolve_backoff_schedule (run-level backoff_schedule, total fail-open)
 # ---------------------------------------------------------------------------

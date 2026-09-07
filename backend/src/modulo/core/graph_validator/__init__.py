@@ -304,6 +304,26 @@ def _check_parameter_set_drift(
         )
 
 
+def _collect_parameter_ref_id(node: dict[str, Any], key: str, ids: set[uuid.UUID]) -> None:
+    """Add the node's *key* value to *ids* when it parses as a UUID (else ignore)."""
+    raw = node.get(key)
+    if raw is None:
+        return
+    parsed = try_parse_uuid(raw)
+    if parsed is not None:
+        ids.add(parsed)
+
+
+def _collect_parameter_ref_ids(nodes: list[dict[str, Any]]) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+    """Collect the referenced parameter schema + set UUIDs from the graph nodes."""
+    schema_ids: set[uuid.UUID] = set()
+    set_ids: set[uuid.UUID] = set()
+    for node in nodes:
+        _collect_parameter_ref_id(node, "parameter_schema_id", schema_ids)
+        _collect_parameter_ref_id(node, "parameter_set_id", set_ids)
+    return schema_ids, set_ids
+
+
 def _check_parameter_node(
     node: dict[str, Any],
     schemas: dict[uuid.UUID, ParameterSchema],
@@ -1114,6 +1134,43 @@ def _check_llm_routing_default(
         )
 
     # ------------------------------------------------------------------
+
+
+def _index_nodes_by_id(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Index the graph's nodes by their ``id`` (nodes without an id are dropped)."""
+    nodes_by_id: dict[str, dict[str, Any]] = {}
+    for n in nodes:
+        nid = n.get("id")
+        if nid is not None:
+            nodes_by_id[str(nid)] = n
+    return nodes_by_id
+
+
+def _parallel_fanout_normal_edges(
+    source: str,
+    src_node: dict[str, Any],
+    src_edges: list[dict[str, Any]],
+    loop_sources: set[str],
+) -> list[dict[str, Any]] | None:
+    """The source's normal outgoing edges when it is a parallel fan-out; else ``None``.
+
+    Skipped shapes (None): llm routing sources; a source with ANY loop edge
+    (the loop counter routes ALL its outgoing edges through the loop counter —
+    single target, ``graph_cache.build_graph_from_json`` — so it is never a
+    parallel fan-out); a source with any conditional edge (=> ALL outgoing
+    edges go through the router, single target chosen); and a source with at
+    most one normal edge (no fan-out).
+    """
+    if src_node.get("routing_mode") == "llm":
+        return None
+    if source in loop_sources:
+        return None
+    if any(_edge_type(e) == "conditional" for e in src_edges):
+        return None
+    normal = [e for e in src_edges if _edge_type(e) != "conditional"]
+    if len(normal) <= 1:
+        return None
+    return normal
 
 
 class GraphValidator:
@@ -2156,6 +2213,22 @@ class GraphValidator:
     # Parameter schema / set references
     # ------------------------------------------------------------------
 
+    async def _fetch_parameter_schemas(
+        self, session: AsyncSession, ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, ParameterSchema]:
+        """Load the referenced ParameterSchema rows (empty map when nothing referenced)."""
+        if not ids:
+            return {}
+        rows = (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(ids)))).scalars().all()
+        return {s.id: s for s in rows}
+
+    async def _fetch_parameter_sets(self, session: AsyncSession, ids: set[uuid.UUID]) -> dict[uuid.UUID, ParameterSet]:
+        """Load the referenced ParameterSet rows (empty map when nothing referenced)."""
+        if not ids:
+            return {}
+        rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(ids)))).scalars().all()
+        return {s.id: s for s in rows}
+
     async def _check_parameter_references(
         self,
         graph_json: dict[str, Any],
@@ -2172,40 +2245,11 @@ class GraphValidator:
         3. If schema version has drifted since the set was created, warn.
         """
         nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
-        schema_ids: set[uuid.UUID] = set()
-        set_ids: set[uuid.UUID] = set()
-
-        for node in nodes:
-            raw_schema_id = node.get("parameter_schema_id")
-            if raw_schema_id is not None:
-                parsed = try_parse_uuid(raw_schema_id)
-                if parsed is not None:
-                    schema_ids.add(parsed)
-            raw_set_id = node.get("parameter_set_id")
-            if raw_set_id is not None:
-                parsed = try_parse_uuid(raw_set_id)
-                if parsed is not None:
-                    set_ids.add(parsed)
-
+        schema_ids, set_ids = _collect_parameter_ref_ids(nodes)
         if not schema_ids and not set_ids:
             return
-
-        # Fetch all referenced schemas.
-        schemas: dict[uuid.UUID, ParameterSchema] = {}
-        if schema_ids:
-            schema_rows = (
-                (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(schema_ids))))
-                .scalars()
-                .all()
-            )
-            schemas = {s.id: s for s in schema_rows}
-
-        # Fetch all referenced sets.
-        sets: dict[uuid.UUID, ParameterSet] = {}
-        if set_ids:
-            set_rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(set_ids)))).scalars().all()
-            sets = {s.id: s for s in set_rows}
-
+        schemas = await self._fetch_parameter_schemas(session, schema_ids)
+        sets = await self._fetch_parameter_sets(session, set_ids)
         for node in nodes:
             _check_parameter_node(node, schemas, sets, result)
 
@@ -2536,6 +2580,42 @@ class GraphValidator:
     # still exercise the flat-key reconcile; the validate path uses the
     # connector-config reconcile in :meth:`_check_node_send_budget_bindings`.
     @staticmethod
+    def _node_send_budget_values(node: dict[str, Any]) -> tuple[float, float] | None:
+        """Resolve a fan-out node's (fanout_cardinality, per_item_budget) pair; None to skip.
+
+        A node without both keys — or with keys that do not parse as positive
+        numbers — contributes no send-budget warning.
+        """
+        fanout = node.get("fanout_cardinality")
+        per_item = node.get("per_item_budget")
+        if fanout is None and per_item is None:
+            return None
+        fanout_val = _as_positive_number(fanout)
+        per_item_val = _as_positive_number(per_item)
+        if fanout_val is None or per_item_val is None:
+            return None
+        return fanout_val, per_item_val
+
+    @staticmethod
+    def _resolve_node_wait_for(node: dict[str, Any]) -> float | None:
+        """The node's total budget: explicit ``node_wait_for`` else ``timeout_seconds``."""
+        wait_for = _as_positive_number(node.get("node_wait_for"))
+        if wait_for is None:
+            return _as_positive_number(node.get("timeout_seconds"))
+        return wait_for
+
+    @staticmethod
+    def _node_send_budget_inputs(node: dict[str, Any]) -> tuple[str, float, float, float] | None:
+        """Resolve (nid, fanout, per_item, wait_for) for a fan-out node; None to skip."""
+        resolved = GraphValidator._node_send_budget_values(node)
+        if resolved is None:
+            return None
+        wait_for = GraphValidator._resolve_node_wait_for(node)
+        if wait_for is None:
+            return None
+        return _string_or_default(node.get("id")), resolved[0], resolved[1], wait_for
+
+    @staticmethod
     def _check_node_send_budget(graph_json: dict[str, Any], result: ValidationResult) -> None:
         """Warn when a fan-out node's send budget exceeds its wait_for budget (FAR-410).
 
@@ -2552,20 +2632,10 @@ class GraphValidator:
         for node in graph_json.get("nodes", []) or []:
             if not isinstance(node, dict):
                 continue
-            fanout = node.get("fanout_cardinality")
-            per_item = node.get("per_item_budget")
-            if fanout is None and per_item is None:
+            resolved = GraphValidator._node_send_budget_inputs(node)
+            if resolved is None:
                 continue
-            nid = _string_or_default(node.get("id"))
-            fanout_val = _as_positive_number(fanout)
-            per_item_val = _as_positive_number(per_item)
-            if fanout_val is None or per_item_val is None:
-                continue
-            wait_for = _as_positive_number(node.get("node_wait_for"))
-            if wait_for is None:
-                wait_for = _as_positive_number(node.get("timeout_seconds"))
-            if wait_for is None:
-                continue
+            nid, fanout_val, per_item_val, wait_for = resolved
             total = fanout_val * per_item_val
             if total > wait_for:
                 result.warning(
@@ -2726,9 +2796,23 @@ class GraphValidator:
     def check_retry_policy(policy: Any, result: ValidationResult) -> None:
         """Validate a pipeline's ``retry_policy``, emitting an ERROR when malformed.
 
-        Valid shape: ``{"on": ["stall"|"timeout"|"failure"|"eval_failed"], "max_retries": 0-5}``.
+        Valid shape: ``{"on": ["stall"|"timeout"|"failure"|"eval_failed"],
+        "max_retries": 0-5}`` (``on`` may be absent or explicitly ``null``).
         ``None``/``{}`` (no policy) passes. A malformed policy would silently
         disable retries at run time, so it is surfaced as a hard error here.
+
+        FAR-649: an ABSENT ``on`` key — missing, or explicitly ``null`` (both
+        treated identically here) — with a valid ``max_retries`` > 0 is VALID
+        and means ALL retryable events (the intuitive default — this shape was
+        previously write-valid but runtime-inert): absent or explicitly null
+        ``on`` = all retryable events (the default); an explicit list is
+        granular; an explicit empty list (``on: []``) means "no retry".
+        Accepting explicit ``null`` here (previously RETRY_POLICY_MALFORMED —
+        a 422 at the write sites and, via the run-start gate re-running this
+        same check, a GraphValidationError) makes the validator coherent with
+        the shipped OpenAPI text and un-bricks legacy/hand-edited null rows,
+        which now run with all-events retries (a deliberate fix, not a
+        regression). A non-list non-null ``on`` (string, int) stays malformed.
         """
         if policy is None or policy == {}:
             return
@@ -2739,8 +2823,13 @@ class GraphValidator:
                 "{'on': ['stall','timeout','failure','eval_failed'], 'max_retries': 0-5}",
             )
             return
-        events = policy.get("on", [])
-        if not isinstance(events, list) or any(not isinstance(e, str) for e in events):
+        events = policy.get("on")
+        if events is None:
+            # FAR-649 (qa gate): an explicit `null` `on` is treated the SAME as
+            # an absent key — valid, all-events semantics. Skip the list-shape
+            # checks entirely (there is no list to validate).
+            pass
+        elif not isinstance(events, list) or any(not isinstance(e, str) for e in events):
             result.error(
                 "RETRY_POLICY_MALFORMED",
                 "retry_policy 'on' must be a list of strings from ['stall','timeout','failure','eval_failed']",
@@ -2758,6 +2847,81 @@ class GraphValidator:
             result.error(
                 "RETRY_POLICY_MALFORMED",
                 "retry_policy 'max_retries' must be an integer between 0 and 5",
+            )
+
+    @staticmethod
+    def _schedule_number(value: Any) -> float | None:
+        """Coerce a schedule numeric literal to float; None when not a number or unrepresentable.
+
+        Booleans are rejected (a JSON ``true`` is not a number). A JSON integer
+        literal with more digits than float can represent (e.g. 10**400) parses
+        to an arbitrary-precision Python int whose float() conversion raises
+        OverflowError BEFORE the range comparison — contain it so a huge int
+        lands in the same malformed bucket as any other bound fault (never a
+        500 / hard abort).
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        try:
+            return float(value)
+        except OverflowError:
+            return None
+
+    @staticmethod
+    def _check_schedule_shape(schedule: Any, rc: Any, result: ValidationResult) -> bool:
+        """Validate the schedule's object shape + key set; True when usable.
+
+        A non-dict schedule is malformed (returns False). Unknown keys are
+        reported but do not by themselves make the schedule unusable (True).
+        """
+        if not isinstance(schedule, dict):
+            result.error(
+                "RETRY_POLICY_SCHEDULE_MALFORMED",
+                "retry_policy 'backoff_schedule' must be an object like "
+                "{'delay_seconds': 1-300, 'multiplier': 1.0-10.0}",
+            )
+            return False
+        unknown = set(schedule) - rc.RETRY_SCHEDULE_ALLOWED_KEYS
+        if unknown:
+            result.error(
+                "RETRY_POLICY_SCHEDULE_MALFORMED",
+                f"retry_policy 'backoff_schedule' contains unknown keys {sorted(str(k) for k in unknown)}; "
+                f"allowed keys are {sorted(rc.RETRY_SCHEDULE_ALLOWED_KEYS)}",
+            )
+        return True
+
+    @staticmethod
+    def _check_schedule_delay(schedule: dict[str, Any], rc: Any, result: ValidationResult) -> None:
+        """Validate the required ``delay_seconds`` key (integer seconds in range)."""
+        delay = schedule.get("delay_seconds")
+        delay_f = GraphValidator._schedule_number(delay)
+        if delay is None:
+            result.error(
+                "RETRY_POLICY_SCHEDULE_MALFORMED",
+                "retry_policy 'backoff_schedule' must include 'delay_seconds' "
+                f"(integer seconds, {rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS}-{rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS})",
+            )
+        elif delay_f is None or not (
+            rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS <= delay_f <= rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS
+            and delay_f == int(delay_f)
+        ):
+            result.error(
+                "RETRY_POLICY_SCHEDULE_MALFORMED",
+                "retry_policy 'backoff_schedule' 'delay_seconds' must be an integer between "
+                f"{rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS} and {rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS}",
+            )
+
+    @staticmethod
+    def _check_schedule_multiplier(schedule: dict[str, Any], rc: Any, result: ValidationResult) -> None:
+        """Validate the optional ``multiplier`` key (number in range, default 2.0)."""
+        if "multiplier" not in schedule:
+            return
+        mult_f = GraphValidator._schedule_number(schedule["multiplier"])
+        if mult_f is None or not rc.RETRY_SCHEDULE_MIN_MULTIPLIER <= mult_f <= rc.RETRY_SCHEDULE_MAX_MULTIPLIER:
+            result.error(
+                "RETRY_POLICY_SCHEDULE_MALFORMED",
+                "retry_policy 'backoff_schedule' 'multiplier' must be a number between "
+                f"{rc.RETRY_SCHEDULE_MIN_MULTIPLIER} and {rc.RETRY_SCHEDULE_MAX_MULTIPLIER}",
             )
 
     @staticmethod
@@ -2784,59 +2948,10 @@ class GraphValidator:
         schedule = policy.get("backoff_schedule")
         if schedule is None or schedule == {}:
             return
-        if not isinstance(schedule, dict):
-            result.error(
-                "RETRY_POLICY_SCHEDULE_MALFORMED",
-                "retry_policy 'backoff_schedule' must be an object like "
-                "{'delay_seconds': 1-300, 'multiplier': 1.0-10.0}",
-            )
+        if not GraphValidator._check_schedule_shape(schedule, rc, result):
             return
-        unknown = set(schedule) - rc.RETRY_SCHEDULE_ALLOWED_KEYS
-        if unknown:
-            result.error(
-                "RETRY_POLICY_SCHEDULE_MALFORMED",
-                f"retry_policy 'backoff_schedule' contains unknown keys {sorted(str(k) for k in unknown)}; "
-                f"allowed keys are {sorted(rc.RETRY_SCHEDULE_ALLOWED_KEYS)}",
-            )
-
-        # A JSON integer literal with more digits than float can represent
-        # (e.g. 10**400) parses to an arbitrary-precision Python int whose
-        # float() conversion raises OverflowError BEFORE the range comparison
-        # — contain it so a huge int lands in the same malformed bucket as any
-        # other bound fault (never a 500 / hard abort).
-        def _as_float(value: Any) -> float | None:
-            try:
-                return float(value)
-            except OverflowError:
-                return None
-
-        delay = schedule.get("delay_seconds")
-        if delay is None:
-            result.error(
-                "RETRY_POLICY_SCHEDULE_MALFORMED",
-                "retry_policy 'backoff_schedule' must include 'delay_seconds' "
-                f"(integer seconds, {rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS}-{rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS})",
-            )
-        else:
-            delay_f = None if isinstance(delay, bool) or not isinstance(delay, (int, float)) else _as_float(delay)
-            if delay_f is None or not (
-                rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS <= delay_f <= rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS
-                and delay_f == int(delay_f)
-            ):
-                result.error(
-                    "RETRY_POLICY_SCHEDULE_MALFORMED",
-                    "retry_policy 'backoff_schedule' 'delay_seconds' must be an integer between "
-                    f"{rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS} and {rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS}",
-                )
-        if "multiplier" in schedule:
-            mult = schedule["multiplier"]
-            mult_f = None if isinstance(mult, bool) or not isinstance(mult, (int, float)) else _as_float(mult)
-            if mult_f is None or not rc.RETRY_SCHEDULE_MIN_MULTIPLIER <= mult_f <= rc.RETRY_SCHEDULE_MAX_MULTIPLIER:
-                result.error(
-                    "RETRY_POLICY_SCHEDULE_MALFORMED",
-                    "retry_policy 'backoff_schedule' 'multiplier' must be a number between "
-                    f"{rc.RETRY_SCHEDULE_MIN_MULTIPLIER} and {rc.RETRY_SCHEDULE_MAX_MULTIPLIER}",
-                )
+        GraphValidator._check_schedule_delay(schedule, rc, result)
+        GraphValidator._check_schedule_multiplier(schedule, rc, result)
 
     # ------------------------------------------------------------------
     # Edge validation
@@ -2938,29 +3053,13 @@ class GraphValidator:
         if not nodes or not edges:
             return
 
-        nodes_by_id: dict[str, dict[str, Any]] = {}
-        for n in nodes:
-            nid = n.get("id")
-            if nid is not None:
-                nodes_by_id[str(nid)] = n
-
+        nodes_by_id = _index_nodes_by_id(nodes)
         loop_sources, by_source = _collect_parallel_fanout_candidates(edges)
 
         for source, src_edges in by_source.items():
             src_node = nodes_by_id.get(source, {})
-            if src_node.get("routing_mode") == "llm":
-                continue
-            # A source with ANY loop edge routes ALL its outgoing edges through
-            # the loop counter (single target, graph_cache.build_graph_from_json),
-            # so it is never a parallel fan-out.
-            if source in loop_sources:
-                continue
-            # Any conditional edge => ALL outgoing edges go through the router
-            # (single target chosen), so this source is NOT a parallel fan-out.
-            if any(_edge_type(e) == "conditional" for e in src_edges):
-                continue
-            normal = [e for e in src_edges if _edge_type(e) != "conditional"]
-            if len(normal) <= 1:
+            normal = _parallel_fanout_normal_edges(source, src_node, src_edges, loop_sources)
+            if normal is None:
                 continue
 
             setters = _collect_context_setter_targets(normal, nodes_by_id)

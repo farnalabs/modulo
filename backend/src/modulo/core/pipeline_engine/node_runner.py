@@ -246,6 +246,28 @@ class SandboxCapacityExceededError(SandboxNodeFailedError):
     """
 
 
+class SandboxBindingResolutionError(SandboxNodeFailedError):
+    """Provision-time per-agent runner-binding resolution failed (FAR-592 D6).
+
+    A bound model backend vanished, decrypted unsuccessfully, or no longer
+    carries the bound source field. RETRYABLE config error: the run fails with
+    the ``sandbox.binding_resolution`` code — the D6 rollback trigger reads
+    that code's rate — so a re-dispatch re-resolves the (possibly reconfigured)
+    binding. The sandbox was NEVER created and the script PROCESS was NEVER
+    started, so re-dispatch is safe.
+    """
+
+
+class SandboxTierRefusedError(SandboxNodeFailedError):
+    """The Local (host-subprocess) provider tier refused this dispatch (FAR-592 D6).
+
+    Terminal (D7-refusal posture): bindings inject standing host-env
+    credentials and the Local tier has no container isolation, so a Local
+    profile without ``allow_runner_env_bindings`` MUST refuse at provision
+    time. Maps to ``sandbox.tier_refused`` via the executor's LEGACY_ALIASES.
+    """
+
+
 def _script_budget_killed_message(node_id: str) -> str:
     """Message for a platform-side budget kill (ScriptBudgetKilledError).
 
@@ -2875,6 +2897,61 @@ def make_node_fn(
     return _node
 
 
+def _parse_router_rules(
+    rules: list[dict[str, Any]],
+) -> tuple[list[tuple[str | None, str | None]], str | None]:
+    """Split Router rules into ``(rule_targets, default_target)``.
+
+    ``rule_targets`` holds ``(guard_expr, target)`` for every non-default rule;
+    the first ``default`` rule's target becomes ``default_target``. The guards
+    are evaluated through the shared JMESPath evaluator so Router and the
+    conditional-edge compile path share ONE truthiness rule.
+    """
+    rule_targets: list[tuple[str | None, str | None]] = []
+    default_target: str | None = None
+    for rule in rules:
+        target = rule.get("target") or rule.get("target_port")
+        if rule.get("default"):
+            default_target = target
+            continue
+        rule_targets.append((rule.get("guard"), target))
+    return rule_targets, default_target
+
+
+def _first_matching_rule_target(
+    state: dict[str, Any],
+    rule_targets: list[tuple[str | None, str | None]],
+) -> str | None:
+    """First rule whose guard matches *state* (first-match-wins), or ``None``.
+
+    A rule with no target is skipped — its guard is not even evaluated (the
+    ``and`` short-circuits), matching the original inline loop.
+    """
+    for guard, target in rule_targets:
+        if target is not None and evaluate_jmespath_condition(state, guard):
+            return target
+    return None
+
+
+def _classifier_rule_target(state: dict[str, Any], rules: list[dict[str, Any]]) -> str | None:
+    """Target of the rule whose ``label`` matches the LLM routing decision.
+
+    LLM routing mode (``mode == "classifier"``) matches the ``_llm_next_node``
+    state value against each rule's ``label``. Returns ``None`` when the state
+    carries no decision or no rule label matches (the caller falls back to the
+    default rule).
+    """
+    label = state.get("_llm_next_node")
+    if label is None:
+        return None
+    for rule in rules:
+        if rule.get("label") == label:
+            matched: str | None = rule.get("target") or rule.get("target_port")
+            if matched is not None:
+                return matched
+    return None
+
+
 def make_router_node_fn(
     router_config: dict[str, Any],
     *,
@@ -2901,31 +2978,16 @@ def make_router_node_fn(
     """
     rules: list[dict[str, Any]] = list(router_config.get("rules", []))
     classifier_mode: bool = router_config.get("mode") == "classifier"
-
-    # Store (guard_expr, target) tuples. The guards are evaluated through the
-    # shared JMESPath evaluator so Router and the conditional-edge compile path
-    # share ONE truthiness rule.
-    rule_targets: list[tuple[str | None, str | None]] = []
-    default_target: str | None = None
-    for rule in rules:
-        target = rule.get("target") or rule.get("target_port")
-        if rule.get("default"):
-            default_target = target
-            continue
-        rule_targets.append((rule.get("guard"), target))
+    rule_targets, default_target = _parse_router_rules(rules)
 
     def _router(state: dict[str, Any]) -> str:
-        for guard, target in rule_targets:
-            if target is not None and evaluate_jmespath_condition(state, guard):
-                return target
+        first = _first_matching_rule_target(state, rule_targets)
+        if first is not None:
+            return first
         if classifier_mode:
-            label = state.get("_llm_next_node")
-            if label is not None:
-                for rule in rules:
-                    if rule.get("label") == label:
-                        matched: str | None = rule.get("target") or rule.get("target_port")
-                        if matched is not None:
-                            return matched
+            matched = _classifier_rule_target(state, rules)
+            if matched is not None:
+                return matched
         if default_target:
             return default_target
         raise RouterNoMatchError(node_id=node_id)
@@ -3545,6 +3607,38 @@ def make_hitl_gate_fn(
     return _hitl_gate
 
 
+def _manual_resume_output(
+    decision: dict[str, Any],
+    output_schema_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Manual output carried by a decision stamped for THIS node, schema-validated.
+
+    A decision's ``output`` that is not a dict resumes with ``None`` (the node
+    completes with no human payload). When the node declares an
+    ``output_schema_json`` and an output IS present, it is validated before
+    the node continues.
+    """
+    resume_data = decision.get("output")
+    manual_output: dict[str, Any] | None = resume_data if isinstance(resume_data, dict) else None
+    if output_schema_json and manual_output is not None:
+        _validate_against_schema(manual_output, output_schema_json)
+    return manual_output
+
+
+def _manual_completion_artifact(node_id: str, manual_output: dict[str, Any] | None) -> dict[str, Any]:
+    """State envelope for a completed manual node."""
+    return {
+        "artifacts": [
+            {
+                "node_id": node_id,
+                "status": "completed",
+                "human_output": manual_output,
+            }
+        ],
+        "manual_output": manual_output,
+    }
+
+
 def make_manual_node_fn(
     node_def: dict[str, Any],
     *,
@@ -3569,10 +3663,7 @@ def make_manual_node_fn(
         decision = state.get("_hitl_decision")
         stamped_gate = decision.get("gate_id") if isinstance(decision, dict) else None
         if isinstance(decision, dict) and stamped_gate == node_id:
-            resume_data = decision.get("output")
-            manual_output: dict[str, Any] | None = resume_data if isinstance(resume_data, dict) else None
-            if output_schema_json and manual_output is not None:
-                _validate_against_schema(manual_output, output_schema_json)
+            manual_output = _manual_resume_output(decision, output_schema_json)
 
             _log.info(
                 "manual_node.completed",
@@ -3582,16 +3673,7 @@ def make_manual_node_fn(
                 },
             )
 
-            return {
-                "artifacts": [
-                    {
-                        "node_id": node_id,
-                        "status": "completed",
-                        "human_output": manual_output,
-                    }
-                ],
-                "manual_output": manual_output,
-            }
+            return _manual_completion_artifact(node_id, manual_output)
         if decision is not None:
             _log.warning(
                 "manual_node.foreign_decision_ignored",
@@ -3791,6 +3873,194 @@ def _guard_connector_secret_output(result: Any, node_id: str) -> dict[str, Any] 
     return None
 
 
+def _state_run_id(state: dict[str, Any]) -> str:
+    """The run id carried in state, as a string ("" when absent)."""
+    return str(state.get("_run_id", "") or "")
+
+
+def _conformance_instance_ids(instance_id: uuid.UUID | None) -> list[uuid.UUID]:
+    """Singleton list for the conformance gate, or an empty list."""
+    return [instance_id] if instance_id is not None else []
+
+
+async def _connector_write_gate_phase(
+    state: dict[str, Any],
+    session_factory: Callable[..., Any] | None,
+    node_id: str,
+    connector: Any,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+) -> tuple[dict[str, Any] | None, bool]:
+    """FAR-458 / FAR-531 pre-write phase for a connector WRITE.
+
+    Only a WRITE is side-effecting; a query never double-submits. The gate
+    reads the run's persisted idempotency key + markers, and suppresses a
+    CONFIRMED-delivered duplicate (matching key + ``delivery_done``) in EVERY
+    mode, and additionally suppresses an AMBIGUOUS (matching key, no
+    ``delivery_done``, no ``no_delivery_confirmed``) write when the
+    connector's ``on_unknown`` policy is ``fail_closed``. Fail-open in every
+    direction — no run id / session factory / persisted key, the killswitch,
+    a DB error, or ``on_unknown="off"`` all proceed to send the write
+    normally; default ``fail_open`` lets an unconfirmed write fire.
+
+    FAR-531 intent marker (write-before / stamp-after): persisted AFTER the
+    gate proceeds and BEFORE the upstream write fires, in the SAME slot the
+    delivery stamp updates. A crash/timeout between here and the stamp leaves
+    the marker in-flight — the ambiguous state fail_closed suppresses on a
+    later attempt (the headline fix; fail_open re-fires, unchanged). Guarded
+    by the killswitch + ``on_unknown != off`` — pointless when the gate can
+    never suppress. Best-effort: an intent-write failure never fails the node.
+
+    Returns ``(suppression_envelope, intent_active)``; a non-None envelope
+    means the write must NOT fire (duplicate suppressed) and is returned from
+    the node directly.
+    """
+    run_id = _state_run_id(state)
+    on_unknown_mode = _connector_on_unknown(connector, resource)
+    gate_result = await _connector_write_gate(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=state.get("_org_id"),
+        node_id=node_id,
+        resource=resource,
+        filters=filters,
+        data=data,
+        on_unknown=on_unknown_mode,
+    )
+    if gate_result is not None:
+        return gate_result, False
+    intent_active = _connector_intent_marker_enabled(on_unknown_mode)
+    if intent_active:
+        # QA Fix 5: the intent persist (incl. its payload-hash computation)
+        # must never fail the node BEFORE the write — any failure degrades to
+        # "no marker" and the write still fires.
+        try:
+            await _persist_connector_write_intent(
+                session_factory,
+                run_id=run_id,
+                org_id_raw=state.get("_org_id"),
+                node_id=node_id,
+                resource=resource,
+                filters=filters,
+                data=data,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "connector.connector_write_intent_persist_failed",
+                extra={"run_id": run_id, "node_id": node_id},
+            )
+    return None, intent_active
+
+
+async def _connector_write_outcome_for_state(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    result: Any = None,
+    intent_active: bool = False,
+    exception: BaseException | None = None,
+) -> None:
+    """Resolve the connector-write marker for THIS node's run context (FAR-458)."""
+    await _resolve_connector_write_outcome(
+        session_factory,
+        connector=connector,
+        run_id=_state_run_id(state),
+        org_id_raw=state.get("_org_id"),
+        node_id=node_id,
+        resource=resource,
+        filters=filters,
+        data=data,
+        result=result,
+        intent_active=intent_active,
+        exception=exception,
+    )
+
+
+async def _connector_action_failure(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    intent_active: bool,
+    exc: Exception,
+) -> dict[str, Any]:
+    """QA Fix 1: classify a RAISED connector error, then return the failure envelope.
+
+    The raised connector error is classified by the SINGLE authority
+    (``_resolve_connector_write_outcome``) as AMBIGUOUS — a raise cannot tell
+    whether the write landed (read-timeout after dispatch vs pre-dispatch
+    validation failure), so the in-flight intent marker is left AS-IS:
+    fail_closed suppresses the re-fire ("possible silent miss"), fail_open
+    re-fires (unchanged). No no-delivery evidence is persisted for a raise.
+    """
+    await _connector_write_outcome_for_state(
+        session_factory,
+        connector,
+        state,
+        node_id,
+        resource,
+        filters,
+        data,
+        result=None,
+        intent_active=intent_active,
+        exception=exc,
+    )
+    return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
+
+
+async def _connector_success_phase(
+    session_factory: Callable[..., Any] | None,
+    connector: Any,
+    state: dict[str, Any],
+    node_id: str,
+    op: str,
+    resource: str,
+    filters: dict[str, Any],
+    data: dict[str, Any],
+    intent_active: bool,
+    result: Any,
+) -> dict[str, Any] | None:
+    """FAR-458 / FAR-531 AC6 post-action phase: stamp a confirmed write, guard output.
+
+    A successful connector WRITE genuinely reached upstream — stamp the
+    delivery marker (bounded, fail-open) so a re-run reusing the SAME
+    persisted key suppresses the duplicate. The full write identity
+    (resource + filters + data) is folded into the derived key on BOTH the
+    gate and the stamp so a target/content edit derives a fresh key. Whether a
+    non-raising result actually delivered is the connector's call
+    (``write_reported_failure`` hook) — a reported failure is a DEFINITE
+    no-delivery (the intent marker resolves to ``no_delivery_confirmed``),
+    never a delivery stamp.
+
+    Then enforces the FAR-418 secret-output hygiene guard. Returns the block
+    envelope on violation, else ``None``.
+    """
+    if op == "write":
+        await _connector_write_outcome_for_state(
+            session_factory,
+            connector,
+            state,
+            node_id,
+            resource,
+            filters,
+            data,
+            result=result,
+            intent_active=intent_active,
+        )
+    return _guard_connector_secret_output(result, node_id)
+
+
 def make_connector_fn(
     node_def: dict[str, Any],
     *,
@@ -3858,7 +4128,7 @@ def make_connector_fn(
         await _run_conformance_gate(
             state,
             node_id=node_id,
-            connector_instance_ids=[instance_id] if instance_id is not None else [],
+            connector_instance_ids=_conformance_instance_ids(instance_id),
         )
 
         scope_block = _enforce_connector_scope(binding, node_id, connector_type, allowed_connectors)
@@ -3876,115 +4146,46 @@ def make_connector_fn(
         resource, filters, data = _connector_inputs(binding, state)
 
         # FAR-458 connector-write UNKNOWN-recovery: the read-before-write dedupe
-        # decision point. Only a WRITE is side-effecting; a query never double-
-        # submits. The gate reads the run's persisted idempotency key + markers,
-        # and suppresses a CONFIRMED-delivered duplicate (matching key +
-        # ``delivery_done``) in EVERY mode, and additionally suppresses an
-        # AMBIGUOUS (matching key, no ``delivery_done``, no
-        # ``no_delivery_confirmed``) write when the connector's ``on_unknown``
-        # policy is ``fail_closed``. Fail-open in every direction — no run id /
-        # session factory / persisted key, the killswitch, a DB error, or
-        # ``on_unknown="off"`` all proceed to send the write normally; default
-        # ``fail_open`` lets an unconfirmed write fire.
+        # decision point (gate + FAR-531 intent marker), extracted to
+        # ``_connector_write_gate_phase``. Only a WRITE is side-effecting.
+        suppress_envelope: dict[str, Any] | None = None
         intent_active = False
         if op == "write":
-            run_id = str(state.get("_run_id", "") or "")
-            on_unknown_mode = _connector_on_unknown(connector, resource)
-            gate_result = await _connector_write_gate(
-                session_factory,
-                run_id=run_id,
-                org_id_raw=state.get("_org_id"),
-                node_id=node_id,
-                resource=resource,
-                filters=filters,
-                data=data,
-                on_unknown=on_unknown_mode,
+            suppress_envelope, intent_active = await _connector_write_gate_phase(
+                state, session_factory, node_id, connector, resource, filters, data
             )
-            if gate_result is not None:
-                return gate_result
-            # FAR-531 intent marker (write-before / stamp-after): persisted
-            # AFTER the gate proceeds and BEFORE the upstream write fires, in
-            # the SAME slot the delivery stamp updates. A crash/timeout between
-            # here and the stamp leaves the marker in-flight — the ambiguous
-            # state fail_closed suppresses on a later attempt (the headline
-            # fix; fail_open re-fires, unchanged). Guarded by the killswitch +
-            # ``on_unknown != off`` — pointless when the gate can never
-            # suppress. Best-effort: an intent-write failure never fails the
-            # node.
-            intent_active = _connector_intent_marker_enabled(on_unknown_mode)
-            if intent_active:
-                # QA Fix 5: the intent persist (incl. its payload-hash
-                # computation) must never fail the node BEFORE the write — any
-                # failure degrades to "no marker" and the write still fires.
-                try:
-                    await _persist_connector_write_intent(
-                        session_factory,
-                        run_id=run_id,
-                        org_id_raw=state.get("_org_id"),
-                        node_id=node_id,
-                        resource=resource,
-                        filters=filters,
-                        data=data,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception(
-                        "connector.connector_write_intent_persist_failed",
-                        extra={"run_id": run_id, "node_id": node_id},
-                    )
+        if suppress_envelope is not None:
+            return suppress_envelope
 
         try:
             result = await _run_connector_action(connector, op, resource, filters, data)
         except Exception as exc:
-            # QA Fix 1: the raised connector error is classified by the SINGLE
-            # authority (``_resolve_connector_write_outcome``) as AMBIGUOUS — a
-            # raise cannot tell whether the write landed (read-timeout after
-            # dispatch vs pre-dispatch validation failure), so the in-flight
-            # intent marker is left AS-IS: fail_closed suppresses the re-fire
-            # ("possible silent miss"), fail_open re-fires (unchanged). No
-            # no-delivery evidence is persisted for a raise.
-            await _resolve_connector_write_outcome(
+            return await _connector_action_failure(
                 session_factory,
-                connector=connector,
-                run_id=str(state.get("_run_id", "") or ""),
-                org_id_raw=state.get("_org_id"),
-                node_id=node_id,
-                resource=resource,
-                filters=filters,
-                data=data,
-                result=None,
-                intent_active=intent_active,
-                exception=exc,
-            )
-            return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
-
-        # FAR-458: a successful connector WRITE genuinely reached upstream —
-        # stamp the delivery marker (bounded, fail-open) so a re-run reusing the
-        # SAME persisted key suppresses the duplicate. The full write identity
-        # (resource + filters + data) is folded into the derived key on BOTH the
-        # gate and the stamp so a target/content edit derives a fresh key.
-        # FAR-531 AC6: whether a non-raising result actually delivered is the
-        # connector's call (``write_reported_failure`` hook) — a reported
-        # failure is a DEFINITE no-delivery (the intent marker resolves to
-        # ``no_delivery_confirmed``), never a delivery stamp.
-        if op == "write":
-            await _resolve_connector_write_outcome(
-                session_factory,
-                connector=connector,
-                run_id=str(state.get("_run_id", "") or ""),
-                org_id_raw=state.get("_org_id"),
-                node_id=node_id,
-                resource=resource,
-                filters=filters,
-                data=data,
-                result=result,
-                intent_active=intent_active,
+                connector,
+                state,
+                node_id,
+                resource,
+                filters,
+                data,
+                intent_active,
+                exc,
             )
 
-        scope_block = _guard_connector_secret_output(result, node_id)
-        if scope_block is not None:
-            return scope_block
+        success_block = await _connector_success_phase(
+            session_factory,
+            connector,
+            state,
+            node_id,
+            op,
+            resource,
+            filters,
+            data,
+            intent_active,
+            result,
+        )
+        if success_block is not None:
+            return success_block
 
         return {
             "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
@@ -4224,6 +4425,34 @@ def _is_sandbox_session_lost_echo(output_json: Any) -> bool:
     return any(_SANDBOX_SESSION_LOST_SUMMARY in s for s in haystack)
 
 
+async def _read_org_vault_secret(
+    session_factory: Callable[..., Any],
+    org_uuid: uuid.UUID,
+    secret_key: str,
+) -> str | None:
+    """Read one secret from the org vault under the org's RLS context.
+
+    Returns ``None`` when the key is not in the vault or the read fails (the
+    failure is logged, never raised) — the ref is then omitted from the
+    sandbox env rather than failing the node.
+    """
+    from modulo.core.secrets_backend import create_secrets_backend
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.settings import get_settings
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
+            return await backend.get_secret(secret_key)
+    except KeyError:
+        return None  # not in vault -> return None
+    except Exception:
+        _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
+        return None
+
+
 async def _sandbox_resolve_secret_ref(
     secret_key: str,
     *,
@@ -4243,42 +4472,22 @@ async def _sandbox_resolve_secret_ref(
     silent, which made an unresolved ``{{ secrets.X }}`` env ref invisible in
     production until the sandbox failed on the missing credential.
     """
-    if session_factory is not None:
-        org_uuid: uuid.UUID | None = None
-        org_id_raw = org_id
-        if org_id_raw:
-            try:
-                org_uuid = uuid.UUID(str(org_id_raw))
-            except (TypeError, ValueError):
-                org_uuid = None
-        if org_uuid is not None:
-            from modulo.core.secrets_backend import create_secrets_backend
-            from modulo.db.rls import set_rls_execution_context, set_rls_org
-            from modulo.settings import get_settings
-
-            try:
-                async with session_factory() as session, session.begin():
-                    await set_rls_org(session, org_uuid)
-                    await set_rls_execution_context(session)
-                    backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
-                    return await backend.get_secret(secret_key)
-            except KeyError:
-                pass  # not in vault -> return None
-            except Exception:
-                _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
-        else:
-            _log.warning(
-                "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the "
-                "org vault (run org_id is missing or invalid) — ref will be omitted from sandbox envs",
-                secret_key,
-            )
-    else:
+    if session_factory is None:
         _log.warning(
             "env_var.secret_ref_no_db_context: secret %r cannot be resolved from the "
             "org vault (no DB session factory on this execution path) — ref will be omitted from sandbox envs",
             secret_key,
         )
-    return None
+        return None
+    org_uuid = _parse_uuid_opt(org_id)
+    if org_uuid is None:
+        _log.warning(
+            "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the "
+            "org vault (run org_id is missing or invalid) — ref will be omitted from sandbox envs",
+            secret_key,
+        )
+        return None
+    return await _read_org_vault_secret(session_factory, org_uuid, secret_key)
 
 
 async def _sandbox_acquire_dispatch_marker(
@@ -5268,6 +5477,7 @@ def _build_sandbox_envs(
     input_json: str,
     sandbox_mode: str,
     env_vars_extra: dict[str, str],
+    runner_bindings: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Compose the sandbox envs dict: system env vars FIRST, then ``**env_vars_extra`` LAST.
 
@@ -5276,6 +5486,17 @@ def _build_sandbox_envs(
     injects its own modulo-reviewbot PAT via ``env_vars_extra``). Script mode
     does NOT auto-inject the long-lived host credentials (opencode API key /
     GitHub PAT) — a script only gets what the pipeline passes explicitly.
+
+    Precedence (DELIBERATE, FAR-592 / D6): profile secrets < runner bindings <
+    node ``env_vars_extra`` — THE NODE WINS. ``runner_bindings`` (per-agent
+    Model Backend credential injections) merge AFTER the profile/host creds
+    but BEFORE the node's ``env_vars_extra``:
+
+    1. MODULO_* system vars (reserved — set exactly once here).
+    2. Profile/host standing credentials (host API key / GitHub PAT).
+    3. Per-agent model-backend runner bindings (decrypt at provision).
+    4. Node ``env_vars_extra`` — the sanctioned override; the reviewbot's
+       ``GITHUB_TOKEN`` override keeps working because this layer merges LAST.
     """
     sandbox_envs: dict[str, str] = {
         "MODULO_RUN_ID": run_id,
@@ -5290,6 +5511,8 @@ def _build_sandbox_envs(
             or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
             or os.environ.get("GITHUB_TOKEN", "")
         )
+    if runner_bindings:
+        sandbox_envs.update(runner_bindings)
     sandbox_envs.update(env_vars_extra)
     return sandbox_envs
 
@@ -5391,6 +5614,20 @@ def _run_identity_strs(state: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def _runner_binding_env_profile_id() -> uuid.UUID | None:
+    """FAR-592 (D6): the run's environment profile id, for the Local refusal.
+
+    Read from the run-scoped conformance context (set by the executor via
+    ``set_conformance_ctx``); the second tuple slot carries
+    ``environment_profile_id``. Absent context (unit tests, direct dispatch) ->
+    None (no tier refusal applied).
+    """
+    ctx = get_conformance_ctx()
+    if ctx is None or len(ctx) < 3:
+        return None
+    return _parse_uuid_opt(ctx[2])
+
+
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
     state: dict[str, Any],
     *,
@@ -5434,6 +5671,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         bridge_client_source,
         load_loop_intercept_guardrails,
         persist_loop_interception_audit,
+    )
+    from modulo.core.runner_bindings import (
+        AgentBindingResolutionError,
+        LocalProviderBindingsRefusedError,
     )
 
     # FAR-215: mid-run capability re-check at node start (block -> HITL).
@@ -5809,6 +6050,49 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             raise SupersededNodeError("E2B dispatch marker denied — run superseded or not running; sandbox not created")
         dispatch_marker_set = True
 
+        # FAR-592 (D6): per-agent runner bindings resolve at PROVISION time —
+        # BEFORE ``AsyncSandbox.create`` — so a resolution failure (or a Local
+        # tier refusal) leaves the sandbox NEVER created and the script
+        # PROCESS never started: both error classes stay pre-claim/re-dispatch
+        # safe. A fresh short-lived hub per dispatch resolves ONLY the
+        # referenced backends and is explicitly disposed inside
+        # ``resolve_agent_bindings``. Precedence is deliberate: profile secrets
+        # < runner bindings < node ``env_vars_extra`` — THE NODE WINS (see
+        # ``_build_sandbox_envs``).
+        _runner_bindings: dict[str, str] = {}
+        if agent_id is not None:
+            try:
+                from modulo.core.runner_bindings import resolve_agent_bindings
+
+                _runner_bindings = await resolve_agent_bindings(
+                    session_factory=session_factory,
+                    org_id=org_id,
+                    agent_id=agent_id,
+                    environment_profile_id=_runner_binding_env_profile_id(),
+                    run_id=run_id,
+                    node_id=node_id,
+                )
+            except LocalProviderBindingsRefusedError:
+                _log.warning(
+                    "sandbox_agent.bindings_local_refused",
+                    extra={"run_id": run_id, "node_id": node_id},
+                )
+                raise SandboxTierRefusedError(
+                    f"Local provider tier refused runner bindings for node '{node_id}'"
+                ) from None
+            except AgentBindingResolutionError as exc:
+                _log.warning(
+                    "sandbox_agent.bindings_resolution_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "exc_msg": str(exc)[:_MAX_ERROR_MSG],
+                    },
+                )
+                raise SandboxBindingResolutionError(
+                    f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
+                ) from exc
+
         # FAR-296 Phase 3/3b-3: egress control + resource limits. deny_all
         # and selected map to allow_internet_access=False; resource_limits
         # and the selected-mode host:port allowlist are carried as sandbox
@@ -6043,6 +6327,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # modulo-reviewbot PAT, not the system default farnalabs bot).
             # The reserved-prefix validator already prevents overriding
             # MODULO_* vars, so update() below is the sanctioned override.
+            # FAR-592 (D6): ``_runner_bindings`` was resolved BEFORE the sandbox
+            # was created (see the provision-time block above the
+            # ``AsyncSandbox.create`` loop) and merges between the profile
+            # creds and the node envs — THE NODE WINS (see _build_sandbox_envs
+            # docstring for the deliberate precedence).
             sandbox_envs: dict[str, str] = _build_sandbox_envs(
                 run_id=run_id,
                 pipeline_id=pipeline_id,
@@ -6050,6 +6339,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 input_json=_input_json,
                 sandbox_mode=sandbox_mode,
                 env_vars_extra=env_vars_extra,
+                runner_bindings=_runner_bindings,
             )
             # FAR-296 Phase 4a: wall-clock spend budget — non-tick path. A very
             # slow provisioning sequence may already have consumed the budget

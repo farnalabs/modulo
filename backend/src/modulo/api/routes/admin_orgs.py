@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 if TYPE_CHECKING:
     from sqlalchemy.engine import CursorResult
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_ORGANISATION_NOT_FOUND
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     deny_break_glass_mint,
@@ -43,7 +43,6 @@ from modulo.db.models.organisation import ORPHAN_ORG_ID, Organisation
 from modulo.db.rls import set_rls_org
 
 _CODE_SYSTEM_ORG_MANAGE = "system.org.manage"
-_MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
 _CODE_ADMIN_ORGS_ADMIN_SET = "admin_orgs.admin_set_org_license"
 _CODE_ADMIN_ORGS_ADMIN_REMOVE = "admin_orgs.admin_remove_org_license"
 _CODE_ADMIN_ORGS_SET_ORG_TRIGGERS_PAUSED = "admin_orgs.admin_set_org_triggers_paused"
@@ -130,7 +129,7 @@ async def _load_org_in_org_scope(session: AsyncSession, org_id: uuid.UUID) -> Or
     await set_rls_org(session, org_id)
     org = await get_organisation(session, org_id)
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
     return org
 
 
@@ -380,7 +379,7 @@ async def admin_create_org_user(
             if org is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=_MSG_ORGANISATION_NOT_FOUND,
+                    detail=MSG_ORGANISATION_NOT_FOUND,
                 )
 
             existing = await get_account_by_email(session, req.email)
@@ -421,11 +420,11 @@ async def admin_delete_org(
         async with session.begin():
             org = await get_organisation(session, org_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
             deleted = await delete_organisation(session, org_id)
             if not deleted:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
     except ProgrammingError as exc:
         _raise_programming_error("admin_orgs.admin_delete_org", MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
@@ -497,7 +496,7 @@ async def admin_get_org_license(
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_get_org_license", exc)
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
     return _resolve_org_license(org)
 
@@ -552,7 +551,7 @@ async def admin_set_org_license(
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_set_org_license (fetch)", exc)
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
     d = _verify_license_key(req)
 
@@ -592,7 +591,7 @@ async def admin_remove_org_license(
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_remove_org_license (fetch)", exc)
     if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
     settings_json = _clear_org_license_key(org.settings_json or {})
 
@@ -655,7 +654,7 @@ async def admin_set_org_authz_enforce(
         _raise_internal_error("Unexpected error in admin_set_org_authz_enforce", exc)
 
     if affected == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
     return SetOrgAuthzEnforceResponse(org_id=str(org_id), enforce=req.enforce)
 

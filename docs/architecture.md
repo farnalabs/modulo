@@ -393,7 +393,15 @@ Every table carries `organisation_id`. Row-Level Security is enforced via `SET L
 - `(trigger_id, payload_hash)` unique on `webhook_dedup_hashes` – deduplication window
 - `(run_id, gate_id)` unique on `hitl_claims` – one claim per gate per run
 - SchemaVersion deletion protected by active agent/pipeline references
-- ModelBackend deletion protected by active references (soft-delete via `status: deprecated`)
+- ModelBackend deletion protected by active references (soft-delete via `status: deprecated`) — agent_runner_bindings carries RESTRICT FKs, so a bound backend cannot be deleted while any agent binding references it (the CRUD pre-delete inventory reports "in use by N agents"; the FK is the race-proof backstop)
+
+### Per-agent runner bindings (Model Backends, FAR-592 / D6)
+
+Model Backend credentials are configure-once-reuse-everywhere: an agent declares **runner bindings** (`agent_runner_bindings`, org-scoped table behind `rls_org_isolation` + RLS grants) of the shape `{model_backend, target_env_var, source_field}`. At provision time, in the runner dispatch path, a fresh short-lived `ModelBackendHub` resolves ONLY the referenced backends, decrypts via the secrets backend, injects `target_env_var = <decrypted source_field value>` into the container/workspace env, and is explicitly disposed. Precedence is deliberate and preserved: profile secrets < runner bindings < node `env_vars_extra` — the NODE wins (the PR Reviewer's `GITHUB_TOKEN` override keeps working).
+
+Tier applicability: bindings inject on container/workspace tiers; the Local (host-subprocess) provider refuses at provision time (typed error, `sandbox.tier_refused`) unless the profile's `config_json.allow_runner_env_bindings` is set. Resolution failure is a first-class retryable error (`sandbox.binding_resolution`) whose rate is the D6 rollback trigger.
+
+The posture for injected values (distinguish from the FAR-296 per-run minted key): the value IS a standing user-configured credential readable by the agent's own code — that is the feature's purpose. Mitigations: bindings may never target a Modulo-reserved var (`RESERVED_ENV_VARS` + `MODULO_*` / `APP_MODULO_*` / `GIT_*` — a tested, named denylist; the denylist limitation documented), every injection is audit-logged without values, save-time validation covers name shape/uniqueness/source-field surface, and manage endpoints sit behind the elevated `model_backend.binding.manage` permission. Docs recommend a dedicated restricted runner key per backend. Related org-secret machinery (`env_vars`, `{{ secrets.* }}`, `env_vars_extra`) stays the org-secret alternative; D6 serves per-agent Model-Backend credentials — a different source, not a replacement.
 
 ## Authentication & Authorization
 

@@ -111,13 +111,30 @@ async def delete_model_backend(session: AsyncSession, model_backend_id: uuid.UUI
     mb = await get_model_backend(session, model_backend_id)
     if mb is None:
         return False
+    # FAR-592 (D6): pre-delete inventory — surface "in use by N agents" for
+    # runner bindings alongside the agent/pipeline scans, so the operator gets
+    # remediation copy instead of a raw 409. The RESTRICT FK below remains the
+    # race-proof backstop; IntegrityError still maps to the typed 409.
+    from modulo.db.crud.agent_runner_binding import count_bindings_for_backend
+
+    org_uuid = mb.organisation_id
     try:
+        binding_count = await count_bindings_for_backend(session, model_backend_id=model_backend_id, org_id=org_uuid)
+        if binding_count:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot delete model backend: it is in use by {binding_count} "
+                    "agent runner binding(s). Re-bind or delete the agents' bindings first."
+                ),
+            )
         await session.delete(mb)
         await session.flush()
     except IntegrityError as exc:
-        # A RESTRICT FK (agents today; agent_runner_bindings when D6 ships)
-        # blocks the hard delete. Map to the typed 409 with an in-use message
-        # so every delete route surfaces the same remediation copy.
+        # A RESTRICT FK (agents or agent_runner_bindings) that slipped past the
+        # inventory scan (concurrent bind) blocks the hard delete. Map to the
+        # typed 409 with an in-use message so every delete route surfaces the
+        # same remediation copy.
         _log.info(
             "model_backends.delete_blocked_in_use",
             extra={"model_backend_id": str(model_backend_id)},

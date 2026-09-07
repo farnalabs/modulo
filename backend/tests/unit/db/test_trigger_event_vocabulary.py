@@ -57,14 +57,13 @@ _MIGRATION_PATH = (
 # 0183_triggers_add_polling_ongoing_agent_signal_indexes ->
 # 0184_trigger_events_indexes_and_type_check (trigger_events index + type-check
 # sweep, renumbered from 0182/0183 after the hitl_claims collision), followed by
-# 0185_error_events_indexes_jsonb (error_events status/level partial indexes,
-# renumbered from 0183 after the collision with main's 0183_triggers migration),
-# then the improve-database migrations 0186_pipeline_check_constraints_deleted_by
-# (renumbered from 0183) and 0187_pipeline_performance_indexes (renumbered from
-# 0184), followed by 0189_bundled_runner_seed_backfill (FAR-590 D4 Bundled Runner
-# seed backfill, re-parented onto the 0187 pipeline_performance_indexes head),
-# which is now the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0189_bundled_runner_seed_backfill"
+# 0185_error_events_indexes_jsonb (error_events status/level partial indexes),
+# re-parented onto the 0184 trigger_events head, then main's improve-database
+# migrations 0186_pipeline_check_constraints_deleted_by and
+# 0187_pipeline_performance_indexes, main's 0188_pipeline_run_context_defaults_default,
+# main's 0189_agent_runner_bindings, and this PR's 0190_bundled_runner_seed_backfill
+# re-parented onto 0189_agent_runner_bindings as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0190_bundled_runner_seed_backfill"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

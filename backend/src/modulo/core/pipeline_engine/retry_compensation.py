@@ -224,22 +224,42 @@ def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy
     is handled by the executor-level guardrail path, not by node-level retries). The
     run-level ``max_retries`` is the retry budget, so the attempt ceiling is
     ``max_retries + 1``.
+
+    FAR-649: an ABSENT ``on`` key (key missing, or explicitly ``null``) with a
+    valid ``max_retries`` (int, non-bool, 1-5 — the executor's bounds) inherits
+    at the NODE level with ALL node retry events (``RETRY_EVENTS``) —
+    coverage-equivalent to the explicit four-event run-level list, which maps
+    to that same node set. An explicit non-empty ``on`` list stays granular; an
+    explicit empty list (``on: []``), a malformed non-list non-null ``on``
+    (e.g. a string), and a malformed / out-of-bounds budget all fail-closed to
+    no node retry (unchanged).
     """
     if not isinstance(pipeline_retry_policy, dict):
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
-    events_raw = pipeline_retry_policy.get("on")
-    if not isinstance(events_raw, list):
-        return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
-    node_events: set[str] = set()
-    for e in events_raw:
-        if e == "stall":
-            node_events.add("stall")
-        elif e == "timeout":
-            node_events.add("timeout")
-        elif e in ("failure", "error"):
-            node_events.add("error")
     max_retries = pipeline_retry_policy.get("max_retries", 0)
-    if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries <= 0:
+    if (
+        isinstance(max_retries, bool)
+        or not isinstance(max_retries, int)
+        or not 1 <= max_retries <= RETRY_MAX_ATTEMPTS_BOUND
+    ):
+        return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
+    events_raw = pipeline_retry_policy.get("on")
+    if events_raw is None:
+        # FAR-649: absent (key missing) or explicitly-null `on` with a valid
+        # budget = ALL node retry events — the same node set the explicit
+        # four-event run-level list maps to.
+        node_events: set[str] = set(RETRY_EVENTS)
+    elif isinstance(events_raw, list):
+        node_events = set()
+        for e in events_raw:
+            if e == "stall":
+                node_events.add("stall")
+            elif e == "timeout":
+                node_events.add("timeout")
+            elif e in ("failure", "error"):
+                node_events.add("error")
+    else:
+        # A malformed non-list, non-null `on` (e.g. a string) fail-closes.
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     if not node_events:
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())

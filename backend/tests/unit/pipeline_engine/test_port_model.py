@@ -326,6 +326,17 @@ def test_retry_aware_hash_stable_across_key_order():
     assert h_a == h_b
 
 
+def test_retry_aware_hash_absent_on_differs_from_empty_on():
+    """FAR-649 (pin): absent-`on` and explicit `on: []` policies fold
+    DIFFERENT hashes — the hash covers the whole policy dict, so the two
+    shapes (all-events vs no-retry) can never share a compile-cache entry."""
+    g = _base_graph()
+    h_absent = compute_retry_aware_topology_hash(g, {"max_retries": 2})
+    h_empty = compute_retry_aware_topology_hash(g, {"on": [], "max_retries": 2})
+    assert h_absent != h_empty
+    assert h_absent != compute_retry_aware_topology_hash(g, {"max_retries": 3})
+
+
 # ---------------------------------------------------------------------------
 # Golden test: existing flat-dict pipeline compiles + routes identically
 # ---------------------------------------------------------------------------

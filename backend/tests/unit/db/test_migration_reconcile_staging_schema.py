@@ -27,9 +27,11 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
-# Current chain head (tracks the latest migration; 0188 adds the Bundled Runner
-# seed backfill, re-parented onto the 0187 pipeline_performance_indexes head).
-_CHAIN_HEAD_MIGRATION = "0189_bundled_runner_seed_backfill"
+# Current chain head (tracks the latest migration; 0188_pipeline_run_context_defaults_default
+# is main's server_default sweep head, 0189_agent_runner_bindings (main, D6) chains off it,
+# and this PR's 0190_bundled_runner_seed_backfill re-parents onto 0189_agent_runner_bindings
+# as the chain head).
+_CHAIN_HEAD_MIGRATION = "0190_bundled_runner_seed_backfill"
 
 
 def _source(name: str) -> str:

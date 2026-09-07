@@ -35,7 +35,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any
+from typing import Any, NoReturn
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
@@ -405,11 +405,17 @@ def _retry_after_policy(
 
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
+
+    FAR-649: an ABSENT ``on`` key (key missing or explicitly ``null``) with a
+    valid ``max_retries`` > 0 means ALL retryable events — every matcher below
+    evaluates (the intuitive default: enabling a budget opts the pipeline into
+    all four retryable outcomes). An explicit non-empty ``on`` list stays
+    granular (unchanged); an explicit EMPTY list (``on: []``) stays "no retry"
+    (backward compatible — the FAR-525 GUI's inert no-op panel save shape).
+    The budget validation runs BEFORE the event-shape branch so an all-events
+    policy still fail-closes on a malformed budget.
     """
     if not isinstance(policy, dict):
-        return None
-    events = policy.get("on")
-    if not isinstance(events, list) or not events:
         return None
     max_retries = policy.get("max_retries", 0)
     if isinstance(max_retries, bool) or not isinstance(max_retries, int):
@@ -418,7 +424,17 @@ def _retry_after_policy(
         return None
     if max_retries == 0:
         return None
-    event_set = set(events)
+    events = policy.get("on")
+    if events is None:
+        # FAR-649: absent (key missing) or explicitly-null `on` with a valid
+        # budget > 0 = ALL retryable events — evaluate every matcher below.
+        event_set: set[Any] = set(_RETRY_POLICY_EVENTS)
+    elif isinstance(events, list) and events:
+        event_set = set(events)
+    else:
+        # Explicit ``on: []`` (or a malformed non-list value) = no retry,
+        # fail-closed — unchanged.
+        return None
     code = error_code or ""
     mapped = map_legacy_code(code) if code else ""
     if _stall_event_matches(event_set, final_status, code, mapped):
@@ -1312,6 +1328,25 @@ def _terminal_failure(
     return status, code, detail, node_token_usage or None
 
 
+def _connector_scope_agent_ids(graph_json: dict[str, Any]) -> list[uuid.UUID]:
+    """Distinct Agent ids referenced by the graph's nodes (for the fetch scope).
+
+    Non-dict nodes and unparseable agent ids are skipped — a malformed node
+    must never abort hub construction.
+    """
+    agent_ids: list[uuid.UUID] = []
+    for node in graph_json.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        agent_id = node.get("agent_id")
+        if agent_id:
+            try:
+                agent_ids.append(uuid.UUID(str(agent_id)))
+            except (TypeError, ValueError):
+                continue
+    return agent_ids
+
+
 @dataclass
 class _StreamState:
     """Mutable per-run stream accumulators for ``_stream_graph``.
@@ -1481,6 +1516,19 @@ class _RunScope:
     pipeline_id: uuid.UUID
     snapshot_id: uuid.UUID
     thread_id: str
+
+
+def _interrupt_gate_payload(interrupts: Any) -> dict[str, Any]:
+    """The gate payload carried by the first LangGraph interrupt (or ``{}``)."""
+    first_interrupt = interrupts[0] if interrupts else None
+    value = getattr(first_interrupt, "value", None)
+    return value if isinstance(value, dict) else {}
+
+
+def _interrupt_required_team_id(gate_payload: dict[str, Any]) -> uuid.UUID | None:
+    """Parse the interrupt payload's ``required_team_id`` (absent -> ``None``)."""
+    required_team_id_str = gate_payload.get("required_team_id")
+    return uuid.UUID(required_team_id_str) if required_team_id_str else None
 
 
 class PipelineExecutor:
@@ -2114,6 +2162,168 @@ class PipelineExecutor:
             hub = None
         return hub
 
+    async def _resolve_run_connector_scope(
+        self,
+        session: Any,
+        org_id: uuid.UUID,
+        graph_json: dict[str, Any] | None,
+    ) -> list[str] | None:
+        """Resolve the run-level fetch scope (deny-by-default, FAR-435 on FAR-418).
+
+        With *graph_json* (the run-start path) the scope is the union of every
+        node's ``capability_scope.allowed_connectors`` and the referenced
+        Agents' ``connector_type_refs`` grants; it is cached on the executor
+        (``_run_connector_scope``) and reused by the compensation path (which
+        has no graph).
+        """
+        if graph_json is None:
+            return self._run_connector_scope
+
+        from sqlalchemy import select
+
+        from modulo.core.capability_scope import (
+            agent_granted_connector_types,
+            compute_run_fetch_scope,
+        )
+        from modulo.db.models.agent import Agent
+
+        agent_ids = _connector_scope_agent_ids(graph_json)
+        grants: dict[str, set[str]] = {}
+        if agent_ids:
+            agent_rows = (
+                (
+                    await session.execute(
+                        select(Agent).where(
+                            Agent.id.in_(agent_ids),
+                            Agent.organisation_id == org_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for agent in agent_rows:
+                grants[str(agent.id)] = agent_granted_connector_types(agent.connector_type_refs)
+        allowed_connectors = compute_run_fetch_scope(graph_json, grants)
+        self._run_connector_scope = allowed_connectors
+        return allowed_connectors
+
+    async def _persist_connector_degraded_markers(self, session: Any, hub: Any) -> None:
+        """FAR-495 degraded-marker persistence (best-effort, own savepoint).
+
+        Persists a degraded marker for the skipped instances and clears stale
+        markers for instances that initialised successfully (a connector fixed
+        via a config/plugin change stops being flagged degraded), inside its
+        own savepoint so a failure here can NEVER fail or roll back the
+        run-start transaction (the hub itself already logged the skips). Only
+        instances actually attempted this run appear in ``hub.skipped`` /
+        ``hub.healthy``, so out-of-scope instances are never touched.
+        """
+        from modulo.db.crud.connector_instance import (
+            clear_degraded_markers,
+            mark_instances_degraded,
+        )
+
+        try:
+            async with session.begin_nested():
+                if hub.skipped:
+                    await mark_instances_degraded(session, hub.skipped)
+                if hub.healthy:
+                    await clear_degraded_markers(session, hub.healthy)
+        except Exception:
+            # No run id in scope here (_init_connector_hub is
+            # org-scoped); the instance ids are the correlatable
+            # identifiers.
+            _log.warning(
+                "pipeline.connector_degraded_marker_failed skipped=%s healthy=%s",
+                sorted(str(i) for i in hub.skipped),
+                sorted(str(i) for i in hub.healthy),
+                exc_info=True,
+            )
+
+    async def _build_connector_hub(
+        self,
+        session: Any,
+        org_id: uuid.UUID,
+        rows: list[Any],
+        allowed_connectors: list[str] | None,
+        request_visibility: str | None,
+    ) -> Any:
+        """Build, enter and initialise the ConnectorHub for the active rows.
+
+        Connectors confirmed configured — any failure below re-raises
+        (fail closed) via the configured path. FAR-587: the runtime-provider
+        hub stays reachable for the teardown path via the ConnectorHub
+        constructor seam (``runtime_provider=`` -> ``_runtime_provider``);
+        _teardown_hub acloses it there, disposing provider-tracked workspaces
+        e.g. billable E2B sandboxes.
+        """
+        from modulo.core.connector_hub import ConnectorHub
+        from modulo.core.pipeline_engine.decorator import set_connector_hub
+        from modulo.core.runtime_provider import create_default_hub
+        from modulo.core.secrets_backend import create_secrets_backend
+        from modulo.settings import get_settings
+
+        _settings = get_settings()
+        secrets_backend = create_secrets_backend(
+            fernet_key=_settings.fernet_key,
+            session=session,
+        )
+        runtime_hub = create_default_hub()
+        hub: ConnectorHub | None = None
+        try:
+            hub = ConnectorHub(
+                secrets_backend=secrets_backend,
+                runtime_provider=runtime_hub,
+                org_id=str(org_id),
+                request_visibility=request_visibility,
+            )
+            await hub.__aenter__()
+            await hub.initialise(rows, allowed_connectors=allowed_connectors)
+            if hub.skipped or hub.healthy:
+                await self._persist_connector_degraded_markers(session, hub)
+            set_connector_hub(hub)
+        except BaseException:
+            # A partially-initialised hub (constructed but __aenter__ or
+            # initialise raised) must still be torn down before the
+            # fail-closed re-raise: the caller sees hub=None for this
+            # failure mode (this helper never returned), so without this
+            # guard the teardown — and with it the runtime-provider
+            # aclose disposing provider-tracked workspaces (FAR-587, e.g.
+            # billable E2B sandboxes) — would be skipped exactly here.
+            # Cleanup failures are logged inside _teardown_hub and
+            # suppressed here so they never mask the original error.
+            if hub is not None:
+                with suppress(Exception):
+                    await _teardown_hub(hub)
+            raise
+        return hub
+
+    async def _hub_init_failure_hub(self, connectors_configured: bool, hub: Any) -> Any | None:
+        """Fail-closed teardown for a generic hub-init failure; returns the final hub.
+
+        *connectors_configured* means connectors ARE configured, OR we could
+        NOT establish that they are NOT (a read/query error with the
+        fail-closed default). A run that may require connector work must never
+        fall through to ``hub=None`` — the node_runner would treat it as
+        vacuous success, silently no-op'ing a configured remote integration
+        and finalising the run GREEN. Re-raise so the run terminalises as
+        FAILED.
+
+        Defensive: ``connectors_configured`` is False ONLY on a confirmed
+        empty result, which never raises — this branch is otherwise
+        unreachable. Keep the vacuous-success return for safety.
+        """
+        if connectors_configured:
+            _log.exception("pipeline.connector_hub_init_failed_configured")
+            if hub is not None:
+                await _teardown_hub(hub)
+            raise
+        _log.exception("pipeline.connector_hub_init_failed")
+        if hub is not None:
+            await _teardown_hub(hub)
+        return None
+
     async def _init_connector_hub(
         self,
         org_id: uuid.UUID,
@@ -2166,45 +2376,9 @@ class PipelineExecutor:
                 await set_rls_execution_context(session)
                 from sqlalchemy import select
 
-                from modulo.core.capability_scope import (
-                    agent_granted_connector_types,
-                    compute_run_fetch_scope,
-                )
-                from modulo.db.models.agent import Agent
                 from modulo.db.models.connector_instance import ConnectorInstance
 
-                allowed_connectors: list[str] | None = None
-                if graph_json is not None:
-                    agent_ids: list[uuid.UUID] = []
-                    for node in graph_json.get("nodes", []) or []:
-                        if not isinstance(node, dict):
-                            continue
-                        agent_id = node.get("agent_id")
-                        if agent_id:
-                            try:
-                                agent_ids.append(uuid.UUID(str(agent_id)))
-                            except (TypeError, ValueError):
-                                continue
-                    grants: dict[str, set[str]] = {}
-                    if agent_ids:
-                        agent_rows = (
-                            (
-                                await session.execute(
-                                    select(Agent).where(
-                                        Agent.id.in_(agent_ids),
-                                        Agent.organisation_id == org_id,
-                                    )
-                                )
-                            )
-                            .scalars()
-                            .all()
-                        )
-                        for agent in agent_rows:
-                            grants[str(agent.id)] = agent_granted_connector_types(agent.connector_type_refs)
-                    allowed_connectors = compute_run_fetch_scope(graph_json, grants)
-                    self._run_connector_scope = allowed_connectors
-                else:
-                    allowed_connectors = self._run_connector_scope
+                allowed_connectors = await self._resolve_run_connector_scope(session, org_id, graph_json)
 
                 rows = (
                     (
@@ -2219,65 +2393,8 @@ class PipelineExecutor:
                     .all()
                 )
                 if isinstance(rows, list) and rows:
-                    # Connectors confirmed configured: build the hub. Any failure
-                    # below re-raises (fail closed) via the configured path.
-                    from modulo.core.connector_hub import ConnectorHub
-                    from modulo.core.pipeline_engine.decorator import set_connector_hub
-                    from modulo.core.runtime_provider import create_default_hub
-                    from modulo.core.secrets_backend import create_secrets_backend
-                    from modulo.db.crud.connector_instance import (
-                        clear_degraded_markers,
-                        mark_instances_degraded,
-                    )
-                    from modulo.settings import get_settings
-
-                    _settings = get_settings()
-                    secrets_backend = create_secrets_backend(
-                        fernet_key=_settings.fernet_key,
-                        session=session,
-                    )
-                    runtime_hub = create_default_hub()
-                    hub = ConnectorHub(
-                        secrets_backend=secrets_backend,
-                        runtime_provider=runtime_hub,
-                        org_id=str(org_id),
-                        request_visibility=request_visibility,
-                    )
-                    # FAR-587: the runtime-provider hub stays reachable for
-                    # the teardown path via the ConnectorHub constructor seam
-                    # (``runtime_provider=`` -> ``_runtime_provider``);
-                    # _teardown_hub acloses it there, disposing
-                    # provider-tracked workspaces e.g. billable E2B sandboxes.
-                    await hub.__aenter__()
-                    await hub.initialise(rows, allowed_connectors=allowed_connectors)
-                    if hub.skipped or hub.healthy:
-                        # FAR-495: persist a degraded marker for the skipped
-                        # instances and clear stale markers for instances that
-                        # initialised successfully (a connector fixed via a
-                        # config/plugin change stops being flagged degraded),
-                        # best-effort inside its own savepoint so a failure here
-                        # can NEVER fail or roll back the run-start transaction
-                        # (the hub itself already logged the skips). Only
-                        # instances actually attempted this run appear in
-                        # ``hub.skipped``/``hub.healthy``, so out-of-scope
-                        # instances are never touched.
-                        try:
-                            async with session.begin_nested():
-                                if hub.skipped:
-                                    await mark_instances_degraded(session, hub.skipped)
-                                if hub.healthy:
-                                    await clear_degraded_markers(session, hub.healthy)
-                        except Exception:
-                            # No run id in scope here (_init_connector_hub is
-                            # org-scoped); the instance ids are the correlatable
-                            # identifiers.
-                            _log.warning(
-                                "pipeline.connector_degraded_marker_failed skipped=%s healthy=%s",
-                                sorted(str(i) for i in hub.skipped),
-                                sorted(str(i) for i in hub.healthy),
-                                exc_info=True,
-                            )
-                    set_connector_hub(hub)
+                    # Connectors confirmed configured: build the hub (fail-closed).
+                    hub = await self._build_connector_hub(session, org_id, rows, allowed_connectors, request_visibility)
                 else:
                     # Confirmed-EMPTY result (no error): the ONE genuine "no
                     # connectors configured" case. ``connectors_configured`` False
@@ -2297,25 +2414,7 @@ class PipelineExecutor:
                 await _teardown_hub(hub)
             raise
         except Exception:
-            if connectors_configured:
-                # Fail closed, loudly: connectors ARE configured, OR we could NOT
-                # establish that they are NOT (a read/query error with the
-                # fail-closed default). A run that may require connector work must
-                # never fall through to ``hub=None`` — the node_runner would treat
-                # it as vacuous success, silently no-op'ing a configured remote
-                # integration and finalising the run GREEN. Re-raise so the run
-                # terminalises as FAILED.
-                _log.exception("pipeline.connector_hub_init_failed_configured")
-                if hub is not None:
-                    await _teardown_hub(hub)
-                raise
-            # Defensive: ``connectors_configured`` is False ONLY on a confirmed
-            # empty result, which never raises — this branch is otherwise
-            # unreachable. Keep the vacuous-success return for safety.
-            _log.exception("pipeline.connector_hub_init_failed")
-            if hub is not None:
-                await _teardown_hub(hub)
-            hub = None
+            hub = await self._hub_init_failure_hub(connectors_configured, hub)
         return hub
 
     async def _compensate_blocked_run_best_effort(
@@ -4271,6 +4370,151 @@ class PipelineExecutor:
                 )
         return error_code, error_detail
 
+    async def _read_retry_attempt_state(
+        self,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> tuple[int, str | None]:
+        """Read the run's attempt count + current claim token for the retry check."""
+        node_attempt_count = 0
+        current_claim_token: str | None = None
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            current_run = await get_run(session, run_id)
+            if current_run is not None:
+                node_attempt_count = int(current_run.node_attempt_count or 0)
+                current_claim_token = current_run.claim_token
+        return node_attempt_count, current_claim_token
+
+    async def _probe_script_lease(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> bool:
+        """FAR-296 Phase 2 stale-claim lease probe before ANY requeue of script mode.
+
+        Proves no script process could still be alive. A probe evaluation
+        error fails CLOSED (returns False, logged) — an unknown side-effect
+        state must never be re-dispatched.
+        """
+        try:
+            ok = await _script_lease_probe_ok(self._session_factory, str(run_id), org_id, self._claim_token)
+        except Exception:
+            _log.warning(
+                "script.lease_probe_eval_failed_retry_policy",
+                extra={"run_id": str(run_id)},
+                exc_info=True,
+            )
+            ok = False
+        if not ok:
+            _log.warning(
+                "script.lease_probe.blocked_retry_policy",
+                extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
+            )
+        return ok
+
+    def _publish_script_side_effect_unknown(self, broker: RunEventBroker, run_id: uuid.UUID) -> str:
+        """FAR-296 Phase 2: terminal-fail with ``script.side_effect_unknown``.
+
+        The lease probe blocked the requeue — a script process may have run
+        with unknown side-effect state. Terminal-fail (never retried) so the
+        run reaches a needs-human state instead of silently looping or being
+        left stuck in ``running``.
+        """
+        _log.warning(
+            "script.lease_probe.terminal_side_effect_unknown",
+            extra={"run_id": str(run_id), "error_code": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN},
+        )
+        error_detail_value = _sanitize_detail(
+            "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
+            "not retried — needs human review.",
+            limit=5000,
+        )
+        broker.publish("run_failed", {"error": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, "detail": error_detail_value})
+        return "side_effect_unknown"
+
+    async def _redispatch_after_policy(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        node_attempt_count: int,
+        retry_budget: int,
+        pipeline_retry_policy: dict[str, Any],
+        model_backend_hub: ModelBackendHub | None,
+        connector_hub: Any | None,
+    ) -> NoReturn:
+        """Fenced pending-reset + backoff + ``RunRetryPolicyError`` re-dispatch.
+
+        Control never returns: the re-raise propagates out of execute() BEFORE
+        the post-stream try/finally, so the run's cleanup runs HERE (clear the
+        cancellation check + hubs and close the run's broker so the retry
+        re-entry gets a fresh broker and no stale contextvars).
+        """
+        from modulo.settings import get_settings
+
+        # FAR-525: resolve the run-level backoff_schedule EARLY — the pure
+        # computation MUST happen BEFORE the fenced pending-reset so a
+        # resolver defect can never strand a run that was already reset.
+        # Total fail-open: an invalid/out-of-bounds schedule falls back to
+        # the hardcoded default schedule (45s x 2.0, cap 300, jitter).
+        schedule_present, schedule_delay, schedule_multiplier, schedule_reason = rc.resolve_backoff_schedule(
+            pipeline_retry_policy
+        )
+        if schedule_reason is not None:
+            _log.warning(
+                "pipeline.retry_policy_schedule_fail_open",
+                extra={
+                    "run_id": str(run_id),
+                    "reason": schedule_reason,
+                    "offending": rc.sanitize_retry_policy_snippet(
+                        pipeline_retry_policy.get("backoff_schedule")
+                        if isinstance(pipeline_retry_policy, dict)
+                        else None
+                    ),
+                },
+            )
+        schedule_state = "absent" if not schedule_present else ("failopen" if schedule_reason else "valid")
+        # ONE jitter draw: the delay is computed ONCE here and threaded to
+        # BOTH the log line and the asyncio.sleep below (no re-resolution).
+        effective_sleep = _retry_backoff_seconds(
+            node_attempt_count, base=schedule_delay, multiplier=schedule_multiplier
+        )
+        _log.warning(
+            "pipeline.retry_policy",
+            extra={
+                "run_id": str(run_id),
+                "status": final_status,
+                "error_code": error_code,
+                "attempt": node_attempt_count,
+                "budget": retry_budget,
+                # FAR-525 observability: the effective post-cap post-jitter
+                # sleep, the schedule state, and the SAQ delay component.
+                "sleep_seconds": round(effective_sleep, 3),
+                "schedule_state": schedule_state,
+                "saq_retry_delay": int(getattr(get_settings(), "saq_retry_delay", 0)),
+            },
+        )
+        reset_rowcount = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+        await self._cleanup_run_resources(
+            model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
+        )
+        # FAR-136 Gap 1: jittered, capped backoff before the re-dispatch.
+        # Without it a policy-triggered retry re-fires back-to-back,
+        # hammering the queue/gateway on a persistent failure. The delay
+        # grows with the attempt count and is bounded by the retry
+        # budget (the loop above only re-dispatches while
+        # node_attempt_count <= retry_budget), so the schedule can never
+        # extend beyond max_retries. `_retry_backoff_seconds` is a pure
+        # function of the attempt number — covered by unit tests.
+        # FAR-525: the delay honours the run-level ``backoff_schedule``
+        # (resolved EARLY above; fail-open to the hardcoded default).
+        if reset_rowcount:
+            # FAR-525 observability: count only CONFIRMED resets — a fence
+            # loss (rowcount 0) means a successor already owns the run.
+            _record_retry_redispatch(reason=final_status, schedule_state=schedule_state, delay_seconds=effective_sleep)
+        await asyncio.sleep(effective_sleep)
+        raise RunRetryPolicyError(final_status, retry_budget)
+
     async def _maybe_retry_after_policy(
         self,
         *,
@@ -4305,15 +4549,7 @@ class PipelineExecutor:
         # narrowing keeps mypy strict-clean without introducing an ``assert``.
         if retry_budget is None:
             return "none"
-        node_attempt_count = 0
-        current_claim_token: str | None = None
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            current_run = await get_run(session, run_id)
-            if current_run is not None:
-                node_attempt_count = int(current_run.node_attempt_count or 0)
-                current_claim_token = current_run.claim_token
+        node_attempt_count, current_claim_token = await self._read_retry_attempt_state(org_id, run_id)
         superseded = (
             self._claim_token is not None
             and current_claim_token is not None
@@ -4330,112 +4566,21 @@ class PipelineExecutor:
         # no script process could still be alive (stale-claim lease probe).
         script_retry_probe_ok = True
         if _graph_has_script_mode(graph_json):
-            try:
-                script_retry_probe_ok = await _script_lease_probe_ok(
-                    self._session_factory, str(run_id), org_id, self._claim_token
-                )
-            except Exception:
-                _log.warning(
-                    "script.lease_probe_eval_failed_retry_policy",
-                    extra={"run_id": str(run_id)},
-                    exc_info=True,
-                )
-                script_retry_probe_ok = False
-            if not script_retry_probe_ok:
-                _log.warning(
-                    "script.lease_probe.blocked_retry_policy",
-                    extra={"run_id": str(run_id), "reason": "stale script_executing lease"},
-                )
+            script_retry_probe_ok = await self._probe_script_lease(run_id=run_id, org_id=org_id)
         if _can_retry_after_policy(node_attempt_count, retry_budget, superseded, script_retry_probe_ok):
-            from modulo.settings import get_settings
-
-            # FAR-525: resolve the run-level backoff_schedule EARLY — the pure
-            # computation MUST happen BEFORE the fenced pending-reset so a
-            # resolver defect can never strand a run that was already reset.
-            # Total fail-open: an invalid/out-of-bounds schedule falls back to
-            # the hardcoded default schedule (45s x 2.0, cap 300, jitter).
-            schedule_present, schedule_delay, schedule_multiplier, schedule_reason = rc.resolve_backoff_schedule(
-                pipeline_retry_policy
+            await self._redispatch_after_policy(
+                run_id=run_id,
+                org_id=org_id,
+                final_status=final_status,
+                error_code=error_code,
+                node_attempt_count=node_attempt_count,
+                retry_budget=retry_budget,
+                pipeline_retry_policy=pipeline_retry_policy,
+                model_backend_hub=model_backend_hub,
+                connector_hub=connector_hub,
             )
-            if schedule_reason is not None:
-                _log.warning(
-                    "pipeline.retry_policy_schedule_fail_open",
-                    extra={
-                        "run_id": str(run_id),
-                        "reason": schedule_reason,
-                        "offending": rc.sanitize_retry_policy_snippet(
-                            pipeline_retry_policy.get("backoff_schedule")
-                            if isinstance(pipeline_retry_policy, dict)
-                            else None
-                        ),
-                    },
-                )
-            schedule_state = "absent" if not schedule_present else ("failopen" if schedule_reason else "valid")
-            # ONE jitter draw: the delay is computed ONCE here and threaded to
-            # BOTH the log line and the asyncio.sleep below (no re-resolution).
-            effective_sleep = _retry_backoff_seconds(
-                node_attempt_count, base=schedule_delay, multiplier=schedule_multiplier
-            )
-            _log.warning(
-                "pipeline.retry_policy",
-                extra={
-                    "run_id": str(run_id),
-                    "status": final_status,
-                    "error_code": error_code,
-                    "attempt": node_attempt_count,
-                    "budget": retry_budget,
-                    # FAR-525 observability: the effective post-cap post-jitter
-                    # sleep, the schedule state, and the SAQ delay component.
-                    "sleep_seconds": round(effective_sleep, 3),
-                    "schedule_state": schedule_state,
-                    "saq_retry_delay": int(getattr(get_settings(), "saq_retry_delay", 0)),
-                },
-            )
-            reset_rowcount = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
-            # The re-raise below propagates out of execute() BEFORE the
-            # post-stream try/finally, so run its cleanup here: clear the
-            # cancellation check + hubs and close the run's broker so the
-            # retry re-entry gets a fresh broker and no stale contextvars.
-            await self._cleanup_run_resources(
-                model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
-            )
-            # FAR-136 Gap 1: jittered, capped backoff before the re-dispatch.
-            # Without it a policy-triggered retry re-fires back-to-back,
-            # hammering the queue/gateway on a persistent failure. The delay
-            # grows with the attempt count and is bounded by the retry
-            # budget (the loop above only re-dispatches while
-            # node_attempt_count <= retry_budget), so the schedule can never
-            # extend beyond max_retries. `_retry_backoff_seconds` is a pure
-            # function of the attempt number — covered by unit tests.
-            # FAR-525: the delay honours the run-level ``backoff_schedule``
-            # (resolved EARLY above; fail-open to the hardcoded default).
-            if reset_rowcount:
-                # FAR-525 observability: count only CONFIRMED resets — a fence
-                # loss (rowcount 0) means a successor already owns the run.
-                _record_retry_redispatch(
-                    reason=final_status, schedule_state=schedule_state, delay_seconds=effective_sleep
-                )
-            await asyncio.sleep(effective_sleep)
-            raise RunRetryPolicyError(final_status, retry_budget)
         if not script_retry_probe_ok:
-            # FAR-296 Phase 2: the lease probe blocked the requeue — a
-            # script process may have run with unknown side-effect state.
-            # Terminal-fail with ``script.side_effect_unknown`` (never
-            # retried) so the run reaches a needs-human state instead of
-            # silently looping or being left stuck in ``running``.
-            _log.warning(
-                "script.lease_probe.terminal_side_effect_unknown",
-                extra={"run_id": str(run_id), "error_code": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN},
-            )
-            error_detail_value = _sanitize_detail(
-                "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
-                "not retried — needs human review.",
-                limit=5000,
-            )
-            broker.publish(
-                "run_failed", {"error": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, "detail": error_detail_value}
-            )
-            return "side_effect_unknown"
+            return self._publish_script_side_effect_unknown(broker, run_id)
         return "none"
 
     async def _run_post_stream_tail(
@@ -4758,6 +4903,73 @@ class PipelineExecutor:
 
         return results
 
+    async def _interrupt_pipeline_name(
+        self,
+        session: Any,
+        pipeline_id: uuid.UUID,
+        org_id: uuid.UUID,
+    ) -> str | None:
+        """Best-effort pipeline-name lookup for the awaiting notification."""
+        try:
+            pipeline = await get_pipeline(session, pipeline_id)
+            return pipeline.name if pipeline is not None else None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "hitl_gate.pipeline_name_lookup_failed",
+                extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                exc_info=True,
+            )
+            return None
+
+    async def _create_interrupt_gate(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        gate_id: str,
+        pipeline_id: uuid.UUID,
+        required_team_id: uuid.UUID | None,
+    ) -> tuple[str | None, bool]:
+        """Create the HITL gate row (or reuse a coalescing open gate).
+
+        FAR-604 D4 gate coalescing: when an OPEN gate already covers this work
+        item, the duplicate run never raises a second gate. Unchanged SHA →
+        "reuse" (the existing gate decides; this run is terminalised
+        superseded by the caller); changed SHA → the old gate was
+        auto-superseded in the same transaction and this run raises fresh.
+
+        Returns ``(pipeline_name, coalesce_reused)`` — the name is ``None``
+        when the gate was reused or the lookup failed (logged, best-effort).
+        """
+        mgr = HITLManager()
+        pipeline_name: str | None = None
+        coalesce_reused = False
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            outcome = await evaluate_gate_coalescing(
+                session,
+                run_id=run_id,
+                gate_id=gate_id,
+                pipeline_id=pipeline_id,
+                org_id=org_id,
+            )
+            if outcome == "reuse":
+                coalesce_reused = True
+            else:
+                await mgr.create_gate(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
+                    required_team_id=required_team_id,
+                )
+                pipeline_name = await self._interrupt_pipeline_name(session, pipeline_id, org_id)
+        return pipeline_name, coalesce_reused
+
     async def _handle_graph_interrupt(
         self,
         interrupts: Any,
@@ -4774,12 +4986,9 @@ class PipelineExecutor:
         NOT segment-only. The empty-accumulator case (``{}`` → ``None``)
         normalizes so ``finalize_cost``'s merge leaves the stored set untouched.
         """
-        first_interrupt = interrupts[0] if interrupts else None
-        value = getattr(first_interrupt, "value", None)
-        gate_payload = value if isinstance(value, dict) else {}
+        gate_payload = _interrupt_gate_payload(interrupts)
         gate_id = gate_payload.get("gate_id", "")
-        required_team_id_str = gate_payload.get("required_team_id")
-        required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
+        required_team_id = _interrupt_required_team_id(gate_payload)
         node_token_usage = state.node_token_usage
         broker = ctx.broker
         run_id = ctx.run_id
@@ -4787,47 +4996,13 @@ class PipelineExecutor:
         org_id = ctx.org_id
 
         if pipeline_id is not None and org_id is not None:
-            mgr = HITLManager()
-            pipeline_name: str | None = None
-            coalesce_reused = False
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await set_rls_execution_context(session)
-                # FAR-604 D4 gate coalescing: when an OPEN gate already
-                # covers this work item, the duplicate run never raises a
-                # second gate. Unchanged SHA → "reuse" (the existing gate
-                # decides; this run is terminalised superseded below);
-                # changed SHA → the old gate was auto-superseded in the same
-                # transaction and this run raises fresh.
-                outcome = await evaluate_gate_coalescing(
-                    session,
-                    run_id=run_id,
-                    gate_id=gate_id,
-                    pipeline_id=pipeline_id,
-                    org_id=org_id,
-                )
-                if outcome == "reuse":
-                    coalesce_reused = True
-                else:
-                    await mgr.create_gate(
-                        session,
-                        run_id=run_id,
-                        gate_id=gate_id,
-                        pipeline_id=pipeline_id,
-                        org_id=org_id,
-                        required_team_id=required_team_id,
-                    )
-                    try:
-                        pipeline = await get_pipeline(session, pipeline_id)
-                        pipeline_name = pipeline.name if pipeline is not None else None
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        _log.warning(
-                            "hitl_gate.pipeline_name_lookup_failed",
-                            extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
-                            exc_info=True,
-                        )
+            pipeline_name, coalesce_reused = await self._create_interrupt_gate(
+                org_id=org_id,
+                run_id=run_id,
+                gate_id=gate_id,
+                pipeline_id=pipeline_id,
+                required_team_id=required_team_id,
+            )
             if coalesce_reused:
                 detail = (
                     "HITL gate coalesced (FAR-604 D4): an open gate already covers this work item "
@@ -5018,36 +5193,20 @@ class PipelineExecutor:
             _accumulate_llm_tokens(lg_event, state.node_token_usage, ctx.guard, ctx.node_token_budgets)
         return None
 
-    async def _stream_exception_outcome(
+    def _stream_policy_outcome(
         self,
         exc: BaseException,
-        *,
+        broker: RunEventBroker,
+        run_id: uuid.UUID,
         state: _StreamState,
-        ctx: _StreamContext,
-    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
-        """Map a stream exception to a terminal 4-tuple, or re-raise it.
+        node_token_usage: dict[str, Any] | None,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None] | None:
+        """Terminal mappings for eval / output / cancellation / compensation errors.
 
-        Extracted from ``_stream_graph``'s exception chain (pure refactor) so
-        the stream method keeps a single ``except BaseException`` clause. Every
-        mapped outcome is identical to the original chain; cancellation and
-        transient node failures are re-raised unchanged.
+        Tried BEFORE ``_stream_operational_outcome``; ``None`` = not this
+        exception. Order within each helper mirrors the original isinstance
+        chain — first match wins.
         """
-        broker = ctx.broker
-        run_id = ctx.run_id
-        node_token_usage = state.node_token_usage or None
-        if isinstance(exc, GraphInterrupt):
-            interrupts = exc.args[0] if exc.args else []
-            return await self._handle_graph_interrupt(interrupts, state, ctx)
-        if isinstance(exc, asyncio.CancelledError):
-            raise
-        if isinstance(exc, (NodeCancelledError, SandboxNodeFailedError)):
-            # Transient node cancellation / sandbox-infra failure (langgraph
-            # wraps a node body's asyncio.CancelledError; a stall or command
-            # timeout raises SandboxNodeFailedError). Do NOT swallow into a
-            # terminal failure tuple here — propagate so execute() can decide:
-            # retry (fenced reset to pending + re-raise) or terminal-fail once
-            # retries are exhausted.
-            raise
         if isinstance(exc, EvalBlockedError):
             return _terminal_failure(
                 broker,
@@ -5092,6 +5251,22 @@ class PipelineExecutor:
                 scrubbed,
                 node_token_usage,
             )
+        return None
+
+    def _stream_operational_outcome(
+        self,
+        exc: BaseException,
+        broker: RunEventBroker,
+        run_id: uuid.UUID,
+        node_token_usage: dict[str, Any] | None,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None] | None:
+        """Terminal mappings for runaway / timeout / superseded / validation / routing errors.
+
+        Tried AFTER ``_stream_policy_outcome``; ``None`` = not this exception
+        (the caller falls back to the generic ``type(exc).__name__`` failure).
+        Order within the helper mirrors the original isinstance chain — first
+        match wins.
+        """
         if isinstance(exc, RunawayRunError):
             error_detail = _sanitize_detail(exc, limit=5000)
             _log.warning(
@@ -5160,6 +5335,47 @@ class PipelineExecutor:
                 error_detail,
                 node_token_usage,
             )
+        return None
+
+    async def _stream_exception_outcome(
+        self,
+        exc: BaseException,
+        *,
+        state: _StreamState,
+        ctx: _StreamContext,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
+        """Map a stream exception to a terminal 4-tuple, or re-raise it.
+
+        Extracted from ``_stream_graph``'s exception chain (pure refactor) so
+        the stream method keeps a single ``except BaseException`` clause. Every
+        mapped outcome is identical to the original chain; cancellation and
+        transient node failures are re-raised unchanged. The isinstance checks
+        are split across ``_stream_policy_outcome`` and
+        ``_stream_operational_outcome`` (tried in that order) — first match
+        wins, exactly as the original inline chain.
+        """
+        broker = ctx.broker
+        run_id = ctx.run_id
+        node_token_usage = state.node_token_usage or None
+        if isinstance(exc, GraphInterrupt):
+            interrupts = exc.args[0] if exc.args else []
+            return await self._handle_graph_interrupt(interrupts, state, ctx)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        if isinstance(exc, (NodeCancelledError, SandboxNodeFailedError)):
+            # Transient node cancellation / sandbox-infra failure (langgraph
+            # wraps a node body's asyncio.CancelledError; a stall or command
+            # timeout raises SandboxNodeFailedError). Do NOT swallow into a
+            # terminal failure tuple here — propagate so execute() can decide:
+            # retry (fenced reset to pending + re-raise) or terminal-fail once
+            # retries are exhausted.
+            raise
+        policy_outcome = self._stream_policy_outcome(exc, broker, run_id, state, node_token_usage)
+        if policy_outcome is not None:
+            return policy_outcome
+        operational_outcome = self._stream_operational_outcome(exc, broker, run_id, node_token_usage)
+        if operational_outcome is not None:
+            return operational_outcome
         _tb = _traceback_detail(exc, limit=5000)
         return _terminal_failure(
             broker,

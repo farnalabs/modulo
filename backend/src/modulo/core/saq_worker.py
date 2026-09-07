@@ -68,6 +68,7 @@ from saq import CronJob, Worker
 from saq.queue.redis import RedisQueue
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from modulo.core.cron_helpers import SAQ_TASK_FIRE_SUITE_RUN
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -1599,7 +1600,7 @@ def _runs_functions() -> list[tuple[str, Any]]:
         ("modulo.core.saq_worker.fire_polling_trigger", fire_polling_trigger),
         ("modulo.core.saq_worker.fire_report_trigger", fire_report_trigger),
         ("modulo.core.saq_worker.fire_ongoing_trigger", fire_ongoing_trigger),
-        ("modulo.core.saq_worker.fire_suite_run_trigger", fire_suite_run_trigger),
+        (SAQ_TASK_FIRE_SUITE_RUN, fire_suite_run_trigger),
     ]
 
 
