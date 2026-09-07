@@ -3124,14 +3124,6 @@ async def create_eval_definition(
         return _tool_error("Failed to create eval definition")
 
 
-@mcp.tool(
-    description="Update an eval definition (admin only). Bumps the definition "
-    "version and snapshots the pre-edit config, mirroring the REST semantics. "
-    "Requires an admin caller; non-admins receive an insufficient_scope error. "
-    "NOTE: because None means 'not provided' in the tool signature, nullable "
-    "fields (node_id, pass_threshold, suite_id) cannot be cleared to NULL via "
-    "this tool - the REST PUT route must be used to unset them.",
-)
 def _assert_update_eval_definition_params(
     eval_type: str | None,
     failure_behaviour: str | None,
@@ -3332,6 +3324,79 @@ async def update_eval_definition(
         return _tool_error("Failed to update eval definition")
 
 
+async def _audit_eval_def_delete(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    eid: uuid.UUID,
+    hard: bool,
+    soft: bool,
+    eval_name: str,
+) -> None:
+    """Best-effort audit event for a guardrail eval-definition delete."""
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        await append_audit_event(
+            s,
+            org_id=org_id,
+            event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
+            actor_user_id=account_id,
+            resource_type="eval_definition",
+            resource_id=eid,
+            payload_json={"eval_id": str(eid), "name": eval_name, "purge": hard},
+        )
+    except Exception:
+        _log.exception(
+            "delete_eval_definition_audit_failed",
+            extra={"org_id": str(org_id), "eval_id": str(eid)},
+        )
+
+
+async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, Any]:
+    """Soft-delete or purge an EvalDefinition; shared with the MCP tool wrapper."""
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("delete_eval_definition")
+
+    from modulo.api.routes.evals import _MSG_EVAL_DEFINITION_NOT_FOUND
+    from modulo.db.models.eval_definition import EvalDefinition
+
+    _assert_admin_scope("delete")
+
+    org_id = _ctx_org_id_val()
+    account_id = _ctx_user_id_val()
+
+    eid, _, eid_err = _parse_eval_ref_ids(eval_id, "eval_id", None)
+    if eid_err is not None:
+        return eid_err
+    assert eid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+
+    async with _session(org_id) as s:
+        eval_def = (
+            await s.execute(
+                select(EvalDefinition).where(
+                    EvalDefinition.id == eid,
+                    EvalDefinition.organisation_id == org_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if eval_def is None:
+            return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
+
+        is_guardrail = eval_def.eval_type == "guardrail"
+        soft = is_guardrail and not hard
+        eval_name = eval_def.name
+        if soft:
+            eval_def.deleted_at = datetime.now(UTC)
+            eval_def.deleted_by = account_id
+        else:
+            await s.delete(eval_def)
+        if is_guardrail:
+            await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name)
+    return {"id": str(eid), "soft_deleted": soft, "hard_deleted": not soft}
+
+
 @mcp.tool(
     description="Delete an eval definition (admin only). Guardrail eval "
     "definitions are SOFT-deleted (deleted_at stamped) by default; a second, "
@@ -3344,61 +3409,7 @@ async def delete_eval_definition(
     hard: bool = False,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        _check_agent_tool_scope("delete_eval_definition")
-
-        from modulo.api.routes.evals import _MSG_EVAL_DEFINITION_NOT_FOUND
-        from modulo.core.audit_logger import append_audit_event
-
-        _assert_admin_scope("delete")
-
-        org_id = _ctx_org_id_val()
-        account_id = _ctx_user_id_val()
-
-        eid, eid_err = _parse_uuid_param(eval_id, "eval_id")
-        if eid_err:
-            return eid_err
-
-        from modulo.db.models.eval_definition import EvalDefinition
-
-        async with _session(org_id) as s:
-            eval_def = (
-                await s.execute(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eid,
-                        EvalDefinition.organisation_id == org_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if eval_def is None:
-                return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
-
-            is_guardrail = eval_def.eval_type == "guardrail"
-            soft = is_guardrail and not hard
-            eval_name = eval_def.name
-            if soft:
-                eval_def.deleted_at = datetime.now(UTC)
-                eval_def.deleted_by = account_id
-            else:
-                await s.delete(eval_def)
-            if is_guardrail:
-                try:
-                    await append_audit_event(
-                        s,
-                        org_id=org_id,
-                        event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
-                        actor_user_id=account_id,
-                        resource_type="eval_definition",
-                        resource_id=eid,
-                        payload_json={"eval_id": str(eid), "name": eval_name, "purge": hard},
-                    )
-                except Exception:
-                    _log.exception(
-                        "delete_eval_definition_audit_failed",
-                        extra={"org_id": str(org_id), "eval_id": str(eid)},
-                    )
-        return {"id": str(eid), "soft_deleted": soft, "hard_deleted": not soft}
+        return await _delete_eval_definition_impl(eval_id, hard)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError as exc:
