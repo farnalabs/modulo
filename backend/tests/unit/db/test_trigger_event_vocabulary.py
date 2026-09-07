@@ -51,8 +51,11 @@ _MIGRATION_PATH = (
 # collision and again from 0178 after the env_profiles_runner_docker collision)
 # re-parented onto 0179_drop_workspace_leases, and the FAR-620 org-api-key
 # scope migration (0181_org_api_keys_scope, renumbered from 0178 after the
-# env_profiles_runner_docker collision) re-parented onto 0180 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0181_org_api_keys_scope"
+# env_profiles_runner_docker collision) re-parented onto 0180 as the chain head,
+# followed by 0182_triggers_add_polling_ongoing_agent_signal_indexes ->
+# 0183_trigger_events_indexes_and_type_check (this PR's trigger_events index +
+# type-check sweep), which is now the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0183_trigger_events_indexes_and_type_check"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
