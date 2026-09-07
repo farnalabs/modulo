@@ -6,7 +6,7 @@ test.describe('Settings HITL Review', { tag: "@regression" }, () => {
     await page.goto('/settings/hitl-review')
     await expect(page.locator('h1')).toContainText('HITL Review')
     if (env.name === 'local') {
-      await expect(page.getByTestId('hitl-review-status-select')).toBeVisible()
+      await expect(page.getByTestId('filter-bar-status')).toBeVisible()
     }
   })
 })

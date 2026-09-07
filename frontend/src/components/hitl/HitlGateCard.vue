@@ -204,7 +204,10 @@ const messageTimers: ReturnType<typeof setTimeout>[] = []
 const status = computed(() => {
   if (props.gate.decision === 'approved') return 'approved'
   if (props.gate.decision === 'rejected') return 'rejected'
-  if (props.gate.claimed_by) return 'claimed'
+  // An in-session claim token counts as claimed (FAR-686): the parent may not
+  // re-fetch immediately after the claim resolves, so without this arm the
+  // card would keep rendering the Claim button instead of approve/reject.
+  if (props.gate.claimed_by || claimToken.value) return 'claimed'
   return 'pending'
 })
 

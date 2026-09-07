@@ -120,6 +120,12 @@
           </span>
         </button>
         <div v-if="expandedKey === expandKey(gate)" class="border-t p-4">
+          <!-- No @claimed handler (FAR-686): a loadGates() refetch flips the
+               page-level `loading` flag, unmounting this list branch and with
+               it the card's in-session claim token. The card already shows
+               approve/reject immediately after claiming; the row badge
+               converges on the next auto-refresh. @decided is safe: the row
+               leaves the list, so there is no in-card state to lose. -->
           <HitlGateCard
             :gate="gate"
             show-run-link
@@ -128,6 +134,7 @@
             @decided="onGateDecided"
           />
         </div>
+      </div>
       </div>
     </template>
   </div>

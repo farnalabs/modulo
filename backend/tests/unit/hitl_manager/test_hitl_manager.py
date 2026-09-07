@@ -566,6 +566,130 @@ async def test_claim_after_expiry_reset_succeeds():
 
 
 # ---------------------------------------------------------------------------
+# claim — same-account re-claim (FAR-686)
+# ---------------------------------------------------------------------------
+
+
+async def test_claim_same_account_reclaim_issues_fresh_token():
+    """FAR-686: a reviewer who reloaded the page lost their claim token (it
+    lives only in frontend state) — the SAME account may re-claim, which
+    re-issues a fresh token and refreshes claimed_at/expires_at while the
+    account stays unchanged."""
+    old_claimed_at = datetime.now(UTC) - timedelta(minutes=10)
+    held = _gate(
+        account_id=_USER,
+        claim_token="stale-token",
+        claimed_at=old_claimed_at,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    reclaimed = _gate(
+        account_id=_USER,
+        claim_token="fresh-token",
+        claimed_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    captured: list[Any] = []
+
+    async def _execute(stmt: Any) -> Any:
+        captured.append(stmt)
+        r = MagicMock()
+        if len(captured) == 1:
+            # Pre-check SELECT — the gate is held by the SAME account
+            r.scalar_one_or_none.return_value = held
+        else:
+            # UPDATE ... RETURNING and any later reads
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+        return r
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=reclaimed)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+
+    mgr = HITLManager()
+    with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
+        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    assert result is reclaimed
+    assert result.account_id == _USER
+    assert result.claim_token != "stale-token"
+
+    assert len(captured) >= 2
+    values = _update_values(captured[1])
+    assert values["account_id"] == _USER
+    assert values["claim_token"] != "stale-token"
+    assert values["claimed_at"] is not None
+    assert values["claimed_at"] > old_claimed_at
+    assert values["expires_at"] - values["claimed_at"] == timedelta(minutes=15)
+
+
+async def test_claim_same_account_reclaim_team_scoped_gate():
+    """Same-account re-claim also works on a team-scoped gate — membership is
+    re-checked on both sides of the claim UPDATE as usual (FAR-686)."""
+    held = _gate(account_id=_USER, claim_token="old-token", required_team_id=_TEAM)
+    reclaimed = _gate(account_id=_USER, claim_token="new-token", required_team_id=_TEAM)
+    membership = MagicMock(spec=TeamMembership)
+    membership.team_id = _TEAM
+    membership.account_id = _USER
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    call_no = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_no
+        call_no += 1
+        r = MagicMock()
+        if call_no in (1, 2):
+            # Pre-check SELECT + FOR UPDATE row lock (same-account hold passes)
+            r.scalar_one_or_none.return_value = held
+        elif call_no in (3, 5):
+            # Membership pre-check + post-claim TOCTOU re-verification
+            r.scalar_one_or_none.return_value = membership
+        else:
+            # Claim UPDATE
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+        return r
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=reclaimed)
+    mgr = HITLManager()
+    with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
+        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    assert result is reclaimed
+    assert result.claim_token == "new-token"
+
+
+async def test_claim_cross_account_on_claimed_gate_raises():
+    """FAR-686 keeps the cross-account guard: another account's live claim is
+    never overridden — AlreadyClaimedError still fires for a different user."""
+    existing = _gate(account_id=uuid.uuid4(), claim_token="tok")
+    session = _session_update(rows_returned=0, gate=existing, pre_check_gate=existing)
+    mgr = HITLManager()
+    with pytest.raises(AlreadyClaimedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_update_where_allows_unclaimed_or_same_account_only():
+    """The claim UPDATE's WHERE admits unclaimed gates and same-account
+    re-claims (FAR-686) but still requires the gate to be undecided."""
+    _mgr, _session, captured = await _claim_capture()
+    update_stmt = captured[1]  # execute call 2 is the UPDATE ... RETURNING
+    sql = str(update_stmt.compile())
+    assert "account_id IS NULL" in sql
+    assert "decision IS NULL" in sql
+    bound = {str(v) for v in update_stmt.compile().params.values()}
+    assert str(_USER) in bound, "same-account re-claim arm missing from the claim UPDATE WHERE"
+
+
+# ---------------------------------------------------------------------------
 # Team-scoped gates
 # ---------------------------------------------------------------------------
 
@@ -1754,6 +1878,64 @@ async def test_list_pending_filters_to_actionable_run_statuses():
     assert "awaiting_human" in sql, f"run-status filter missing awaiting_human, got: {sql}"
     assert "claimed" in sql, f"run-status filter missing claimed, got: {sql}"
     assert "complete" not in sql, f"terminal status must not be an allowed value, got: {sql}"
+
+
+async def test_list_pending_default_excludes_claimed_gates():
+    """Default list_pending() matches unclaimed + undecided gates only — the
+    WHERE carries ``account_id IS NULL`` so a held claim never surfaces."""
+    unclaimed = _gate(account_id=None)
+    session = AsyncMock()
+    scalars = MagicMock()
+    scalars.__iter__ = lambda self: iter([unclaimed])
+    execute_result = MagicMock()
+    execute_result.scalars.return_value = scalars
+    session.execute = AsyncMock(return_value=execute_result)
+
+    mgr = HITLManager()
+    result = await mgr.list_pending(session, _ORG)
+    assert result == [unclaimed]
+    sql = str(session.execute.call_args[0][0].compile())
+    assert "decision IS NULL" in sql
+    assert "account_id IS NULL" in sql
+
+
+async def test_list_pending_include_claimed_returns_claimed_and_unclaimed():
+    """FAR-686: ``include_claimed=True`` (the org review endpoint) also returns
+    claimed-but-undecided gates so they stay visible and actionable."""
+    claimed = _gate(account_id=_USER, claim_token="tok", claimed_at=datetime.now(UTC))
+    unclaimed = _gate(account_id=None)
+    session = AsyncMock()
+    scalars = MagicMock()
+    scalars.__iter__ = lambda self: iter([claimed, unclaimed])
+    execute_result = MagicMock()
+    execute_result.scalars.return_value = scalars
+    session.execute = AsyncMock(return_value=execute_result)
+
+    mgr = HITLManager()
+    result = await mgr.list_pending(session, _ORG, include_claimed=True)
+    assert result == [claimed, unclaimed]
+    sql = str(session.execute.call_args[0][0].compile())
+    assert "decision IS NULL" in sql
+    assert "account_id IS NULL" not in sql
+
+
+async def test_list_pending_never_returns_decided_gates():
+    """Both list_pending() modes filter on ``decision IS NULL`` — a decided
+    gate is history, never pending work."""
+    session = AsyncMock()
+    scalars = MagicMock()
+    scalars.__iter__ = lambda self: iter([])
+    execute_result = MagicMock()
+    execute_result.scalars.return_value = scalars
+    session.execute = AsyncMock(return_value=execute_result)
+
+    mgr = HITLManager()
+    await mgr.list_pending(session, _ORG)
+    default_sql = str(session.execute.call_args[0][0].compile())
+    await mgr.list_pending(session, _ORG, include_claimed=True)
+    include_sql = str(session.execute.call_args[0][0].compile())
+    assert "decision IS NULL" in default_sql
+    assert "decision IS NULL" in include_sql
 
 
 # ---------------------------------------------------------------------------
