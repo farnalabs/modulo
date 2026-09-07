@@ -1419,6 +1419,58 @@ class RestConnector(ConnectorBase):
 
     # ── Request builder (injection guard) ──────────────────────────────────
 
+    def _rendered_headers(self, spec: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
+        """Render the configured header templates, rejecting injection overrides.
+
+        Header names/values must not contain CR/LF or control chars, and a
+        rendered header may not override an auth/transport (protected) header.
+        """
+        headers: dict[str, str] = {}
+        rendered_headers = self._render(spec["headers"], context)
+        if isinstance(rendered_headers, dict):
+            for name, value in rendered_headers.items():
+                name_str = str(name)
+                value_str = str(value)
+                _reject_control_chars(name_str, what="header name")
+                _reject_control_chars(value_str, what="header value")
+                if name_str.lower() in self._protected_header_names:
+                    raise ValueError(f"REST rendered header overrides protected header {name_str!r}")
+                headers[name_str] = value_str
+        return headers
+
+    def _rendered_params(self, spec: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        """Render the configured query-param templates (None values dropped)."""
+        params: dict[str, Any] = {}
+        rendered_params = self._render(spec["params"], context)
+        if isinstance(rendered_params, dict):
+            for key, value in rendered_params.items():
+                if value is not None:
+                    params[str(key)] = value
+        return params
+
+    def _screen_write_payloads(
+        self,
+        resource: str,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any],
+        body: Any,
+    ) -> None:
+        """Screen the write-surface wire payload with the injection guard.
+
+        The prompt-injection TEXT classifier is a write-side concern (the hub
+        guards write payloads with filter_payload_for_injection). On the READ
+        surface it only adds false positives — a legitimate agent-supplied search
+        term like ``q=import os`` would otherwise throw OutputRejectedError. The
+        read surface relies on the real HTTP controls above (control-char
+        rejection, protected-header set, SSRF/allowlist).
+        """
+        screened: list[str] = [url]
+        screened.extend(headers.values())
+        screened.extend(str(v) for v in params.values())
+        screened.extend(_collect_strings(body))
+        self._security_guard.filter_strings(screened, resource=resource)
+
     async def _build_request(
         self,
         resource: str,
@@ -1441,25 +1493,8 @@ class RestConnector(ConnectorBase):
         default_method = "GET" if surface == "read" else "POST"
         spec = self._operation_spec(resource, default_method=default_method)
 
-        headers: dict[str, str] = {}
-        rendered_headers = self._render(spec["headers"], context)
-        if isinstance(rendered_headers, dict):
-            for name, value in rendered_headers.items():
-                name_str = str(name)
-                value_str = str(value)
-                _reject_control_chars(name_str, what="header name")
-                _reject_control_chars(value_str, what="header value")
-                if name_str.lower() in self._protected_header_names:
-                    raise ValueError(f"REST rendered header overrides protected header {name_str!r}")
-                headers[name_str] = value_str
-
-        params: dict[str, Any] = {}
-        rendered_params = self._render(spec["params"], context)
-        if isinstance(rendered_params, dict):
-            for key, value in rendered_params.items():
-                if value is not None:
-                    params[str(key)] = value
-
+        headers = self._rendered_headers(spec, context)
+        params = self._rendered_params(spec, context)
         body: Any = None
         if spec["body"] is not None:
             body = self._render(spec["body"], context)
@@ -1471,19 +1506,8 @@ class RestConnector(ConnectorBase):
 
         await self._validate_target_url(url)
 
-        # Write-path-style injection screening of everything that reaches the wire.
-        # The prompt-injection TEXT classifier is a write-side concern (the hub
-        # guards write payloads with filter_payload_for_injection). On the READ
-        # surface it only adds false positives — a legitimate agent-supplied search
-        # term like ``q=import os`` would otherwise throw OutputRejectedError. The
-        # read surface relies on the real HTTP controls above (control-char
-        # rejection, protected-header set, SSRF/allowlist).
         if surface == "write":
-            screened: list[str] = [url]
-            screened.extend(headers.values())
-            screened.extend(str(v) for v in params.values())
-            screened.extend(_collect_strings(body))
-            self._security_guard.filter_strings(screened, resource=resource)
+            self._screen_write_payloads(resource, url, headers, params, body)
 
         return RestRequest(
             method=spec["method"],
