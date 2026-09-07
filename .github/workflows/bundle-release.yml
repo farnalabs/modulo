@@ -31,9 +31,6 @@ on:
     tags:
       - "bundle-v*"
 
-permissions:
-  contents: write
-
 concurrency:
   group: bundle-${{ github.ref }}
   cancel-in-progress: false
@@ -85,6 +82,9 @@ jobs:
     name: Bundle linux-${{ matrix.arch }}
     needs: version-parity
     runs-on: ubuntu-latest
+    # Least-privilege: only the bundle job publishes releases.
+    permissions:
+      contents: write
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -118,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p downloads
-          curl -fsSL --retry 3 --retry-delay 2 -o "downloads/${PBS_TARBALL}" \
+          curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/${PBS_TARBALL}" \
             "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PBS_TARBALL}"
           echo "${PBS_SHA256}  ${PBS_TARBALL}" | (cd downloads && sha256sum --check --strict -)
 
@@ -134,7 +134,7 @@ jobs:
 
           download_and_verify() {
             local url="$1" name="$2" sha="$3"
-            curl -fsSL --retry 3 --retry-delay 2 -o "downloads/${name}" "$url"
+            curl -fsSL --proto '=https' --retry 3 --retry-delay 2 -o "downloads/${name}" "$url"
             echo "${sha}  ${name}" | (cd downloads && sha256sum --check --strict -)
           }
 
@@ -207,7 +207,7 @@ jobs:
         run: |
           set -euo pipefail
           cd backend
-          uv sync --frozen --no-dev
+          uv sync --frozen --no-dev --no-build
           BUNDLE="../build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/backend"
           cp -a src "$BUNDLE/backend/src"
