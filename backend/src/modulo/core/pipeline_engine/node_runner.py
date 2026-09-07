@@ -4403,16 +4403,6 @@ def _is_sandbox_session_lost_echo(output_json: Any) -> bool:
     return any(_SANDBOX_SESSION_LOST_SUMMARY in s for s in haystack)
 
 
-def _parse_org_uuid(org_id: str) -> uuid.UUID | None:
-    """Parse a run's org id string to a UUID, or ``None`` when absent/invalid."""
-    if not org_id:
-        return None
-    try:
-        return uuid.UUID(str(org_id))
-    except (TypeError, ValueError):
-        return None
-
-
 async def _read_org_vault_secret(
     session_factory: Callable[..., Any],
     org_uuid: uuid.UUID,
@@ -4467,7 +4457,7 @@ async def _sandbox_resolve_secret_ref(
             secret_key,
         )
         return None
-    org_uuid = _parse_org_uuid(org_id)
+    org_uuid = _parse_uuid_opt(org_id)
     if org_uuid is None:
         _log.warning(
             "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the "

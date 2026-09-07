@@ -2254,17 +2254,33 @@ class PipelineExecutor:
             session=session,
         )
         runtime_hub = create_default_hub()
-        hub = ConnectorHub(
-            secrets_backend=secrets_backend,
-            runtime_provider=runtime_hub,
-            org_id=str(org_id),
-            request_visibility=request_visibility,
-        )
-        await hub.__aenter__()
-        await hub.initialise(rows, allowed_connectors=allowed_connectors)
-        if hub.skipped or hub.healthy:
-            await self._persist_connector_degraded_markers(session, hub)
-        set_connector_hub(hub)
+        hub: ConnectorHub | None = None
+        try:
+            hub = ConnectorHub(
+                secrets_backend=secrets_backend,
+                runtime_provider=runtime_hub,
+                org_id=str(org_id),
+                request_visibility=request_visibility,
+            )
+            await hub.__aenter__()
+            await hub.initialise(rows, allowed_connectors=allowed_connectors)
+            if hub.skipped or hub.healthy:
+                await self._persist_connector_degraded_markers(session, hub)
+            set_connector_hub(hub)
+        except BaseException:
+            # A partially-initialised hub (constructed but __aenter__ or
+            # initialise raised) must still be torn down before the
+            # fail-closed re-raise: the caller sees hub=None for this
+            # failure mode (this helper never returned), so without this
+            # guard the teardown — and with it the runtime-provider
+            # aclose disposing provider-tracked workspaces (FAR-587, e.g.
+            # billable E2B sandboxes) — would be skipped exactly here.
+            # Cleanup failures are logged inside _teardown_hub and
+            # suppressed here so they never mask the original error.
+            if hub is not None:
+                with suppress(Exception):
+                    await _teardown_hub(hub)
+            raise
         return hub
 
     async def _hub_init_failure_hub(self, connectors_configured: bool, hub: Any) -> Any | None:
