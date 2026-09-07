@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_UNEXPECTED_ERROR_NO_PERIOD
+from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.view import (
@@ -25,7 +25,6 @@ from modulo.db.crud.view import (
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_VIEWS_TABLE_MISSING = "views.table_missing"
-_MSG_SAVED_VIEWS_FEATURE_NOT = "The saved_views feature is not available. Run database migrations to enable it."
 _CODE_VIEW_MANAGE = "view.manage"
 _MSG_VIEW_NOT_FOUND = "View not found"
 
@@ -95,7 +94,7 @@ async def list_views_endpoint(
         logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.list.sqlalchemy_error")
@@ -151,7 +150,7 @@ async def create_view_endpoint(
         logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.create.sqlalchemy_error")
@@ -187,7 +186,7 @@ async def get_view_endpoint(
         logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.get.sqlalchemy_error")
@@ -227,7 +226,7 @@ async def update_view_endpoint(
         logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.update.sqlalchemy_error")
@@ -265,7 +264,7 @@ async def delete_view_endpoint(
         logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.delete.sqlalchemy_error")
@@ -302,7 +301,7 @@ async def restore_view_endpoint(
         logger.exception(_CODE_VIEWS_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_SAVED_VIEWS_FEATURE_NOT,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("views.restore.sqlalchemy_error")

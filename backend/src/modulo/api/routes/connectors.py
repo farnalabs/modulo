@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.middleware.sensitive_mask import (
@@ -45,7 +45,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 _CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT = "connectors.list_connectors_endpoint"
-_MSG_CONNECTORS_NOT_AVAILABLE_RUN = "Connectors are not available. Run database migrations to enable this feature."
 _CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT = "connectors.create_connector_endpoint"
 _CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT = "connectors.get_connector_endpoint"
 _MSG_CONNECTOR_NOT_FOUND = "Connector not found"
@@ -422,7 +421,7 @@ async def list_connectors_endpoint(
         logger.exception(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_CONNECTORS_LIST_CONNECTORS_ENDPOINT)
@@ -539,7 +538,7 @@ async def create_connector_endpoint(
         logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
@@ -580,7 +579,7 @@ async def get_connector_endpoint(
         logger.exception(_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_CONNECTORS_GET_CONNECTOR_ENDPOINT)
@@ -752,7 +751,7 @@ async def update_connector_endpoint(
         logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
@@ -798,7 +797,7 @@ async def delete_connector_endpoint(
         logger.exception(_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_CONNECTORS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT)

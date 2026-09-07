@@ -15,7 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_UNEXPECTED_ERROR_NO_PERIOD
+from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -29,9 +29,6 @@ from modulo.util import is_valid_http_url
 _CODE_NOTIFICATION_VIEW = "notification.view"
 _CODE_NOTIFICATION_MANAGE = "notification.manage"
 _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING = "notifications.endpoint_table_missing"
-_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN = (
-    "Notifications are not available. Run database migrations to enable this feature."
-)
 _MSG_ENDPOINT_NOT_FOUND = "Endpoint not found"
 
 
@@ -105,7 +102,7 @@ async def list_endpoints(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.list_endpoints.sqlalchemy_error")
@@ -173,7 +170,7 @@ async def create_endpoint(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.create_endpoint.sqlalchemy_error")
@@ -218,7 +215,7 @@ async def get_endpoint(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications")
@@ -287,7 +284,7 @@ async def update_endpoint(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.update_endpoint.sqlalchemy_error")
@@ -333,7 +330,7 @@ async def delete_endpoint(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.delete_endpoint.sqlalchemy_error")
@@ -379,7 +376,7 @@ async def restore_endpoint(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception("notifications.restore_endpoint.sqlalchemy_error")

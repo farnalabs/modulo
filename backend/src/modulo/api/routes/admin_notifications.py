@@ -19,7 +19,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_UNEXPECTED_ERROR
+from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -45,14 +45,10 @@ _MSG_NOTIFICATION_DELIVERY_LOGGING_NOT = (
     "Notification delivery logging is not available. Run database migrations to enable it."
 )
 _CODE_NOTIFICATIONS_DB_ERROR = "notifications.db_error"
-_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again later."
 _CODE_NOTIFICATIONS_UNEXPECTED_ERROR = "notifications.unexpected_error"
 _MSG_MODULO_NOTIFIER_1_0 = "Modulo-Notifier/1.0"
 _MSG_APPLICATION_JSON = "application/json"
 _CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING = "notifications.endpoint_table_missing"
-_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN = (
-    "Notifications are not available. Run database migrations to enable this feature."
-)
 _MSG_WEBHOOK_NOT_FOUND = "Webhook not found"
 
 
@@ -204,7 +200,7 @@ async def list_all_deliveries(
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_all_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -370,7 +366,7 @@ async def retry_all_failed_deliveries(
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -495,7 +491,7 @@ async def _record_delivery_result(
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries.record"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
 
 
@@ -536,7 +532,7 @@ async def _record_delivery_error(
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "retry_all_failed_deliveries.error_record"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
 
 
@@ -590,13 +586,13 @@ async def list_webhooks(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "list_webhooks"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -644,13 +640,13 @@ async def create_webhook(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "create_webhook"})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -684,13 +680,13 @@ async def get_webhook(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "get_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -742,13 +738,13 @@ async def update_webhook(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "update_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -785,13 +781,13 @@ async def delete_webhook(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "delete_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -829,13 +825,13 @@ async def test_webhook(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_NOTIFICATIONS_DB_ERROR, extra={"route": "test_webhook", "webhook_id": str(webhook_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -931,7 +927,7 @@ async def re_enable_webhook(
         logger.exception(_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(
@@ -939,7 +935,7 @@ async def re_enable_webhook(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -1046,7 +1042,7 @@ async def _fetch_webhook_deliveries(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
@@ -1130,7 +1126,7 @@ async def _fetch_delivery_for_retry(
         logger.exception(_CODE_NOTIFICATIONS_DELIVERY_TABLE_MISSING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_NOTIFICATIONS_NOT_AVAILABLE_RUN,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(
@@ -1139,7 +1135,7 @@ async def _fetch_delivery_for_retry(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from None
     except HTTPException:
         raise
