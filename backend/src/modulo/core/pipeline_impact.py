@@ -260,6 +260,36 @@ def _normalise_changed_ports(
     return result
 
 
+def _build_port_adjacency(graph: dict[str, Any]) -> dict[str, set[str]]:
+    """Outgoing-edge adjacency for the graph: ``{source: {targets}}``.
+
+    Edges missing either endpoint are skipped.
+    """
+    adjacency: dict[str, set[str]] = {}
+    for edge in graph.get("edges", []):
+        src = _edge_source(edge)
+        tgt = _edge_target(edge)
+        if src is None or tgt is None:
+            continue
+        adjacency.setdefault(src, set()).add(tgt)
+    return adjacency
+
+
+def _reachable_downstream(adjacency: dict[str, set[str]], start: str) -> set[str]:
+    """Transitive downstream closure of *start* along the adjacency (BFS)."""
+    visited: set[str] = set()
+    queue: deque[str] = deque([start])
+    while queue:
+        current = queue.popleft()
+        if current in visited:
+            continue
+        visited.add(current)
+        for nxt in adjacency.get(current, ()):
+            if nxt not in visited:
+                queue.append(nxt)
+    return visited
+
+
 def compute_port_change_impact(graph: dict[str, Any], changed_ports: Iterable[Any]) -> set[str]:
     """Deterministic impact oracle: which downstream nodes a port change affects.
 
@@ -271,29 +301,13 @@ def compute_port_change_impact(graph: dict[str, Any], changed_ports: Iterable[An
     downstream nodes break" oracle.
     """
     node_ids = {str(n.get("id")) for n in graph.get("nodes", []) if n.get("id")}
-    adjacency: dict[str, set[str]] = {}
-    for edge in graph.get("edges", []):
-        src = _edge_source(edge)
-        tgt = _edge_target(edge)
-        if src is None or tgt is None:
-            continue
-        adjacency.setdefault(src, set()).add(tgt)
+    adjacency = _build_port_adjacency(graph)
 
     impacted: set[str] = set()
     for node_id, _direction, _port, _change in _normalise_changed_ports(changed_ports):
         if node_id not in node_ids or node_id in impacted:
             continue
-        visited: set[str] = set()
-        queue: deque[str] = deque([node_id])
-        while queue:
-            current = queue.popleft()
-            if current in visited:
-                continue
-            visited.add(current)
-            for nxt in adjacency.get(current, ()):
-                if nxt not in visited:
-                    queue.append(nxt)
-        impacted |= visited
+        impacted |= _reachable_downstream(adjacency, node_id)
     return impacted
 
 
