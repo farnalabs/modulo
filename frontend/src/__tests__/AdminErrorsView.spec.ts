@@ -74,6 +74,33 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+const LONG_MESSAGE =
+  'Traceback (most recent call last): ' + 'x'.repeat(400) + ' ValueError: pipeline output schema mismatch'
+
+function mountWithLongMessageGroup() {
+  getMock.mockImplementation(async (path: string) => {
+    if (path === '/api/v1/errors') {
+      return {
+        items: [
+          {
+            id: 'eg-long-1',
+            level_peak: 'error',
+            sample_message: LONG_MESSAGE,
+            count: 3,
+            first_seen: new Date().toISOString(), // nosemgrep: new-date-without-guard
+            last_seen: new Date().toISOString(), // nosemgrep: new-date-without-guard
+            status: 'new',
+            assigned_to: null,
+          },
+        ],
+        total: 1,
+      }
+    }
+    return { items: [], total: 0 }
+  })
+  return mountView()
+}
+
 describe('AdminErrorsView', () => {
   it('renders without crashing and shows the empty state', async () => {
     const wrapper = mountView()
@@ -178,6 +205,149 @@ describe('AdminErrorsView', () => {
     expect(api.GET).toHaveBeenCalledWith('/api/v1/errors', expect.objectContaining({
       params: { query: expect.objectContaining({ search: 'foo' }) },
     }))
+    wrapper.unmount()
+  })
+
+  it('truncates the message column by default (block-level ellipsis, bounded width)', async () => {
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    const truncated = wrapper.find('[data-testid="admin-errors-message-truncated"]')
+    expect(truncated.exists()).toBe(true)
+    // The inline-span bug: truncate only applies to block-level boxes, so the
+    // element must carry truncate + a max-width bound (flex item is blockified).
+    expect(truncated.classes()).toContain('truncate')
+    expect(truncated.classes()).toContain('max-w-xs')
+    expect(truncated.classes()).not.toContain('whitespace-normal')
+    expect(truncated.text()).toBe(LONG_MESSAGE)
+
+    const full = wrapper.find('[data-testid="admin-errors-message-full"]')
+    expect(full.exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('expands the full message per row via the toggle button, then collapses', async () => {
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    const toggle = wrapper.find('[data-testid="admin-errors-expand-eg-long-1"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(toggle.attributes('aria-label')).toBe('Expand error message')
+
+    await toggle.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-errors-message-truncated"]').exists()).toBe(false)
+    const full = wrapper.find('[data-testid="admin-errors-message-full"]')
+    expect(full.exists()).toBe(true)
+    // Expanded message wraps within the bounded column instead of stretching it.
+    expect(full.classes()).toContain('whitespace-normal')
+    expect(full.classes()).toContain('break-words')
+    expect(full.classes()).toContain('max-w-xs')
+    expect(full.text()).toBe(LONG_MESSAGE)
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(toggle.attributes('aria-label')).toBe('Collapse error message')
+
+    await toggle.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-errors-message-full"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-errors-message-truncated"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('does not navigate when the expand button is clicked, but row click still navigates', async () => {
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    const toggle = wrapper.find('[data-testid="admin-errors-expand-eg-long-1"]')
+    await toggle.trigger('click')
+    await nextTick()
+    expect(routerMocks.push).not.toHaveBeenCalled()
+
+    const row = wrapper.find('tbody tr')
+    await row.trigger('click')
+    expect(routerMocks.push).toHaveBeenCalledTimes(1)
+    expect(routerMocks.push).toHaveBeenCalledWith('/admin/errors/eg-long-1')
+    wrapper.unmount()
+  })
+
+  it('does not trigger row navigation when pressing a key on the expand button', async () => {
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    const toggle = wrapper.find('[data-testid="admin-errors-expand-eg-long-1"]')
+    // The DataTable row forwards keydown (Enter/Space) to row navigation; the
+    // button must stop propagation so keyboard activation stays local. The
+    // explicit key payload matches DataTable's `event.key === 'Enter'` check.
+    await toggle.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(routerMocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('truncates and expands a null message as the (no message) fallback', async () => {
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors') {
+        return {
+          items: [
+            {
+              id: 'eg-empty-1',
+              level_peak: 'error',
+              sample_message: null,
+              count: 1,
+              first_seen: new Date().toISOString(), // nosemgrep: new-date-without-guard
+              last_seen: new Date().toISOString(), // nosemgrep: new-date-without-guard
+              status: 'new',
+              assigned_to: null,
+            },
+          ],
+          total: 1,
+        }
+      }
+      return { items: [], total: 0 }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const truncated = wrapper.find('[data-testid="admin-errors-message-truncated"]')
+    expect(truncated.exists()).toBe(true)
+    expect(truncated.classes()).toContain('truncate')
+    expect(truncated.text()).toBe('(no message)')
+
+    await wrapper.find('[data-testid="admin-errors-expand-eg-empty-1"]').trigger('click')
+    await nextTick()
+
+    const full = wrapper.find('[data-testid="admin-errors-message-full"]')
+    expect(full.exists()).toBe(true)
+    expect(full.classes()).toContain('whitespace-normal')
+    expect(full.text()).toBe('(no message)')
+    wrapper.unmount()
+  })
+
+  it('keeps the table wrapper non-stretching (overflow-x-auto + w-full, no forced min width)', async () => {
+    const wrapper = mountWithLongMessageGroup()
+    await flushPromises()
+    await nextTick()
+
+    const tableWrapper = wrapper.find('.table-wrapper')
+    expect(tableWrapper.exists()).toBe(true)
+    expect(tableWrapper.classes()).not.toContain('min-w-max')
+    expect(tableWrapper.classes()).not.toContain('w-max')
+
+    const table = tableWrapper.find('table')
+    expect(table.classes()).toContain('w-full')
+    expect(table.classes()).not.toContain('min-w-max')
+    expect(table.classes()).not.toContain('w-max')
+
+    const scrollRoot = tableWrapper.find('div')
+    expect(scrollRoot.classes()).toContain('overflow-x-auto')
     wrapper.unmount()
   })
 })

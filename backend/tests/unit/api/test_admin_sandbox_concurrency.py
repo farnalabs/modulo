@@ -83,10 +83,38 @@ def client_viewer(mock_session):
 
 
 @pytest.mark.anyio
-async def test_get_defaults_to_null(client_admin):
+async def test_get_absent_key_resolves_docker_tier_default(client_admin):
+    """FAR-589 D3b: an ABSENT key returns the Docker-tier default 4 with
+    ``is_default=True`` so the UI can render "4 (default)"."""
     resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
     assert resp.status_code == 200
-    assert resp.json() == {"sandbox_concurrency_limit": None}
+    assert resp.json() == {"sandbox_concurrency_limit": 4, "is_default": True}
+
+
+@pytest.mark.anyio
+async def test_get_explicit_value_is_not_default(client_admin, org_settings):
+    org_settings["sandbox_concurrency_limit"] = 7
+    resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
+    assert resp.status_code == 200
+    assert resp.json() == {"sandbox_concurrency_limit": 7, "is_default": False}
+
+
+@pytest.mark.anyio
+async def test_get_explicit_null_is_no_gate_not_default(client_admin, org_settings):
+    """An explicit ``null`` (no gate) must stay distinguishable from the absent
+    Docker-tier default."""
+    org_settings["sandbox_concurrency_limit"] = None
+    resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
+    assert resp.status_code == 200
+    assert resp.json() == {"sandbox_concurrency_limit": None, "is_default": False}
+
+
+@pytest.mark.anyio
+async def test_get_stored_zero_reads_zero(client_admin, org_settings):
+    org_settings["sandbox_concurrency_limit"] = 0
+    resp = await client_admin.get("/api/v1/admin/org/sandbox-concurrency")
+    assert resp.status_code == 200
+    assert resp.json() == {"sandbox_concurrency_limit": 0, "is_default": False}
 
 
 @pytest.mark.anyio
@@ -96,13 +124,40 @@ async def test_put_sets_limit(client_admin, mock_session):
         json={"sandbox_concurrency_limit": 5},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"sandbox_concurrency_limit": 5}
+    assert resp.json() == {"sandbox_concurrency_limit": 5, "is_default": False}
     org = mock_session.execute.return_value.scalar_one_or_none.return_value
     assert org.settings_json["sandbox_concurrency_limit"] == 5
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("bad", [0, -1, 101])
+async def test_put_uses_row_lock_against_concurrent_writers(client_admin, mock_session):
+    """FAR-589 D3b: the settings read-modify-write must SELECT ... FOR UPDATE so
+    a concurrent settings writer cannot be dropped between read and flush."""
+    resp = await client_admin.put(
+        "/api/v1/admin/org/sandbox-concurrency",
+        json={"sandbox_concurrency_limit": 5},
+    )
+    assert resp.status_code == 200
+    stmt = mock_session.execute.await_args_list[0].args[0]
+    assert "FOR UPDATE" in str(stmt)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("value", [0, 100])
+async def test_put_accepts_zero_and_hundred(client_admin, mock_session, value):
+    """FAR-589 D3b: ``0`` is a meaningful value (deny-all); 100 stays the cap."""
+    resp = await client_admin.put(
+        "/api/v1/admin/org/sandbox-concurrency",
+        json={"sandbox_concurrency_limit": value},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"sandbox_concurrency_limit": value, "is_default": False}
+    org = mock_session.execute.return_value.scalar_one_or_none.return_value
+    assert org.settings_json["sandbox_concurrency_limit"] == value
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("bad", [-1, 101])
 async def test_put_rejects_out_of_range(client_admin, bad):
     resp = await client_admin.put(
         "/api/v1/admin/org/sandbox-concurrency",
@@ -119,7 +174,7 @@ async def test_put_null_clears_limit(client_admin, org_settings):
         json={"sandbox_concurrency_limit": None},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"sandbox_concurrency_limit": None}
+    assert resp.json() == {"sandbox_concurrency_limit": None, "is_default": False}
 
 
 @pytest.mark.anyio

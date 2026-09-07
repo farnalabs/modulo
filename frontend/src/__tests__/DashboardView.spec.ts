@@ -103,6 +103,40 @@ function setupEmptyMocks() {
   })
 }
 
+function setupPeriodSpendMock(delta_pct: number | null) {
+  mockGet.mockImplementation((url: string) => {
+    if (url === '/api/v1/dashboard/summary') {
+      return Promise.resolve({
+        data: {
+          ...mockSummaryData,
+          period: {
+            days: 7,
+            metrics: {
+              total_runs: { current: 50, previous: 40, delta_pct: 25.0 },
+              active_pipelines: { current: 8, previous: 9, delta_pct: -11.1 },
+              run_counts_by_status: {
+                running: { current: 0, previous: 0, delta_pct: null },
+                awaiting_human: { current: 0, previous: 0, delta_pct: null },
+                failed: { current: 5, previous: 3, delta_pct: 66.7 },
+                idle: { current: 0, previous: 0, delta_pct: null },
+              },
+              eval_pass_rate: { current: 82.5, previous: 80.0, delta_pct: 3.1 },
+              spend: { current: 100.25, previous: 90.0, delta_pct },
+              tokens: { current: 15000, previous: 12000, delta_pct: 25.0 },
+              success_rate: { current: 85.0, previous: 80.0, delta_pct: 6.2 },
+              avg_duration_ms: { current: 1250.5, previous: 1300.0, delta_pct: -3.8 },
+            },
+          },
+        },
+        error: undefined,
+      })
+    }
+    if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+    if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+    return Promise.resolve({ data: null, error: undefined })
+  })
+}
+
 describe('DashboardView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -342,6 +376,43 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('11.4%') // spend up
   })
 
+  it('renders the token-spend delta span destructive when spend went up (cost metric: higher spend is bad)', async () => {
+    setupPeriodSpendMock(11.4)
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
+    expect(deltaSpan.exists()).toBe(true)
+    expect(deltaSpan.classes()).toContain('text-destructive')
+    expect(deltaSpan.classes()).not.toContain('text-success')
+  })
+
+  it('renders the token-spend delta span success when spend went down (cost metric: lower spend is good)', async () => {
+    setupPeriodSpendMock(-11.4)
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
+    expect(deltaSpan.exists()).toBe(true)
+    expect(deltaSpan.classes()).toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-destructive')
+  })
+
+  it('renders the token-spend delta span muted when spend is flat', async () => {
+    setupPeriodSpendMock(0)
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
+    expect(deltaSpan.exists()).toBe(true)
+    expect(deltaSpan.classes()).toContain('text-muted-foreground')
+    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-destructive')
+  })
+
   it('shows the no-prior-data fallback on stat cards whose delta_pct is null when a window is selected', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
@@ -498,8 +569,46 @@ describe('DashboardView', () => {
     // Card sparklines carry units.
     expect(sparklines[0].props('unit')).toBe('%')
     expect(sparklines[1].props('unit')).toBe('$')
+    // Rate sparklines carry forward missing days; the spend sparkline keeps the
+    // zero-fill default.
+    expect(sparklines[0].props('missingData')).toBe('carry-forward')
+    expect(sparklines[1].props('missingData')).toBe('zero')
     // Card sparkline labels come from summary.trend dates.
     expect(sparklines[0].props('labels')).toEqual(mockSummaryData.trend.map(d => d.date))
+  })
+
+  it('passes raw eval_pass_rate nulls (not flattened to 0) to the eval sparkline', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            trend: [
+              { date: '2026-06-23', run_count: 1, eval_pass_rate: null, token_spend_usd: 2.0 },
+              { date: '2026-06-24', run_count: 2, eval_pass_rate: 80, token_spend_usd: 3.0 },
+              { date: '2026-06-25', run_count: 3, eval_pass_rate: null, token_spend_usd: 4.0 },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const sparklines = wrapper.findAllComponents({ name: 'SparklineChart' })
+    const evalSparkline = sparklines.find(s => s.props('unit') === '%')
+    expect(evalSparkline).toBeDefined()
+    // Nulls must reach the sparkline untouched — flattening to 0 would render
+    // "no evals" days as a 0% pass-rate crash to the chart floor.
+    expect(evalSparkline!.props('data')).toEqual([null, 80, null])
+    expect(evalSparkline!.props('missingData')).toBe('carry-forward')
+    // The spend sparkline is untouched by the null-handling change.
+    const spendSparkline = sparklines.find(s => s.props('unit') === '$')
+    expect(spendSparkline).toBeDefined()
+    expect(spendSparkline!.props('data')).toEqual([2.0, 3.0, 4.0])
   })
 
   it('renders the no-data placeholder inside sparklines when the trend is empty', async () => {

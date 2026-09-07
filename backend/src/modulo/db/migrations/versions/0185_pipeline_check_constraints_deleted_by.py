@@ -1,7 +1,7 @@
 """Add missing CHECK constraints on pipelines and deleted_by audit column.
 
-Revision ID: 0183_pipeline_check_constraints_deleted_by
-Revises: 0182_hitl_claims_active_sweep_indexes
+Revision ID: 0185_pipeline_check_constraints_deleted_by
+Revises: 0184_trigger_events_indexes_and_type_check
 Create Date: 2026-09-07
 
 Findings from improve-database lens analysis of the pipeline model cluster:
@@ -45,8 +45,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0183_pipeline_check_constraints_deleted_by"
-down_revision: str | None = "0182_hitl_claims_active_sweep_indexes"
+revision: str = "0185_pipeline_check_constraints_deleted_by"
+down_revision: str | None = "0184_trigger_events_indexes_and_type_check"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

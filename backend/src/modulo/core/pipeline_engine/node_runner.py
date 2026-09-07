@@ -348,6 +348,22 @@ _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk pub
 # idle watchdog's liveness signal — the sandbox connection — instead of the
 # fragile RPC output stream.
 _SANDBOX_LOG_PATH = "/home/user/agent.log"
+
+
+def _wrap_sandbox_command_with_log_redirect(wrapped_cmd: str, log_path: str) -> str:
+    """Group the sandbox command in a subshell and redirect all output to log_path.
+
+    Newline-safe (FAR-651): the opening paren and closing paren each sit on
+    their OWN line. An inline wrap (`( {cmd} ) > log`) appends ` ) > log` to
+    the command's final line — which breaks any command whose final line must
+    stand alone, notably a heredoc terminator without a trailing newline
+    (`PYFAR647 ) > log` never matches the bare delimiter → unterminated
+    heredoc → bash exit 2 → the agent never runs). A command that already
+    ends with a newline just gains a harmless blank line before the paren.
+    """
+    return f"(\n{wrapped_cmd}\n) > {log_path} 2>&1"
+
+
 _SANDBOX_TAIL_INTERVAL = 5.0  # seconds between sandbox log drain probes
 _SANDBOX_TAIL_READ_TIMEOUT = 10.0  # per-drain probe wait_for timeout
 # FAR-296 Phase 3b-3: platform-side resource-cap killer cadence. The killer
@@ -5719,7 +5735,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     async with session_factory() as _cap_session, _cap_session.begin():
                         await set_rls_org(_cap_session, _org_uuid)
                         await set_rls_execution_context(_cap_session)
-                        _cap = await get_sandbox_concurrency_limit(_cap_session, _org_uuid)
+                        # FAR-589 D3b: one reader for all five call sites. The
+                        # flag-off window enforces the contract's cap only — an
+                        # absent key (Docker-tier default, is_default=True) does
+                        # NOT gate until D8's rollout flag activates it.
+                        _cap = (await get_sandbox_concurrency_limit(_cap_session, _org_uuid)).enforced_cap
                         if _cap is not None:
                             _active = await count_active_runner_dispatches_for_org(
                                 _cap_session, _org_uuid, exclude_run_id=uuid.UUID(str(run_id))
@@ -6115,7 +6135,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 run_id=run_id,
                 node_id=node_id,
             )
-            wrapped_command = f"( {_bridge_wrapped_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
+            wrapped_command = _wrap_sandbox_command_with_log_redirect(_bridge_wrapped_command, _SANDBOX_LOG_PATH)
             cmd_handle = await asyncio.wait_for(
                 sandbox.commands.run(
                     wrapped_command,

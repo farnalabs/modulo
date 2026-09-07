@@ -81,14 +81,14 @@ class MyCustomBackend(ModelBackendBase):
         return f"custom/{self._model_id}"
 
     async def invoke(self, messages, **kwargs):
-        # Call your provider's API and return a response
+        # Call your provider's API and return a BaseMessage
         ...
-        return AIMessage(content=response_text)
+        return BaseMessage(content=response_text)
 
     def stream(self, messages, tools=None, **kwargs):
         # Return an async iterator yielding BaseMessage chunks
         ...
-        yield AIMessage(content=token)
+        yield BaseMessage(content=token)
 ```
 
 ## Health checks
