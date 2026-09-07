@@ -41,7 +41,7 @@ from modulo.core.capability_scope import (
     validate_allowed_connectors_subset,
     validate_no_self_tools,
 )
-from modulo.core.graph_validator import GraphValidator
+from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
 from modulo.core.pipeline_engine.scatter_join import (
     FanOutConfig,
     JoinAggregateSpec,
@@ -1040,6 +1040,25 @@ class HitlGateConfig(BaseModel):
         "If the condition evaluates to true (e.g., score < threshold with operator lt), "
         "the gate fires. If false, execution continues without interrupting.",
     )
+
+    @field_validator("description")
+    @classmethod
+    def _description_must_explain_why(cls, v: str) -> str:
+        """FAR-613: a HITL gate must explain WHY a human must decide on it.
+
+        The description is the reviewer's decision briefing (surfaces in the
+        approve/reject UI and MCP gate resources). A description that is empty
+        or a few characters carries no decision context, so the trimmed length
+        must meet the shared minimum the save-time GraphValidator enforces for
+        node-level ``hitl_config`` gates too (whose config dict bypasses this
+        Pydantic model).
+        """
+        if len(v.strip()) < HITL_DESCRIPTION_MIN_LENGTH:
+            raise ValueError(
+                f"HITL gate requires a human-provided description (min {HITL_DESCRIPTION_MIN_LENGTH} chars) "
+                "explaining why this gate exists"
+            )
+        return v
 
 
 class PipelineGraphEdge(BaseModel):

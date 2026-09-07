@@ -172,6 +172,9 @@
               </div>
               <div>
                 <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.SettingsHitlReviewView.actions_label') }}</h3>
+                <!-- FAR-613: the decision briefing — WHY the gate exists and
+                     WHAT the reviewer is looking at, above the controls. -->
+                <HitlBriefing :description="gate.description" :context="gate.context" class="mb-3" />
                 <div class="space-y-3">
                   <div v-if="gateStatus(gate) === 'pending'">
                     <Button :disabled="claiming[expandKey(gate)]" class="w-full" data-testid="hitl-review-claim" @click="claimGate(gate)">
@@ -251,6 +254,7 @@ import FilterBar from '../components/shared/FilterBar.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import HitlBriefing from '../components/HitlBriefing.vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { shortId } from '../utils/format'
@@ -271,6 +275,10 @@ interface GateItem {
   decision_at: string | null
   created_at?: string
   team_scope?: string
+  /** FAR-613: the gate config's human description (null for legacy gates). */
+  description?: string | null
+  /** FAR-613: the fire-time briefing bundle persisted on the claim row. */
+  context?: Record<string, unknown> | null
 }
 
 interface PipelineItem {

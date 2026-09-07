@@ -903,13 +903,17 @@
             />
           </div>
           <div>
-            <label for="pipelineeditorview-field-13" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.description') }}</label>
+            <label for="pipelineeditorview-field-13" class="mb-1 block text-xs font-medium text-muted-foreground">
+              {{ $t('views.PipelineEditorView.description') }} <span class="text-destructive">*</span>
+            </label>
             <textarea id="pipelineeditorview-field-13"
               v-model="edgeForm.description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               :placeholder="$t('views.PipelineEditorView.hitl_description_placeholder')"
+              :aria-invalid="edgeForm.hitl_enabled && edgeForm.description.trim().length < 20 ? 'true' : undefined"
               rows="2"
             />
+            <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.hitl_description_hint') }}</p>
           </div>
           <div>
             <label for="pipelineeditorview-field-12" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.claim_expiry_minutes') }}</label>
@@ -2000,6 +2004,13 @@ function buildHitlGateConfig(): any {
 
 async function saveEdgeConfig() {
   if (!selectedEdgeData.value) return
+  // FAR-613: a HITL gate must explain WHY it exists — the backend rejects
+  // saves whose gate config carries no usable description (min 20 trimmed
+  // chars), so block client-side first with a clear, localised message.
+  if (edgeForm.hitl_enabled && edgeForm.description.trim().length < 20) {
+    edgeSaveError.value = t('views.PipelineEditorView.hitl_description_required')
+    return
+  }
   savingEdge.value = true
   edgeSaveError.value = null
 

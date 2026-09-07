@@ -97,6 +97,7 @@ from modulo.core.pipeline_engine.evidence import (
     run_evidence_probe,
 )
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
+from modulo.core.pipeline_engine.hitl_context import build_hitl_gate_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
@@ -4809,14 +4810,9 @@ class PipelineExecutor:
                 if outcome == "reuse":
                     coalesce_reused = True
                 else:
-                    await mgr.create_gate(
-                        session,
-                        run_id=run_id,
-                        gate_id=gate_id,
-                        pipeline_id=pipeline_id,
-                        org_id=org_id,
-                        required_team_id=required_team_id,
-                    )
+                    # FAR-613: resolve the pipeline name FIRST (the same
+                    # failure-isolated seam the notifications use) so the
+                    # fire-time briefing bundle carries it too.
                     try:
                         pipeline = await get_pipeline(session, pipeline_id)
                         pipeline_name = pipeline.name if pipeline is not None else None
@@ -4828,6 +4824,27 @@ class PipelineExecutor:
                             extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
                             exc_info=True,
                         )
+                    # FAR-613: capture the decision briefing at fire time.
+                    # Failure-isolated — a briefing defect must never block
+                    # the interrupt (build_hitl_gate_context never raises;
+                    # context is None on capture failure).
+                    gate_context = await build_hitl_gate_context(
+                        session,
+                        run_id=run_id,
+                        gate_id=gate_id,
+                        org_id=org_id,
+                        pipeline_name=pipeline_name,
+                        completed_node_outputs=ctx.completed_node_outputs,
+                    )
+                    await mgr.create_gate(
+                        session,
+                        run_id=run_id,
+                        gate_id=gate_id,
+                        pipeline_id=pipeline_id,
+                        org_id=org_id,
+                        required_team_id=required_team_id,
+                        context_json=gate_context,
+                    )
             if coalesce_reused:
                 detail = (
                     "HITL gate coalesced (FAR-604 D4): an open gate already covers this work item "

@@ -3364,6 +3364,13 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
         gates, total = await _load_pending_hitl_gates(s, base_where, page, page_size)
+        # FAR-613: resolve each gate's description from its run's snapshot
+        # graph (shared batched resolver — same normalisation the REST
+        # pending endpoints use) while the session is open. Context comes
+        # from the claim row itself.
+        from modulo.db.crud.hitl_gate_config import resolve_gate_descriptions
+
+        description_by_gate = await resolve_gate_descriptions(s, gates=gates, org_id=org_id)
     return {
         "gates": [
             {
@@ -3373,6 +3380,8 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
                 "claimed_by": str(g.account_id) if g.account_id else None,
                 "expires_at": _iso_or_none(g.expires_at),
                 "required_team_id": str(g.required_team_id) if g.required_team_id else None,
+                "description": description_by_gate.get((g.run_id, g.gate_id)),
+                "context": g.context_json if isinstance(g.context_json, dict) else None,
             }
             for g in gates
         ],
@@ -6796,6 +6805,8 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     async with _session(org_id) as s:
         gate = await _get_hitl_gate(s, rid, gate_id, org_id)
         required_team_name = None
+        description: str | None = None
+        context: dict[str, Any] | None = None
         if gate is not None:
             # A team-scoped key must not read another team's gate even when
             # the gate itself is org-level (required_team_id IS NULL).
@@ -6803,6 +6814,20 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
             if scope_error is not None:
                 return scope_error
             required_team_name = await _hitl_required_team_name(s, gate)
+            # FAR-613: the fire-time briefing. Context comes from the claim
+            # row (captured at gate-fire time); the description falls back to
+            # the snapshot config resolver for gates that fired before
+            # context capture existed.
+            context = gate.context_json if isinstance(gate.context_json, dict) else None
+            raw_description = context.get("description") if context is not None else None
+            from modulo.db.crud.hitl_gate_config import normalize_gate_description, resolve_hitl_gate_config
+
+            if isinstance(raw_description, str) and raw_description.strip():
+                description = raw_description.strip()
+            else:
+                description = normalize_gate_description(
+                    await resolve_hitl_gate_config(s, run_id=rid, gate_id=gate_id, org_id=org_id)
+                )
     if gate is None:
         return f"HITL gate '{gate_id}' not found on run {run_id}."
     parts = [
@@ -6821,6 +6846,12 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         )
     if gate.expires_at:
         parts.append(f"Claim expires: {gate.expires_at.isoformat()}")
+    # FAR-613: the decision briefing — WHY the gate exists and WHAT the
+    # reviewer is looking at. Deterministic bound: the context block is a
+    # fixed character slice of the serialised bundle.
+    parts.append(f"Description: {description or 'No description provided for this gate'}")
+    if context is not None:
+        parts.append("Fire context: " + json.dumps(context, sort_keys=True, default=str)[:2048])
     return "\n".join(parts)
 
 

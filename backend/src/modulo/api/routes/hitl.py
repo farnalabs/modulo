@@ -54,11 +54,15 @@ from modulo.db.crud.hitl_gate_config import (
     hitl_gate_exists_but_unresolved,
     human_only_denial,
     make_gate_id,
+    normalize_gate_description,
+    resolve_gate_descriptions,
     resolve_hitl_gate_config,
+    snapshot_gate_config_map,
 )
 from modulo.db.crud.run import get_run, transition_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
@@ -145,6 +149,15 @@ class GateResponse(BaseModel):
     #: Human label from the snapshot edge's ``hitl_gate_config.label``
     #: (frontend UUID hygiene — falls back to shortId when absent).
     label: str | None = None
+    #: FAR-613: the gate config's human description — WHY this gate exists.
+    #: Resolved from the snapshot gate config (edge-level or FAR-402
+    #: node-level). None for legacy gates → the UI renders the muted
+    #: no-description fallback.
+    description: str | None = None
+    #: FAR-613: the fire-time briefing bundle persisted on the claim row
+    #: (condition, trigger, source node, bounded artifacts, reason,
+    #: pipeline_name). None for legacy gates.
+    context: dict[str, Any] | None = None
 
 
 class PendingGatesResponse(BaseModel):
@@ -865,13 +878,18 @@ async def list_run_pending_gates(
                 pipeline_name = pipeline.name if pipeline else None
 
             gate_label_map: dict[str, str] = {}
+            gate_description_map: dict[str, str | None] = {}
             if run is not None and run.snapshot_id:
-                from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-
-                snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
+                snap_result = await session.execute(
+                    select(PipelineSnapshot).where(
+                        PipelineSnapshot.id == run.snapshot_id,
+                        PipelineSnapshot.organisation_id == principal.organisation_id,
+                    )
+                )
                 snapshot = snap_result.scalar_one_or_none()
                 if snapshot is not None and isinstance(snapshot.graph_json, dict):
                     gate_label_map = _build_gate_label_map(snapshot.graph_json)
+                    gate_description_map = _build_gate_description_map(snapshot.graph_json)
     except ProgrammingError as exc:
         logger.exception("hitl.list_run_pending_gates")
         raise HTTPException(
@@ -894,7 +912,15 @@ async def list_run_pending_gates(
         ) from e
 
     return PendingGatesResponse(
-        gates=[_gate_to_response(g, pipeline_name=pipeline_name, label=gate_label_map.get(g.gate_id)) for g in gates]
+        gates=[
+            _gate_to_response(
+                g,
+                pipeline_name=pipeline_name,
+                label=gate_label_map.get(g.gate_id),
+                description=gate_description_map.get(g.gate_id),
+            )
+            for g in gates
+        ]
     )
 
 
@@ -927,6 +953,15 @@ async def list_org_pending_gates(
                     select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
                 )
                 pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
+
+            # FAR-613: resolve each gate's description from its run's snapshot
+            # graph via the shared batched resolver (two IN queries over the
+            # few pending gates' runs + snapshots — never per-gate walks), so
+            # the org review page gets the briefing without an N+1. Context
+            # comes from the claim row itself (_gate_to_response).
+            description_by_gate = await resolve_gate_descriptions(
+                session, gates=gates, org_id=principal.organisation_id
+            )
     except ProgrammingError as exc:
         logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(
@@ -951,8 +986,16 @@ async def list_org_pending_gates(
     # Org-level: gates span many runs, so per-run snapshot lookups are
     # expensive. Leave label=None here — the frontend falls back to shortId.
     # Only the run-level endpoint (used by RunDetailView) resolves the label.
+    # Description IS resolved (FAR-613) via the batched snapshot reads above.
     return PendingGatesResponse(
-        gates=[_gate_to_response(g, pipeline_name=pipeline_map.get(g.pipeline_id)) for g in gates]
+        gates=[
+            _gate_to_response(
+                g,
+                pipeline_name=pipeline_map.get(g.pipeline_id),
+                description=description_by_gate.get((g.run_id, g.gate_id)),
+            )
+            for g in gates
+        ]
     )
 
 
@@ -988,7 +1031,40 @@ def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
     return gate_label_map
 
 
-def _gate_to_response(g: HitlClaim, pipeline_name: str | None = None, label: str | None = None) -> GateResponse:
+def _gate_description_from_graph(graph_json: dict[str, Any] | None, gate_id: str) -> str | None:
+    """The gate's human description from a snapshot graph, or None (FAR-613).
+
+    Shared normalisation lives in ``hitl_gate_config.normalize_gate_description``
+    so both pending endpoints and the MCP gate resource render the same muted
+    no-description fallback for the same gates.
+    """
+    if not isinstance(graph_json, dict):
+        return None
+    config = snapshot_gate_config_map(graph_json).get(gate_id)
+    return normalize_gate_description(config)
+
+
+def _build_gate_description_map(graph_json: dict[str, Any]) -> dict[str, str | None]:
+    """Map gate_id -> the gate config's human description (FAR-613).
+
+    Sibling of :func:`_build_gate_label_map` — same snapshot walk (via the
+    shared ``snapshot_gate_config_map``, which covers BOTH gate shapes:
+    edge-level configs and FAR-402 node-level ``hitl_config``), keyed by the
+    same derived gate ids, so labels and descriptions always agree on the
+    gate id derivation. Gates whose config carries no usable description map
+    to ``None`` (the frontend renders the muted no-description fallback).
+    """
+    return {
+        gate_id: _gate_description_from_graph(graph_json, gate_id) for gate_id in snapshot_gate_config_map(graph_json)
+    }
+
+
+def _gate_to_response(
+    g: HitlClaim,
+    pipeline_name: str | None = None,
+    label: str | None = None,
+    description: str | None = None,
+) -> GateResponse:
     return GateResponse(
         run_id=g.run_id,
         gate_id=g.gate_id,
@@ -1000,4 +1076,6 @@ def _gate_to_response(g: HitlClaim, pipeline_name: str | None = None, label: str
         decision=g.decision,
         decision_at=g.decision_at.isoformat() if g.decision_at else None,
         label=label,
+        description=description,
+        context=g.context_json if isinstance(g.context_json, dict) else None,
     )

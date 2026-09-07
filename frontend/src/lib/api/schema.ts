@@ -11115,6 +11115,12 @@ export interface components {
             decision_at?: string | null;
             /** Label */
             label?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** GetOrgGuardrailsKillSwitchResponse */
         GetOrgGuardrailsKillSwitchResponse: {
