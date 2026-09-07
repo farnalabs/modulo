@@ -1057,7 +1057,6 @@ async def replace_bindings_endpoint(
     credential fields) at SAVE time; the referenced backend must be visible to
     the org. VALUES ARE NEVER LOGGED.
     """
-    from modulo.db.models.agent_runner_binding import AgentRunnerBinding
     from modulo.db.runner_binding_constraints import BindingValidationError
 
     specs = [
@@ -1078,10 +1077,8 @@ async def replace_bindings_endpoint(
             # Audit diff carries env-var NAMES only — never values (values are
             # not stored on the binding row at all; the credential stays
             # encrypted in the referenced backend).
-            before_rows = await session.execute(
-                select(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == agent_id)
-            )
-            before_targets = {row.target_env_var for row in before_rows.scalars()}
+            before_bindings = await list_bindings_for_agent(session, agent_id)
+            before_targets = {b.target_env_var for b in before_bindings}
             after_targets = {spec["target_env_var"] for spec in specs}
             created = await replace_agent_bindings(
                 session,

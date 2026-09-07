@@ -115,6 +115,7 @@ def _patch_core(agent: MagicMock | None = None) -> list[Any]:
     patchers = [
         patch(f"{_AGENTS_PREFIX}get_agent", return_value=agent if agent is not None else _make_agent()),
         patch(f"{_AGENTS_PREFIX}set_rls_org"),
+        patch(f"{_AGENTS_PREFIX}list_bindings_for_agent", new=AsyncMock(return_value=[])),
         patch(f"{_AGENTS_PREFIX}append_audit_event", new=AsyncMock()),
     ]
     for p in patchers:
@@ -155,6 +156,7 @@ def test_replace_bindings_round_trip(client: TestClient) -> None:
     with (
         patch(f"{_AGENTS_PREFIX}get_agent", return_value=_make_agent()),
         patch(f"{_AGENTS_PREFIX}set_rls_org"),
+        patch(f"{_AGENTS_PREFIX}list_bindings_for_agent", new=AsyncMock(return_value=[])),
         patch(f"{_AGENTS_PREFIX}replace_agent_bindings", new=AsyncMock(return_value=[_Binding()])),
         patch(f"{_AGENTS_PREFIX}append_audit_event", new=AsyncMock()),
     ):
