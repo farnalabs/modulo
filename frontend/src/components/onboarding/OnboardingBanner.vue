@@ -49,7 +49,7 @@
           v-for="action in store.actions"
           :key="action.id"
           class="flex items-center gap-3 rounded-lg px-3 py-2 transition-colors"
-          :class="action.completed || action.skipped ? 'opacity-50' : 'hover:bg-accent'"
+          :class="actionClass(action)"
           role="button"
           tabindex="0"
           @click="handleActionClick(action)"
@@ -121,6 +121,10 @@ const expanded = ref(false)
 
 const circumference = 2 * Math.PI * 14
 const dashOffset = computed(() => circumference - (store.progressPct / 100) * circumference)
+
+function actionClass(action: OnboardingAction): string {
+  return action.completed || action.skipped ? 'opacity-50' : 'hover:bg-accent'
+}
 
 function handleActionClick(action: OnboardingAction) {
   if (action.completed || action.skipped) return
