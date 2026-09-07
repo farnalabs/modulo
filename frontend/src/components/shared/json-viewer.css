@@ -68,6 +68,27 @@
   border-left-color: hsla(var(--border) / 0.6);
 }
 
+/* Wrapped-line rendering (FAR-626): a value that wraps to multiple lines must
+   stay inside its own node — no crushed inline-flex siblings, no overflow past
+   the row edge, indent guides keep spanning the full node height.
+   The dep sizes .vjs-value with `word-break: break-word`, which does not
+   shrink a flex item's min-content, so a long unbreakable chunk (hash, base64,
+   URL…) inflates the row and the browser emits ragged partial lines.
+   `anywhere` zeroes the min-content of the value, and `min-width: 0` lets the
+   dep's anonymous value-wrapper flex item shrink to the space left of the
+   indent column, so text wraps at the container edge and fills lines cleanly. */
+
+.json-viewer .vjs-value {
+  overflow-wrap: anywhere;
+}
+
+/* The value wrapper is the dep's classless <span> child of the row (siblings
+   all carry classes). Virtual trees rely on `white-space: nowrap` + horizontal
+   scrolling, so they must keep their intrinsic width. */
+.json-viewer .vjs-tree:not(.is-virtual) .vjs-tree-node > span:not([class]) {
+  min-width: 0;
+}
+
 .json-viewer .vjs-tree::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -101,11 +122,14 @@
 
 .json-viewer .json-viewer-string-truncated-text {
   overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .json-viewer .json-viewer-string-count {
   color: hsl(var(--muted-foreground));
   font-size: 11px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .json-viewer .json-viewer-string-toggle {
@@ -120,6 +144,11 @@
   color: hsl(var(--muted-foreground));
   cursor: pointer;
   transition: color 0.15s ease;
+  /* The preview text floors at ~0 min-content, so flex would redistribute
+     the squeeze onto these controls and crush them into vertical slivers
+     when the preview wraps. Keep them at their natural, single-line size. */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .json-viewer .json-viewer-string-toggle:hover {

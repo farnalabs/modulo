@@ -756,17 +756,20 @@ def test_single_migration_head() -> None:
     # 0181_org_api_keys_scope (FAR-620 user-scoped MCP keys) chains off 0180_hitl_parked_status.
     chaining_off_0180 = [p for p in revisions if parents[p] == "0180_hitl_parked_status"]
     assert [_basename(p) for p in chaining_off_0180] == ["0181_org_api_keys_scope.py"]
-    # 0182_triggers_add_polling_ongoing_agent_signal_indexes (this PR's polling /
-    # ongoing / agent_signal tick-scan partial-index sweep) chains off 0181_org_api_keys_scope.
+    # 0182_hitl_claims_active_sweep_indexes (hitl active-sweep, on main) chains off 0181_org_api_keys_scope.
     chaining_off_0181 = [p for p in revisions if parents[p] == "0181_org_api_keys_scope"]
-    assert [_basename(p) for p in chaining_off_0181] == ["0182_triggers_add_polling_ongoing_agent_signal_indexes.py"]
-    # 0183_trigger_events_indexes_and_type_check (this PR's trigger_events composite
-    # indexes + trigger_type CHECK) chains off 0182 and is the single head.
-    chaining_off_0182 = [p for p in revisions if parents[p] == "0182_triggers_add_polling_ongoing_agent_signal_indexes"]
-    assert [_basename(p) for p in chaining_off_0182] == ["0183_trigger_events_indexes_and_type_check.py"]
-    # Nothing chains off 0183_trigger_events_indexes_and_type_check -> it is the single head.
-    chaining_off_0183 = [p for p in revisions if parents[p] == "0183_trigger_events_indexes_and_type_check"]
-    assert chaining_off_0183 == []
+    assert [_basename(p) for p in chaining_off_0181] == ["0182_hitl_claims_active_sweep_indexes.py"]
+    # 0183_triggers_add_polling_ongoing_agent_signal_indexes (this PR's polling /
+    # ongoing / agent_signal tick-scan partial-index sweep) chains off 0182_hitl_claims_active_sweep_indexes.
+    chaining_off_0182 = [p for p in revisions if parents[p] == "0182_hitl_claims_active_sweep_indexes"]
+    assert [_basename(p) for p in chaining_off_0182] == ["0183_triggers_add_polling_ongoing_agent_signal_indexes.py"]
+    # 0184_trigger_events_indexes_and_type_check (this PR's trigger_events composite
+    # indexes + trigger_type CHECK) chains off 0183 and is the single head.
+    chaining_off_0183 = [p for p in revisions if parents[p] == "0183_triggers_add_polling_ongoing_agent_signal_indexes"]
+    assert [_basename(p) for p in chaining_off_0183] == ["0184_trigger_events_indexes_and_type_check.py"]
+    # Nothing chains off 0184_trigger_events_indexes_and_type_check -> it is the single head.
+    chaining_off_0184 = [p for p in revisions if parents[p] == "0184_trigger_events_indexes_and_type_check"]
+    assert chaining_off_0184 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

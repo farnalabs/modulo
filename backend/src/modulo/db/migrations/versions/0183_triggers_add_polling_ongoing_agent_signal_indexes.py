@@ -1,7 +1,7 @@
 """Add partial indexes for polling, ongoing, and agent_signal tick scans.
 
-Revision ID: 0182_triggers_add_polling_ongoing_agent_signal_indexes
-Revises: 0181_org_api_keys_scope
+Revision ID: 0183_triggers_add_polling_ongoing_agent_signal_indexes
+Revises: 0182_hitl_claims_active_sweep_indexes
 Create Date: 2026-09-07
 
 ``0167_add_hot_query_indexes`` added ``ix_triggers_due_cron`` for the
@@ -20,8 +20,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0182_triggers_add_polling_ongoing_agent_signal_indexes"
-down_revision: str | None = "0181_org_api_keys_scope"
+revision: str = "0183_triggers_add_polling_ongoing_agent_signal_indexes"
+down_revision: str | None = "0182_hitl_claims_active_sweep_indexes"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

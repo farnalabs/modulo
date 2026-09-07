@@ -1,7 +1,7 @@
 """Add composite indexes and trigger_type CHECK on trigger_events.
 
-Revision ID: 0183_trigger_events_indexes_and_type_check
-Revises: 0182_triggers_add_polling_ongoing_agent_signal_indexes
+Revision ID: 0184_trigger_events_indexes_and_type_check
+Revises: 0183_triggers_add_polling_ongoing_agent_signal_indexes
 Create Date: 2026-09-07
 
 * ``ix_trigger_events_trigger_org_created`` — covering composite index
@@ -24,8 +24,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0183_trigger_events_indexes_and_type_check"
-down_revision: str | None = "0182_triggers_add_polling_ongoing_agent_signal_indexes"
+revision: str = "0184_trigger_events_indexes_and_type_check"
+down_revision: str | None = "0183_triggers_add_polling_ongoing_agent_signal_indexes"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
