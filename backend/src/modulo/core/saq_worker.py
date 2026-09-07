@@ -361,7 +361,6 @@ def _probe_database() -> None:
     ``psycopg2``, which is not in the dependency tree.
     """
     from sqlalchemy import create_engine, text
-    from sqlalchemy.exc import SQLAlchemyError
 
     settings = get_settings()
     sync_url = str(settings.database_url).replace("+asyncpg", "+psycopg").replace("+aiomysql", "+pymysql")
@@ -371,7 +370,9 @@ def _probe_database() -> None:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         _log.info("Database connection probe passed")
-    except (SQLAlchemyError, OSError) as exc:
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
         _log.warning("Database probe failed (non-fatal): %s — DB may recover before first job", exc)
     finally:
         if engine is not None:
