@@ -80,9 +80,13 @@ def _preflight_violation_check(name: str, expr: str) -> None:
     CONSTRAINT`` fail and aborts the whole deploy chain, so we surface the count
     up front with a clear message instead of letting the migration die mid-flight.
     """
-    violation_count = op.execute(
-        f"SELECT count(*) FROM {_TABLE} WHERE NOT ({expr})"  # noqa: S608  # nosec B608
-    ).scalar_one()
+    violation_count = (
+        op.get_bind()
+        .execute(
+            sa.text(f"SELECT count(*) FROM {_TABLE} WHERE NOT ({expr})")  # noqa: S608
+        )
+        .scalar_one()
+    )
     if violation_count:
         raise RuntimeError(
             f"Cannot add CHECK constraint {name}: {violation_count} existing row(s) "
