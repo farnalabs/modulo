@@ -2490,6 +2490,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent_id}/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Bindings Endpoint
+         * @description List the agent's runner bindings (agent.list permission).
+         */
+        get: operations["list_bindings_endpoint_api_v1_agents__agent_id__bindings_get"];
+        /**
+         * Replace Bindings Endpoint
+         * @description Replace the agent's runner bindings (elevated, audit-logged).
+         *
+         *     Validates every ``target_env_var`` (valid / not reserved / unique per
+         *     agent) and ``source_field`` (against the referenced backend's known
+         *     credential fields) at SAVE time; the referenced backend must be visible to
+         *     the org. VALUES ARE NEVER LOGGED.
+         */
+        put: operations["replace_bindings_endpoint_api_v1_agents__agent_id__bindings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent_id}/bindings/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Binding Endpoint
+         * @description Delete one of the agent's binding rows (elevated, audit-logged).
+         */
+        delete: operations["delete_binding_endpoint_api_v1_agents__agent_id__bindings__binding_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/parameter-schemas": {
         parameters: {
             query?: never;
@@ -8544,6 +8593,48 @@ export interface components {
             /** Expected Updated At */
             expected_updated_at?: string | null;
         };
+        /** AgentBindingListResponse */
+        AgentBindingListResponse: {
+            /** Items */
+            items: components["schemas"]["AgentBindingResponse"][];
+        };
+        /** AgentBindingResponse */
+        AgentBindingResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Model Backend Id
+             * Format: uuid
+             */
+            model_backend_id: string;
+            /** Target Env Var */
+            target_env_var: string;
+            /** Source Field */
+            source_field: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** AgentCreate */
         AgentCreate: {
             /** Name */
@@ -9134,6 +9225,26 @@ export interface components {
             total_runs_this_month: number;
             /** License Key */
             license_key?: string | null;
+        };
+        /** BindingSpec */
+        BindingSpec: {
+            /**
+             * Model Backend Id
+             * Format: uuid
+             */
+            model_backend_id: string;
+            /** Target Env Var */
+            target_env_var: string;
+            /** Source Field */
+            source_field: string;
+        };
+        /**
+         * BindingsReplaceRequest
+         * @description Wholesale replacement set for the agent's runner bindings.
+         */
+        BindingsReplaceRequest: {
+            /** Bindings */
+            bindings: components["schemas"]["BindingSpec"][];
         };
         /** Body_upload_zip_and_analyse_endpoint_api_v1_libraries_import_upload_zip_post */
         Body_upload_zip_and_analyse_endpoint_api_v1_libraries_import_upload_zip_post: {
@@ -13327,7 +13438,7 @@ export interface components {
             } | null;
             /**
              * Retry Policy
-             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5, backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. When a run ends in a configured state and retries remain, the run is re-dispatched automatically instead of terminal-failing. 'backoff' is the legacy NODE-level inherited retry delay (node retries inherit this value; default 0). 'backoff_schedule' paces ONLY the run-level re-dispatch: the in-job sleep is min(delay_seconds * multiplier^(attempt-1), 300) plus up to +25% jitter (cap and jitter are code-held, not configurable); multiplier defaults to 2.0 (1.0 = fixed delay). The effective re-dispatch gap is the sleep plus settings.saq_retry_delay plus queue wait.
+             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5, backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. 'on' absent (or null) = ALL retryable events; an explicit list = granular; an explicit empty list = no retry. When a run ends in a configured state and retries remain, the run is re-dispatched automatically instead of terminal-failing. 'backoff' is the legacy NODE-level inherited retry delay (node retries inherit this value; default 0). 'backoff_schedule' paces ONLY the run-level re-dispatch: the in-job sleep is min(delay_seconds * multiplier^(attempt-1), 300) plus up to +25% jitter (cap and jitter are code-held, not configurable); multiplier defaults to 2.0 (1.0 = fixed delay). The effective re-dispatch gap is the sleep plus settings.saq_retry_delay plus queue wait.
              */
             retry_policy?: {
                 [key: string]: unknown;
@@ -13804,7 +13915,7 @@ export interface components {
             } | null;
             /**
              * Retry Policy
-             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5, backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. Set to {} to clear. 'backoff' = node-level inherited retry delay; 'backoff_schedule' = run-level re-dispatch pacing only (min(delay_seconds * multiplier^(attempt-1), 300) + up to 25% jitter; multiplier default 2.0). Effective gap = sleep + settings.saq_retry_delay + queue wait.
+             * @description Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5, backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. 'on' absent (or null) = ALL retryable events; an explicit list = granular; an explicit empty list = no retry. Set to {} to clear. 'backoff' = node-level inherited retry delay; 'backoff_schedule' = run-level re-dispatch pacing only (min(delay_seconds * multiplier^(attempt-1), 300) + up to 25% jitter; multiplier default 2.0). Effective gap = sleep + settings.saq_retry_delay + queue wait.
              */
             retry_policy?: {
                 [key: string]: unknown;
@@ -23232,6 +23343,108 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PromptDiffResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_bindings_endpoint_api_v1_agents__agent_id__bindings_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentBindingListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_bindings_endpoint_api_v1_agents__agent_id__bindings_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BindingsReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentBindingListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_binding_endpoint_api_v1_agents__agent_id__bindings__binding_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

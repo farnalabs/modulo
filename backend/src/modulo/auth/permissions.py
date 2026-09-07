@@ -136,6 +136,9 @@ PERMISSIONS: dict[str, str] = {
     "model_backend.update": "operator",
     "model_backend.delete": "operator",
     "model_backend.list": "viewer",
+    # agent runner bindings (FAR-592 / D6): standing-credential injection —
+    # guarded at the operator level, same as model-credential management.
+    "model_backend.binding.manage": "operator",
     # hitl
     "hitl.claim": "runner",
     "hitl.approve": "operator",

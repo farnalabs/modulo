@@ -250,6 +250,18 @@ def test_sanitize_retry_policy_keeps_minimal_valid_dict() -> None:
     assert fault is None
 
 
+def test_sanitize_retry_policy_absent_on_round_trips_unchanged() -> None:
+    """FAR-649 (pin): a policy WITHOUT the `on` key (write-valid; the runtime
+    resolves it to ALL retryable events) survives import WHOLE — it must not
+    be whole-dropped or nested-dropped into a different shape, which would
+    silently change its runtime meaning."""
+    policy = {"max_retries": 2}
+    sanitized, fault = _sanitize_retry_policy(policy)
+    assert sanitized == policy
+    assert fault is None
+    assert "on" not in sanitized
+
+
 def test_sanitize_retry_policy_drops_unknown_event() -> None:
     sanitized, fault = _sanitize_retry_policy({"on": ["bogus"], "max_retries": 2})
     assert not sanitized
@@ -807,6 +819,8 @@ def _export_session(fakes: dict[str, Any]) -> AsyncMock:
     pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
     agents_result = MagicMock()
     agents_result.scalars.return_value = [fakes["agent"]]
+    bindings_result = MagicMock()
+    bindings_result.scalars.return_value = []
     schemas_result = MagicMock()
     schemas_result.scalars.return_value = [fakes["schema"]]
     backends_result = MagicMock()
@@ -814,8 +828,9 @@ def _export_session(fakes: dict[str, Any]) -> AsyncMock:
     edges_result = MagicMock()
     edges_result.scalars.return_value = [fakes["edge"]]
     session.execute = AsyncMock(
-        side_effect=[pipeline_result, agents_result, schemas_result, backends_result, edges_result]
+        side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result]
     )
+    session.get = AsyncMock(return_value=None)
     return session
 
 
@@ -984,9 +999,12 @@ async def test_export_pipeline_bundle_agent_without_refs(monkeypatch: pytest.Mon
     pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
     agents_result = MagicMock()
     agents_result.scalars.return_value = [bare_agent]
+    bindings_result = MagicMock()
+    bindings_result.scalars.return_value = []
     edges_result = MagicMock()
     edges_result.scalars.return_value = [fakes["edge"]]
-    session.execute = AsyncMock(side_effect=[pipeline_result, agents_result, edges_result])
+    session.execute = AsyncMock(side_effect=[pipeline_result, agents_result, bindings_result, edges_result])
+    session.get = AsyncMock(return_value=None)
     data = await export_pipeline_bundle(session, fakes["pipeline"].id)
     bundle = extract_bundle_json_from_zip(data)
     assert bundle["agents"] == [
@@ -1008,6 +1026,125 @@ async def test_export_pipeline_bundle_agent_without_refs(monkeypatch: pytest.Mon
     ]
     assert not bundle["schemas"]
     assert not bundle["model_backends"]
+
+
+async def test_export_pipeline_bundle_carries_name_based_runner_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-592 (D6): bindings export NAME-BASED and pull their backend into the bundle."""
+    fakes = _pipeline_fakes()
+    binding_row = SimpleNamespace(
+        model_backend_id=fakes["backend"].id,
+        target_env_var="OPENCODE_API_KEY",
+        source_field="api_key",
+    )
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    agents_result = MagicMock()
+    agents_result.scalars.return_value = [fakes["agent"]]
+    bindings_result = MagicMock()
+    bindings_result.scalars.return_value = [binding_row]
+    schemas_result = MagicMock()
+    schemas_result.scalars.return_value = [fakes["schema"]]
+    backends_result = MagicMock()
+    backends_result.scalars.return_value = [fakes["backend"]]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    session.execute = AsyncMock(
+        side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result]
+    )
+    session.get = AsyncMock(return_value=fakes["backend"])
+
+    data = await export_pipeline_bundle(session, fakes["pipeline"].id)
+    bundle = extract_bundle_json_from_zip(data)
+
+    # Name-based spec (no org ids, no credentials) + the bound backend rides along.
+    assert bundle["agents"][0]["model_backend_bindings"] == [
+        {"model_backend_name": "MB", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}
+    ]
+    assert bundle["model_backends"] == [
+        {"id": str(fakes["backend"].id), "name": "MB", "provider": "openai", "model_id": "gpt-4o"}
+    ]
+
+
+# ---------------------------------------------------------------------------
+# _apply_agent_bindings — name-based rebind at import (FAR-592 / D6)
+# ---------------------------------------------------------------------------
+
+
+def _bindings_ctx() -> SimpleNamespace:
+    return SimpleNamespace(
+        session=AsyncMock(),
+        org_id=uuid.uuid4(),
+        created_by=uuid.uuid4(),
+        warnings=[],
+    )
+
+
+async def test_apply_agent_bindings_rebinds_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    replace_mock = AsyncMock()
+    monkeypatch.setattr(mod, "replace_agent_bindings", replace_mock)
+    ctx = _bindings_ctx()
+    backend = SimpleNamespace(id=uuid.uuid4(), name="MB", provider="openai")
+    agent = SimpleNamespace(id=uuid.uuid4(), name="Agent A")
+    ad = {
+        "model_backend_bindings": [
+            {"model_backend_name": "MB", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}
+        ]
+    }
+
+    await mod._apply_agent_bindings(ctx, agent, ad, {"MB": backend}, ctx.warnings)
+
+    replace_mock.assert_awaited_once()
+    kwargs = replace_mock.await_args.kwargs
+    assert kwargs["org_id"] == ctx.org_id
+    assert kwargs["agent_id"] == agent.id
+    assert kwargs["bindings_specs"] == [
+        {
+            "_backend_id": backend.id,
+            "_account_id": ctx.created_by,
+            "target_env_var": "OPENCODE_API_KEY",
+            "source_field": "api_key",
+        }
+    ]
+    assert not ctx.warnings
+
+
+async def test_apply_agent_bindings_unknown_backend_name_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    replace_mock = AsyncMock()
+    monkeypatch.setattr(mod, "replace_agent_bindings", replace_mock)
+    ctx = _bindings_ctx()
+    agent = SimpleNamespace(id=uuid.uuid4(), name="Agent A")
+    ad = {
+        "model_backend_bindings": [
+            {"model_backend_name": "Ghost", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}
+        ]
+    }
+
+    await mod._apply_agent_bindings(ctx, agent, ad, {}, ctx.warnings)
+
+    replace_mock.assert_not_awaited()
+    assert len(ctx.warnings) == 1
+    assert "did not resolve" in ctx.warnings[0]
+
+
+async def test_apply_agent_bindings_invalid_pair_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    replace_mock = AsyncMock()
+    monkeypatch.setattr(mod, "replace_agent_bindings", replace_mock)
+    ctx = _bindings_ctx()
+    backend = SimpleNamespace(id=uuid.uuid4(), name="MB", provider="openai")
+    agent = SimpleNamespace(id=uuid.uuid4(), name="Agent A")
+    ad = {
+        "model_backend_bindings": [
+            {"model_backend_name": "MB", "target_env_var": "MODULO_API_KEY", "source_field": "api_key"}
+        ]
+    }
+
+    await mod._apply_agent_bindings(ctx, agent, ad, {"MB": backend}, ctx.warnings)
+
+    replace_mock.assert_not_awaited()
+    assert len(ctx.warnings) == 1
+    assert "rejected at import" in ctx.warnings[0]
 
 
 # ---------------------------------------------------------------------------

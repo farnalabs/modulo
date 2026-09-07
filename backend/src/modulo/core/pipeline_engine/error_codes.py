@@ -54,6 +54,12 @@ _CODE_SANDBOX_QUEUE_TIMEOUT = "sandbox.queue_timeout"
 # FAR-510: the finalize-time downgrade code for a sandbox_agent node whose
 # synthetic failure envelope was masked as a completed output.
 _CODE_SANDBOX_AGENT_FAILED = "sandbox.agent_failed"
+# FAR-592 (D6): provision-time per-agent runner-binding resolution failure —
+# retryable config error; the D6 rollback trigger reads this code's rate.
+_CODE_SANDBOX_BINDING_RESOLUTION = "sandbox.binding_resolution"
+# FAR-592 (D6): the Local (host-subprocess) provider tier refused a
+# bindings-carrying agent without an explicit opt-in (D7-refusal posture).
+_CODE_SANDBOX_TIER_REFUSED = "sandbox.tier_refused"
 _CODE_CAPACITY_ORG = "capacity.org"
 # FAR-410: a connector write was cancelled mid-send (per-attempt timeout), so
 # the upstream side-effect state is unknowable. This is a DISTINCT terminal
@@ -62,6 +68,7 @@ _CODE_CAPACITY_ORG = "capacity.org"
 # dotted spelling mirrors the ``script.side_effect_unknown`` taxonomy pattern
 # ("side-effect state unknown; never retried").
 _CODE_CONNECTOR_UNKNOWN = "connector.side_effect_unknown"
+_CODE_SCOPE_VIOLATION = "scope.violation"
 
 
 ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
@@ -274,6 +281,26 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="critical",
         guidance="Sandbox agent execution failed; the run was downgraded from complete at finalization.",
     ),
+    # FAR-592 (D6): retryable provision-time binding-resolution failure
+    # (backend gone/unhealthy/decrypt/malformed). The D6 rollback trigger
+    # monitors this code's rate via the error dashboard.
+    _CODE_SANDBOX_BINDING_RESOLUTION: ErrorCodeSpec(
+        error_class="config",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Agent runner binding could not be resolved at provision time; re-configure the binding.",
+    ),
+    # FAR-592 (D6): terminal — the Local host tier refuses standing-credential
+    # injection without an explicit profile opt-in.
+    _CODE_SANDBOX_TIER_REFUSED: ErrorCodeSpec(
+        error_class="config",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Local provider tier refused runner bindings; opt in via the profile's "
+            "allow_runner_env_bindings flag or switch tiers."
+        ),
+    ),
     # --- node guard codes ------------------------------------------------
     _CODE_NODE_TIMEOUT: ErrorCodeSpec(
         error_class="node",
@@ -321,7 +348,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
     # FAR-418: node-level capability_scope violation — a node used a connector /
     # tool / run_context key excluded by its scope (deny-by-default). Permanent
     # (re-dispatching would reproduce the same violation), so never retryable.
-    "scope.violation": ErrorCodeSpec(
+    _CODE_SCOPE_VIOLATION: ErrorCodeSpec(
         error_class="scope",
         retryable=False,
         alert_severity="critical",
@@ -476,6 +503,17 @@ LEGACY_ALIASES: dict[str, str] = {
     "SandboxRateLimitExhaustedError": _CODE_SANDBOX_QUEUE_TIMEOUT,
     # FAR-296 Phase 4b: dispatch-time capacity gate maps to ``capacity.org``.
     "SandboxCapacityExceededError": _CODE_CAPACITY_ORG,
+    # FAR-592 (D6): provision-time binding-resolution failures map to the
+    # retryable ``sandbox.binding_resolution`` code (D6 rollback-trigger
+    # signal); the typed wrapper and the raw core class name both publish.
+    "SandboxBindingResolutionError": _CODE_SANDBOX_BINDING_RESOLUTION,
+    "AgentBindingResolutionError": _CODE_SANDBOX_BINDING_RESOLUTION,
+    # FAR-592 (D6): the Local tier refusal maps to the terminal
+    # ``sandbox.tier_refused`` code. Both the node-runner wrapper (what the
+    # executor sees via ``type(exc).__name__``) and the raw core class name
+    # publish.
+    "SandboxTierRefusedError": _CODE_SANDBOX_TIER_REFUSED,
+    "LocalProviderBindingsRefusedError": _CODE_SANDBOX_TIER_REFUSED,
     "executor_setup_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_heartbeat_lost": "harness.executor_heartbeat_lost",
@@ -513,8 +551,8 @@ LEGACY_ALIASES: dict[str, str] = {
     "capacity_timeout": "capacity.timeout",
     # FAR-418: scope violation (legacy snake_case spelling canonicalized to
     # scope.violation).
-    "scope_violation": "scope.violation",
-    "ScopeViolationError": "scope.violation",
+    "scope_violation": _CODE_SCOPE_VIOLATION,
+    "ScopeViolationError": _CODE_SCOPE_VIOLATION,
 }
 
 

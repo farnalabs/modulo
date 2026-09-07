@@ -444,6 +444,8 @@ class PipelineCreate(TeamVisibilityMixin):
         description=(
             "Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5, "
             "backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. "
+            "'on' absent (or null) = ALL retryable events; an explicit list = granular; "
+            "an explicit empty list = no retry. "
             "When a run ends in a configured state and retries remain, the run is "
             "re-dispatched automatically instead of terminal-failing. "
             "'backoff' is the legacy NODE-level inherited retry delay (node retries inherit "
@@ -498,6 +500,8 @@ class PipelineUpdate(TeamVisibilityMixin):
         description=(
             "Retry policy: {on: [stall|timeout|failure|eval_failed], max_retries: 0-5, "
             "backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. "
+            "'on' absent (or null) = ALL retryable events; an explicit list = granular; "
+            "an explicit empty list = no retry. "
             "Set to {} to clear. 'backoff' = node-level inherited retry delay; "
             "'backoff_schedule' = run-level re-dispatch pacing only "
             "(min(delay_seconds * multiplier^(attempt-1), 300) + up to 25% jitter; "

@@ -25,12 +25,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
+from modulo.core.runner_bindings import BindingValidationError, validate_binding_pair
 from modulo.db.crud.agent import create_agent
+from modulo.db.crud.agent_runner_binding import replace_agent_bindings
 from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.crud.pipeline import create_pipeline
 from modulo.db.crud.schema import create_schema, create_schema_version
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
+from modulo.db.models.agent_runner_binding import AgentRunnerBinding
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
@@ -330,6 +333,28 @@ async def _build_agents_list(
             schema_ids.add(a.output_schema_id)
         if a.model_backend_id:
             model_backend_ids.add(a.model_backend_id)
+        # FAR-592 (D6): agent runner bindings export NAME-BASED (stripped to
+        # name-bound specs; no organisation ids, no credentials) so the
+        # round-trip import rebinds by the same name-based mechanism the
+        # model backends use.
+        binding_rows = await session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == a.id))
+        bindings_list: list[dict[str, Any]] = []
+        bound_used_ids: set[uuid.UUID] = set()
+        for binding_row in binding_rows.scalars():
+            backend_row = await session.get(ModelBackend, binding_row.model_backend_id)
+            if backend_row is None:
+                continue
+            bindings_list.append(
+                {
+                    "model_backend_name": backend_row.name,
+                    "target_env_var": binding_row.target_env_var,
+                    "source_field": binding_row.source_field,
+                }
+            )
+            bound_used_ids.add(binding_row.model_backend_id)
+        model_backend_ids.update(bound_used_ids)
+        if bindings_list:
+            agents_list[-1]["model_backend_bindings"] = bindings_list
     return agents_list
 
 
@@ -1416,6 +1441,18 @@ async def _materialize_agents(
 
         agent_id_map[export_agent_id] = str(agent.id)
 
+        # FAR-592 (D6): name-based runner-binding rebind (the bundle's bound
+        # backends resolve through the bundle's model_backends section too).
+        if ad.get("model_backend_bindings"):
+            bundle_backend_rows = await ctx.session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.organisation_id == ctx.org_id,
+                    ModelBackend.name.in_([str(b.get("model_backend_name", "")) for b in ad["model_backend_bindings"]]),
+                )
+            )
+            backends_by_name = {row.name: row for row in bundle_backend_rows.scalars()}
+            await _apply_agent_bindings(ctx, agent, ad, backends_by_name, ctx.warnings)
+
     return agent_id_map
 
 
@@ -1490,6 +1527,56 @@ def _apply_agent_references(
         agent_args["output_schema_version"] = resolved_output_version
     if resolved_mb_id:
         agent_args["model_backend_id"] = _safe_uuid(resolved_mb_id, "agent.model_backend_id")
+
+
+async def _apply_agent_bindings(
+    ctx: _ImportContext,
+    agent: Agent,
+    ad: dict[str, Any],
+    backends_by_name: dict[str, ModelBackend],
+    warnings: list[str],
+) -> None:
+    specs: list[dict[str, Any]] = []
+    for binding_payload in ad.get("model_backend_bindings", []):
+        backend = backends_by_name.get(str(binding_payload.get("model_backend_name", "")))
+        if backend is None:
+            warnings.append(
+                f"Agent '{agent.name}' binding to model backend "
+                f"'{binding_payload.get('model_backend_name', '')}' did not resolve "
+                "by name; the binding will be omitted."
+            )
+            continue
+        try:
+            validate_binding_pair(
+                target_env_var=str(binding_payload["target_env_var"]),
+                source_field=str(binding_payload["source_field"]),
+                provider=backend.provider,
+            )
+        except BindingValidationError as exc:
+            warnings.append(
+                f"Agent '{agent.name}' runner binding rejected at import ({exc}); the binding will be omitted."
+            )
+            continue
+        specs.append(
+            {
+                "_backend_id": backend.id,
+                "_account_id": ctx.created_by,
+                "target_env_var": str(binding_payload["target_env_var"]),
+                "source_field": str(binding_payload["source_field"]),
+            }
+        )
+    if specs:
+        try:
+            await replace_agent_bindings(
+                ctx.session,
+                org_id=ctx.org_id,
+                agent_id=agent.id,
+                bindings_specs=specs,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            warnings.append(f"Agent '{agent.name}' runner bindings were not imported: {exc}.")
 
 
 async def _create_agent_with_retry(

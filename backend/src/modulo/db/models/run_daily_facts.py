@@ -41,7 +41,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import ONDELETE_SET_NULL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.pipeline import Pipeline
@@ -77,14 +77,16 @@ class RunDailyFact(OrgScoped):
         ),
     )
     run_date: Mapped[date] = mapped_column(Date, nullable=False)
-    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="SET NULL"), index=True)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True
+    )
     team_name: Mapped[str | None] = mapped_column(String(255))
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipelines.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("pipelines.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     pipeline_name: Mapped[str | None] = mapped_column(String(255))
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipeline_folders.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("pipeline_folders.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False)

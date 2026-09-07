@@ -55,12 +55,14 @@ _MIGRATION_PATH = (
 # from 0181 after the org_api_keys_scope collision) re-parented onto
 # 0181_org_api_keys_scope, followed by
 # 0183_triggers_add_polling_ongoing_agent_signal_indexes ->
-# 0184_trigger_events_indexes_and_type_check (this PR's trigger_events index +
-# type-check sweep, renumbered from 0182/0183 after the hitl_claims
-# collision), then the improve-database migrations 0186_pipeline_check_constraints_deleted_by
-# (renumbered from 0183) and 0187_pipeline_performance_indexes (renumbered from
-# 0184), which is now the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0187_pipeline_performance_indexes"
+# 0184_trigger_events_indexes_and_type_check (trigger_events index + type-check
+# sweep, renumbered from 0182/0183 after the hitl_claims collision), followed by
+# 0185_error_events_indexes_jsonb (error_events status/level partial indexes),
+# re-parented onto the 0184 trigger_events head, then main's improve-database
+# migrations 0186_pipeline_check_constraints_deleted_by and
+# 0187_pipeline_performance_indexes, main's 0188_pipeline_run_context_defaults_default,
+# and this PR's 0189_agent_runner_bindings re-parented onto 0188 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0189_agent_runner_bindings"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

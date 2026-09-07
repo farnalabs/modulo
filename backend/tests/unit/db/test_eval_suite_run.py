@@ -771,17 +771,24 @@ def test_single_migration_head() -> None:
     # off 0184_trigger_events_indexes_and_type_check.
     chaining_off_0184 = [p for p in revisions if parents[p] == "0184_trigger_events_indexes_and_type_check"]
     assert [_basename(p) for p in chaining_off_0184] == ["0185_error_events_indexes_jsonb.py"]
-    # 0186_pipeline_check_constraints_deleted_by (improve-database FK/check sweep, renumbered
-    # from 0185) chains off 0185_error_events_indexes_jsonb.
+    # 0186_pipeline_check_constraints_deleted_by (improve-database FK/check sweep) chains
+    # off 0185_error_events_indexes_jsonb.
     chaining_off_0185_error_events = [p for p in revisions if parents[p] == "0185_error_events_indexes_jsonb"]
     assert [_basename(p) for p in chaining_off_0185_error_events] == ["0186_pipeline_check_constraints_deleted_by.py"]
-    # 0187_pipeline_performance_indexes (improve-database index sweep, renumbered from 0186)
-    # chains off 0186.
+    # 0187_pipeline_performance_indexes (improve-database index sweep) chains off 0186.
     chaining_off_0186 = [p for p in revisions if parents[p] == "0186_pipeline_check_constraints_deleted_by"]
     assert [_basename(p) for p in chaining_off_0186] == ["0187_pipeline_performance_indexes.py"]
-    # Nothing chains off 0187_pipeline_performance_indexes -> it is the single head.
+    # 0189_agent_runner_bindings (this PR, FAR-592 / D6; renumbered from 0188 to avoid the
+    # collision with main's 0188_pipeline_run_context_defaults_default, which chains off
+    # 0187 and is now the penultimate link) chains off 0188 and is the single head.
     chaining_off_0187 = [p for p in revisions if parents[p] == "0187_pipeline_performance_indexes"]
-    assert chaining_off_0187 == []
+    assert [_basename(p) for p in chaining_off_0187] == ["0188_pipeline_run_context_defaults_default.py"]
+    # 0189_agent_runner_bindings re-parents onto 0188_pipeline_run_context_defaults_default.
+    chaining_off_0188 = [p for p in revisions if parents[p] == "0188_pipeline_run_context_defaults_default"]
+    assert [_basename(p) for p in chaining_off_0188] == ["0189_agent_runner_bindings.py"]
+    # Nothing chains off 0189_agent_runner_bindings -> it is the single head.
+    chaining_off_0189 = [p for p in revisions if parents[p] == "0189_agent_runner_bindings"]
+    assert chaining_off_0189 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

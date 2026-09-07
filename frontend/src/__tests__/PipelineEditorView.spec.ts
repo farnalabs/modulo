@@ -212,6 +212,16 @@ describe('PipelineEditorView', () => {
     const panel = wrapper.find('[data-testid="pipeline-editor-retry-policy-panel"]')
     expect(panel.exists()).toBe(true)
 
+    // FAR-649: the panel defaults to All-errors mode — the granular event
+    // checkboxes are hidden until "Choose specific errors" is selected.
+    const allRadio = wrapper.find('[data-testid="pipeline-editor-retry-mode-all"]')
+    expect(allRadio.exists()).toBe(true)
+    expect((allRadio.element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-retry-event-stall"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="pipeline-editor-retry-mode-specific"]').setValue('specific')
+    await nextTick()
+
     // Only the events the backend allowlist accepts are offered in the UI.
     // eval_failed became backend-supported in FAR-503: the API allowlist
     // (_RETRY_POLICY_EVENTS in api/routes/pipelines.py), the graph validator and
@@ -233,6 +243,7 @@ describe('PipelineEditorView', () => {
     ;(wrapper.vm as any).syncRetryPolicyFromPipeline()
     await nextTick()
     expect((wrapper.vm as any).retryPolicyEvents).toEqual(['eval_failed', 'stall'])
+    expect((wrapper.vm as any).retryPolicyMode).toBe('specific')
     const stallCheckbox = wrapper.find('[data-testid="pipeline-editor-retry-event-stall"]')
     expect((stallCheckbox.element as HTMLInputElement).checked).toBe(true)
   })
@@ -281,7 +292,11 @@ describe('PipelineEditorView', () => {
       })
     })
 
-    it('save in the disable direction sends on: [] and preserves schedule and legacy backoff (not {})', async () => {
+    it('blocks save in granular mode with zero events selected (no silent inert policy)', async () => {
+      // FAR-649: the FAR-525-era "disable direction" save (`{on: [], ...}`) is
+      // gone — granular with zero selected events DISABLES save and warns.
+      // The `{on: []}` shape remains valid API-wise, but the editor never
+      // produces it.
       const wrapper = await mountWithPolicy({
         on: ['failure', 'stall'],
         max_retries: 2,
@@ -290,15 +305,15 @@ describe('PipelineEditorView', () => {
       })
       const vm = wrapper.vm as any
       vm.retryPolicyEvents = []
+      expect(vm.retryPolicySaveBlocked).toBe(true)
+      expect(vm.retryPolicyNoRetriesWarning).toContain('No events selected')
+
+      const callsBefore = vi.mocked(api.PATCH).mock.calls.length
       await vm.saveRetryPolicy()
       await flushPromises()
 
-      expect(lastPatchBody().retry_policy).toEqual({
-        on: [],
-        max_retries: 2,
-        backoff: 7,
-        backoff_schedule: { delay_seconds: 90, multiplier: 2 },
-      })
+      expect(vi.mocked(api.PATCH).mock.calls.length).toBe(callsBefore)
+      expect(vm.retryPolicyError).toContain('No events selected')
     })
 
     it('rebuilds backoff_schedule from panel state, dropping junk inner keys (enable direction)', async () => {
@@ -317,22 +332,22 @@ describe('PipelineEditorView', () => {
       })
     })
 
-    it('rebuilds backoff_schedule from panel state, dropping junk inner keys (disable direction)', async () => {
+    it('rebuilds backoff_schedule from panel state, dropping junk inner keys (All-errors mode, no on key)', async () => {
       const wrapper = await mountWithPolicy({
         on: ['timeout'],
         max_retries: 1,
         backoff_schedule: { delay_seconds: 20, multiplier: 3, junk_key: 'hand-edited' },
       })
       const vm = wrapper.vm as any
-      vm.retryPolicyEvents = []
+      vm.retryPolicyMode = 'all'
       await vm.saveRetryPolicy()
       await flushPromises()
 
       expect(lastPatchBody().retry_policy).toEqual({
-        on: [],
         max_retries: 1,
         backoff_schedule: { delay_seconds: 20, multiplier: 3 },
       })
+      expect(lastPatchBody().retry_policy.on).toBeUndefined()
     })
 
     it('sends the default 45s x 2.0 schedule when no schedule is stored, without a legacy backoff key', async () => {
@@ -383,6 +398,101 @@ describe('PipelineEditorView', () => {
       await wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
       await nextTick()
       expect(wrapper.find('[data-testid="pipeline-editor-retry-policy-schedule-warning"]').exists()).toBe(false)
+    })
+  })
+
+  describe('FAR-649 retry coverage mode (absent on = all errors)', () => {
+    async function mountWithPolicy(retryPolicy: Record<string, unknown> | null) {
+      router.push('/pipelines/test-pipeline-id/editor')
+      await router.isReady()
+      const wrapper = mountEditor()
+      await flushPromises()
+      ;(wrapper.vm as any).pipeline = { retry_policy: retryPolicy }
+      ;(wrapper.vm as any).syncRetryPolicyFromPipeline()
+      await nextTick()
+      return wrapper
+    }
+
+    function lastPatchBody(): any {
+      const calls = vi.mocked(api.PATCH).mock.calls
+      expect(calls.length).toBeGreaterThan(0)
+      return (calls[calls.length - 1][1] as any).body
+    }
+
+    it('renders the mode radios with All-errors pre-selected for a no-on policy', async () => {
+      const wrapper = await mountWithPolicy({ max_retries: 2 })
+      const vm = wrapper.vm as any
+      expect(vm.retryPolicyMode).toBe('all')
+
+      await wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+      await nextTick()
+      const allRadio = wrapper.find('[data-testid="pipeline-editor-retry-mode-all"]')
+      expect((allRadio.element as HTMLInputElement).checked).toBe(true)
+      expect((wrapper.find('[data-testid="pipeline-editor-retry-mode-specific"]').element as HTMLInputElement).checked).toBe(
+        false,
+      )
+      // granular checkboxes stay hidden until "Choose specific errors"
+      expect(wrapper.find('[data-testid="pipeline-editor-retry-event-stall"]').exists()).toBe(false)
+
+      await wrapper.find('[data-testid="pipeline-editor-retry-mode-specific"]').setValue('specific')
+      await nextTick()
+      expect(wrapper.find('[data-testid="pipeline-editor-retry-event-stall"]').exists()).toBe(true)
+    })
+
+    it('saves All-errors mode WITHOUT the on key, preserving schedule and legacy backoff', async () => {
+      const wrapper = await mountWithPolicy({
+        max_retries: 2,
+        backoff: 9,
+        backoff_schedule: { delay_seconds: 30, multiplier: 1.5 },
+      })
+      const vm = wrapper.vm as any
+      expect(vm.retryPolicyMode).toBe('all')
+      await vm.saveRetryPolicy()
+      await flushPromises()
+
+      expect(lastPatchBody().retry_policy).toEqual({
+        max_retries: 2,
+        backoff: 9,
+        backoff_schedule: { delay_seconds: 30, multiplier: 1.5 },
+      })
+      expect(lastPatchBody().retry_policy.on).toBeUndefined()
+    })
+
+    it('switching to Choose-specific saves the explicit event list', async () => {
+      const wrapper = await mountWithPolicy({ max_retries: 2 })
+      const vm = wrapper.vm as any
+      vm.retryPolicyMode = 'specific'
+      vm.retryPolicyEvents = ['stall', 'timeout']
+      await vm.saveRetryPolicy()
+      await flushPromises()
+
+      expect(lastPatchBody().retry_policy).toEqual({
+        on: ['stall', 'timeout'],
+        max_retries: 2,
+        backoff_schedule: { delay_seconds: 45, multiplier: 2 },
+      })
+    })
+
+    it('loads a stored on: [] as granular with none selected and the no-events warning', async () => {
+      const wrapper = await mountWithPolicy({ on: [], max_retries: 2 })
+      const vm = wrapper.vm as any
+      expect(vm.retryPolicyMode).toBe('specific')
+      expect(vm.retryPolicyEvents).toEqual([])
+      expect(vm.retryPolicyNoRetriesWarning).toContain('No events selected')
+      expect(vm.retryPolicySaveBlocked).toBe(true)
+
+      await wrapper.find('[data-testid="pipeline-editor-retry-policy-toggle"]').trigger('click')
+      await nextTick()
+      const warning = wrapper.find('[data-testid="pipeline-editor-retry-policy-warning"]')
+      expect(warning.exists()).toBe(true)
+      expect(warning.text()).toContain('No events selected')
+    })
+
+    it('renders an explicit null on as All-errors (the runtime all-events shape)', async () => {
+      const wrapper = await mountWithPolicy({ on: null, max_retries: 2 })
+      const vm = wrapper.vm as any
+      expect(vm.retryPolicyMode).toBe('all')
+      expect(vm.retryPolicyEvents).toEqual([])
     })
   })
 

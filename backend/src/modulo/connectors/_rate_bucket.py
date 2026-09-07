@@ -81,13 +81,17 @@ class SharedBudgetUnavailableError(RuntimeError):
 # socket-level failures surfaced unwrapped.
 _REDIS_FAILURES = (RedisError, OSError, TimeoutError, ConnectionError)
 
+# Validation error shared by every bucket constructor: a non-positive refill
+# rate is always invalid.
+_ERR_RATE_MUST_BE_POSITIVE = "rate must be > 0"
+
 
 class TokenBucket:
     """In-memory, per-process, async-safe token bucket."""
 
     def __init__(self, rate: float, burst: int, clock: Callable[[], float] = time.monotonic) -> None:
         if rate <= 0:
-            raise ValueError("rate must be > 0")
+            raise ValueError(_ERR_RATE_MUST_BE_POSITIVE)
         if burst <= 0:
             raise ValueError("burst must be > 0")
         self.rate = float(rate)
@@ -178,7 +182,7 @@ class RedisTokenBucket:
         key_prefix: str = "rest_rate_limit:",
     ) -> None:
         if rate <= 0:
-            raise ValueError("rate must be > 0")
+            raise ValueError(_ERR_RATE_MUST_BE_POSITIVE)
         if burst <= 0:
             raise ValueError("burst must be >= 1")
         self.rate = float(rate)
@@ -253,7 +257,7 @@ class PerDestinationRateLimiter:
         buckets: dict[str, TokenBucket] | None = None,
     ) -> None:
         if rate <= 0:
-            raise ValueError("rate must be > 0")
+            raise ValueError(_ERR_RATE_MUST_BE_POSITIVE)
         if burst <= 0:
             raise ValueError("burst must be >= 1")
         if redis_client is not None and not tenant_id:

@@ -301,6 +301,10 @@ EVAL_LEADERBOARD_MAX_DAYS = 365
 # state and are always included.
 _SUITE_RUN_TERMINAL_STATES = frozenset({SuiteRunState.COMPLETED.value, SuiteRunState.PARTIAL.value})
 
+# SQL condition joiner used by every eval read-model builder: the allowlisted
+# ``__CONDITIONS__`` placeholder is filled with the bound conditions ANDed.
+_SQL_AND = " AND "
+
 
 def validate_leaderboard_axis(group_by: str) -> str:
     """Validate a leaderboard ``group_by`` against the fixed axis allowlist.
@@ -435,7 +439,7 @@ def build_eval_leaderboard_query(
         .replace("__AXIS_KEY__", key_sql)
         .replace("__AXIS_LABEL__", label_sql)
         .replace("__AXIS_JOINS__", axis_joins)
-        .replace("__CONDITIONS__", " AND ".join(conditions))
+        .replace("__CONDITIONS__", _SQL_AND.join(conditions))
     )
     return statement, params
 
@@ -477,7 +481,7 @@ def build_eval_timeseries_query(
         "WHERE __CONDITIONS__ "
         "GROUP BY bucket, ed.eval_type "
         "ORDER BY bucket"
-    ).replace("__CONDITIONS__", " AND ".join(conditions))
+    ).replace("__CONDITIONS__", _SQL_AND.join(conditions))
     return statement, params
 
 
@@ -514,7 +518,7 @@ def build_eval_pipelines_query(
         "WHERE __CONDITIONS__ "
         "GROUP BY ed.pipeline_id "
         "ORDER BY ed.pipeline_id"
-    ).replace("__CONDITIONS__", " AND ".join(conditions))
+    ).replace("__CONDITIONS__", _SQL_AND.join(conditions))
     return statement, params
 
 

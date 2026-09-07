@@ -189,6 +189,88 @@ def test_retry_after_policy_zero_budget_returns_none():
     assert _retry_after_policy({"on": ["failure"], "max_retries": 0}, "failed", "boom") is None
 
 
+# ---------------------------------------------------------------------------
+# FAR-649: absent `on` (key missing or null) + valid budget > 0 = ALL events
+# ---------------------------------------------------------------------------
+
+
+def test_retry_after_policy_absent_on_matches_stall():
+    assert _retry_after_policy({"max_retries": 2}, "stalled", "executor_stalled") == 2
+
+
+def test_retry_after_policy_absent_on_matches_timeout():
+    assert _retry_after_policy({"max_retries": 3}, "failed", "node_timeout") == 3
+
+
+def test_retry_after_policy_absent_on_matches_eval_failed():
+    assert _retry_after_policy({"max_retries": 1}, "eval_failed", "eval_blocked") == 1
+
+
+def test_retry_after_policy_absent_on_matches_failure():
+    assert _retry_after_policy({"max_retries": 5}, "failed", "some_other_error") == 5
+
+
+def test_retry_after_policy_absent_on_excludes_hang_death():
+    # All-events coverage must stay surgical about the never-retryable
+    # exclusions: a hang death (node_cancelled + "likely hung") is excluded
+    # from "failure" retries regardless of coverage breadth.
+    hang_detail = "the agent likely hung before writing any result"
+    assert _retry_after_policy({"max_retries": 2}, "failed", "node_cancelled", hang_detail) is None
+
+
+def test_retry_after_policy_null_on_is_all_events():
+    # An explicitly-null `on` behaves like an absent key (defensive: the write
+    # sites reject null, but legacy/hand-edited rows may carry it).
+    assert _retry_after_policy({"on": None, "max_retries": 2}, "stalled", "executor_stalled") == 2
+    assert _retry_after_policy({"on": None, "max_retries": 2}, "failed", "node_timeout") == 2
+
+
+def test_retry_after_policy_absent_on_never_retries_script_mode_terminal_codes():
+    """FAR-649 (qa gate) — the script-mode exclusion TWIN for the all-events
+    path: an ABSENT-`on` (all-events) retry_policy must NEVER retry script-mode
+    terminal codes, exactly like the explicit-`on` ``failure`` policy pinned at
+    ``test_executor.py::test_retry_after_policy_never_retries_script_mode_terminal_codes``.
+
+    Once a script-mode node's process started (fencing lease claimed), any
+    fault is exactly-once regardless of coverage breadth. This pins that the
+    never-retryable exclusions are BREADTH-INDEPENDENT — they live in the
+    failure matcher, not in event-set construction — so a future refactor that
+    moves them into the all-events expansion must fail here."""
+    all_events_policy = {"max_retries": 3}
+    for code in (
+        "script.failed",
+        "script.invalid_output",
+        "script.side_effect_unknown",
+        "script.session_lost",
+        "ScriptFailedError",
+        "ScriptInvalidOutputError",
+        "ScriptSideEffectUnknownError",
+        "script.schema_failed",
+        "script.no_output",
+    ):
+        assert _retry_after_policy(all_events_policy, "failed", code) is None, code
+    # The explicitly-null spelling resolves through the same all-events path.
+    null_on_policy = {"on": None, "max_retries": 3}
+    for code in ("script.failed", "script.side_effect_unknown", "ScriptFailedError"):
+        assert _retry_after_policy(null_on_policy, "failed", code) is None, code
+
+
+def test_retry_after_policy_absent_on_zero_budget_returns_none():
+    assert _retry_after_policy({"max_retries": 0}, "stalled", "executor_stalled") is None
+
+
+def test_retry_after_policy_absent_on_malformed_budget_returns_none():
+    assert _retry_after_policy({"max_retries": "lots"}, "stalled", "executor_stalled") is None
+    assert _retry_after_policy({"max_retries": True}, "failed", "boom") is None
+
+
+def test_retry_after_policy_explicit_empty_on_returns_none():
+    # An explicit `on: []` stays "no retry" (backward compatible) — it must NOT
+    # be collapsed into the all-events default.
+    assert _retry_after_policy({"on": [], "max_retries": 2}, "stalled", "executor_stalled") is None
+    assert _retry_after_policy({"on": [], "max_retries": 2}, "failed", "node_timeout") is None
+
+
 def test_retry_after_policy_failure_excludes_timeout_outcome():
     # A "failure"-only policy must not retry a node_timeout outcome.
     assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_timeout") is None
