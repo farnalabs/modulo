@@ -1,4 +1,4 @@
-"""FAR-613: migration 0182 — ``hitl_claims.context_json`` round-trip.
+"""FAR-613: migration 0190 — ``hitl_claims.context_json`` round-trip.
 
 Executes the migration against an in-memory SQLite engine (the 0126-style
 portable-DDL template — the migration is a plain ``op.add_column`` with an
@@ -32,7 +32,7 @@ from alembic.operations import Operations
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
-_REVISION = "0182_hitl_claim_context_json"
+_REVISION = "0190_hitl_claim_context_json"
 
 _ADD_COLUMN_RE = re.compile(r'op\.add_column\(\s*"(\w+)"\s*,\s*sa\.Column\(\s*"(\w+)"')
 _DROP_COLUMN_RE = re.compile(r'op\.drop_column\(\s*"(\w+)"\s*,\s*"(\w+)"')

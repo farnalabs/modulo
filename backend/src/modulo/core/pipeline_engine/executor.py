@@ -4904,26 +4904,6 @@ class PipelineExecutor:
 
         return results
 
-    async def _interrupt_pipeline_name(
-        self,
-        session: Any,
-        pipeline_id: uuid.UUID,
-        org_id: uuid.UUID,
-    ) -> str | None:
-        """Best-effort pipeline-name lookup for the awaiting notification."""
-        try:
-            pipeline = await get_pipeline(session, pipeline_id)
-            return pipeline.name if pipeline is not None else None
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning(
-                "hitl_gate.pipeline_name_lookup_failed",
-                extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
-                exc_info=True,
-            )
-            return None
-
     async def _create_interrupt_gate(
         self,
         *,

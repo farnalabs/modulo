@@ -1,7 +1,7 @@
 """HITL decision briefing (FAR-613): ``hitl_claims.context_json``.
 
-Revision ID: 0182_hitl_claim_context_json
-Revises: 0181_org_api_keys_scope
+Revision ID: 0190_hitl_claim_context_json
+Revises: 0189_agent_runner_bindings
 Create Date: 2026-09-06
 
 The executor's interrupt handler (``_handle_graph_interrupt``) now captures a
@@ -34,8 +34,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0182_hitl_claim_context_json"
-down_revision: str | None = "0181_org_api_keys_scope"
+revision: str = "0190_hitl_claim_context_json"
+down_revision: str | None = "0189_agent_runner_bindings"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
