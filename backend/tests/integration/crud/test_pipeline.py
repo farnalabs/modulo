@@ -483,7 +483,7 @@ async def test_soft_delete_pipeline_stamps_deleted_by(
 async def test_pipeline_check_constraints_reject_non_positive_values(
     rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
-    """Migration 0183 CHECK constraints must reject non-positive config values.
+    """Migration 0186 CHECK constraints must reject non-positive config values.
 
     Asserts the migration-built schema enforces ``ck_pipelines_*_positive``: a
     direct insert of ``max_duration_seconds = 0`` must raise IntegrityError, and a

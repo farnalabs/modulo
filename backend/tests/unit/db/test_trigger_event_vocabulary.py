@@ -57,10 +57,10 @@ _MIGRATION_PATH = (
 # 0183_triggers_add_polling_ongoing_agent_signal_indexes ->
 # 0184_trigger_events_indexes_and_type_check (this PR's trigger_events index +
 # type-check sweep, renumbered from 0182/0183 after the hitl_claims
-# collision), then the improve-database migrations 0185_pipeline_check_constraints_deleted_by
-# (renumbered from 0183) and 0186_pipeline_performance_indexes (renumbered from
+# collision), then the improve-database migrations 0186_pipeline_check_constraints_deleted_by
+# (renumbered from 0183) and 0187_pipeline_performance_indexes (renumbered from
 # 0184), which is now the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0186_pipeline_performance_indexes"
+_CHAIN_HEAD_MIGRATION_NAME = "0187_pipeline_performance_indexes"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

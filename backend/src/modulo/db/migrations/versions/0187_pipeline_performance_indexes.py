@@ -1,7 +1,7 @@
 """Add composite indexes for hot pipeline queries.
 
-Revision ID: 0186_pipeline_performance_indexes
-Revises: 0185_pipeline_check_constraints_deleted_by
+Revision ID: 0187_pipeline_performance_indexes
+Revises: 0186_pipeline_check_constraints_deleted_by
 Create Date: 2026-09-07
 
 Findings from improve-database lens analysis:
@@ -44,8 +44,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0186_pipeline_performance_indexes"
-down_revision: str | None = "0185_pipeline_check_constraints_deleted_by"
+revision: str = "0187_pipeline_performance_indexes"
+down_revision: str | None = "0186_pipeline_check_constraints_deleted_by"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

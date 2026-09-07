@@ -767,17 +767,21 @@ def test_single_migration_head() -> None:
     # trigger_type CHECK) chains off 0183.
     chaining_off_0183 = [p for p in revisions if parents[p] == "0183_triggers_add_polling_ongoing_agent_signal_indexes"]
     assert [_basename(p) for p in chaining_off_0183] == ["0184_trigger_events_indexes_and_type_check.py"]
-    # 0185_pipeline_check_constraints_deleted_by (improve-database FK/check sweep, renumbered
-    # from 0183) chains off 0184_trigger_events_indexes_and_type_check.
+    # 0185_error_events_indexes_jsonb (main's error_events index + JSONB sweep) chains
+    # off 0184_trigger_events_indexes_and_type_check.
     chaining_off_0184 = [p for p in revisions if parents[p] == "0184_trigger_events_indexes_and_type_check"]
-    assert [_basename(p) for p in chaining_off_0184] == ["0185_pipeline_check_constraints_deleted_by.py"]
-    # 0186_pipeline_performance_indexes (improve-database index sweep, renumbered from 0184)
-    # chains off 0185.
-    chaining_off_0185 = [p for p in revisions if parents[p] == "0185_pipeline_check_constraints_deleted_by"]
-    assert [_basename(p) for p in chaining_off_0185] == ["0186_pipeline_performance_indexes.py"]
-    # Nothing chains off 0186_pipeline_performance_indexes -> it is the single head.
-    chaining_off_0186 = [p for p in revisions if parents[p] == "0186_pipeline_performance_indexes"]
-    assert chaining_off_0186 == []
+    assert [_basename(p) for p in chaining_off_0184] == ["0185_error_events_indexes_jsonb.py"]
+    # 0186_pipeline_check_constraints_deleted_by (improve-database FK/check sweep, renumbered
+    # from 0185) chains off 0185_error_events_indexes_jsonb.
+    chaining_off_0185_error_events = [p for p in revisions if parents[p] == "0185_error_events_indexes_jsonb"]
+    assert [_basename(p) for p in chaining_off_0185_error_events] == ["0186_pipeline_check_constraints_deleted_by.py"]
+    # 0187_pipeline_performance_indexes (improve-database index sweep, renumbered from 0186)
+    # chains off 0186.
+    chaining_off_0186 = [p for p in revisions if parents[p] == "0186_pipeline_check_constraints_deleted_by"]
+    assert [_basename(p) for p in chaining_off_0186] == ["0187_pipeline_performance_indexes.py"]
+    # Nothing chains off 0187_pipeline_performance_indexes -> it is the single head.
+    chaining_off_0187 = [p for p in revisions if parents[p] == "0187_pipeline_performance_indexes"]
+    assert chaining_off_0187 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
