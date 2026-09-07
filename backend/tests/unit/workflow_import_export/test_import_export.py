@@ -250,6 +250,18 @@ def test_sanitize_retry_policy_keeps_minimal_valid_dict() -> None:
     assert fault is None
 
 
+def test_sanitize_retry_policy_absent_on_round_trips_unchanged() -> None:
+    """FAR-649 (pin): a policy WITHOUT the `on` key (write-valid; the runtime
+    resolves it to ALL retryable events) survives import WHOLE — it must not
+    be whole-dropped or nested-dropped into a different shape, which would
+    silently change its runtime meaning."""
+    policy = {"max_retries": 2}
+    sanitized, fault = _sanitize_retry_policy(policy)
+    assert sanitized == policy
+    assert fault is None
+    assert "on" not in sanitized
+
+
 def test_sanitize_retry_policy_drops_unknown_event() -> None:
     sanitized, fault = _sanitize_retry_policy({"on": ["bogus"], "max_retries": 2})
     assert not sanitized
