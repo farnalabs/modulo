@@ -1752,7 +1752,18 @@ export default {
       "attempts": "Attempts",
       "error": "Error",
       "actions": "Actions",
-      "dead_letter_queue": "Dead Letter Queue"
+      "dead_letter_queue": "Dead Letter Queue",
+      "to": "To",
+      "apply": "Apply",
+      "reset": "Reset",
+      "retry": "Retry",
+      "previous": "Previous",
+      "next": "Next",
+      "of_deliveries": "{count} of {total} deliveries",
+      "try_adjusting_filters": "Try adjusting your filters or wait for notifications to be sent.",
+      "no_additional_details": "No additional details available.",
+      "view_dead_lettered": "View Dead Lettered",
+      "dead_letter_queue_description": "{count} undeliverable notification(s) across all endpoints"
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",
