@@ -19,7 +19,7 @@ status: covered
 
 OpenID Connect upstream integration: discovery-document fetch, JWKS retrieval and
 caching, and signature verification of the provider-issued `id_token`, wired into
-the SSO callback flow (`feat-auth-sso-provider-ui`).
+the SSO callback flow (`feat-sso`).
 
 ## Behaviours
 
