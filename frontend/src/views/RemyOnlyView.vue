@@ -400,7 +400,7 @@ onMounted(async () => {
   background-color: hsla(var(--primary) / 0.08);
 }
 .remy-only-tab-close {
-  @apply flex items-center justify-center rounded p-0.5 transition-colors shrink-0 cursor-pointer border-0 bg-transparent;
+  @apply flex items-center justify-center rounded p-0.5 transition-colors shrink-0 border-0 bg-transparent;
   color: hsl(var(--muted-foreground));
 }
 .remy-only-tab-close:hover {

@@ -985,7 +985,7 @@ function renderMarkdown(text: string): string {
   outline-offset: 2px;
 }
 .remy-tool-header {
-  @apply flex items-center gap-2 w-full px-3 py-2 text-left cursor-pointer;
+  @apply flex items-center gap-2 w-full px-3 py-2 text-left;
   background-color: hsl(var(--muted));
   color: hsl(var(--foreground));
 }
@@ -1029,7 +1029,7 @@ function renderMarkdown(text: string): string {
   overflow-y: auto;
 }
 .remy-slash-item {
-  @apply flex items-center gap-3 w-full px-3 py-2 text-left text-sm transition-colors cursor-pointer;
+  @apply flex items-center gap-3 w-full px-3 py-2 text-left text-sm transition-colors;
   color: hsl(var(--popover-foreground));
   border-left: 2px solid transparent;
 }
