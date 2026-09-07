@@ -276,23 +276,34 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     # ── Community tier — mobile icon-rail experiment (default OFF) ──────────
-    # Seeded with ``is_active=false`` so it is listed-but-inactive on every tier
-    # (community-tier flags otherwise activate everywhere via the tier-rank
-    # comparison). Org admins can enable it per-org through the Feature Flags UI
-    # (sets an org ``feature_overrides`` entry, which wins in ``_refresh``).
+    # Registered in ``DEFAULT_OFF_FLAGS`` so it stays listed-but-inactive on
+    # every tier (community-tier flags otherwise activate everywhere via the
+    # tier-rank comparison). Org admins can enable it per-org through the
+    # Feature Flags UI (sets an org ``feature_overrides`` entry, which wins in
+    # ``_refresh``).
     FeatureFlag(
         name="mobile_sidebar_rail",
         description="Mobile icon-rail sidebar (experimental)",
         tier="community",
     ),
     # ── Community tier — user-scoped MCP keys (default OFF, FAR-620) ────────
-    # Same two-mechanism precedent as ``mobile_sidebar_rail``: listed in the
-    # catalog for per-org toggling AND hardcoded in ``_refresh``'s inactive
-    # set (without the hardcode the community-tier tier-rank fallback would
-    # activate it everywhere). Orgs enable it via ``feature_overrides``.
+    # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
+    # two-mechanism precedent): default-OFF everywhere until an org
+    # ``feature_overrides`` entry enables it.
     FeatureFlag(
         name="user_scoped_mcp_keys",
         description="Per-user MCP API keys (keys operate as their creator's identity)",
+        tier="community",
+    ),
+    # ── Community tier — lifecycle map journeys display (default OFF, FAR-654) ──
+    # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
+    # two-mechanism precedent): journey attribution display ships default-OFF
+    # for MVP until an org ``feature_overrides`` entry enables it. The
+    # frontend LifecycleMapView gates the journeys fetch and all journey UI on
+    # this flag.
+    FeatureFlag(
+        name="lifecycle_map_journeys",
+        description="Journey cards and journey detail on the Lifecycle Map view (attribution display)",
         tier="community",
     ),
 ]
@@ -300,6 +311,22 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
 
 # community=Free, team=one paid tier
 TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
+
+# Flags shipped default-OFF on every tier regardless of tier rank. Each is
+# listed in the catalog for per-org toggling AND hardcoded here so the
+# community-tier tier-rank fallback in ``FeatureFlagRegistry._refresh`` can
+# never activate it (the "two-mechanism" precedent started by
+# ``mobile_sidebar_rail``). Orgs enable them per-org via
+# ``feature_overrides``; a system-level ``set_override`` also wins.
+DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
+    {
+        "mobile_sidebar_rail",
+        "dashboard_charts",
+        "saved_views",
+        "user_scoped_mcp_keys",
+        "lifecycle_map_journeys",
+    }
+)
 
 
 class CommunityTier:
@@ -574,19 +601,11 @@ class FeatureFlagRegistry:
         current_rank = tier_rank.get(self._current_tier, 0)
         # Flags seeded ``is_active=false`` in the DB catalog (experiments that
         # must ship default-OFF everywhere). ``__init__`` runs ``_refresh()``
-        # before ``_load_catalog``, so guard with getattr. ``mobile_sidebar_rail``
-        # is always in the inactive set — it is default-OFF by definition, so it
-        # must not come active via the tier-rank fallback when the DB catalog is
-        # empty; only an explicit ``_overrides`` entry can turn it on.
-        # ``user_scoped_mcp_keys`` (FAR-620) follows the same two-mechanism
-        # precedent: default-OFF everywhere until an org ``feature_overrides``
-        # entry enables it.
-        inactive: set[str] = getattr(self, "_inactive_flags", set()) | {
-            "mobile_sidebar_rail",
-            "dashboard_charts",
-            "saved_views",
-            "user_scoped_mcp_keys",
-        }
+        # before ``_load_catalog``, so guard with getattr. The hardcoded
+        # ``DEFAULT_OFF_FLAGS`` set wins over the tier-rank fallback AND over a
+        # DB catalog row marked active — only an explicit override (org
+        # ``feature_overrides`` / system ``set_override``) can turn them on.
+        inactive: set[str] = getattr(self, "_inactive_flags", set()) | DEFAULT_OFF_FLAGS
 
         for flag in self._flags:
             if flag.name in inactive:
