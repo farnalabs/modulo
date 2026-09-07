@@ -2543,6 +2543,42 @@ class GraphValidator:
     # still exercise the flat-key reconcile; the validate path uses the
     # connector-config reconcile in :meth:`_check_node_send_budget_bindings`.
     @staticmethod
+    def _node_send_budget_values(node: dict[str, Any]) -> tuple[float, float] | None:
+        """Resolve a fan-out node's (fanout_cardinality, per_item_budget) pair; None to skip.
+
+        A node without both keys — or with keys that do not parse as positive
+        numbers — contributes no send-budget warning.
+        """
+        fanout = node.get("fanout_cardinality")
+        per_item = node.get("per_item_budget")
+        if fanout is None and per_item is None:
+            return None
+        fanout_val = _as_positive_number(fanout)
+        per_item_val = _as_positive_number(per_item)
+        if fanout_val is None or per_item_val is None:
+            return None
+        return fanout_val, per_item_val
+
+    @staticmethod
+    def _resolve_node_wait_for(node: dict[str, Any]) -> float | None:
+        """The node's total budget: explicit ``node_wait_for`` else ``timeout_seconds``."""
+        wait_for = _as_positive_number(node.get("node_wait_for"))
+        if wait_for is None:
+            return _as_positive_number(node.get("timeout_seconds"))
+        return wait_for
+
+    @staticmethod
+    def _node_send_budget_inputs(node: dict[str, Any]) -> tuple[str, float, float, float] | None:
+        """Resolve (nid, fanout, per_item, wait_for) for a fan-out node; None to skip."""
+        resolved = GraphValidator._node_send_budget_values(node)
+        if resolved is None:
+            return None
+        wait_for = GraphValidator._resolve_node_wait_for(node)
+        if wait_for is None:
+            return None
+        return _string_or_default(node.get("id")), resolved[0], resolved[1], wait_for
+
+    @staticmethod
     def _check_node_send_budget(graph_json: dict[str, Any], result: ValidationResult) -> None:
         """Warn when a fan-out node's send budget exceeds its wait_for budget (FAR-410).
 
@@ -2559,20 +2595,10 @@ class GraphValidator:
         for node in graph_json.get("nodes", []) or []:
             if not isinstance(node, dict):
                 continue
-            fanout = node.get("fanout_cardinality")
-            per_item = node.get("per_item_budget")
-            if fanout is None and per_item is None:
+            resolved = GraphValidator._node_send_budget_inputs(node)
+            if resolved is None:
                 continue
-            nid = _string_or_default(node.get("id"))
-            fanout_val = _as_positive_number(fanout)
-            per_item_val = _as_positive_number(per_item)
-            if fanout_val is None or per_item_val is None:
-                continue
-            wait_for = _as_positive_number(node.get("node_wait_for"))
-            if wait_for is None:
-                wait_for = _as_positive_number(node.get("timeout_seconds"))
-            if wait_for is None:
-                continue
+            nid, fanout_val, per_item_val, wait_for = resolved
             total = fanout_val * per_item_val
             if total > wait_for:
                 result.warning(
