@@ -115,7 +115,7 @@
                 role="button"
                 tabindex="0"
                 :data-testid="'dashboard-team-row-' + team.id"
-                class="border-b last:border-0 cursor-pointer hover:bg-muted/50"
+                class="border-b last:border-0 hover:bg-muted/50"
                 @click="toggleTeam(team.id)"
                 @keydown.enter="toggleTeam(team.id)"
                 @keydown.space.prevent="toggleTeam(team.id)">

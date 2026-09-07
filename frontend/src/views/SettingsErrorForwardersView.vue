@@ -36,7 +36,7 @@
               >{{ $t('views.SettingsErrorForwardersView.not_configured') }}</span>
               <button
                 type="button"
-                class="relative inline-flex h-6 w-11 cursor-pointer items-center"
+                class="relative inline-flex h-6 w-11 items-center"
                 :aria-label="$t('views.SettingsErrorForwardersView.toggle_forwarder', { name: fwd.display_name })"
                 @click="toggleForwarder(fwd)"
               >

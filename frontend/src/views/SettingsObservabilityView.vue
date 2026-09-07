@@ -98,7 +98,7 @@
             <div class="flex items-center gap-3">
               <button
                 type="button"
-                class="relative inline-flex h-6 w-11 cursor-pointer items-center"
+                class="relative inline-flex h-6 w-11 items-center"
                 data-testid="settings-observability-langsmith-toggle"
                 :aria-label="$t('views.SettingsObservabilityView.toggle_langsmith')"
                 @click="langsmithEnabled = !langsmithEnabled"

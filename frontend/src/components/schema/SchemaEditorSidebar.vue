@@ -24,7 +24,7 @@
           @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
           v-for="schema in schemas"
           :key="schema.id"
-          class="cursor-pointer border-b px-4 py-3 transition-colors hover:bg-muted/50"
+          class="border-b px-4 py-3 transition-colors hover:bg-muted/50"
           :class="{ 'bg-muted': selectedId === schema.id }"
           data-testid="schema-editor-list-item"
           @click="$emit('select', schema.id)"

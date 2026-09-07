@@ -3,8 +3,8 @@
     type="button"
     :data-testid="`journey-card-${journey.kind}-${journey.ref}`"
     :aria-label="$t('views.LifecycleMapView.journey.open', { label: refLabel })"
-    class="journey-card w-full rounded-md border border-border bg-card px-2 py-1.5 text-left shadow-sm transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 outline-none cursor-pointer"
-    :class="{ 'border-dashed opacity-60 cursor-pointer': journey.unattributed }"
+    class="journey-card w-full rounded-md border border-border bg-card px-2 py-1.5 text-left shadow-sm transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 outline-none"
+    :class="{ 'border-dashed opacity-60': journey.unattributed }"
     @click="$emit('open')"
   >
     <div class="flex items-center justify-between gap-1">

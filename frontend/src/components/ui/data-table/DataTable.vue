@@ -125,7 +125,6 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
           v-for="(row, index) in sortedRows"
           :key="index"
           class="transition-colors hover:bg-muted/30"
-          :class="props.rowClickable && 'cursor-pointer'"
           :role="props.rowClickable ? 'button' : undefined"
           :tabindex="props.rowClickable ? 0 : undefined"
           @click="onRowClick(row)"
