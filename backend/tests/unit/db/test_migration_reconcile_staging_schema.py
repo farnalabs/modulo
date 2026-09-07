@@ -27,9 +27,8 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
-# Current chain head (tracks the latest migration; 0120 is still the
-# org-FK hardening migration the OrgFkHardening tests below inspect).
-_CHAIN_HEAD_MIGRATION = "0182_hitl_claims_active_sweep_indexes"
+# Current chain head (tracks the latest migration).
+_CHAIN_HEAD_MIGRATION = "0183_agent_runner_bindings"
 
 
 def _source(name: str) -> str:

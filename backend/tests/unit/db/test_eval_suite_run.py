@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0181."""
+    """Exactly one migration chains off each predecessor, and the head is 0183."""
     import re
 
     revisions = {}
@@ -756,12 +756,15 @@ def test_single_migration_head() -> None:
     # 0181_org_api_keys_scope (FAR-620 user-scoped MCP keys) chains off 0180_hitl_parked_status.
     chaining_off_0180 = [p for p in revisions if parents[p] == "0180_hitl_parked_status"]
     assert [_basename(p) for p in chaining_off_0180] == ["0181_org_api_keys_scope.py"]
-    # 0182_hitl_claims_active_sweep_indexes (this PR) chains off 0181_org_api_keys_scope.
+    # 0182_hitl_claims_active_sweep_indexes (main) chains off 0181_org_api_keys_scope.
     chaining_off_0181 = [p for p in revisions if parents[p] == "0181_org_api_keys_scope"]
     assert [_basename(p) for p in chaining_off_0181] == ["0182_hitl_claims_active_sweep_indexes.py"]
-    # Nothing chains off 0182_hitl_claims_active_sweep_indexes -> it is the single head.
+    # 0183_agent_runner_bindings (this PR, FAR-592 / D6) chains off 0182_hitl_claims_active_sweep_indexes.
     chaining_off_0182 = [p for p in revisions if parents[p] == "0182_hitl_claims_active_sweep_indexes"]
-    assert chaining_off_0182 == []
+    assert [_basename(p) for p in chaining_off_0182] == ["0183_agent_runner_bindings.py"]
+    # Nothing chains off 0183_agent_runner_bindings -> it is the single head.
+    chaining_off_0183 = [p for p in revisions if parents[p] == "0183_agent_runner_bindings"]
+    assert chaining_off_0183 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

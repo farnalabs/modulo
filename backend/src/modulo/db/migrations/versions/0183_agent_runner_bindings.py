@@ -44,6 +44,11 @@ _ORG_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', tr
 
 _TABLE = "agent_runner_bindings"
 
+# Module-level tuple of org-scoped tables this migration secures with RLS, so the
+# architecture test (test_rls_coverage) can detect the coverage without parsing
+# the f-string DDL below.
+_ORG_SCOPED_TABLES = ("agent_runner_bindings",)
+
 
 def _is_postgres(bind: sa.Connection) -> bool:
     return bind.dialect.name == "postgresql"

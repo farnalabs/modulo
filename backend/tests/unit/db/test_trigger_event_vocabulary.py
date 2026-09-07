@@ -53,8 +53,9 @@ _MIGRATION_PATH = (
 # migration (0181_org_api_keys_scope) re-parented onto 0180, and this PR's
 # FAR-604 active-sweep migration (0182_hitl_claims_active_sweep_indexes,
 # renumbered from 0181 after the org_api_keys_scope collision) re-parented onto
-# 0181_org_api_keys_scope as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0182_hitl_claims_active_sweep_indexes"
+# 0181_org_api_keys_scope, and this PR's 0183_agent_runner_bindings re-parented
+# onto 0182 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0183_agent_runner_bindings"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

@@ -5,6 +5,7 @@ def test_initial_schema_contains_required_tables() -> None:
     required = {
         "accounts",
         "agents",
+        "agent_runner_bindings",
         "audit_chain_heads",
         "audit_events",
         "chat_messages",
