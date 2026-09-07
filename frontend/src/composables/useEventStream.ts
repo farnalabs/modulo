@@ -42,6 +42,41 @@ function scheduleReconnect(): void {
   }, delay)
 }
 
+function handleConnectError(timeoutId: ReturnType<typeof setTimeout>, e: unknown): void {
+  clearTimeout(timeoutId)
+  if (e instanceof Error && e.name === 'AbortError') {
+    if (!_disconnecting) scheduleReconnect()
+    return
+  }
+  scheduleReconnect()
+}
+
+function dispatchToTypeHandlers(typeHandlers: Set<EventHandler>, parsed: EventBusEvent): void {
+  for (const handler of typeHandlers) {
+    try { handler(parsed) } catch (e) {
+      console.error('[EventBus] Handler error', e)
+    }
+  }
+}
+
+function dispatchResourceEvent(parsed: EventBusEvent): void {
+  const typeHandlers = handlers.get(parsed.type)
+  if (typeHandlers) {
+    dispatchToTypeHandlers(typeHandlers, parsed)
+  }
+  try { dispatchToStore(parsed) } catch (e) {
+    console.error('[EventBus] dispatchToStore error', e)
+  }
+}
+
+function handleResourceChanged(data: string): void {
+  try {
+    dispatchResourceEvent(JSON.parse(data) as EventBusEvent)
+  } catch {
+    console.warn('[EventBus] Failed to parse SSE data')
+  }
+}
+
 async function doConnect(): Promise<void> {
   cleanup()
   abortController = new AbortController()
@@ -67,31 +102,11 @@ async function doConnect(): Promise<void> {
 
     for await (const { event, data } of parseSSEStream(reader)) {
       if (event === 'resource_changed') {
-        try {
-          const parsed = JSON.parse(data)
-          const typeHandlers = handlers.get(parsed.type)
-          if (typeHandlers) {
-            for (const handler of typeHandlers) {
-              try { handler(parsed) } catch (e) {
-                console.error('[EventBus] Handler error', e)
-              }
-            }
-          }
-          try { dispatchToStore(parsed) } catch (e) {
-            console.error('[EventBus] dispatchToStore error', e)
-          }
-        } catch {
-          console.warn('[EventBus] Failed to parse SSE data')
-        }
+        handleResourceChanged(data)
       }
     }
   } catch (e: unknown) {
-    clearTimeout(timeoutId)
-    if (e instanceof Error && e.name === 'AbortError') {
-      if (!_disconnecting) scheduleReconnect()
-      return
-    }
-    scheduleReconnect()
+    handleConnectError(timeoutId, e)
     return
   } finally {
     reader?.cancel().catch(() => {})
