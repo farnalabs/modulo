@@ -38,10 +38,26 @@ outcomes.
 - **Malformed `max_retries`** (non-int, bool, out of [0, 5], or 0) stays
   fail-closed (no retry), including in the all-events case; the budget
   validation runs before the event-shape branch.
-- **Validator shape unchanged** (`GraphValidator.check_retry_policy`): absent
-  `on` stays write-valid; no new error codes. `on: null` remains rejected at
-  the write sites (only the runtime resolver treats it defensively as
-  all-events, for legacy/hand-edited rows).
+- **Validator accepts explicit `null` `on`** (`GraphValidator.check_retry_policy`):
+  `on: null` is now treated IDENTICALLY to an absent key — valid, with the
+  all-events default. This is a deliberate fix, not a regression: the shipped
+  OpenAPI text already documented "absent (or null) = ALL retryable events",
+  but the validator rejected an explicit `null` as RETRY_POLICY_MALFORMED —
+  a 422 at the write sites and (via the run-start gate re-running the same
+  check) a GraphValidationError that BRICKED legacy/hand-edited null rows at
+  run start. Those rows now run with all-events retries. The validator shape
+  is otherwise unchanged: no new error codes, and a non-list non-null `on`
+  (string, int) stays malformed.
+- **Node-level inheritance is breadth-independent**
+  (`_policy_from_pipeline_default`): an absent-`on` policy with a valid budget
+  (int, non-bool, 1-5) now inherits at the NODE level with all node retry
+  events — coverage-equivalent to the explicit four-event run-level list,
+  which maps to that same node set (same attempt ceiling `max_retries + 1`,
+  same backoff). The editor's All-errors default shape is therefore equivalent
+  to the explicit four-event list at BOTH the run and the node level;
+  previously the absent-`on` shape silently yielded ZERO node-level retries.
+  Explicit `on: []`, a malformed non-list non-null `on`, and a malformed /
+  out-of-bounds budget still fail-closed to no node retry.
 - **Nodeless zombie repair re-classified** (`_should_redispatch_nodeless`):
   an absent-`on` policy with a valid budget > 0 is now stall-covered, so the
   repair honors the POLICY budget (terminal-fail once exhausted) instead of

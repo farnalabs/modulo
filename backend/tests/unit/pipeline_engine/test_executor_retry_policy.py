@@ -225,6 +225,36 @@ def test_retry_after_policy_null_on_is_all_events():
     assert _retry_after_policy({"on": None, "max_retries": 2}, "failed", "node_timeout") == 2
 
 
+def test_retry_after_policy_absent_on_never_retries_script_mode_terminal_codes():
+    """FAR-649 (qa gate) — the script-mode exclusion TWIN for the all-events
+    path: an ABSENT-`on` (all-events) retry_policy must NEVER retry script-mode
+    terminal codes, exactly like the explicit-`on` ``failure`` policy pinned at
+    ``test_executor.py::test_retry_after_policy_never_retries_script_mode_terminal_codes``.
+
+    Once a script-mode node's process started (fencing lease claimed), any
+    fault is exactly-once regardless of coverage breadth. This pins that the
+    never-retryable exclusions are BREADTH-INDEPENDENT — they live in the
+    failure matcher, not in event-set construction — so a future refactor that
+    moves them into the all-events expansion must fail here."""
+    all_events_policy = {"max_retries": 3}
+    for code in (
+        "script.failed",
+        "script.invalid_output",
+        "script.side_effect_unknown",
+        "script.session_lost",
+        "ScriptFailedError",
+        "ScriptInvalidOutputError",
+        "ScriptSideEffectUnknownError",
+        "script.schema_failed",
+        "script.no_output",
+    ):
+        assert _retry_after_policy(all_events_policy, "failed", code) is None, code
+    # The explicitly-null spelling resolves through the same all-events path.
+    null_on_policy = {"on": None, "max_retries": 3}
+    for code in ("script.failed", "script.side_effect_unknown", "ScriptFailedError"):
+        assert _retry_after_policy(null_on_policy, "failed", code) is None, code
+
+
 def test_retry_after_policy_absent_on_zero_budget_returns_none():
     assert _retry_after_policy({"max_retries": 0}, "stalled", "executor_stalled") is None
 

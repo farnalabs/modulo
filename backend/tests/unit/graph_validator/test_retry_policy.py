@@ -123,6 +123,46 @@ def test_retry_policy_absent_on_is_valid() -> None:
     assert result.is_valid
 
 
+def test_retry_policy_explicit_null_on_is_valid() -> None:
+    """FAR-649 (qa gate pin): an explicitly-`null` `on` is treated the SAME as
+    an absent key — valid, with all-events semantics. Previously this emitted
+    RETRY_POLICY_MALFORMED (a 422 at the write sites and, via the run-start
+    gate re-running this same check, a GraphValidationError), contradicting the
+    shipped OpenAPI text ("absent (or null) = ALL retryable events") and
+    bricking legacy/hand-edited null rows."""
+    result = ValidationResult()
+    GraphValidator.check_retry_policy({"on": None, "max_retries": 2}, result)
+    assert not result.issues
+    assert result.is_valid
+
+
+def test_retry_policy_null_on_with_zero_budget_is_shape_valid() -> None:
+    # `on: null` is shape-valid regardless of the budget value (a 0 budget is
+    # semantically "no retry", not malformed).
+    result = ValidationResult()
+    GraphValidator.check_retry_policy({"on": None, "max_retries": 0}, result)
+    assert not result.issues
+    assert result.is_valid
+
+
+def test_retry_policy_null_on_does_not_loosen_non_list_non_null() -> None:
+    # Only `null` joins the absent case: a non-list non-null `on` (string)
+    # stays RETRY_POLICY_MALFORMED.
+    result = ValidationResult()
+    GraphValidator.check_retry_policy({"on": "stall", "max_retries": 2}, result)
+    assert "RETRY_POLICY_MALFORMED" in _codes(result)
+    assert not result.is_valid
+
+
+def test_retry_policy_explicit_empty_on_is_shape_valid() -> None:
+    # `on: []` is shape-valid (semantically "no retry", not malformed) — no
+    # error either way.
+    result = ValidationResult()
+    GraphValidator.check_retry_policy({"on": [], "max_retries": 2}, result)
+    assert not result.issues
+    assert result.is_valid
+
+
 # ---------------------------------------------------------------------------
 # FAR-525 — check_retry_policy_schedule (the OPTIONAL backoff_schedule key)
 # ---------------------------------------------------------------------------
