@@ -46,6 +46,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_COST_MANAGE = "cost.manage"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again."
+_MSG_ORG_NOT_FOUND = "Organisation not found"
 
 
 _log = logging.getLogger(__name__)
@@ -380,7 +381,7 @@ async def set_org_spend_limit(
             await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORG_NOT_FOUND)
             org.daily_spend_limit = Decimal(str(req.daily_spend_limit)) if req.daily_spend_limit is not None else None
             await session.flush()
     except ProgrammingError:
@@ -573,7 +574,7 @@ async def update_cost_controls(
             await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORG_NOT_FOUND)
 
             _apply_cost_control_updates(org, req)
 
@@ -711,7 +712,7 @@ async def set_spend_ceiling(
             await set_rls_org(session, current_user.organisation_id)
             org = await get_organisation(session, current_user.organisation_id)
             if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORG_NOT_FOUND)
             # ``exclude_unset`` distinguishes "field not sent" (leave unchanged,
             # so a partial update never clobbers the other ceiling) from an
             # explicit ``null`` (clear this ceiling back to unlimited). An empty
