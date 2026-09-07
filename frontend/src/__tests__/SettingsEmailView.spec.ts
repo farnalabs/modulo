@@ -93,4 +93,178 @@ describe('SettingsEmailView', () => {
     await nextTick()
     expect(wrapper.text()).toContain('Email settings saved.')
   })
+
+  it('shows an error when saving settings fails with a detail', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.PUT as any).mockResolvedValue({ data: undefined, error: { detail: 'smtp host unreachable' } })
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const saveBtn = wrapper.find('button')
+    await saveBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Save failed: smtp host unreachable')
+  })
+
+  it('shows a formatted error when saving settings fails without a detail', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.PUT as any).mockResolvedValue({ data: undefined, error: { message: 'boom' } })
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const saveBtn = wrapper.find('button')
+    await saveBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Save failed:')
+  })
+
+  it('sends a test email and shows the returned message when the result is ok', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.POST as any).mockResolvedValue({ data: { ok: true, message: 'queued' }, error: undefined })
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().includes('Test'))
+    expect(testBtn).toBeTruthy()
+    await (testBtn as any).trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('queued')
+  })
+
+  it('shows the fallback success message when the ok result has no message', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.POST as any).mockResolvedValue({ data: { ok: true }, error: undefined })
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().includes('Test'))
+    await (testBtn as any).trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Test email sent successfully.')
+  })
+
+  it('shows an error when the test result is not ok', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.POST as any).mockResolvedValue({ data: { ok: false, message: 'rejected' }, error: undefined })
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().includes('Test'))
+    await (testBtn as any).trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('rejected')
+  })
+
+  it('shows the fallback error message when the not-ok result has no message', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.POST as any).mockResolvedValue({ data: { ok: false }, error: undefined })
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().includes('Test'))
+    await (testBtn as any).trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Test failed.')
+  })
+
+  it('shows a formatted error when the test request returns an error', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.POST as any).mockResolvedValue({ data: undefined, error: { detail: 'smtp auth failed' } })
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().includes('Test'))
+    await (testBtn as any).trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Test failed: smtp auth failed')
+  })
+
+  it('shows a formatted error when saving throws', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.PUT as any).mockRejectedValue(new Error('network down'))
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const saveBtn = wrapper.find('button')
+    await saveBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Save failed:')
+    expect(wrapper.text()).toContain('network down')
+  })
+
+  it('shows a formatted error when testing throws', async () => {
+    await setupPlanStore('00000000-0000-0000-0000-000000000001')
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: { smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '********', email_from: '' }, error: undefined })
+    ;(api.POST as any).mockRejectedValue(new Error('network down'))
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text().includes('Test'))
+    await (testBtn as any).trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Test failed:')
+    expect(wrapper.text()).toContain('network down')
+  })
+
+  it('shows an error when saving with no organisation id', async () => {
+    const { usePlanStore } = await import('../stores/planStore')
+    const planStore = usePlanStore()
+    planStore.orgId = null
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({ data: undefined, error: undefined })
+
+    const wrapper = createWrapper()
+    await flushPromises()
+    await nextTick()
+
+    const saveBtn = wrapper.find('button')
+    await saveBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Could not determine organisation')
+  })
 })
