@@ -1136,6 +1136,43 @@ def _check_llm_routing_default(
     # ------------------------------------------------------------------
 
 
+def _index_nodes_by_id(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Index the graph's nodes by their ``id`` (nodes without an id are dropped)."""
+    nodes_by_id: dict[str, dict[str, Any]] = {}
+    for n in nodes:
+        nid = n.get("id")
+        if nid is not None:
+            nodes_by_id[str(nid)] = n
+    return nodes_by_id
+
+
+def _parallel_fanout_normal_edges(
+    source: str,
+    src_node: dict[str, Any],
+    src_edges: list[dict[str, Any]],
+    loop_sources: set[str],
+) -> list[dict[str, Any]] | None:
+    """The source's normal outgoing edges when it is a parallel fan-out; else ``None``.
+
+    Skipped shapes (None): llm routing sources; a source with ANY loop edge
+    (the loop counter routes ALL its outgoing edges through the loop counter —
+    single target, ``graph_cache.build_graph_from_json`` — so it is never a
+    parallel fan-out); a source with any conditional edge (=> ALL outgoing
+    edges go through the router, single target chosen); and a source with at
+    most one normal edge (no fan-out).
+    """
+    if src_node.get("routing_mode") == "llm":
+        return None
+    if source in loop_sources:
+        return None
+    if any(_edge_type(e) == "conditional" for e in src_edges):
+        return None
+    normal = [e for e in src_edges if _edge_type(e) != "conditional"]
+    if len(normal) <= 1:
+        return None
+    return normal
+
+
 class GraphValidator:
     """Validates a PipelineSnapshot's graph before save or execution."""
 
@@ -2997,29 +3034,13 @@ class GraphValidator:
         if not nodes or not edges:
             return
 
-        nodes_by_id: dict[str, dict[str, Any]] = {}
-        for n in nodes:
-            nid = n.get("id")
-            if nid is not None:
-                nodes_by_id[str(nid)] = n
-
+        nodes_by_id = _index_nodes_by_id(nodes)
         loop_sources, by_source = _collect_parallel_fanout_candidates(edges)
 
         for source, src_edges in by_source.items():
             src_node = nodes_by_id.get(source, {})
-            if src_node.get("routing_mode") == "llm":
-                continue
-            # A source with ANY loop edge routes ALL its outgoing edges through
-            # the loop counter (single target, graph_cache.build_graph_from_json),
-            # so it is never a parallel fan-out.
-            if source in loop_sources:
-                continue
-            # Any conditional edge => ALL outgoing edges go through the router
-            # (single target chosen), so this source is NOT a parallel fan-out.
-            if any(_edge_type(e) == "conditional" for e in src_edges):
-                continue
-            normal = [e for e in src_edges if _edge_type(e) != "conditional"]
-            if len(normal) <= 1:
+            normal = _parallel_fanout_normal_edges(source, src_node, src_edges, loop_sources)
+            if normal is None:
                 continue
 
             setters = _collect_context_setter_targets(normal, nodes_by_id)
