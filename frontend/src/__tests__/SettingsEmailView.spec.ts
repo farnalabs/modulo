@@ -6,7 +6,7 @@ const { mockPlanStore, mockApi } = vi.hoisted(() => {
   const ORG_ID = '00000000-0000-0000-0000-000000000001'
   return {
     mockPlanStore: {
-      orgId: ORG_ID,
+      orgId: ORG_ID as string | null,
       fetchPlan: vi.fn().mockResolvedValue(undefined),
       featureEnabled: vi.fn().mockReturnValue(true),
       isAtMinimumTier: vi.fn().mockReturnValue(true),
