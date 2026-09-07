@@ -152,7 +152,7 @@ def test_list_bindings_empty(client: tuple[TestClient, AsyncMock]) -> None:
     ):
         resp = http.get(f"/api/v1/agents/{_AGENT_ID}/bindings")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["items"] == []
+    assert not resp.json()["items"]
 
 
 def test_list_bindings_agent_not_found(client: tuple[TestClient, AsyncMock]) -> None:
@@ -275,7 +275,7 @@ def test_replace_bindings_empty_set(client: tuple[TestClient, AsyncMock]) -> Non
     ):
         resp = http.put(f"/api/v1/agents/{_AGENT_ID}/bindings", json={"bindings": []})
     assert resp.status_code == 200, resp.text
-    assert resp.json()["items"] == []
+    assert not resp.json()["items"]
 
 
 # ---------------------------------------------------------------------------
