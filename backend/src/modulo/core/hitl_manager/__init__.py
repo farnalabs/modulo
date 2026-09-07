@@ -285,16 +285,20 @@ class HITLManager:
             raise GateAlreadyDecidedError(run_id, gate_id)
         if gate_check.account_id is not None:
             raise AlreadyClaimedError(run_id, gate_id)
-        # FAR-612: the run itself must be waiting for a human. An undecided
-        # gate on any other status is data rot (e.g. orphaned rows left by the
-        # since-fixed auto-approve bug) -- claiming it would flip a terminal
-        # run to "claimed" via the route's update_run_status. Org-scoped so a
-        # foreign run id can never be probed through this check.
+        # FAR-612: the run itself must be waiting for a human (or parked on a
+        # human decision). An undecided gate on any other status is data rot
+        # (e.g. orphaned rows left by the since-fixed auto-approve bug) --
+        # claiming it would flip a terminal run to "claimed" via the route's
+        # update_run_status. ``hitl_parked`` is deliberately INCLUDED: per
+        # FAR-604 D2 a parked run's gate stays OPEN AND CLAIMABLE (park !=
+        # decide) until a decision un-parks it, so a parked run must remain
+        # claimable. Org-scoped so a foreign run id can never be probed
+        # through this check.
         run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
         run = run_result.scalar_one_or_none()
         if run is None:
             raise GateNotFoundError(run_id, gate_id)
-        if run.status != "awaiting_human":
+        if run.status not in ("awaiting_human", "hitl_parked"):
             raise RunNotAwaitingError(run_id, run.status)
         if gate_check.required_team_id is not None:
             # Lock the gate row so the team check is serialised with the UPDATE.
