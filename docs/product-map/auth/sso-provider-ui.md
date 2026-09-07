@@ -1,5 +1,5 @@
 ---
-id: feat-auth-sso-provider-ui
+id: feat-sso
 prd: 9.4
 delivery-tasks: []
 code:
