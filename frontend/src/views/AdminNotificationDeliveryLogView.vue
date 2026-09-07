@@ -424,10 +424,13 @@ async function retryAllFailed() {
     } else if (data) {
       await loadDeliveries()
       const result = data as unknown as { retried: number; success: boolean; errors?: unknown[] }
-      const msg = t('views.AdminNotificationDeliveryLogView.retried_deliveries_count', { count: result.retried }, result.retried)
+      const retried = t('views.AdminNotificationDeliveryLogView.retried_deliveries_count', { count: result.retried }, result.retried)
       retrySuccessMessage.value = result.success
-        ? msg
-        : `${msg} with ${t('views.AdminNotificationDeliveryLogView.errors_count', { count: result.errors?.length || 0 }, result.errors?.length || 0)}`
+        ? retried
+        : t('views.AdminNotificationDeliveryLogView.retried_with_errors', {
+            retried,
+            errors: t('views.AdminNotificationDeliveryLogView.errors_count', { count: result.errors?.length || 0 }, result.errors?.length || 0),
+          })
     }
   } catch (e: unknown) {
     error.value = `${t('views.AdminNotificationDeliveryLogView.retry_all_request_failed')} ${formatApiError(e)}`
