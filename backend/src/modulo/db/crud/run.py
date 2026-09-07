@@ -1931,6 +1931,57 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
         await _write_unclassified_classification(session, run)
 
 
+def _apply_run_claim_fields(run: Run, status: str, update: _RunStatusUpdate) -> None:
+    """Stamp the lifecycle timestamps + claim driven by the new status."""
+    if status == "running" and run.started_at is None:
+        run.started_at = datetime.now(UTC)
+    if update.claimed_by is not None:
+        run.claimed_by = update.claimed_by
+    if _is_terminal_status(status):
+        run.completed_at = datetime.now(UTC)
+
+
+def _apply_run_error_fields(run: Run, update: _RunStatusUpdate) -> None:
+    """Apply the error marker fields (an explicit clear beats a new marker)."""
+    if update.clear_error_code:
+        # Explicitly clear a prior capacity marker (the error_code=... writes
+        # below are conditional on non-None, so None alone cannot clear it).
+        run.error_code = None
+        run.error_detail = None
+    if update.error_code is not None:
+        run.error_code = update.error_code
+    if update.error_detail is not None:
+        run.error_detail = update.error_detail
+
+
+def _apply_run_cost_fields(run: Run, update: _RunStatusUpdate) -> None:
+    """Apply the cost fields (sentinel = leave cost_breakdown alone)."""
+    if update.total_tokens is not None:
+        run.total_tokens = update.total_tokens
+    if update.total_cost_usd is not None:
+        run.total_cost_usd = update.total_cost_usd
+    if update.cost_breakdown is not _COST_BREAKDOWN_SENTINEL:
+        # The eval_failed direct write PRESERVES the terminal field set: it
+        # sets status + completed_at and leaves the cost fields untouched (the
+        # eval pipeline never passes the cost kwargs). Passing the sentinel
+        # (the default) means "leave cost_breakdown alone"; passing None writes
+        # an explicit NULL (the pre-component-read terminal transition).
+        run.cost_breakdown = update.cost_breakdown
+
+
+def _apply_run_output_fields(run: Run, update: _RunStatusUpdate) -> None:
+    """Apply the token-usage / output / per-node telemetry payloads."""
+    if update.node_token_usage is not None:
+        run.node_token_usage = update.node_token_usage
+    if update.outputs_json is not None:
+        run.outputs_json = update.outputs_json
+    if update.node_telemetry_json is not None:
+        # Split-out per-node telemetry (Agent Return Contract, FAR-125) —
+        # persisted on the SAME ORM object and flushed with outputs_json so the
+        # pair lands in one atomic write, never a torn half-state.
+        run.node_telemetry_json = update.node_telemetry_json
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -1988,41 +2039,10 @@ async def update_run_status(
         )
         return run
     run.status = status
-    if status == "running" and run.started_at is None:
-        run.started_at = datetime.now(UTC)
-    if update.claimed_by is not None:
-        run.claimed_by = update.claimed_by
-    if _is_terminal_status(status):
-        run.completed_at = datetime.now(UTC)
-    if update.clear_error_code:
-        # Explicitly clear a prior capacity marker (the error_code=... writes
-        # below are conditional on non-None, so None alone cannot clear it).
-        run.error_code = None
-        run.error_detail = None
-    if update.error_code is not None:
-        run.error_code = update.error_code
-    if update.error_detail is not None:
-        run.error_detail = update.error_detail
-    if update.total_tokens is not None:
-        run.total_tokens = update.total_tokens
-    if update.total_cost_usd is not None:
-        run.total_cost_usd = update.total_cost_usd
-    if update.cost_breakdown is not _COST_BREAKDOWN_SENTINEL:
-        # The eval_failed direct write PRESERVES the terminal field set: it
-        # sets status + completed_at and leaves the cost fields untouched (the
-        # eval pipeline never passes the cost kwargs). Passing the sentinel
-        # (the default) means "leave cost_breakdown alone"; passing None writes
-        # an explicit NULL (the pre-component-read terminal transition).
-        run.cost_breakdown = update.cost_breakdown
-    if update.node_token_usage is not None:
-        run.node_token_usage = update.node_token_usage
-    if update.outputs_json is not None:
-        run.outputs_json = update.outputs_json
-    if update.node_telemetry_json is not None:
-        # Split-out per-node telemetry (Agent Return Contract, FAR-125) —
-        # persisted on the SAME ORM object and flushed with outputs_json so the
-        # pair lands in one atomic write, never a torn half-state.
-        run.node_telemetry_json = update.node_telemetry_json
+    _apply_run_claim_fields(run, status, update)
+    _apply_run_error_fields(run, update)
+    _apply_run_cost_fields(run, update)
+    _apply_run_output_fields(run, update)
     await session.flush()
     if run.status in TERMINAL_STATUSES:
         await _classify_terminal_run(session, run)
