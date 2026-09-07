@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0186."""
+    """Exactly one migration chains off each predecessor, and the head is 0187."""
     import re
 
     revisions = {}

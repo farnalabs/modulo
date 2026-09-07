@@ -302,11 +302,17 @@ async def soft_delete_pipeline(
 
 
 async def restore_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
-    """Restore a soft-deleted pipeline. Returns None if not found."""
+    """Restore a soft-deleted pipeline. Returns None if not found.
+
+    Clears both ``deleted_at`` and ``deleted_by`` so a restored row never
+    carries a stale ``deleted_by`` stamp with ``deleted_at IS NULL`` (restores
+    the audit state to exactly what soft_delete wrote, mirrored by the eval
+    models' restore wiring).
+    """
     result = await session.execute(
         update(Pipeline)
         .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_not(None))
-        .values(deleted_at=None)
+        .values(deleted_at=None, deleted_by=None)
         .returning(Pipeline)
     )
     await session.flush()

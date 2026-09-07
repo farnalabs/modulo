@@ -478,6 +478,7 @@ async def test_soft_delete_pipeline_stamps_deleted_by(
     await rls_session.flush()
     assert restored is not None
     assert restored.deleted_at is None
+    assert restored.deleted_by is None
 
 
 async def test_pipeline_check_constraints_reject_non_positive_values(
