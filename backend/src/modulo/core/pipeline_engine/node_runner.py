@@ -5719,7 +5719,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     async with session_factory() as _cap_session, _cap_session.begin():
                         await set_rls_org(_cap_session, _org_uuid)
                         await set_rls_execution_context(_cap_session)
-                        _cap = await get_sandbox_concurrency_limit(_cap_session, _org_uuid)
+                        # FAR-589 D3b: one reader for all five call sites. The
+                        # flag-off window enforces the contract's cap only — an
+                        # absent key (Docker-tier default, is_default=True) does
+                        # NOT gate until D8's rollout flag activates it.
+                        _cap = (await get_sandbox_concurrency_limit(_cap_session, _org_uuid)).enforced_cap
                         if _cap is not None:
                             _active = await count_active_runner_dispatches_for_org(
                                 _cap_session, _org_uuid, exclude_run_id=uuid.UUID(str(run_id))

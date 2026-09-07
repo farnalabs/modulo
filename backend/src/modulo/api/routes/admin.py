@@ -3595,11 +3595,21 @@ async def admin_update_retention(
 
 
 class SandboxConcurrencyResponse(BaseModel):
+    """Public admin response (name frozen — FAR-589 D3b).
+
+    ``is_default`` is additive: it marks the ABSENT-key case so the UI can
+    render "4 (default)" and distinguish an explicit ``null`` (no gate) from
+    the Docker-tier default.
+    """
+
     sandbox_concurrency_limit: int | None = None
+    is_default: bool = False
 
 
 class UpdateSandboxConcurrencyRequest(BaseModel):
-    sandbox_concurrency_limit: int | None = Field(default=None, ge=1, le=100)
+    # FAR-589 D3b: ``0`` is a meaningful value (deny-all), so the floor drops
+    # from 1 to 0; the upper bound stays 100.
+    sandbox_concurrency_limit: int | None = Field(default=None, ge=0, le=100)
 
 
 @router.get("/org/sandbox-concurrency")
@@ -3640,7 +3650,7 @@ async def admin_get_sandbox_concurrency(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
-    return SandboxConcurrencyResponse(sandbox_concurrency_limit=limit)
+    return SandboxConcurrencyResponse(sandbox_concurrency_limit=limit.cap, is_default=limit.is_default)
 
 
 @router.put("/org/sandbox-concurrency", status_code=status.HTTP_200_OK)
@@ -3657,7 +3667,13 @@ async def admin_update_sandbox_concurrency(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await get_organisation(session, current_user.organisation_id)
+            # FAR-589 D3b: row-level lock (SELECT ... FOR UPDATE) so the
+            # read-modify-write of settings_json cannot drop a concurrent
+            # writer's change between the read and the flush.
+            result = await session.execute(
+                select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1).with_for_update()
+            )
+            org = result.scalar_one_or_none()
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ORGANISATION_NOT_FOUND)
             settings = dict(org.settings_json) if org.settings_json else {}
