@@ -22,14 +22,12 @@ esac
 URL="https://github.com/$REPO/releases/$VERSION/download/modulo-$OS-$ARCH.tar.gz"
 echo "Downloading from $URL..."
 
-if command -v curl &>/dev/null; then
-    curl -fsSL --proto '=https' --tlsv1.2 "$URL" | tar xz -C "$INSTALL_DIR" modulo
-elif command -v wget &>/dev/null; then
-    wget -q --https-only --max-redirect=5 -O- "$URL" | tar xz -C "$INSTALL_DIR" modulo
-else
-    echo "Error: need curl or wget"
+if ! command -v curl &>/dev/null; then
+    echo "Error: curl is required (install it, e.g. 'apt install curl' or 'brew install curl')"
     exit 1
 fi
+
+curl -fsSL --proto '=https' --tlsv1.2 "$URL" | tar xz -C "$INSTALL_DIR" modulo
 
 echo "Installed to $INSTALL_DIR/modulo"
 echo "Run 'modulo --help' to get started"
