@@ -5161,36 +5161,20 @@ class PipelineExecutor:
             _accumulate_llm_tokens(lg_event, state.node_token_usage, ctx.guard, ctx.node_token_budgets)
         return None
 
-    async def _stream_exception_outcome(
+    def _stream_policy_outcome(
         self,
         exc: BaseException,
-        *,
+        broker: RunEventBroker,
+        run_id: uuid.UUID,
         state: _StreamState,
-        ctx: _StreamContext,
-    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
-        """Map a stream exception to a terminal 4-tuple, or re-raise it.
+        node_token_usage: dict[str, Any] | None,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None] | None:
+        """Terminal mappings for eval / output / cancellation / compensation errors.
 
-        Extracted from ``_stream_graph``'s exception chain (pure refactor) so
-        the stream method keeps a single ``except BaseException`` clause. Every
-        mapped outcome is identical to the original chain; cancellation and
-        transient node failures are re-raised unchanged.
+        Tried BEFORE ``_stream_operational_outcome``; ``None`` = not this
+        exception. Order within each helper mirrors the original isinstance
+        chain — first match wins.
         """
-        broker = ctx.broker
-        run_id = ctx.run_id
-        node_token_usage = state.node_token_usage or None
-        if isinstance(exc, GraphInterrupt):
-            interrupts = exc.args[0] if exc.args else []
-            return await self._handle_graph_interrupt(interrupts, state, ctx)
-        if isinstance(exc, asyncio.CancelledError):
-            raise
-        if isinstance(exc, (NodeCancelledError, SandboxNodeFailedError)):
-            # Transient node cancellation / sandbox-infra failure (langgraph
-            # wraps a node body's asyncio.CancelledError; a stall or command
-            # timeout raises SandboxNodeFailedError). Do NOT swallow into a
-            # terminal failure tuple here — propagate so execute() can decide:
-            # retry (fenced reset to pending + re-raise) or terminal-fail once
-            # retries are exhausted.
-            raise
         if isinstance(exc, EvalBlockedError):
             return _terminal_failure(
                 broker,
@@ -5235,6 +5219,22 @@ class PipelineExecutor:
                 scrubbed,
                 node_token_usage,
             )
+        return None
+
+    def _stream_operational_outcome(
+        self,
+        exc: BaseException,
+        broker: RunEventBroker,
+        run_id: uuid.UUID,
+        node_token_usage: dict[str, Any] | None,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None] | None:
+        """Terminal mappings for runaway / timeout / superseded / validation / routing errors.
+
+        Tried AFTER ``_stream_policy_outcome``; ``None`` = not this exception
+        (the caller falls back to the generic ``type(exc).__name__`` failure).
+        Order within the helper mirrors the original isinstance chain — first
+        match wins.
+        """
         if isinstance(exc, RunawayRunError):
             error_detail = _sanitize_detail(exc, limit=5000)
             _log.warning(
@@ -5303,6 +5303,47 @@ class PipelineExecutor:
                 error_detail,
                 node_token_usage,
             )
+        return None
+
+    async def _stream_exception_outcome(
+        self,
+        exc: BaseException,
+        *,
+        state: _StreamState,
+        ctx: _StreamContext,
+    ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
+        """Map a stream exception to a terminal 4-tuple, or re-raise it.
+
+        Extracted from ``_stream_graph``'s exception chain (pure refactor) so
+        the stream method keeps a single ``except BaseException`` clause. Every
+        mapped outcome is identical to the original chain; cancellation and
+        transient node failures are re-raised unchanged. The isinstance checks
+        are split across ``_stream_policy_outcome`` and
+        ``_stream_operational_outcome`` (tried in that order) — first match
+        wins, exactly as the original inline chain.
+        """
+        broker = ctx.broker
+        run_id = ctx.run_id
+        node_token_usage = state.node_token_usage or None
+        if isinstance(exc, GraphInterrupt):
+            interrupts = exc.args[0] if exc.args else []
+            return await self._handle_graph_interrupt(interrupts, state, ctx)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        if isinstance(exc, (NodeCancelledError, SandboxNodeFailedError)):
+            # Transient node cancellation / sandbox-infra failure (langgraph
+            # wraps a node body's asyncio.CancelledError; a stall or command
+            # timeout raises SandboxNodeFailedError). Do NOT swallow into a
+            # terminal failure tuple here — propagate so execute() can decide:
+            # retry (fenced reset to pending + re-raise) or terminal-fail once
+            # retries are exhausted.
+            raise
+        policy_outcome = self._stream_policy_outcome(exc, broker, run_id, state, node_token_usage)
+        if policy_outcome is not None:
+            return policy_outcome
+        operational_outcome = self._stream_operational_outcome(exc, broker, run_id, node_token_usage)
+        if operational_outcome is not None:
+            return operational_outcome
         _tb = _traceback_detail(exc, limit=5000)
         return _terminal_failure(
             broker,
