@@ -66,7 +66,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         tables = [t for t in Base.metadata.sorted_tables if t.name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
-        # The quarantine side table has NO ORM model (migration-0176-owned,
+        # The quarantine side table has NO ORM model (migration-0190-owned,
         # Core-only in the repo module) — created here so the sweep's
         # quarantine exclusion + INSERT run against the real schema.
         await conn.run_sync(lambda sync_conn: QUARANTINE_TABLE.create(sync_conn, checkfirst=True))
@@ -825,7 +825,7 @@ class TestMalformedMetadataFailOpen:
 
 
 class TestInheritedSentinelFiltering:
-    """qa M19: inherited '__'-prefixed keys (pre-0176 legacy data) are
+    """qa M19: inherited '__'-prefixed keys (pre-0190 legacy data) are
     FILTERED from the new-table REPLACE write (kept on the legacy column)
     instead of raising and permanently wedging the run; NEWLY introduced
     sentinel keys still raise."""
@@ -1131,7 +1131,7 @@ class TestBackfill:
     async def test_empty_markers_dict_run_is_never_selected(self, session: AsyncSession) -> None:
         """A run whose ONLY blob is markers = '{}' (explicit empty dict) is
         never selected: '{}' markers mean "no markers" and are not
-        representable (migration 0176's _ANY_BLOB_OBJECT_SQL excludes them).
+        representable (migration 0190's _ANY_BLOB_OBJECT_SQL excludes them).
         Selecting such a run would write zero rows every pass — an
         un-healable zombie re-selected on every sweep tick."""
         await _seed_run(

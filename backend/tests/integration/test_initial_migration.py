@@ -42,7 +42,7 @@ pytestmark = pytest.mark.integration
 # ANY JSONB<->JSON modify_type, bare-column-set FK matching, blanket
 # audit-chain remove_columns) hid genuine drift. Every entry below carries a
 # one-line reason and an expiry tag:
-#   * `# expires: B2b`  — the drift disappears when migration 0177 drops the
+#   * `# expires: B2b`  — the drift disappears when migration 0192 drops the
 #     legacy runs blob columns; remove the entry then (a stale entry would
 #     keep hiding drift and must fail loudly instead).
 #   * `# permanent (documented repo divergence)` — the repo's multi-backend
@@ -110,7 +110,7 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     # permanent (documented repo divergence) — the new table keeps its three
     # blob columns after B2b (they ARE the store once the legacy columns go).
     "run_node_outputs": frozenset({"outputs_json", "node_telemetry_json", "raw_output_markers"}),
-    # runs: the three legacy blob columns EXPIRE at B2b (dropped by 0177);
+    # runs: the three legacy blob columns EXPIRE at B2b (dropped by 0192);
     # the rest are the multi-backend parity convention.
     "runs": frozenset(
         {
@@ -174,7 +174,7 @@ _MIGRATION_OWNED_CHECKS: dict[str, frozenset[str]] = {
     "notification_endpoints": frozenset({"ck_notification_endpoint_dead_letter"}),
     "org_daily_run_counts": frozenset({"ck_daily_run_count_run_count"}),
     "run_daily_facts": frozenset({"ck_run_daily_facts_status", "ck_run_daily_facts_trigger_type"}),
-    # 0176: the STRICT dialect-specific meta-shape CHECK (jsonb_typeof on PG /
+    # 0190: the STRICT dialect-specific meta-shape CHECK (jsonb_typeof on PG /
     # json_type on SQLite); the ORM declares the PORTABLE subset with a
     # different name (ck_run_node_outputs_meta_present) — matched below.
     # permanent (documented repo divergence)
@@ -240,7 +240,7 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # The reconciliation chain's raw-SQL run-number counter path; the ORM
         # model was deleted (FAR-253 dead-code cleanup).
         "run_number_counters",
-        # FAR-583 ops/remediation quarantine side table (migration 0176):
+        # FAR-583 ops/remediation quarantine side table (migration 0190):
         # written by migrations + the sweep, read by ops SQL only.
         "run_node_outputs_quarantine",
     }
@@ -312,7 +312,7 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
             known_table == table and col_names == {known_col} for (known_table, known_col) in _NODES_ID_FK_KNOWN_GAPS
         )
     if kind == "remove_constraint":
-        # CHECK guards that exist ONLY in migrations (0157/0165/0176) —
+        # CHECK guards that exist ONLY in migrations (0157/0165/0190) —
         # per-(table, constraint) entries.
         constraint = inner[1]
         table_checks = _MIGRATION_OWNED_CHECKS.get(constraint.table.name, frozenset())
@@ -355,7 +355,7 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
     rewrite — the old blanket classes hid genuine drift). Every entry carries
     a one-line reason and an expiry tag:
 
-    * ``# expires: B2b`` — the drift disappears when migration 0177 drops the
+    * ``# expires: B2b`` — the drift disappears when migration 0192 drops the
       legacy ``runs`` blob columns; the entry must be removed then (a stale
       entry keeps hiding drift and must fail loudly instead).
     * ``# permanent (documented repo divergence)`` — the repo's multi-backend

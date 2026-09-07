@@ -1,4 +1,4 @@
-"""Structural unit tests for migration 0176_run_node_outputs (FAR-583).
+"""Structural unit tests for migration 0190_run_node_outputs (FAR-583).
 
 These run WITHOUT a database. They pin the migration's data contract: the
 inlined terminal-status literal (migrations cannot import app constants) AND
@@ -32,7 +32,7 @@ from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.models.run_node_outputs import UNKNOWN_NODE_ID
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0176_run_node_outputs"
+_MIGRATION_NAME = "0190_run_node_outputs"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 
@@ -61,8 +61,9 @@ def test_metadata_unchanged() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
     # 0175_dedupe_soft_delete_names is SPLICED mid-chain (0155 -> 0175 -> 0156),
-    # so the current alembic heads tip is 0174 — NOT 0175.
-    assert module.down_revision == "0174_per_org_last_admin_guard"
+    # so the linear chain runs ... -> 0174 -> main's 0176..0189 — this revision
+    # chains onto the 0189 tip.
+    assert module.down_revision == "0189_agent_runner_bindings"
     assert module.branch_labels is None
     assert module.depends_on is None
 
@@ -256,17 +257,17 @@ def test_quarantine_docstrings_do_not_claim_default_revoke_posture() -> None:
         Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "crud" / "run_retention.py"
     ).read_text(encoding="utf-8")
     assert "no app-role grant on Postgres (default" not in retention_src
-    assert "migration 0176 grants" in retention_src, "the docstring names the explicit grants"
+    assert "migration 0190 grants" in retention_src, "the docstring names the explicit grants"
 
 
-def test_sweep_index_migration_0177_chains_and_pins() -> None:
-    """qa iteration 2 (Major 7): migration 0177 creates the sweep's partial
-    index — revision chain (0176 -> 0177), the twin terminal literal, the
+def test_sweep_index_migration_0191_chains_and_pins() -> None:
+    """qa iteration 2 (Major 7): migration 0191 creates the sweep's partial
+    index — revision chain (0190 -> 0191), the twin terminal literal, the
     assembled predicate, and the 0171-precedent deploy-safety shape (plain
     blocking ``CREATE INDEX IF NOT EXISTS`` — env.py's single externally-
     managed chain transaction makes CONCURRENTLY and the autocommit_block
-    escape unavailable; see the 0177 docstring)."""
-    index_migration_name = "0177_run_node_outputs_sweep_index"
+    escape unavailable; see the 0191 docstring)."""
+    index_migration_name = "0191_run_node_outputs_sweep_index"
     index_path = _VERSIONS / f"{index_migration_name}.py"
     assert index_path.exists(), f"Migration file missing: {index_path}"
     spec = importlib.util.spec_from_file_location(f"migration_{index_migration_name}", index_path)
@@ -276,7 +277,7 @@ def test_sweep_index_migration_0177_chains_and_pins() -> None:
     spec.loader.exec_module(module)
 
     assert module.revision == index_migration_name
-    assert module.down_revision == "0176_run_node_outputs"
+    assert module.down_revision == "0190_run_node_outputs"
 
     # The twin discipline: the inlined literal equals sorted(TERMINAL_STATUSES)
     # and the predicate is assembled FROM the tuple (cannot drift by
@@ -302,9 +303,9 @@ def test_sweep_index_migration_0177_chains_and_pins() -> None:
     assert "DROP INDEX IF EXISTS" in index_code
     # Postgres-only guard; SQLite is a no-op — BOTH upgrade and downgrade.
     assert index_code.count("if not _is_postgres(bind):") == 2
-    # The numbering-shift note (B2b drop -> 0178, PR C pointer -> 0179).
-    assert "0178" in index_path.read_text(encoding="utf-8")
-    assert "0179" in index_path.read_text(encoding="utf-8")
+    # The numbering-shift note (B2b drop -> 0192, PR C pointer -> 0193).
+    assert "0192" in index_path.read_text(encoding="utf-8")
+    assert "0193" in index_path.read_text(encoding="utf-8")
 
 
 def test_quarantine_sql_shape_is_present() -> None:
