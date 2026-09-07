@@ -42,7 +42,7 @@ async def _invoke_with_timeout(
     backend: ModelBackendBase,
     messages: list[BaseMessage],
     *,
-    timeout: float,  # noqa: ASYNC109
+    timeout: float,  # noqa: ASYNC109 — passed to asyncio.timeout(), not asyncio.wait_for()
 ) -> BaseMessage:
     async with asyncio.timeout(timeout):
         return await backend.invoke(messages)
@@ -78,7 +78,7 @@ async def invoke_and_parse(
     backend: ModelBackendBase,
     messages: list[BaseMessage],
     *,
-    timeout: float,  # noqa: ASYNC109
+    timeout: float,  # noqa: ASYNC109 — passed to asyncio.timeout(), not asyncio.wait_for()
     error_cls: type[Exception],
     context: str,
 ) -> dict[str, Any]:
