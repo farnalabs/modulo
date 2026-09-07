@@ -27,7 +27,9 @@
 # the image small while glibc keeps opencode + python wheels happy. The digest
 # below is release-advanced by the publish job; bump it only when the base
 # image is re-scanned and the seed/docs digest constants advance with it.
-ARG BASE_IMAGE=debian:12-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+# Pin by DIGEST ONLY (no :tag) so the base image reference is unambiguous and
+# cannot silently drift to a different tag.
+ARG BASE_IMAGE=debian@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 
 FROM ${BASE_IMAGE}
 
@@ -62,12 +64,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && rm -rf /var/lib/apt/lists/*
 
 # opencode needs Node (the vendored runtime is a JS CLI). Install Node LTS from
-# NodeSource, then the pinned opencode binary via npm (registry tarball is
-# verifiable against the release tag).
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+# NodeSource, then the pinned opencode binary via npm. The NodeSource setup
+# script is fetched over HTTPS only (--proto '=https'), saved to a local file
+# and executed explicitly (never piped straight into a shell), and npm installs
+# with --ignore-scripts so no lifecycle scripts from the published tarball run.
+RUN curl --proto '=https' --tlsv1.2 -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o /tmp/nodesource_setup.sh \
+    && bash /tmp/nodesource_setup.sh \
+    && rm -f /tmp/nodesource_setup.sh \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g "opencode-ai@${OPENCODE_VERSION}"
+    && npm install -g --ignore-scripts "opencode-ai@${OPENCODE_VERSION}"
 
 # Non-root user (ADR 029 workspace hardening): uid 1001, writable session dirs
 # are handed to the container as tmpfs mounts on workdir/$HOME (the provider

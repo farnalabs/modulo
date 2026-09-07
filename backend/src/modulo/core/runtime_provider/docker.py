@@ -35,7 +35,7 @@ _DEFAULT_HARDENING_MEMORY_MB = 1024
 # for an opencode session (verified by the GA opencode scenario).
 _TMPFS_WORKDIR = "/home/user"
 _TMPFS_WORKDIR_SIZE = "size=512m,mode=1777"
-_TMPFS_TMP = "/tmp"  # noqa: S108 # nosec B108 - container-side tmpfs mount path
+_TMPFS_TMP = "/tmp"  # noqa: S108 # nosec B108  # NOSONAR - container-side tmpfs mount path (mode=1777 sticky-bit, dropped caps)
 _TMPFS_TMP_SIZE = "size=128m,mode=1777"
 # Dropped capabilities + no-new-privileges (no cap_add is granted).
 _CAP_DROP = ["ALL"]

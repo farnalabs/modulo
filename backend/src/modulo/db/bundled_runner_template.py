@@ -45,7 +45,7 @@ _TEMPLATE_HARDENING: dict[str, Any] = {
     "memory_mb": 1024,
     "cpu_limit": 1.0,
     "read_only_rootfs": True,
-    "tmpfs_paths": {"/home/user": "size=512m,mode=1777", "/tmp": "size=128m,mode=1777"},  # noqa: S108 # nosec B108 - container-side tmpfs path
+    "tmpfs_paths": {"/home/user": "size=512m,mode=1777", "/tmp": "size=128m,mode=1777"},  # noqa: S108 # nosec B108  # NOSONAR - container-side tmpfs path (mode=1777 sticky-bit)
     "capabilities_drop": ["ALL"],
     "no_new_privileges": True,
     "user": "1001:1001",
