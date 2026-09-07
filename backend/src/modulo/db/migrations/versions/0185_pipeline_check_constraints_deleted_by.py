@@ -87,8 +87,6 @@ def _preflight_violation_check(name: str, expr: str) -> None:
         )
         .scalar_one()
     )
-        .scalar_one()
-    )
     if violation_count:
         raise RuntimeError(
             f"Cannot add CHECK constraint {name}: {violation_count} existing row(s) "
