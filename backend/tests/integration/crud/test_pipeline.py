@@ -506,8 +506,6 @@ async def test_pipeline_check_constraints_reject_non_positive_values(
 
     await rls_session.rollback()
 
-    await rls_session.rollback()
-
     nullable_pid = uuid.uuid4()
     await rls_session.execute(
         text(
