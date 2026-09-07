@@ -1370,6 +1370,7 @@ class TestSaqWorkerSettings:
             "hitl_overdue",
             "retention_cleanup",
             "webhook_dedup_cleanup",
+            "expired_webhook_dedup_purge",
             "trigger_events_cleanup",
             "stale_run_recovery",
             "slot_reconciliation",

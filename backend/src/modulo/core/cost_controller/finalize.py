@@ -209,6 +209,7 @@ def _e2b_rate() -> Decimal:
 
         return Decimal(str(get_settings().e2b_sandbox_usd_per_hour))
     except Exception:
+        _log.debug("cost_controller.e2b_rate_fallback", exc_info=True)
         return _LEGACY_E2B_RATE_DEFAULT
 
 

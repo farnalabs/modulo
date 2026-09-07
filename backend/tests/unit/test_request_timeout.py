@@ -43,7 +43,9 @@ class TestRequestTimeoutMiddleware:
         resp = client.get("/slow")
         assert resp.status_code == 504
         body = resp.json()
-        assert body["error"] == "gateway_timeout"
+        assert body["type"] == "urn:problem:modulo:gateway_timeout"
+        assert body["title"] == "Gateway Timeout"
+        assert body["status"] == 504
         assert "timeout" in body["detail"]
 
     def test_request_completes_within_default_timeout(self) -> None:
@@ -95,7 +97,9 @@ class TestRequestTimeoutMiddlewareEdgeCases:
         client = TestClient(app)
         resp = client.get("/slow")
         body = resp.json()
-        assert "error" in body
+        assert body["type"] == "urn:problem:modulo:gateway_timeout"
+        assert body["title"] == "Gateway Timeout"
+        assert body["status"] == 504
         assert "detail" in body
 
     def test_timeout_response_is_json(self) -> None:

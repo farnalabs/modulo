@@ -31,7 +31,7 @@
         </template>
         <template v-else>
           <button type="button"
-            class="text-sm font-semibold truncate cursor-pointer hover:opacity-80 bg-transparent border-0 p-0 text-left"
+            class="text-sm font-semibold truncate hover:opacity-80 bg-transparent border-0 p-0 text-left"
             :title="$t('components.remy.RemyPanel.click_to_rename')"
             @click.stop="startEditName"
             @dblclick.stop="startEditName"

@@ -135,17 +135,45 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `FilesystemConnector` | `git-host` | read/write files, git commit/push |
 | `GitHubConnector` | `git-host` | read/write via API, create PR |
 | `GitLabConnector` | `git-host` | read/write via API, merge requests |
+| `BitbucketConnector` | `git-host` | read/write via API |
+| `GiteaConnector` | `git-host` | read/write via API |
+| `AzureReposConnector` | `git-host` | read/write via API |
 | `ShellConnector` | `shell` | run commands in a runtime-provider workspace |
 | `SlackConnector` | `messaging` | send messages, search channels |
+| `DiscordConnector` | `messaging` | send messages |
+| `MicrosoftTeamsConnector` | `messaging` | send messages |
 | `JiraConnector` | `issue-tracker` | create/search/update issues |
 | `LinearConnector` | `issue-tracker` | create/search/update issues |
+| `TrelloConnector` | `issue-tracker` | create/search/update cards |
+| `AsanaConnector` | `issue-tracker` | create/search/update tasks |
+| `MondayConnector` | `issue-tracker` | create/search/update items |
+| `ShortcutConnector` | `issue-tracker` | create/search/update stories |
+| `YouTrackConnector` | `issue-tracker` | create/search/update issues |
 | `NotionConnector` | `documentation` | read/write pages and databases |
 | `ConfluenceConnector` | `documentation` | read/write pages |
+| `DropboxPaperConnector` | `documentation` | read/write pages |
 | `PagerDutyConnector` | `incident-management` | trigger/acknowledge/resolve incidents |
+| `OpsgenieConnector` | `incident-management` | create/acknowledge/resolve alerts |
 | `SentryConnector` | `error-tracking` | list/search issues, create events |
 | `DatadogConnector` | `monitoring` | query metrics, create monitors |
+| `GrafanaConnector` | `monitoring` | query dashboards and alerts |
+| `SonarQubeConnector` | `monitoring` | query project quality gates |
+| `SnykConnector` | `monitoring` | list vulnerabilities |
 | `RestConnector` | `rest` | verb-agnostic HTTP read/write against a declared endpoint (see `docs/rest-connector.md`) |
-| *(40+ built-in connectors total, see `modulo/connectors/`)* | | |
+| `N8NConnector` | `rest` | trigger n8n workflows |
+| `JenkinsConnector` | `ci-cd` | trigger/query builds |
+| `CircleCIConnector` | `ci-cd` | trigger/query pipelines |
+| `BuildkiteConnector` | `ci-cd` | trigger/query builds |
+| `AzurePipelinesConnector` | `ci-cd` | trigger/query pipelines |
+| `TeamCityConnector` | `ci-cd` | trigger/query builds |
+| `NpmConnector` | `package-manager` | query package metadata |
+| `PyPIConnector` | `package-manager` | query package metadata |
+| `OnePasswordConnector` | `secrets` | read secrets |
+| `AzureKeyVaultConnector` | `secrets` | read secrets |
+| `SharePointConnector` | `documentation` | read/write files and pages |
+| `TrivyConnector` | `security` | scan container images |
+| `CodeClimateConnector` | `quality` | query code quality metrics |
+| *(41 built-in connectors total; see `modulo/connectors/`)* | | |
 
 ### Model Backend Hub (`modulo/model_backends/`)
 
@@ -160,7 +188,28 @@ Model backends stay first-class for Runner nodes too (ADR 029): once D6 lands, a
 | Azure OpenAI | V1 |
 | Bedrock | V1 |
 | Ollama | V1 |
-| Custom | V1 |
+| DeepSeek | V1 |
+| Gemini | V1 |
+| Grok | V1 |
+| Groq | V1 |
+| Mistral | V1 |
+| Cohere | V1 |
+| Vertex AI | V1 |
+| Together AI | V1 |
+| OpenRouter | V1 |
+| Perplexity | V1 |
+| Fireworks | V1 |
+| Ai21 | V1 |
+| Qwen | V1 |
+| WatsonX | V1 |
+| vLLM | V1 |
+| TGI | V1 |
+| LLamaCpp | V1 |
+| LM Studio | V1 |
+| LocalAI | V1 |
+| Jan | V1 |
+| OpenCode | V1 |
+| *(27 model backends total; see `modulo/model_backends/`)* | |
 
 ### Trigger Engine (`modulo/core/trigger_engine/`)
 

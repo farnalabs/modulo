@@ -8,9 +8,9 @@ and SAML Response parsing with full XML digital signature verification.
 import logging
 from typing import Any
 
-from onelogin.saml2.auth import OneLogin_Saml2_Auth  # type: ignore[import-untyped]
-from onelogin.saml2.idp_metadata_parser import OneLogin_Saml2_IdPMetadataParser  # type: ignore[import-untyped]
-from onelogin.saml2.settings import OneLogin_Saml2_Settings  # type: ignore[import-untyped]
+from onelogin.saml2.auth import OneLogin_Saml2_Auth
+from onelogin.saml2.idp_metadata_parser import OneLogin_Saml2_IdPMetadataParser
+from onelogin.saml2.settings import OneLogin_Saml2_Settings
 
 _log = logging.getLogger(__name__)
 

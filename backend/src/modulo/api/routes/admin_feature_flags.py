@@ -32,6 +32,7 @@ _CODE_FEATURE_FLAGS_TOGGLE_FAILED = "feature_flags.toggle_failed"
 _CODE_FEATURE_FLAGS_GET_ORG = "feature_flags.get_org_override_failed"
 _CODE_FEATURE_FLAGS_SET_ORG = "feature_flags.set_org_override_failed"
 _CODE_FEATURE_FLAGS_CLEAR_ORG = "feature_flags.clear_org_override_failed"
+_MSG_ORG_ID_REQUIRED = "Organisation ID required for org-scoped feature flag operations"
 
 
 logger = logging.getLogger(__name__)
@@ -361,7 +362,11 @@ async def get_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    assert current_user.organisation_id is not None  # nosec B101 -- genuine invariant: require_system_permission guarantees a non-None organisation_id for org-scoped system-config routes
+    if current_user.organisation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_MSG_ORG_ID_REQUIRED,
+        )
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
@@ -415,7 +420,11 @@ async def set_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    assert current_user.organisation_id is not None  # nosec B101 -- genuine invariant: require_system_permission guarantees a non-None organisation_id for org-scoped system-config routes
+    if current_user.organisation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_MSG_ORG_ID_REQUIRED,
+        )
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
@@ -474,7 +483,11 @@ async def clear_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    assert current_user.organisation_id is not None  # nosec B101 -- genuine invariant: require_system_permission guarantees a non-None organisation_id for org-scoped system-config routes
+    if current_user.organisation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_MSG_ORG_ID_REQUIRED,
+        )
     try:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)

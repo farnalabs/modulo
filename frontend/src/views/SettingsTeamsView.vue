@@ -59,7 +59,7 @@
             <button
               type="button"
               :data-testid="'settings-teams-toggle-' + team.id"
-              class="flex flex-1 cursor-pointer items-center gap-3 border-none bg-transparent p-0 text-left"
+              class="flex flex-1 items-center gap-3 border-none bg-transparent p-0 text-left"
               :aria-expanded="expandedTeamId === team.id"
               :aria-controls="'settings-teams-panel-' + team.id"
               @click="toggleExpand(team.id)"

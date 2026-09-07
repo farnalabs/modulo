@@ -71,7 +71,7 @@
         <button
           type="button"
           data-testid="hitl-review-toggle-expand"
-          class="flex w-full cursor-pointer items-center gap-4 p-4 text-left"
+          class="flex w-full items-center gap-4 p-4 text-left"
           :class="{ 'border-b': expandedKey === expandKey(gate) }"
           @click="toggleExpand(gate)"
         >

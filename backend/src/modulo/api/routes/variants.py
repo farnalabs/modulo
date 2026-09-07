@@ -9,7 +9,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.constants import (
+    MSG_DB_OPERATION_FAILED,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_RESOURCE_ALREADY_EXISTS,
+    MSG_UNEXPECTED_ERROR,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.runs import _mask_output_value
@@ -34,9 +39,7 @@ from modulo.db.crud.variant_group import (
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_VARIANTS_CREATE_GROUP = "variants.create_group"
-_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again."
 _MSG_UNEXPECTED_ERROR_VARIANT_GROUP = "Unexpected error in variant group endpoint"
-_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE = "An unexpected error occurred. Please try again."
 _CODE_VARIANT_LIST = "variant.list"
 _CODE_VARIANTS_LIST_GROUPS = "variants.list_groups"
 _CODE_VARIANTS_GET_GROUP = "variants.get_group"
@@ -269,7 +272,7 @@ async def create_group(
         _log.exception(_CODE_VARIANTS_CREATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -277,7 +280,7 @@ async def create_group(
         _log.exception(_MSG_UNEXPECTED_ERROR_VARIANT_GROUP)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     return _variant_to_response(group)
@@ -313,7 +316,7 @@ async def list_groups(
         _log.exception(_CODE_VARIANTS_LIST_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -321,7 +324,7 @@ async def list_groups(
         _log.exception("Unexpected error in variant group list endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return [_variant_to_response(g) for g in items]
 
@@ -353,7 +356,7 @@ async def get_group(
         _log.exception(_CODE_VARIANTS_GET_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -361,7 +364,7 @@ async def get_group(
         _log.exception(_MSG_UNEXPECTED_ERROR_VARIANT_GROUP)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VARIANT_GROUP_NOT_FOUND)
@@ -412,7 +415,7 @@ async def update_group(
         _log.exception(_CODE_VARIANTS_UPDATE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -420,7 +423,7 @@ async def update_group(
         _log.exception(_MSG_UNEXPECTED_ERROR_VARIANT_GROUP)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VARIANT_GROUP_NOT_FOUND)
@@ -454,7 +457,7 @@ async def delete_group(
         _log.exception(_CODE_VARIANTS_DELETE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -462,7 +465,7 @@ async def delete_group(
         _log.exception("Unexpected error in variant group delete endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_VARIANT_GROUP_NOT_FOUND)
@@ -495,7 +498,7 @@ async def restore_group(
         _log.exception(_CODE_VARIANTS_RESTORE_GROUP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -503,7 +506,7 @@ async def restore_group(
         _log.exception("Unexpected error in variant group restore endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found or not deleted")
@@ -574,7 +577,7 @@ async def run_variant(
         _log.exception(_CODE_VARIANTS_RUN_VARIANT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -582,7 +585,7 @@ async def run_variant(
         _log.exception("Unexpected error in variant group run endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     if result is None:
@@ -659,7 +662,7 @@ async def run_batch(
         _log.exception(_CODE_VARIANTS_RUN_VARIANT_BATCH)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -667,7 +670,7 @@ async def run_batch(
         _log.exception("Unexpected error in variant group batch run endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     if results is None:
@@ -726,7 +729,7 @@ async def coverage_gaps(
         _log.exception(_CODE_VARIANTS_COVERAGE_GAPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -734,7 +737,7 @@ async def coverage_gaps(
         _log.exception("Unexpected error in variant group coverage-gaps endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return gaps
 
@@ -772,7 +775,7 @@ async def prompt_diffs(
         _log.exception(_CODE_VARIANTS_PROMPT_DIFFS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -780,7 +783,7 @@ async def prompt_diffs(
         _log.exception("Unexpected error in variant group prompt-diffs endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
     return diffs
 
@@ -826,7 +829,7 @@ async def batch_compare(
         _log.exception(_CODE_VARIANTS_BATCH_COMPARE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException:
         raise
@@ -834,7 +837,7 @@ async def batch_compare(
         _log.exception("Unexpected error in variant group batch compare endpoint")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
     if not entries:

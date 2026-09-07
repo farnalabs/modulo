@@ -189,6 +189,7 @@ Client sync for the hosted community library of pipeline primitives.
 | `SAQ_NODELESS_REDISPATCH_BUDGET` | No | `2` | Max re-dispatch cycles for claimed-but-nodeless SAQ zombies |
 | `SLOT_RECONCILE_STALE_SECONDS` | No | `1800` | Stale heartbeat window for slot reconciliation sweep (force-releases leaked slots) |
 | `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` | No | `3600` | Max age (seconds) for pending runs before trigger backpressure kicks in |
+| `HITL_PARK_GRACE_SECONDS` | No | `86400` | Seconds after an open HITL gate expires unanswered before the run is parked to `hitl_parked` (non-terminal, releases pipeline capacity). Min 60, max 604800 |
 
 `SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
 only dispatch path, so the readiness gate is always active. The deploy-time
