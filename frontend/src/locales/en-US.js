@@ -1097,7 +1097,6 @@ export default {
       "triggered_by": "Triggered by",
       "heartbeat": "Heartbeat",
       "queued": "queued",
-      "ago": "{s}s ago",
       "empty_state_description": "Try adjusting your filters or trigger a pipeline run.",
       "deleted_pipeline": "(deleted pipeline)",
       "run_count": "1 run | {count} runs",
@@ -1451,7 +1450,6 @@ export default {
       "work_item_kind_github_default": "GitHub",
       "child_runs": "Child runs",
       "stale": "stale",
-      "ago": "{s}s ago",
       "running_label": "running",
       "node_progress_aria": "Node {name}: {state}",
       "node_state_completed": "completed",
@@ -3514,6 +3512,13 @@ export default {
       "ongoing": "Ongoing",
       "correction": "Correction",
       "slack_app_mention": "Slack Mention"
+    },
+    "heartbeat": {
+      "just_now": "just now",
+      "seconds_ago": "{s}s ago",
+      "minutes_seconds_ago": "{m}m {s}s ago",
+      "hours_minutes_ago": "{h}h {m}m ago",
+      "days_hours_ago": "{d}d {h}h ago"
     }
   },
   "nav": {
