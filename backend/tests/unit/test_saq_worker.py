@@ -124,6 +124,7 @@ class TestFunctionsWiring:
         assert "hitl_overdue" in names
         assert "retention_cleanup" in names
         assert "webhook_dedup_cleanup" in names
+        assert "expired_webhook_dedup_purge" in names
         assert "trigger_events_cleanup" in names
         assert "stale_run_recovery" in names
         assert "slot_reconciliation" in names
@@ -144,6 +145,7 @@ class TestFunctionsWiring:
             "hitl_overdue",
             "retention_cleanup",
             "webhook_dedup_cleanup",
+            "expired_webhook_dedup_purge",
             "trigger_events_cleanup",
             "stale_run_recovery",
             "slot_reconciliation",
@@ -186,6 +188,16 @@ class TestFunctionsWiring:
         assert sr.heartbeat == 30
         assert sr.ttl == 300
         assert sr.unique is True
+        # expired_webhook_dedup_purge: every 15 min (FAR-661) — dedup rows
+        # carry a 5-min TTL that nothing scheduled deleted before; bounded +
+        # idempotent, the advisory lock serialises with the manual API cleanup.
+        ewdp = jobs["expired_webhook_dedup_purge"]
+        assert ewdp.cron == "*/15 * * * *"
+        assert ewdp.timeout == 300
+        assert ewdp.retries == 2
+        assert ewdp.heartbeat == 30
+        assert ewdp.ttl == 300
+        assert ewdp.unique is True
         # hitl_park_sweep: every 5 min (FAR-604 D2), unique so overlapping
         # ticks cannot double-park (the guarded UPDATE is idempotent anyway);
         # failures raise so retries=2 engages.

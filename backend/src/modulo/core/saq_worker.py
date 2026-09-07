@@ -88,6 +88,7 @@ _TIMERS: dict[str, float] = {"schedule": 5, "worker_info": 89, "sweep": 60, "abo
 # intent is not achievable; every minute is the floor).
 _CRON_EVERY_MINUTE = "* * * * *"
 _CRON_EVERY_5_MINUTES = "*/5 * * * *"
+_CRON_EVERY_15_MINUTES = "*/15 * * * *"
 _CRON_HOURLY = "0 * * * *"
 
 
@@ -1021,6 +1022,48 @@ async def webhook_dedup_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     return {"deleted": total}
 
 
+async def expired_webhook_dedup_purge(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — purge expired ``webhook_dedup_hashes`` rows (FAR-661).
+
+    Every webhook delivery inserts a dedup hash row with a 5-minute TTL
+    (``TriggerEngine._DEDUP_TTL_SECONDS = 300``), but the hourly
+    ``webhook_dedup_cleanup`` above only retains ``trigger_events`` — nothing
+    scheduled ever deleted the dedup rows themselves, so they accumulated
+    forever and only surfaced as housekeeping candidates (10k+ "expired
+    webhook dedups" observed in manual testing). This sibling job deletes
+    rows whose ``expires_at`` has passed, in bounded batches.
+
+    The purge is CROSS-ORG by design (expiry-based over every org's hashes),
+    so on PostgreSQL it runs on the system session factory (modulo_system
+    role, LOGIN, BYPASSRLS — FAR-523) via ``_cleanup_session_factory``:
+    ``webhook_dedup_hashes`` carries the org-scoped ``rls_org_isolation``
+    policy and ``modulo_app`` is NOBYPASSRLS, so a plain-factory session —
+    which never set ``app.organisation_id`` — would silently match ZERO rows
+    (the same invisible no-op documented on ``webhook_dedup_cleanup``). Do
+    NOT swap back to ``_make_session_factory`` on PostgreSQL. On
+    non-PostgreSQL backends (no RLS, no modulo_system role) the plain
+    factory is correct and used instead (see ``_cleanup_session_factory``).
+
+    Mirrors ``webhook_dedup_cleanup``: the system session factory is
+    ``autobegin=False`` (the codebase DI convention), so every batch needs an
+    explicit transaction — the first ``session.execute`` would otherwise
+    raise ``InvalidRequestError: Autobegin is disabled on this Session``. The
+    transaction must begin PER BATCH (not once around the loop) because
+    ``purge_expired_dedup_hashes`` commits at the end of each pass.
+    """
+    from modulo.core.cleanup_jobs.webhook_dedup_cleanup import DEDUP_PURGE_BATCH_SIZE, purge_expired_dedup_hashes
+
+    total = 0
+    async with _cleanup_session_factory()() as session:
+        while True:
+            async with session.begin():
+                deleted = await purge_expired_dedup_hashes(session)
+            total += deleted
+            if deleted < DEDUP_PURGE_BATCH_SIZE:
+                break
+    return {"deleted": total}
+
+
 async def trigger_events_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — age-based retention for trigger_events (90-day default).
 
@@ -1514,6 +1557,7 @@ def _system_functions() -> list[Any]:
         hitl_overdue,
         retention_cleanup,
         webhook_dedup_cleanup,
+        expired_webhook_dedup_purge,
         trigger_events_cleanup,
         stale_run_recovery,
         slot_reconciliation,
@@ -1588,6 +1632,23 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         CronJob(
             webhook_dedup_cleanup,
             cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # expired webhook dedup hashes: every 15 min (FAR-661) — each webhook
+        # delivery leaves a dedup row with a 5-minute TTL that nothing
+        # scheduled ever deleted; a 15-min purge bounds the pile-up to
+        # housekeeping scale without competing with the 5-min sweeps.
+        # unique=True so overlapping ticks cannot double-purge (the purge is
+        # bounded + idempotent — a second instance can only find nothing left
+        # to delete, and the advisory lock serialises against the manual API
+        # cleanup anyway).
+        CronJob(
+            expired_webhook_dedup_purge,
+            cron=_CRON_EVERY_15_MINUTES,
             unique=True,
             timeout=300,
             heartbeat=30,
