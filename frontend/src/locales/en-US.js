@@ -829,7 +829,9 @@ export default {
       "scheduler_starvation_pending_count": "Pending runs",
       "scheduler_starvation_oldest_wait": "Oldest wait",
       "scheduler_starvation_age_minutes": "{minutes}m",
-      "scheduler_starvation_age_hours": "{hours}h"
+      "scheduler_starvation_age_hours": "{hours}h",
+      "expand_message": "Expand error message",
+      "collapse_message": "Collapse error message"
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",
