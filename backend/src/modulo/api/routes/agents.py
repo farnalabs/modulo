@@ -1056,6 +1056,7 @@ async def replace_bindings_endpoint(
     """
     from modulo.db.crud.agent_runner_binding import replace_agent_bindings
     from modulo.db.models.agent_runner_binding import AgentRunnerBinding
+    from modulo.db.runner_binding_constraints import BindingValidationError
 
     specs = [
         {
@@ -1107,6 +1108,12 @@ async def replace_bindings_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
+    except BindingValidationError as exc:
+        _log.warning("agents.replace_bindings_endpoint: invalid binding pair", extra={"error": str(exc)})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid binding: reserved or malformed target_env_var, or unknown source_field",
+        ) from None
     except SQLAlchemyError:
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
@@ -1145,15 +1152,16 @@ async def delete_binding_endpoint(
             if agent is None or agent.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
             deleted = await delete_binding(session, binding_id)
-            await append_audit_event(
-                session,
-                org_id=principal.organisation_id,
-                event_type="agent_runner_binding.deleted",
-                actor_user_id=principal.account_id,
-                resource_type="agent",
-                resource_id=agent_id,
-                payload_json={"binding_id": str(binding_id), "operation": "delete"},
-            )
+            if deleted:
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="agent_runner_binding.deleted",
+                    actor_user_id=principal.account_id,
+                    resource_type="agent",
+                    resource_id=agent_id,
+                    payload_json={"binding_id": str(binding_id), "operation": "delete"},
+                )
     except SQLAlchemyError:
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
