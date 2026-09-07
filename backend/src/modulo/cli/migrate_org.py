@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from sqlalchemy import select
-from tqdm import tqdm
+from tqdm import tqdm  # type: ignore[import-untyped]
 
 from modulo.db.models import (
     Account,
