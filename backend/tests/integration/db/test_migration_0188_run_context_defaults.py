@@ -49,6 +49,9 @@ async def test_run_context_defaults_server_default_allows_raw_insert_without_col
     # Roll back the aborted transaction; this also undoes the DROP DEFAULT so the
     # migrated schema (with the 0188 default) is restored for the positive case.
     await rls_session.rollback()
+    # set_rls_org now requires an active transaction (guard added in 048251f67),
+    # so open a fresh transaction for the positive-insert half of the test.
+    await rls_session.begin()
     await set_rls_org(rls_session, test_org)
 
     # Post-0188: the default fills run_context_defaults with an empty object.
@@ -68,5 +71,5 @@ async def test_run_context_defaults_server_default_allows_raw_insert_without_col
         {"id": str(ok_pid)},
     )
     assert not stored.scalar_one()
-
-    # The fixture rolls the session back, removing the row and leaving the schema at head.
+    # Discard the positive-insert row; the fixture's final rollback is a no-op.
+    await rls_session.rollback()
