@@ -19,7 +19,17 @@ at, and persists it on the ``hitl_claims.context_json`` column (migration
 
 Truncation is DETERMINISTIC: JSON serialised with ``sort_keys=True`` and
 ``default=str``, then sliced to fixed character budgets — the same gate always
-produces the same stored bundle (no wall-clock or dict-order variance).
+produces the same stored bundle (no wall-clock or dict-order variance). Every
+string field is bounded (artifacts ~2KB total; description / condition /
+reason capped at :data:`_TEXT_FIELD_MAX_CHARS`).
+
+Redaction (FAR-188): artifacts and ``reason`` are derived from NODE OUTPUTS
+(LLM / connector content), so they run through the shared redaction primitive
+(:func:`modulo.core.pipeline_engine.error_codes.sanitize_error_text`) BEFORE
+truncation — credentials must never enter persistence unmasked. User-authored
+save-time fields (``description``, ``condition``, ``pipeline_name``,
+``source_node_label``) are bounded but not redacted: they were authored
+through the validated save path, not produced by agent/connector output.
 
 The capture is FAILURE-ISOLATED by contract: :func:`build_hitl_gate_context`
 never raises (any internal error logs and yields ``None`` context) so a
@@ -38,6 +48,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.db.crud.hitl_gate_config import _config_from_graph, _config_from_hitl_nodes, parse_hitl_gate_id
 from modulo.db.crud.run import get_run
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -50,6 +61,13 @@ ARTIFACTS_BUDGET_CHARS = 2048
 _ARTIFACT_ENTRY_MAX_CHARS = 1200
 #: Hard cap on the number of artifact entries (a condition can name many nodes).
 _ARTIFACT_MAX_ENTRIES = 5
+#: Deterministic cap for the bundle's single-string fields (``description``,
+#: ``condition``, ``reason``). The edge-config contract already caps
+#: description at 2000 and condition at 500 (api.routes.pipelines
+#: HitlGateConfig); this is the capture-side backstop for node-level
+#: ``hitl_config`` descriptions (GraphValidator enforces only the minimum)
+#: and LLM-derived ``reason`` values, which have no upstream bound.
+_TEXT_FIELD_MAX_CHARS = 2000
 #: ``reason`` fallback when a node gate's raising output carries no reasoning.
 REASON_ABSENT = "no reasoning provided"
 
@@ -63,18 +81,17 @@ _NODE_ID_IN_CONDITION_RE = re.compile(
 )
 
 
-def _deterministic_json(value: Any, limit: int) -> str:
-    """Serialise *value* deterministically, sliced to *limit* characters.
+def _serialize(value: Any) -> str:
+    """Serialise *value* deterministically (``sort_keys=True``, ``default=str``).
 
-    ``sort_keys=True`` pins the key order, ``default=str`` degrades every
-    non-JSON value (UUID, datetime, LangChain message objects) to its string
-    form, and the slice makes the budget a hard deterministic bound.
+    Never raises: ``default=str`` degrades every non-JSON value (UUID,
+    datetime, LangChain message objects) to its string form, and any residual
+    serialisation error falls back to ``repr``.
     """
     try:
-        text = json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+        return json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
     except Exception:  # pragma: no cover - defensive: default=str makes this near-impossible
-        text = repr(value)
-    return text[:limit]
+        return repr(value)
 
 
 def extract_condition_node_ids(condition: str | None) -> list[str]:
@@ -130,10 +147,16 @@ def _bound_artifacts(entries: list[dict[str, str]]) -> list[dict[str, str]]:
 
 
 def _artifact_entry(node_id: str, output: Any) -> dict[str, str]:
-    """One bounded artifact entry: the node id plus its output summary."""
+    """One bounded, REDACTED artifact entry: the node id plus its output summary.
+
+    Node outputs are agent/connector content, so the summary runs through the
+    shared redaction primitive BEFORE truncation (FAR-163: a secret
+    straddling the cut point must still be removed; FAR-188: credentials
+    never enter persistence unmasked).
+    """
     return {
         "node_id": node_id,
-        "summary": _deterministic_json(output, _ARTIFACT_ENTRY_MAX_CHARS),
+        "summary": sanitize_error_text(_serialize(output))[:_ARTIFACT_ENTRY_MAX_CHARS],
     }
 
 
@@ -142,14 +165,15 @@ def _output_reason(output: Any) -> str:
 
     Both the flat output dict and the outer envelope shape (a node's contract
     output nested under ``output``) are consulted, so a schema-validated
-    ``reason`` is found either way.
+    ``reason`` is found either way. The reason is LLM-derived content, so it
+    is REDACTED through the shared primitive before persistence (FAR-188).
     """
     if isinstance(output, dict):
         for candidate in (output, output.get("output")):
             if isinstance(candidate, dict):
                 reason = candidate.get("reason")
                 if isinstance(reason, str) and reason.strip():
-                    return reason
+                    return sanitize_error_text(reason)
     return REASON_ABSENT
 
 
@@ -243,17 +267,20 @@ async def _build_context_inner(
     if isinstance(config, dict):
         raw_description = config.get("description")
         if isinstance(raw_description, str) and raw_description.strip():
-            description = raw_description
+            # Bounded: edge-config descriptions are capped at 2000 by the
+            # save-time contract; node-level hitl_config descriptions have
+            # no upstream max — this slice is the capture-side backstop.
+            description = raw_description[:_TEXT_FIELD_MAX_CHARS]
         raw_condition = config.get("condition")
         if trigger == "condition" and isinstance(raw_condition, str) and raw_condition.strip():
-            condition = raw_condition
+            condition = raw_condition[:_TEXT_FIELD_MAX_CHARS]
 
     artifacts: list[dict[str, str]] = []
     reason: str | None = None
     if trigger == "node":
         node_output = (completed_node_outputs or {}).get(source_node_id or "")
         if node_output is not None:
-            reason = _output_reason(node_output)
+            reason = _output_reason(node_output)[:_TEXT_FIELD_MAX_CHARS]
             artifacts.append(_artifact_entry(source_node_id or gate_id, node_output))
     else:
         referenced = extract_condition_node_ids(condition)

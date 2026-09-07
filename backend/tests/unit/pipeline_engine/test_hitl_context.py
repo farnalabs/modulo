@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.pipeline_engine.hitl_context import (
+    _TEXT_FIELD_MAX_CHARS,
     ARTIFACTS_BUDGET_CHARS,
     REASON_ABSENT,
     build_hitl_gate_context,
@@ -237,6 +238,45 @@ class TestTruncationBounds:
         first = await _build(graph, completed_node_outputs=outputs)
         second = await _build(graph, completed_node_outputs=outputs)
         assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+class TestRedactionAndTextBounds:
+    """FAR-188 redaction + capture-side text bounds (review findings)."""
+
+    async def test_credential_bearing_artifact_summary_is_redacted(self):
+        graph = _hitl_node_graph({"description": "Human confirms the incident resolution."})
+        leaked = {"summary": f"deployed with ghp_{'a' * 30} token embedded"}
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: leaked})
+        assert context is not None
+        summary = context["artifacts"][0]["summary"]
+        assert "ghp_" not in summary
+        assert "<redacted>" in summary
+
+    async def test_reason_is_redacted(self):
+        graph = _hitl_node_graph({"description": "Human confirms the incident resolution."})
+        leaked = {"reason": f"model call failed with key sk-{'x' * 12}"}
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: leaked})
+        assert context is not None
+        assert "sk-" not in context["reason"]
+        assert "<redacted>" in context["reason"]
+
+    async def test_reason_bounded_to_text_field_max(self):
+        graph = _hitl_node_graph({"description": "Human confirms the incident resolution."})
+        context = await _build(graph, completed_node_outputs={_UUID_SRC: {"reason": "r" * 5000}})
+        assert context is not None
+        assert len(context["reason"]) <= _TEXT_FIELD_MAX_CHARS
+
+    async def test_node_gate_description_bounded(self):
+        graph = _hitl_node_graph({"description": "d" * 5000})
+        context = await _build(graph, completed_node_outputs={})
+        assert context is not None
+        assert len(context["description"]) <= _TEXT_FIELD_MAX_CHARS
+
+    async def test_condition_bounded(self):
+        config = {"description": "Approve the deploy.", "condition": "c" * 5000}
+        context = await _build(_edge_graph(config), completed_node_outputs={})
+        assert context is not None
+        assert len(context["condition"]) <= _TEXT_FIELD_MAX_CHARS
 
 
 class TestExtractConditionNodeIds:

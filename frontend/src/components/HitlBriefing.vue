@@ -69,7 +69,7 @@ const hasDetails = computed(() => Boolean(trigger.value || condition.value || so
   <section
     data-testid="hitl-briefing"
     class="rounded-lg border bg-muted/30 p-3"
-    aria-label="HITL decision briefing"
+    :aria-label="$t('views.HitlBriefing.title')"
   >
     <h4 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
       {{ $t('views.HitlBriefing.title') }}
