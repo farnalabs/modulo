@@ -55,6 +55,28 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def no_org_client() -> Generator[TestClient, None, None]:
+    """System admin whose principal has no organisation_id.
+
+    Exercises the org-scoped feature-flag override guard that rejects such
+    principals with 403 before any org lookup.
+    """
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: MagicMock()
+    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=None,
+        account_id="00000000-0000-0000-0000-000000000002",
+        org_role="admin",
+        is_system_admin=True,
+    )
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 @pytest.fixture(autouse=True)
 def _clear_registry_overrides() -> Generator[None, None, None]:
     """Clear the class-level FeatureFlagRegistry._overrides after each test.
@@ -429,6 +451,24 @@ class TestOrgOverrideCacheInvalidation:
             resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["override"] is True
+
+
+class TestOrgOverrideOrgIdGuard:
+    def test_org_override_rejects_missing_organisation_id(self, no_org_client: TestClient) -> None:
+        """A system admin without an organisation_id must be rejected (403) on
+        every org-scoped feature-flag override endpoint instead of crashing on
+        a None org lookup. Regression for the assert -> if/raise conversion."""
+        for method, url in (
+            ("get", "/api/v1/admin/feature-flags/sso/org-override"),
+            ("put", "/api/v1/admin/feature-flags/sso/org-override"),
+            ("delete", "/api/v1/admin/feature-flags/sso/org-override"),
+        ):
+            if method == "get":
+                resp = no_org_client.get(url)
+            else:
+                resp = getattr(no_org_client, method)(url, json={"enabled": True})
+            assert resp.status_code == 403, (method, resp.status_code, resp.text)
+            assert "Organisation ID required" in resp.text
 
 
 # ---------------------------------------------------------------------------

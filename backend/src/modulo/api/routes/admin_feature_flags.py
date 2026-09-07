@@ -32,6 +32,7 @@ _CODE_FEATURE_FLAGS_TOGGLE_FAILED = "feature_flags.toggle_failed"
 _CODE_FEATURE_FLAGS_GET_ORG = "feature_flags.get_org_override_failed"
 _CODE_FEATURE_FLAGS_SET_ORG = "feature_flags.set_org_override_failed"
 _CODE_FEATURE_FLAGS_CLEAR_ORG = "feature_flags.clear_org_override_failed"
+_MSG_ORG_ID_REQUIRED = "Organisation ID required for org-scoped feature flag operations"
 
 
 logger = logging.getLogger(__name__)
@@ -364,7 +365,7 @@ async def get_org_flag_override(
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organisation ID required for org-scoped feature flag operations",
+            detail=_MSG_ORG_ID_REQUIRED,
         )
     try:
         async with session.begin():
@@ -422,7 +423,7 @@ async def set_org_flag_override(
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organisation ID required for org-scoped feature flag operations",
+            detail=_MSG_ORG_ID_REQUIRED,
         )
     try:
         async with session.begin():
@@ -485,7 +486,7 @@ async def clear_org_flag_override(
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Organisation ID required for org-scoped feature flag operations",
+            detail=_MSG_ORG_ID_REQUIRED,
         )
     try:
         async with session.begin():

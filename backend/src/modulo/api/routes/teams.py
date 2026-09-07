@@ -219,11 +219,6 @@ async def _remove_member_checked(
     # SECURITY (#1194): operator cannot remove someone with equal or higher
     # team role — prevents intra-org privilege interference.
     if not is_admin:
-        if caller_membership is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Caller membership not found",
-            )
         target_level = team_role_level(membership.role)
         caller_level = team_role_level(caller_membership.role)
         if target_level >= caller_level:
@@ -269,11 +264,6 @@ async def _change_member_role_checked(
     # SECURITY (#1194): operator cannot demote someone with equal or higher
     # team role — prevents intra-org privilege interference.
     if not is_admin:
-        if caller_membership is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Caller membership not found",
-            )
         target_level = team_role_level(old_role)
         caller_level = team_role_level(caller_membership.role)
         if target_level >= caller_level:
