@@ -871,7 +871,7 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
         ip: str,
         port: int,
         *,
-        timeout: float | None = None,  # noqa: ASYNC109
+        timeout: float | None = None,  # noqa: ASYNC109 — httpcore connect_tcp(), not asyncio.wait_for()
         local_address: str | None = None,
         socket_options: Iterable[SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:
@@ -903,7 +903,7 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
         ips: tuple[str, ...],
         port: int,
         *,
-        timeout: float | None,  # noqa: ASYNC109
+        timeout: float | None,  # noqa: ASYNC109 — httpcore connect_tcp(), not asyncio.wait_for()
         local_address: str | None,
         socket_options: Iterable[SOCKET_OPTION] | None,
     ) -> httpcore.AsyncNetworkStream:
@@ -940,7 +940,7 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
         self,
         host: str,
         port: int,
-        timeout: float | None = None,  # noqa: ASYNC109
+        timeout: float | None = None,  # noqa: ASYNC109 — httpcore connect_tcp(), not asyncio.wait_for()
         local_address: str | None = None,
         socket_options: Iterable[SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:

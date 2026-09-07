@@ -1973,7 +1973,7 @@ async def delete_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            deleted = await soft_delete_pipeline(session, pipeline_id)
+            deleted = await soft_delete_pipeline(session, pipeline_id, deleted_by=principal.account_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 

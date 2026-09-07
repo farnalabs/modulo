@@ -59,9 +59,12 @@ _MIGRATION_PATH = (
 # sweep, renumbered from 0182/0183 after the hitl_claims collision), followed by
 # 0185_error_events_indexes_jsonb (error_events status/level partial indexes,
 # renumbered from 0183 after the collision with main's 0183_triggers migration),
-# followed by 0186_bundled_runner_seed_backfill (FAR-590 D4 Bundled Runner seed
-# backfill, re-parented onto the 0185 error_events head), which is now the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0186_bundled_runner_seed_backfill"
+# then the improve-database migrations 0186_pipeline_check_constraints_deleted_by
+# (renumbered from 0183) and 0187_pipeline_performance_indexes (renumbered from
+# 0184), followed by 0188_bundled_runner_seed_backfill (FAR-590 D4 Bundled Runner
+# seed backfill, re-parented onto the 0187 pipeline_performance_indexes head),
+# which is now the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0188_bundled_runner_seed_backfill"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

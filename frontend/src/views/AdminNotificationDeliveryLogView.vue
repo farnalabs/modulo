@@ -8,7 +8,7 @@
         <div>
           <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</label>
           <Select
-  aria-label="Status"
+  :aria-label="$t('views.AdminNotificationDeliveryLogView.status')"
   v-model="filterStatus"
   :placeholder="$t('views.AdminNotificationDeliveryLogView.status')"
   data-testid="admin-notification-log-status"
@@ -25,7 +25,7 @@
         <div>
           <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
           <Select
-  aria-label="Event Type"
+  :aria-label="$t('views.AdminAuditView.event_type')"
   v-model="filterEventType"
   :placeholder="$t('views.AdminAuditView.event_type')"
   data-testid="admin-notification-log-event-type"
@@ -49,7 +49,7 @@
           />
         </div>
         <div>
-          <label for="adminnotificationdeliverylogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">To</label>
+          <label for="adminnotificationdeliverylogview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.to') }}</label>
           <input id="adminnotificationdeliverylogview-field-1"
             v-model="filterDateTo"
             type="date"
@@ -59,7 +59,7 @@
         </div>
         <div class="flex items-end gap-2">
           <Button data-testid="admin-notification-log-apply" @click="applyFilters">
-            Apply
+            {{ $t('views.AdminNotificationDeliveryLogView.apply') }}
           </Button>
           <button
             type="button"
@@ -67,7 +67,7 @@
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             @click="resetFilters"
           >
-            Reset
+            {{ $t('views.AdminNotificationDeliveryLogView.reset') }}
           </button>
           <button
             v-if="hasRetryableItems"
@@ -77,12 +77,12 @@
             class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-40 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300"
             @click="retryAllFailed"
           >
-            {{ retryingAll ? 'Retrying All…' : 'Retry All Failed' }}
+            {{ retryingAll ? $t('views.AdminNotificationDeliveryLogView.retrying_all') : $t('views.AdminNotificationDeliveryLogView.retry_all_failed') }}
           </button>
         </div>
       </div>
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
-        {{ total }} delivery{{ total === 1 ? '' : 'ies' }}
+        {{ $t('views.AdminNotificationDeliveryLogView.deliveries_count', { count: total }, total) }}
       </div>
       <div
         v-if="retrySuccessMessage"
@@ -97,12 +97,12 @@
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDeliveries" />
 
-    <div v-else-if="items.length === 0" data-testid="admin-notification-log-empty" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">{{ $t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found') }}</p>
-      <p class="mt-1 text-sm text-muted-foreground">
-        Try adjusting your filters or wait for notifications to be sent.
-      </p>
-    </div>
+    <EmptyState
+      v-else-if="items.length === 0"
+      data-testid="admin-notification-log-empty"
+      :title="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found')"
+      :description="$t('views.AdminNotificationDeliveryLogView.try_adjusting_filters')"
+    />
 
     <template v-else>
       <div class="table-wrapper">
@@ -130,26 +130,15 @@
                 <button
                   type="button"
                   class="inline-flex items-center rounded p-1 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :aria-label="'Expand delivery ' + entry.id"
+                  :aria-label="$t('views.AdminNotificationDeliveryLogView.expand_delivery', { id: entry.id })"
                   :data-testid="'admin-notification-log-expand-' + entry.id"
                   @click.stop="toggleRow(entry.id)"
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
+                  <ChevronRight
                     :class="expandedId === entry.id ? 'rotate-90' : ''"
-                    class="transition-transform"
+                    class="h-3.5 w-3.5 transition-transform"
                     aria-hidden="true"
-                  >
-                    <polyline points="9 18 15 12 9 6" />
-                  </svg>
+                  />
                 </button>
               </td>
               <td class="table-cell whitespace-nowrap text-muted-foreground">
@@ -180,7 +169,7 @@
                   class="rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
                   @click.stop="retryDelivery(entry)"
                 >
-                  {{ retryingId === entry.id ? 'Retrying…' : 'Retry' }}
+                  {{ retryingId === entry.id ? $t('views.AdminNotificationDeliveryLogView.retrying') : $t('views.AdminNotificationDeliveryLogView.retry') }}
                 </button>
               </td>
             </tr>
@@ -201,7 +190,7 @@
                     <code class="ml-1 font-mono text-xs">{{ entry.response_code }}</code>
                   </div>
                   <div v-if="!entry.response_body && !entry.last_error && !entry.response_code" class="text-xs text-muted-foreground italic">
-                    No additional details available.
+                    {{ $t('views.AdminNotificationDeliveryLogView.no_additional_details') }}
                   </div>
                 </div>
               </td>
@@ -219,10 +208,10 @@
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPage(prevCursor)"
         >
-          Previous
+          {{ $t('views.AdminNotificationDeliveryLogView.previous') }}
         </button>
         <span class="text-sm text-muted-foreground">
-          {{ items.length }} of {{ total }} deliveries
+          {{ $t('views.AdminNotificationDeliveryLogView.of_deliveries', { count: items.length, total }) }}
         </span>
         <button
           type="button"
@@ -231,7 +220,7 @@
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPage(nextCursor)"
         >
-          Next
+          {{ $t('views.AdminNotificationDeliveryLogView.next') }}
         </button>
       </div>
 
@@ -240,7 +229,7 @@
           <div>
             <h3 class="text-base font-semibold">{{ $t('views.AdminNotificationDeliveryLogView.dead_letter_queue') }}</h3>
             <p class="text-sm text-muted-foreground">
-              {{ deadLetteredCount }} undeliverable notification{{ deadLetteredCount === 1 ? '' : 's' }} across all endpoints
+              {{ $t('views.AdminNotificationDeliveryLogView.dead_letter_queue_description', { count: deadLetteredCount }, deadLetteredCount) }}
             </p>
           </div>
           <button
@@ -249,7 +238,7 @@
             class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent"
             @click="showDeadLettered"
           >
-            View Dead Lettered
+            {{ $t('views.AdminNotificationDeliveryLogView.view_dead_lettered') }}
           </button>
         </div>
       </div>
@@ -268,8 +257,13 @@ import { formatApiError } from '../lib/api/formatError'
 import type { components, paths } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
+import { ChevronRight } from '@lucide/vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 interface DeliveryLogPage {
@@ -382,7 +376,7 @@ function showDeadLettered() {
 
 async function retryDelivery(entry: DeliveryLogEntry) {
   if (!entry.endpoint_id) {
-    retryMessages.value[entry.id] = { type: 'error', text: 'Cannot retry: missing endpoint ID' }
+    retryMessages.value[entry.id] = { type: 'error', text: t('views.AdminNotificationDeliveryLogView.cannot_retry_missing_endpoint_id') }
     return
   }
   retryingId.value = entry.id
@@ -401,18 +395,18 @@ async function retryDelivery(entry: DeliveryLogEntry) {
       },
     )
     if (err) {
-      retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${formatApiError(err)}` }
+      retryMessages.value[entry.id] = { type: 'error', text: `${t('views.AdminNotificationDeliveryLogView.retry_failed')} ${formatApiError(err)}` }
     } else if (data) {
       if (data.success) {
         await loadDeliveries()
-        retryMessages.value[entry.id] = { type: 'success', text: 'Retry succeeded' }
+        retryMessages.value[entry.id] = { type: 'success', text: t('views.AdminNotificationDeliveryLogView.retry_succeeded') }
       } else {
         await loadDeliveries()
-        retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${data.error || `HTTP ${data.status_code}`}` }
+        retryMessages.value[entry.id] = { type: 'error', text: `${t('views.AdminNotificationDeliveryLogView.retry_failed')} ${data.error || `HTTP ${data.status_code}`}` }
       }
     }
   } catch (e: unknown) {
-    retryMessages.value[entry.id] = { type: 'error', text: `Retry request failed: ${formatApiError(e)}` }
+    retryMessages.value[entry.id] = { type: 'error', text: `${t('views.AdminNotificationDeliveryLogView.retry_request_failed')} ${formatApiError(e)}` }
   } finally {
     retryingId.value = null
   }
@@ -426,15 +420,20 @@ async function retryAllFailed() {
   try {
     const { data, error: err } = await api.POST('/api/v1/admin/notifications/deliveries/retry-all-failed', {})
     if (err) {
-      error.value = `Retry all failed: ${formatApiError(err)}`
+      error.value = `${t('views.AdminNotificationDeliveryLogView.retry_all_failed_1')} ${formatApiError(err)}`
     } else if (data) {
       await loadDeliveries()
       const result = data as unknown as { retried: number; success: boolean; errors?: unknown[] }
-      const msg = `Retried ${result.retried} deliver${result.retried === 1 ? 'y' : 'ies'}`
-      retrySuccessMessage.value = result.success ? msg : `${msg} with ${result.errors?.length || 0} error(s)`
+      const retried = t('views.AdminNotificationDeliveryLogView.retried_deliveries_count', { count: result.retried }, result.retried)
+      retrySuccessMessage.value = result.success
+        ? retried
+        : t('views.AdminNotificationDeliveryLogView.retried_with_errors', {
+            retried,
+            errors: t('views.AdminNotificationDeliveryLogView.errors_count', { count: result.errors?.length || 0 }, result.errors?.length || 0),
+          })
     }
   } catch (e: unknown) {
-    error.value = `Retry all request failed: ${formatApiError(e)}`
+    error.value = `${t('views.AdminNotificationDeliveryLogView.retry_all_request_failed')} ${formatApiError(e)}`
   } finally {
     retryingAll.value = false
   }

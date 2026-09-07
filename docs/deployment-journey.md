@@ -166,7 +166,7 @@ These are not future plans – they are built and tested today:
 - **Backup/DR**: `modulo backup` / `modulo restore` CLI, full DR procedure
 - **Secrets backends**: Fernet (default), Vault, AWS Secrets Manager
 
-### When you need modulo-cloud (V3 – not yet built)
+### When you need a hosted SaaS (modulo-cloud)
 
 A hosted SaaS wrapping Modulo core, adding multi-org billing, subdomain
 routing, and a public community library registry. Only needed if/when
