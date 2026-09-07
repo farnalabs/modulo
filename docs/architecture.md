@@ -135,17 +135,45 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `FilesystemConnector` | `git-host` | read/write files, git commit/push |
 | `GitHubConnector` | `git-host` | read/write via API, create PR |
 | `GitLabConnector` | `git-host` | read/write via API, merge requests |
+| `BitbucketConnector` | `git-host` | read/write via API |
+| `GiteaConnector` | `git-host` | read/write via API |
+| `AzureReposConnector` | `git-host` | read/write via API |
 | `ShellConnector` | `shell` | run commands in a runtime-provider workspace |
 | `SlackConnector` | `messaging` | send messages, search channels |
+| `DiscordConnector` | `messaging` | send messages |
+| `MicrosoftTeamsConnector` | `messaging` | send messages |
 | `JiraConnector` | `issue-tracker` | create/search/update issues |
 | `LinearConnector` | `issue-tracker` | create/search/update issues |
+| `TrelloConnector` | `issue-tracker` | create/search/update cards |
+| `AsanaConnector` | `issue-tracker` | create/search/update tasks |
+| `MondayConnector` | `issue-tracker` | create/search/update items |
+| `ShortcutConnector` | `issue-tracker` | create/search/update stories |
+| `YouTrackConnector` | `issue-tracker` | create/search/update issues |
 | `NotionConnector` | `documentation` | read/write pages and databases |
 | `ConfluenceConnector` | `documentation` | read/write pages |
+| `DropboxPaperConnector` | `documentation` | read/write pages |
 | `PagerDutyConnector` | `incident-management` | trigger/acknowledge/resolve incidents |
+| `OpsgenieConnector` | `incident-management` | create/acknowledge/resolve alerts |
 | `SentryConnector` | `error-tracking` | list/search issues, create events |
 | `DatadogConnector` | `monitoring` | query metrics, create monitors |
+| `GrafanaConnector` | `monitoring` | query dashboards and alerts |
+| `SonarQubeConnector` | `monitoring` | query project quality gates |
+| `SnykConnector` | `monitoring` | list vulnerabilities |
 | `RestConnector` | `rest` | verb-agnostic HTTP read/write against a declared endpoint (see `docs/rest-connector.md`) |
-| *(40+ built-in connectors total — see `modulo/connectors/`)* | | |
+| `N8NConnector` | `rest` | trigger n8n workflows |
+| `JenkinsConnector` | `ci-cd` | trigger/query builds |
+| `CircleCIConnector` | `ci-cd` | trigger/query pipelines |
+| `BuildkiteConnector` | `ci-cd` | trigger/query builds |
+| `AzurePipelinesConnector` | `ci-cd` | trigger/query pipelines |
+| `TeamCityConnector` | `ci-cd` | trigger/query builds |
+| `NpmConnector` | `package-manager` | query package metadata |
+| `PyPIConnector` | `package-manager` | query package metadata |
+| `OnePasswordConnector` | `secrets` | read secrets |
+| `AzureKeyVaultConnector` | `secrets` | read secrets |
+| `SharePointConnector` | `documentation` | read/write files and pages |
+| `TrivyConnector` | `security` | scan container images |
+| `CodeClimateConnector` | `quality` | query code quality metrics |
+| *(41 built-in connectors total; see `modulo/connectors/`)* | | |
 
 ### Model Backend Hub (`modulo/model_backends/`)
 
@@ -160,7 +188,28 @@ Model backends stay first-class for Runner nodes too (ADR 029): once D6 lands, a
 | Azure OpenAI | V1 |
 | Bedrock | V1 |
 | Ollama | V1 |
-| Custom | V1 |
+| DeepSeek | V1 |
+| Gemini | V1 |
+| Grok | V1 |
+| Groq | V1 |
+| Mistral | V1 |
+| Cohere | V1 |
+| Vertex AI | V1 |
+| Together AI | V1 |
+| OpenRouter | V1 |
+| Perplexity | V1 |
+| Fireworks | V1 |
+| Ai21 | V1 |
+| Qwen | V1 |
+| WatsonX | V1 |
+| vLLM | V1 |
+| TGI | V1 |
+| LLamaCpp | V1 |
+| LM Studio | V1 |
+| LocalAI | V1 |
+| Jan | V1 |
+| OpenCode | V1 |
+| *(27 model backends total; see `modulo/model_backends/`)* | |
 
 ### Trigger Engine (`modulo/core/trigger_engine/`)
 
@@ -230,36 +279,36 @@ Manages the local and community library of reusable primitives (agents, schemas,
 #### Run admission and healing (FAR-604)
 
 Dispatch admission is capacity-gated twice: per pipeline (`max_concurrent_runs`,
-counted over `running`/`claimed`/`unknown` runs — `awaiting_human` and
+counted over `running`/`claimed`/`unknown` runs -- `awaiting_human` and
 `hitl_parked` are EXCLUDED: a run parked on a human decision is not executing,
-and a human decision may take days without starving admission — the 2026-09-04
+and a human decision may take days without starving admission -- the 2026-09-04
 incident had 20 `awaiting_human` runs consuming a 20-cap pipeline for 26h) and
 per org (`run_concurrency_limit`, still counted over
-`running`/`awaiting_human`/`hitl_parked`/`claimed`/`unknown` — the org-wide
+`running`/`awaiting_human`/`hitl_parked`/`claimed`/`unknown` -- the org-wide
 worker pool stays bounded by parked runs). A capacity-deferred run stays
 `pending` (marked
 `pipeline_capacity` / `org_capacity_limited`) and is re-dispatched when a slot
 frees; `pipeline.max_concurrent_runs` must be >= 1 (create/update reject 0 and
-negatives — 0 would silently wedge admission forever; pausing admission is the
+negatives -- 0 would silently wedge admission forever; pausing admission is the
 org triggers pause). Four independent mechanisms keep that gate healthy:
 
-- **Slot reconciliation sweep** — a system cron (every 5 min) terminalises
+- **Slot reconciliation sweep** -- a system cron (every 5 min) terminalises
   `running` runs whose heartbeat is stale past `SLOT_RECONCILE_STALE_SECONDS`
   (default 30 min) with the `worker_lost` error code, force-releasing the
   pipeline slots a crashed worker leaked. Journeys and daily facts advance for
   each released run.
-- **HITL park-on-expiry sweep** — a system cron (every 5 min) parks a run whose
+- **HITL park-on-expiry sweep** -- a system cron (every 5 min) parks a run whose
   open HITL gate expired UNANSWERED past `HITL_PARK_GRACE_SECONDS` (default
   24h): the run moves `awaiting_human` → `hitl_parked` (a non-terminal status
-  that holds no pipeline capacity) — the STATUS itself is the parked signal
-  the HITL UI reads to show "expired — parked". Park ≠ decide: the gate row
+  that holds no pipeline capacity) -- the STATUS itself is the parked signal
+  the HITL UI reads to show "expired -- parked". Park != decide: the gate row
   stays OPEN AND CLAIMABLE (a claim takes a fresh TTL), and the moment a
   decision commits
   (`HITLManager._decide`, API or MCP) the run un-parks to `awaiting_human` and
-  re-enters normal admission — approve resumes from the checkpoint through the
+  re-enters normal admission -- approve resumes from the checkpoint through the
   normal resume path, reject terminalises via the reject path. Each park is
   logged loudly (`hitl_park.parked`).
-- **Queue coalescing (latest-wins)** — for webhook deliveries with a stable
+- **Queue coalescing (latest-wins)** -- for webhook deliveries with a stable
   work-item key (GitHub: `repository.full_name` + `pull_request.number`, or
   `issue.number`; anything else → no key, no coalescing), a new delivery folds
   into the pipeline's UNSTARTED `pending` run for the same key instead of
@@ -267,13 +316,13 @@ org triggers pause). Four independent mechanisms keep that gate healthy:
   `created_at` bumped, and a `coalesced` TriggerEvent is recorded. On by
   default; disable per trigger with `config_json.coalesce_pending: false`.
   Replays never coalesce.
-- **Dispatcher backpressure** — trigger dispatch (webhook, cron, polling)
+- **Dispatcher backpressure** -- trigger dispatch (webhook, cron, polling)
   refuses NEW runs when the pipeline's pending queue exceeds
   `max(3 x max_concurrent_runs, 5)` rows or its oldest pending run is older
   than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default 60 min). Refusals are
   loud: a `backpressure_skipped` TriggerEvent carries the depths, and the
   webhook path answers 429 so the sender retries.
-- **Legacy stale-run sweep** — pending runs past the never-dispatched window
+- **Legacy stale-run sweep** -- pending runs past the never-dispatched window
   (`SAQ_NEVER_DISPATCHED_WINDOW`), capacity-marked runs past the TTL
   (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
   (`worker_lost`) are terminalised or re-dispatched as before.
@@ -360,7 +409,7 @@ Every table carries `organisation_id`. Row-Level Security is enforced via `SET L
 Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. Role set: `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only). Admin actions require human session. Keys shown once at creation.
 
 Every key carries a **caller scope** (`scope` column, immutable post-mint):
-`org` (org-level machine identity — the historical default; includes
+`org` (org-level machine identity -- the historical default; includes
 team-scoped and per-run sandbox keys) or `user` (a per-user key that acts as
 its creator's identity and is quota'd to 10 active per account). User-scoped
 minting is REST-JWT-only, gated by the org `user_scoped_mcp_keys` flag

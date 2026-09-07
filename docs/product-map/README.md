@@ -163,6 +163,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-guardrails](configure/guardrails.md) => PRD N/A
 - [feat-mcp](configure/mcp.md) => PRD N/A
 - [feat-environments](environments/environments.md) => PRD N/A
+- [feat-model-backends](configure/model-backends.md) => PRD N/A
+- [feat-remy](configure/remy.md) => PRD 8.23
 
 ### Core Platform
 - [feat-hitl](hitl/hitl-gates.md) => PRD N/A
@@ -177,9 +179,6 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-variants](improve/variants.md) => PRD N/A
 - [feat-feedback](improve/feedback.md) => PRD 8.20
 
-### Improve
-- [feat-evals](improve/evals.md) => PRD N/A
-
 ### Infra
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
 
@@ -191,10 +190,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-pipelines-pipeline-versioning](pipelines/snapshot-versioning.md) => PRD 8.13
 - [feat-pipelines-pipeline-diff-rollback](pipelines/pipeline-diff-rollback.md) => PRD 8.13
 - [feat-router (Router & HITL nodes)](pipelines/router-hitl-nodes.md) => PRD N/A
-
-### Configure
-- [feat-model-backends](configure/model-backends.md) => PRD N/A
-- [feat-mcp](configure/mcp.md) => PRD N/A
+- [feat-dashboard](build/dashboard.md) => PRD 8.20
+- [feat-runs](build/runs.md) => PRD N/A
 
 ### Notifications
 - [feat-notifications](notifications/notifications.md) => PRD N/A
@@ -215,15 +212,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 ### Triggers
 - [feat-triggers](triggers/trigger-engine.md) => PRD N/A
 
-### Build
-- [feat-dashboard](build/dashboard.md) => PRD 8.20
-- [feat-runs](build/runs.md) => PRD N/A
-
 ### Monitor
 - [feat-costs](monitor/costs.md) => PRD 8.10, 9.3
-
-### Configure
-- [feat-remy](configure/remy.md) => PRD 8.23
 
 ### Admin
 - [feat-plugins](admin/plugins.md) => PRD N/A
