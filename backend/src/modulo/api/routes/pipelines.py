@@ -255,9 +255,18 @@ def _edge_data_to_validator(edge: GraphEdgeData) -> dict[str, Any]:
 
 
 def _reject_graph_validation_issues(issues: list[Any]) -> None:
-    """Raise 422 for graph-save issues that must block authoring."""
+    """Raise 422 for graph-save issues that must block authoring.
+
+    ``HITL_GATE_DESCRIPTION_REQUIRED`` (FAR-613) is hard-blocking on this
+    path: a node's ``hitl_config`` is an unvalidated ``dict[str, Any]`` that
+    bypasses the edge-level ``HitlGateConfig`` Pydantic contract, so the
+    validator issue is the ONLY save-time gate for node-level gate
+    descriptions. It is raised inside ``session.begin()`` so the already-run
+    graph write rolls back with the rejection — without it the node-level
+    check would be advisory-only and the save would succeed.
+    """
     for issue in issues:
-        if issue.code in ("GUARDRAIL_CAP_EXCEEDED", "REDACT_CORRECT_BLOCKED"):
+        if issue.code in ("GUARDRAIL_CAP_EXCEEDED", "REDACT_CORRECT_BLOCKED", "HITL_GATE_DESCRIPTION_REQUIRED"):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=issue.message,

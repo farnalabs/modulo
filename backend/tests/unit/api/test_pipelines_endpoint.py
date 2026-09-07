@@ -1013,6 +1013,68 @@ def test_replace_pipeline_graph_blocks_redact_correct_422(client: TestClient) ->
     assert "exfiltration channel" in resp.json()["detail"]
 
 
+def test_replace_pipeline_graph_blocks_undescribed_node_level_hitl_gate_422(client: TestClient) -> None:
+    """FAR-613 iteration-1 MAJOR-3: the node-level HITL description requirement
+    must HARD-REJECT a REST graph save like the guardrail codes. A node's
+    ``hitl_config`` is an unvalidated ``dict[str, Any]`` that bypasses the
+    edge-level ``HitlGateConfig`` Pydantic contract, so
+    ``HITL_GATE_DESCRIPTION_REQUIRED`` from the validator is the ONLY save-time
+    gate. Without the reject-set entry the issue is advisory-only: the graph
+    save succeeds and the node-level gate persists with no description. The
+    reject raises inside ``session.begin()`` so the already-run graph write
+    rolls back — the stored graph is unchanged (same semantics as the
+    GUARDRAIL_CAP_EXCEEDED / REDACT_CORRECT_BLOCKED cases)."""
+    node_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    nodes = [
+        {
+            "id": str(node_id),
+            "node_type": "hitl",
+            "hitl_config": {"label": "Review"},
+            "position": {"x": 0, "y": 0},
+        },
+        {"id": str(target_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}},
+    ]
+    edges = [
+        {
+            "source_node_id": str(node_id),
+            "target_node_id": str(target_id),
+            "edge_type": "normal",
+        }
+    ]
+    validation = ValidationResult()
+    validation.error(
+        "HITL_GATE_DESCRIPTION_REQUIRED",
+        f"HITL gate on node '{node_id}' requires a human-provided description "
+        f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
+        node_id=str(node_id),
+    )
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)) as mock_replace,
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=validation,
+        ),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.patch(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": edges},
+        )
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "human-provided description" in detail
+    # The write ran inside the transaction and the rejection rolled it back —
+    # no graph payload is echoed back (nothing survived the rejected save).
+    mock_replace.assert_awaited_once()
+    assert "nodes" not in resp.json()
+    assert "edges" not in resp.json()
+
+
 # ---------------------------------------------------------------------------
 # FAR-309 PR A — mutation-time guardrail-binding strip enforcement
 # ---------------------------------------------------------------------------

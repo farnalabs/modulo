@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator._types import (
+    ValidationIssue,
     ValidationResult,
     try_parse_uuid,
     try_parse_uuids,
@@ -3133,3 +3134,20 @@ def _parallel_write_detail(setters: list[dict[str, Any]]) -> str | None:
     if not common:
         return None
     return f"parallel branches write the same run_context keys: {sorted(common)}"
+
+
+def check_hitl_gate_descriptions(graph_json: dict[str, Any]) -> list[ValidationIssue]:
+    """Run the FAR-613 HITL gate-description check standalone (public seam).
+
+    Single-sourced with the save-time check
+    (:meth:`GraphValidator._check_hitl_gate_descriptions`) so the write
+    surfaces cannot drift. Exists for graph-WRITE surfaces that do not run
+    the full ``validate_definition`` (which needs a session): the MCP
+    ``update_pipeline_graph`` tool bypasses the REST Pydantic contract for
+    node-level ``hitl_config`` and never runs full validation, so it calls
+    this with the submitted ``{"nodes": [...], "edges": [...]}`` shape and
+    rejects on ``HITL_GATE_DESCRIPTION_REQUIRED`` issues.
+    """
+    result = ValidationResult()
+    GraphValidator()._check_hitl_gate_descriptions(graph_json, result)
+    return result.issues

@@ -694,7 +694,14 @@ _ERROR_DETAIL_HARD_LIMIT = 5000
 # duplicated or drifted across redaction sites.
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+"),
-    re.compile(r"sk-[A-Za-z0-9]{8,}"),
+    # The body class includes ``-`` so the hyphenated vendor segments match:
+    # after the ``sk-`` prefix the current OpenAI key shapes run
+    # ``sk-proj-…``, ``sk-svcacct-…``, ``sk-None-…`` and OpenRouter runs
+    # ``sk-or-v1-…`` — a plain-alphanumeric body stops at the first hyphen
+    # and would leak those keys unredacted (FAR-613: persisted briefing
+    # content passes through this sanitizer). Short innocuous strings are
+    # unaffected: the 8-char minimum still applies to the whole body.
+    re.compile(r"sk-[A-Za-z0-9-]{8,}"),
     re.compile(r"sk-ant-[A-Za-z0-9_-]{8,}"),
     re.compile(r"sk_live_[A-Za-z0-9]{8,}"),
     re.compile(r"ghp_[A-Za-z0-9]{20,}"),
@@ -702,7 +709,10 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"glpat-[A-Za-z0-9_-]{8,}"),
     AWS_ACCESS_KEY_PATTERN,
     re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
-    re.compile(r"xox[bap]-[A-Za-z0-9-]{10,}"),
+    # ``r`` (Slack rotateable tokens) aligned with the canonical shared list
+    # in :mod:`modulo.core.secret_patterns` (``xox[baprs]-``) — the two
+    # sites had drifted apart and a ``xoxr-`` token escaped this sanitizer.
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"://[^:\s@]+:[^@\s@]+@"),

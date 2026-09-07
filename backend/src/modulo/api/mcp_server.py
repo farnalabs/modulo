@@ -2246,6 +2246,27 @@ async def _update_pipeline_graph_impl(
     if sandbox_err:
         return sandbox_err
 
+    # FAR-613: the MCP path never runs the full graph validator, and a node's
+    # ``hitl_config`` is an unvalidated ``dict[str, Any]`` that bypasses the
+    # edge-level ``HitlGateConfig`` Pydantic contract entirely — so the HITL
+    # gate-description requirement is enforced HERE explicitly. An
+    # agent-authored gate is exactly where an unexplained gate most needs its
+    # decision briefing: a node-level or edge-level gate without a
+    # human-provided description is rejected with the same
+    # ``validation_failed`` shape as structural validation failures. The
+    # check is single-sourced with the save-time validator via the public
+    # helper (deliberately NOT the full ``validate_definition`` — that would
+    # surface every pre-existing issue and break MCP flows).
+    from modulo.core.graph_validator import check_hitl_gate_descriptions as _check_hitl_descriptions
+
+    hitl_issues = _check_hitl_descriptions({"nodes": nodes, "edges": edges})
+    hitl_description_errors = [i.message for i in hitl_issues if i.code == "HITL_GATE_DESCRIPTION_REQUIRED"]
+    if hitl_description_errors:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {'; '.join(hitl_description_errors)}",
+        }
+
     try:
         async with _session(org_id) as s:
             from modulo.db.crud.pipeline import get_pipeline
@@ -2311,7 +2332,10 @@ async def _update_pipeline_graph_impl(
     description="Set or replace the graph (nodes + edges) of an existing pipeline. "
     "Pass nodes as a list of dicts with id, node_type, agent_id, position (x, y), "
     "and edges as a list of dicts with id, source_node_id, target_node_id, edge_type. "
-    "Returns the updated graph."
+    "HITL gates (node hitl_config or edge hitl_gate_config) must carry a human-provided "
+    "description (min 20 chars) explaining why the gate exists; a graph write whose "
+    "gates lack one is rejected with validation_failed (FAR-613: the MCP path enforces "
+    "the HITL description rule specifically). Returns the updated graph."
 )
 @_RETRY_DB
 async def update_pipeline_graph(

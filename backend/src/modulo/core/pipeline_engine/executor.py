@@ -4812,10 +4812,22 @@ class PipelineExecutor:
                 else:
                     # FAR-613: resolve the pipeline name FIRST (the same
                     # failure-isolated seam the notifications use) so the
-                    # fire-time briefing bundle carries it too.
+                    # fire-time briefing bundle carries it too. Both the name
+                    # lookup and the briefing capture below perform DB reads
+                    # on the SHARED session inside the interrupt handler's
+                    # outer transaction, so each runs inside a nested
+                    # savepoint (the established best-effort idiom): a
+                    # DB-level failure there would otherwise leave the shared
+                    # transaction in pending-rollback while the error is
+                    # swallowed, and the next statement (create_gate) would
+                    # raise PendingRollbackError and fail the whole
+                    # interrupt. A savepoint-scoped failure rolls back only
+                    # the savepoint; the briefing degrades (name/context
+                    # -> None) but the interrupt always proceeds.
                     try:
-                        pipeline = await get_pipeline(session, pipeline_id)
-                        pipeline_name = pipeline.name if pipeline is not None else None
+                        async with session.begin_nested():
+                            pipeline = await get_pipeline(session, pipeline_id)
+                            pipeline_name = pipeline.name if pipeline is not None else None
                     except asyncio.CancelledError:
                         raise
                     except Exception:
@@ -4827,15 +4839,29 @@ class PipelineExecutor:
                     # FAR-613: capture the decision briefing at fire time.
                     # Failure-isolated — a briefing defect must never block
                     # the interrupt (build_hitl_gate_context never raises;
-                    # context is None on capture failure).
-                    gate_context = await build_hitl_gate_context(
-                        session,
-                        run_id=run_id,
-                        gate_id=gate_id,
-                        org_id=org_id,
-                        pipeline_name=pipeline_name,
-                        completed_node_outputs=ctx.completed_node_outputs,
-                    )
+                    # context is None on capture failure). The savepoint is
+                    # what keeps a DB-level capture error from poisoning the
+                    # shared transaction (see above).
+                    gate_context: dict[str, Any] | None = None
+                    try:
+                        async with session.begin_nested():
+                            gate_context = await build_hitl_gate_context(
+                                session,
+                                run_id=run_id,
+                                gate_id=gate_id,
+                                org_id=org_id,
+                                pipeline_name=pipeline_name,
+                                completed_node_outputs=ctx.completed_node_outputs,
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.warning(
+                            "hitl_gate.context_capture_failed",
+                            extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+                            exc_info=True,
+                        )
+                        gate_context = None
                     await mgr.create_gate(
                         session,
                         run_id=run_id,
