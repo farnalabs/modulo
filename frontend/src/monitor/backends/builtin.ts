@@ -23,9 +23,13 @@ export class BuiltinMonitorBackend implements MonitorBackend {
     })
   }
 
-  setUser(_user: UserInfo | null): void {}
+  setUser(_user: UserInfo | null): void {
+    // Intentional no-op: the builtin backend has no server to report user identity to.
+  }
 
-  setTags(_tags: Record<string, string>): void {}
+  setTags(_tags: Record<string, string>): void {
+    // Intentional no-op: the builtin backend does not support global tags.
+  }
 
   dispose(): void {
     disposeTransport()
