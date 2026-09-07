@@ -11,6 +11,7 @@ vi.mock('../lib/api/client', () => ({
 
 import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import type { HitlGate } from '../components/hitl/HitlGateCard.vue'
+import { resetHitlGateState } from '../composables/useHitlGateState'
 
 function gate(overrides: Partial<HitlGate> = {}): HitlGate {
   return {
@@ -33,6 +34,9 @@ describe('HitlGateCard', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // Module-scoped gate state outlives component instances by design — each
+    // test must start from a fresh browser session.
+    resetHitlGateState()
   })
 
   afterEach(() => {
@@ -175,5 +179,64 @@ describe('HitlGateCard', () => {
     const runLink = wrapper.find('[data-testid="hitl-gate-run-link"]')
     expect(runLink.exists()).toBe(true)
     expect(runLink.attributes('href')).toBe('/runs/550e8400-e29b-41d4-a716-446655440000')
+  })
+
+  it('restores the claim token and notes when the card remounts (FAR-686 regression)', async () => {
+    // The review page's 30s auto-refresh unmounts the list branch: the
+    // remounted card must come back with approve/reject (not re-claim) and
+    // the reviewer's typed notes intact.
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-persist', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+    const mountOptions = (gateProps: HitlGate) => ({
+      props: { gate: gateProps },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    wrapper = mount(HitlGateCard, mountOptions(gate()))
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-notes"]').setValue('notes typed before unmount')
+
+    const firstInstance = wrapper
+    wrapper = null
+    firstInstance.unmount()
+
+    // Remount as the auto-refresh would: same gate, now claimed_by on the server.
+    wrapper = mount(HitlGateCard, mountOptions(gate({ claimed_by: 'reviewer@team' })))
+    expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-gate-claim-token"]').text()).toContain('tok-persist')
+
+    const restoredNotes = wrapper.find('[data-testid="hitl-gate-notes"]')
+    expect((restoredNotes.element as HTMLTextAreaElement).value).toBe('notes typed before unmount')
+  })
+
+  it('drops a stale persisted token when the server reports the gate as pending again', async () => {
+    // A pending gate has no live claim server-side: any persisted token is
+    // stale and must not resurrect approve/reject on remount.
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-stale', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+    const mountOptions = {
+      props: { gate: gate() },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    }
+
+    wrapper = mount(HitlGateCard, mountOptions)
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    wrapper = null
+
+    wrapper = mount(HitlGateCard, mountOptions)
+    expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
   })
 })

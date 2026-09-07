@@ -153,6 +153,7 @@ import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
 import { shortId } from '../../utils/format'
 import { formatDateShortWithTime } from '../../lib/formatDate'
+import { useHitlGateState } from '../../composables/useHitlGateState'
 import Button from 'primevue/button'
 import HitlBriefing from '../HitlBriefing.vue'
 
@@ -193,11 +194,20 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const claimToken = ref<string | null>(null)
+// Per-gate session state (FAR-686): the claim token and notes live in a
+// module-scoped store keyed by run_id:gate_id so they survive the card
+// unmounting — the review page's auto-refresh unmounts the whole list branch
+// every 30s. A gate the server reports as pending has no live claim anymore,
+// so any persisted token for it is stale and is dropped at setup; the card
+// then offers a fresh claim instead of approving with a dead token.
+const gateState = useHitlGateState(props.gate.run_id, props.gate.gate_id)
+if (!props.gate.claimed_by) gateState.clear()
+
+const claimToken = gateState.claimToken
+const notes = gateState.notes
 const claimedByYou = ref(false)
 const claiming = ref(false)
 const actioning = ref<'approve' | 'reject' | null>(null)
-const notes = ref('')
 const message = ref<HitlMessage | null>(null)
 let messageTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -273,7 +283,7 @@ async function claimGate() {
       showMessage({ type: 'error', text: `${t('hitl.gate.claim_failed')} ${formatApiError(err)}` }, false)
     } else if (data) {
       const d = data as { claim_token: string; expires_at: string }
-      claimToken.value = d.claim_token
+      gateState.setClaimToken(d.claim_token)
       claimedByYou.value = true
       const payload: HitlMessage = { type: 'success', text: t('hitl.gate.gate_claimed_you_can_now_approve_or_reject') }
       showMessage(payload)
@@ -302,8 +312,9 @@ async function approveGate() {
     if (err) {
       showMessage({ type: 'error', text: `${t('hitl.gate.approve_failed')} ${formatApiError(err)}` }, false)
     } else {
-      claimToken.value = null
-      notes.value = ''
+      // Decision done: drop the persisted token/notes for this gate so no
+      // stale session state is left behind (FAR-686).
+      gateState.clear()
       claimedByYou.value = false
       const payload: HitlMessage = { type: 'success', text: t('hitl.gate.gate_approved_pipeline_resuming') }
       showMessage(payload)
@@ -333,8 +344,9 @@ async function rejectGate() {
     if (err) {
       showMessage({ type: 'error', text: `${t('hitl.gate.reject_failed')} ${formatApiError(err)}` }, false)
     } else {
-      claimToken.value = null
-      notes.value = ''
+      // Decision done: drop the persisted token/notes for this gate so no
+      // stale session state is left behind (FAR-686).
+      gateState.clear()
       claimedByYou.value = false
       const payload: HitlMessage = { type: 'success', text: t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target') }
       showMessage(payload)
