@@ -370,6 +370,130 @@ def _check_edge_repoint_breaking(
     return findings
 
 
+def _port_breaking_finding(
+    severity: str,
+    node_id: str,
+    direction: str,
+    port: str | None,
+    src: str | None,
+    tgt: str | None,
+    reason: str,
+) -> dict[str, Any]:
+    """Build one breaking-change finding for a node port vs a consuming edge."""
+    return {
+        "severity": severity,
+        "node_id": node_id,
+        "direction": direction,
+        "port": port,
+        "edge": {"source": src, "target": tgt},
+        "reason": reason,
+    }
+
+
+def _port_consuming_edges(
+    new_edges: list[dict[str, Any]],
+    node_id: str,
+    direction: str,
+) -> list[dict[str, Any]]:
+    """Edges of the new graph that read the given port direction of *node_id*.
+
+    An ``output`` port is read by edges FROM the node; an ``input`` port is
+    read by edges TO the node.
+    """
+    if direction == _DIR_OUTPUT:
+        return [e for e in new_edges if _edge_source(e) == node_id]
+    return [e for e in new_edges if _edge_target(e) == node_id]
+
+
+def _check_edge_port_breaking(
+    node_id: str,
+    direction: str,
+    port: str | None,
+    change: str | None,
+    default_port_gone: bool,
+    edge: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Breaking findings for one consuming edge against one port change.
+
+    ``default_port_gone`` is True when the node's port set for this direction
+    is now empty — the default port a legacy (port-less) edge reads has
+    disappeared.
+    """
+    ref_raw = edge.get("source_port") if direction == _DIR_OUTPUT else edge.get("target_port")
+    ref = str(ref_raw) if ref_raw is not None else None
+    src = _edge_source(edge)
+    tgt = _edge_target(edge)
+    if ref is None:
+        # Port-less (legacy) edge reads the node's default port.
+        if change == "removed" and default_port_gone:
+            return [
+                _port_breaking_finding(
+                    "block",
+                    node_id,
+                    direction,
+                    port,
+                    src,
+                    tgt,
+                    (
+                        f"edge {src} -> {tgt} reads the default {direction} of node "
+                        f"{node_id}, which no longer declares any {direction} port"
+                    ),
+                )
+            ]
+        return []
+    if ref != port:
+        return []
+    if change == "removed":
+        return [
+            _port_breaking_finding(
+                "block",
+                node_id,
+                direction,
+                port,
+                src,
+                tgt,
+                (
+                    f"edge {src} -> {tgt} reads {direction} port '{ref}' of node "
+                    f"{node_id}, which the new node no longer declares"
+                ),
+            )
+        ]
+    if change == "modified":
+        return [
+            _port_breaking_finding(
+                "warning",
+                node_id,
+                direction,
+                port,
+                src,
+                tgt,
+                (
+                    f"edge {src} -> {tgt} reads {direction} port '{ref}' of node "
+                    f"{node_id}, whose schema-ref changed — the data read may alter"
+                ),
+            )
+        ]
+    return []
+
+
+def _check_node_port_change_breaking(
+    signatures: dict[str, dict[str, dict[str, str | None]]],
+    new_edges: list[dict[str, Any]],
+    node_id: str,
+    direction: str,
+    port: str | None,
+    change: str | None,
+) -> list[dict[str, Any]]:
+    """Breaking findings for one normalised node-port change against the new graph."""
+    if node_id not in signatures:
+        return []
+    default_port_gone = not signatures[node_id][direction]
+    findings: list[dict[str, Any]] = []
+    for edge in _port_consuming_edges(new_edges, node_id, direction):
+        findings.extend(_check_edge_port_breaking(node_id, direction, port, change, default_port_gone, edge))
+    return findings
+
+
 def check_port_change_breaking(
     graph_new: dict[str, Any],
     changed_ports: Iterable[Any],
@@ -391,11 +515,6 @@ def check_port_change_breaking(
     new_edges = list(graph_new.get("edges", []))
     findings: list[dict[str, Any]] = []
 
-    def _consuming_edges(node_id: str, direction: str) -> list[dict[str, Any]]:
-        if direction == _DIR_OUTPUT:
-            return [e for e in new_edges if _edge_source(e) == node_id]
-        return [e for e in new_edges if _edge_target(e) == node_id]
-
     for item in changed_ports:
         # Edge-port repoints carry their own semantics (the edge now reads a
         # different port of its endpoint node) and are handled separately so the
@@ -407,65 +526,5 @@ def check_port_change_breaking(
             findings.extend(_check_edge_repoint_breaking(item, graph_new))
             continue
         for node_id, direction, port, change in _normalise_changed_ports([item]):
-            if node_id not in signatures:
-                continue
-            # The node's port set for this direction is now empty — the default
-            # port a legacy (port-less) edge reads has disappeared.
-            now_empty = not signatures[node_id][direction]
-
-            for edge in _consuming_edges(node_id, direction):
-                ref = edge.get("source_port") if direction == _DIR_OUTPUT else edge.get("target_port")
-                ref = str(ref) if ref is not None else None
-                src = _edge_source(edge)
-                tgt = _edge_target(edge)
-
-                if ref is None:
-                    # Port-less (legacy) edge reads the node's default port.
-                    if change == "removed" and now_empty:
-                        findings.append(
-                            {
-                                "severity": "block",
-                                "node_id": node_id,
-                                "direction": direction,
-                                "port": port,
-                                "edge": {"source": src, "target": tgt},
-                                "reason": (
-                                    f"edge {src} -> {tgt} reads the default {direction} of node "
-                                    f"{node_id}, which no longer declares any {direction} port"
-                                ),
-                            }
-                        )
-                    continue
-
-                if ref != port:
-                    continue
-
-                if change == "removed":
-                    findings.append(
-                        {
-                            "severity": "block",
-                            "node_id": node_id,
-                            "direction": direction,
-                            "port": port,
-                            "edge": {"source": src, "target": tgt},
-                            "reason": (
-                                f"edge {src} -> {tgt} reads {direction} port '{ref}' of node "
-                                f"{node_id}, which the new node no longer declares"
-                            ),
-                        }
-                    )
-                elif change == "modified":
-                    findings.append(
-                        {
-                            "severity": "warning",
-                            "node_id": node_id,
-                            "direction": direction,
-                            "port": port,
-                            "edge": {"source": src, "target": tgt},
-                            "reason": (
-                                f"edge {src} -> {tgt} reads {direction} port '{ref}' of node "
-                                f"{node_id}, whose schema-ref changed — the data read may alter"
-                            ),
-                        }
-                    )
+            findings.extend(_check_node_port_change_breaking(signatures, new_edges, node_id, direction, port, change))
     return findings
