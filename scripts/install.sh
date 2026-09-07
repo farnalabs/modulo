@@ -49,18 +49,6 @@ MARKER_FILE="${INSTALL_ROOT}/.modulo-native-install"
 FORCE=0
 FROM_FILE=""
 
-# Detect OS and arch
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
-case "$ARCH" in
-    x86_64) ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-    *)
-        echo "Error: unsupported architecture: $ARCH" >&2
-        exit 1
-        ;;
-esac
-
 die() {
   printf 'ERROR: %b\n' "$*" >&2
   exit 1
