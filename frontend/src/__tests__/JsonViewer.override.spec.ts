@@ -27,6 +27,11 @@ const nestedFixture = {
 const longValue = 'A'.repeat(1200)
 const longFixture = { agent_stdout: longValue }
 
+// FAR-626 wrapping case: an unbreakable token below the truncation threshold
+// (default dep path) and a spaced sentence long enough to wrap its preview.
+const unbreakableToken = 'x'.repeat(400)
+const wrapFixture = { session_blob: unbreakableToken, note: 'word '.repeat(60) }
+
 function mountSimple() {
   return mount(JsonViewer, { props: { data: fixture } })
 }
@@ -45,6 +50,10 @@ function mountNested() {
 
 function mountLong() {
   return mount(JsonViewer, { props: { data: longFixture } })
+}
+
+function mountWrap() {
+  return mount(JsonViewer, { props: { data: wrapFixture } })
 }
 
 /** A long raw (non-JSON) string hits the plain-string render path. */
@@ -121,6 +130,28 @@ function ruleSelectors(sheet: CSSStyleSheet | null): string[] {
     console.warn('Failed to read cssRules', err)
   }
   return selectors
+}
+
+/** Values declared for `prop` by every rule whose selector contains `selectorPart`. */
+function ruleDeclValues(sheet: CSSStyleSheet | null, selectorPart: string, prop: string): string[] {
+  if (!sheet) return []
+  const values: string[] = []
+  try {
+    for (let j = 0; j < sheet.cssRules.length; j++) {
+      const rule = sheet.cssRules[j]
+      if (rule instanceof CSSStyleRule && rule.selectorText.includes(selectorPart)) {
+        values.push(rule.style.getPropertyValue(prop).trim())
+      }
+    }
+  } catch (err) {
+    // jsdom can throw on foreign/at-rule boundaries — skip.
+    console.warn('Failed to read cssRules', err)
+  }
+  return values
+}
+
+function isZero(value: string): boolean {
+  return value !== '' && Number.parseFloat(value) === 0
 }
 
 /**
@@ -272,6 +303,44 @@ describe('JsonViewer override contract', () => {
     const wrapper = mountSimple()
     expect(wrapper.find('[data-testid="json-viewer-string-truncated"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="json-viewer-string-expand"]').exists()).toBe(false)
+  })
+
+  it('renders a long unbreakable value on the default dep path (FAR-626 wrap case)', () => {
+    const wrapper = mountWrap()
+    // Below the truncation threshold: the dep's default value rendering stays.
+    expect(wrapper.find('[data-testid="json-viewer-string-truncated"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="json-viewer-string-expand"]').exists()).toBe(false)
+    const values = wrapper.findAll('.vjs-value-string').map((node) => node.text())
+    expect(values.some((text) => text.includes(unbreakableToken))).toBe(true)
+    // Tripwire: the wrap CSS targets the dep's classless value-wrapper <span>
+    // (the only classless direct child of a row). If a vue-json-pretty upgrade
+    // classes or removes it, fail here instead of silently dropping the fix.
+    expect(wrapper.find('.vjs-tree-node > span:not([class])').exists()).toBe(true)
+  })
+
+  it('keeps the wrap contract in the override stylesheet (FAR-626)', () => {
+    mountSimple()
+    mountWrap()
+    const sheet = findOverrideSheet()
+    expect(sheet, 'expected our json-viewer override stylesheet to be mounted').not.toBeNull()
+
+    // Values must be breakable anywhere so a long unbreakable token cannot
+    // inflate the row's min-content, and the dep's anonymous value-wrapper
+    // flex item (the classless <span> child of .vjs-tree-node) must be free
+    // to shrink to the space left of the indent column.
+    expect(ruleSelectors(sheet)).toContain('.json-viewer .vjs-value')
+    expect(ruleDeclValues(sheet, '.vjs-value', 'overflow-wrap')).toContain('anywhere')
+    const wrapperMinWidths = ruleDeclValues(sheet, ':not([class])', 'min-width')
+    expect(wrapperMinWidths.some(isZero), `expected a min-width: 0 rule for the value wrapper, got ${JSON.stringify(wrapperMinWidths)}`).toBe(true)
+
+    // When the truncated preview wraps, it must absorb the squeeze itself…
+    const textMinWidths = ruleDeclValues(sheet, '.json-viewer-string-truncated-text', 'min-width')
+    expect(textMinWidths.some(isZero), `expected min-width: 0 on the preview text, got ${JSON.stringify(textMinWidths)}`).toBe(true)
+    // …while the expand toggle and char count keep their natural size.
+    for (const part of ['.json-viewer-string-toggle', '.json-viewer-string-count']) {
+      expect(ruleDeclValues(sheet, part, 'flex-shrink')).toContain('0')
+      expect(ruleDeclValues(sheet, part, 'white-space')).toContain('nowrap')
+    }
   })
 
   it('copy writes the FULL value to the clipboard even when a long string is truncated', async () => {
