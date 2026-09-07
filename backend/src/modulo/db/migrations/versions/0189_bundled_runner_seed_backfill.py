@@ -1,7 +1,7 @@
 """Backfill the Bundled Runner (Docker) profile per org + re-point modulo-dev (FAR-590 D4).
 
-Revision ID: 0188_bundled_runner_seed_backfill
-Revises: 0187_pipeline_performance_indexes
+Revision ID: 0189_bundled_runner_seed_backfill
+Revises: 0188_pipeline_run_context_defaults_default
 Create Date: 2026-09-06
 
 What this revision changes
@@ -36,8 +36,8 @@ import json
 
 from alembic import op
 
-revision: str = "0188_bundled_runner_seed_backfill"
-down_revision: str | None = "0187_pipeline_performance_indexes"
+revision: str = "0189_bundled_runner_seed_backfill"
+down_revision: str | None = "0188_pipeline_run_context_defaults_default"
 branch_labels: str | None = None
 depends_on: str | None = None
 

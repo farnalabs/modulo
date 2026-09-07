@@ -29,7 +29,7 @@ _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
 # Current chain head (tracks the latest migration; 0188 adds the Bundled Runner
 # seed backfill, re-parented onto the 0187 pipeline_performance_indexes head).
-_CHAIN_HEAD_MIGRATION = "0188_bundled_runner_seed_backfill"
+_CHAIN_HEAD_MIGRATION = "0189_bundled_runner_seed_backfill"
 
 
 def _source(name: str) -> str:
