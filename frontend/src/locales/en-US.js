@@ -2495,7 +2495,17 @@ export default {
       "kanban": "Kanban",
       "timeline": "Timeline",
       "ascending": "Ascending",
-      "descending": "Descending"
+      "descending": "Descending",
+      "create_view": "Create View",
+      "saving": "Saving...",
+      "save": "Save",
+      "cancel": "Cancel",
+      "learn_about_saved_views": "Learn about saved views",
+      "empty_state_description": "Create a view to save filter configurations and layout preferences so you can quickly switch between different data perspectives.",
+      "deleting": "Deleting...",
+      "delete": "Delete",
+      "confirm_delete_title": "Delete \"{name}\"?",
+      "action_cannot_be_undone": "This action cannot be undone"
     },
     "ProductAnalytics": {
       "consent_prompt_title": "Help improve Modulo",

@@ -4,7 +4,7 @@
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('components.ViewToggle.saved_views')" :subtitle="$t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data')" />
       <Button class="border-primary/30 hover:border-primary/60" data-testid="admin-views-add" @click="openAddForm">
-        Create View
+        {{ $t('views.AdminViewsView.create_view') }}
       </Button>
     </header>
     <LoadingSpinner v-if="loading" />
@@ -92,7 +92,7 @@
           <div v-if="saveError" class="text-sm text-destructive">{{ saveError }}</div>
           <div class="flex items-center gap-2">
             <Button type="submit" :disabled="saving" class="border-primary/30 hover:border-primary/60" data-testid="admin-views-save">
-              {{ saving ? 'Saving...' : 'Save' }}
+              {{ saving ? $t('views.AdminViewsView.saving') : $t('views.AdminViewsView.save') }}
             </Button>
             <button
               type="button"
@@ -100,43 +100,28 @@
               data-testid="admin-views-cancel"
               @click="closeForm"
             >
-              Cancel
+              {{ $t('views.AdminViewsView.cancel') }}
             </button>
           </div>
         </form>
       </div>
       <div v-if="views.length === 0 && !showForm" class="card p-8 text-center">
-        <svg
-          class="mx-auto h-16 w-16 text-muted-foreground/40"
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-        >
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <line x1="3" y1="9" x2="21" y2="9" />
-          <line x1="9" y1="21" x2="9" y2="9" />
-        </svg>
+        <Table2 class="mx-auto h-16 w-16 text-muted-foreground/40" />
         <p class="mt-4 text-lg font-medium">{{ $t('views.AdminViewsView.no_saved_views_yet') }}</p>
         <p class="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
-          Create a view to save filter configurations and layout preferences so you can quickly switch between different data perspectives.
+          {{ $t('views.AdminViewsView.empty_state_description') }}
         </p>
         <a
           href="https://modulo.run/docs/features/saved-views"
           target="_blank"
           class="mt-4 inline-flex items-center gap-1 text-sm text-primary hover:underline"
         >
-          Learn about saved views
-          <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-            <polyline points="15 3 21 3 21 9" />
-            <line x1="10" y1="14" x2="21" y2="3" />
-          </svg>
+          {{ $t('views.AdminViewsView.learn_about_saved_views') }}
+          <ExternalLink class="h-3.5 w-3.5" />
         </a>
       </div>
       <div v-if="views.length > 0" class="overflow-hidden rounded-lg border">
-        <table class="w-full text-left text-sm">
+        <table class="w-full text-left text-sm" :aria-label="$t('components.ViewToggle.saved_views')">
           <thead class="bg-muted/50">
             <tr>
               <th class="px-4 py-3 font-medium">{{ $t('views.AdminViewsView.name') }}</th>
@@ -168,18 +153,18 @@
         </table>
       </div>
       <div v-if="deleteConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-        <p class="text-sm font-medium text-destructive">Delete "{{ deleteConfirmName }}"?</p>
-        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminModelBackendsView.this_action_cannot_be_undone') }}</p>
+        <p class="text-sm font-medium text-destructive">{{ $t('views.AdminViewsView.confirm_delete_title', { name: deleteConfirmName }) }}</p>
+        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminViewsView.action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-views-delete-confirm" @click="deleteView">
-            {{ deleting ? 'Deleting...' : 'Delete' }}
+            {{ deleting ? $t('views.AdminViewsView.deleting') : $t('views.AdminViewsView.delete') }}
           </Button>
           <button type="button"
             class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
             data-testid="admin-views-delete-cancel"
             @click="deleteConfirmId = null"
           >
-            Cancel
+            {{ $t('views.AdminViewsView.cancel') }}
           </button>
         </div>
         <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
@@ -201,6 +186,7 @@ import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
+import { Table2, ExternalLink } from '@lucide/vue'
 
 interface SavedView {
   id: string
