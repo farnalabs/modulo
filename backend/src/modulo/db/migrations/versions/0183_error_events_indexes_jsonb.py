@@ -1,7 +1,13 @@
 """error_events: add status/level indexes, promote context_json to JSONB.
 
-Revision ID: 0182_error_events_indexes_jsonb
-Revises: 0181_org_api_keys_scope
+Renumber note: originally authored as 0182_error_events_indexes_jsonb
+(down_revision 0181_org_api_keys_scope). Main merged 0182_hitl_claims_
+active_sweep_indexes first, so this migration was renumbered to 0183 to
+avoid a two-head collision on the 0182 prefix and re-parented onto the
+real main head 0182_hitl_claims_active_sweep_indexes.
+
+Revision ID: 0183_error_events_indexes_jsonb
+Revises: 0182_hitl_claims_active_sweep_indexes
 Create Date: 2026-09-07
 """
 
@@ -10,8 +16,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0182_error_events_indexes_jsonb"
-down_revision: str | None = "0181_org_api_keys_scope"
+revision: str = "0183_error_events_indexes_jsonb"
+down_revision: str | None = "0182_hitl_claims_active_sweep_indexes"
 
 
 def upgrade() -> None:

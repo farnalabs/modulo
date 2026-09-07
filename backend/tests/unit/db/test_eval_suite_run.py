@@ -756,12 +756,15 @@ def test_single_migration_head() -> None:
     # 0181_org_api_keys_scope (FAR-620 user-scoped MCP keys) chains off 0180_hitl_parked_status.
     chaining_off_0180 = [p for p in revisions if parents[p] == "0180_hitl_parked_status"]
     assert [_basename(p) for p in chaining_off_0180] == ["0181_org_api_keys_scope.py"]
-    # 0182_error_events_indexes_jsonb (promote context_json to JSONB + add indexes) chains off 0181.
+    # 0182_hitl_claims_active_sweep_indexes (FAR-604 active-sweep indexes) chains off 0181.
     chaining_off_0181 = [p for p in revisions if parents[p] == "0181_org_api_keys_scope"]
-    assert [_basename(p) for p in chaining_off_0181] == ["0182_error_events_indexes_jsonb.py"]
-    # Nothing chains off 0182_error_events_indexes_jsonb -> it is the single head.
-    chaining_off_0182 = [p for p in revisions if parents[p] == "0182_error_events_indexes_jsonb"]
-    assert chaining_off_0182 == []
+    assert [_basename(p) for p in chaining_off_0181] == ["0182_hitl_claims_active_sweep_indexes.py"]
+    # 0183_error_events_indexes_jsonb (promote context_json to JSONB + add indexes) chains off 0182.
+    chaining_off_0182 = [p for p in revisions if parents[p] == "0182_hitl_claims_active_sweep_indexes"]
+    assert [_basename(p) for p in chaining_off_0182] == ["0183_error_events_indexes_jsonb.py"]
+    # Nothing chains off 0183_error_events_indexes_jsonb -> it is the single head.
+    chaining_off_0183 = [p for p in revisions if parents[p] == "0183_error_events_indexes_jsonb"]
+    assert chaining_off_0183 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

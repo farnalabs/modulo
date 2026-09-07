@@ -52,9 +52,12 @@ _MIGRATION_PATH = (
 # re-parented onto 0179_drop_workspace_leases, and the FAR-620 org-api-key
 # scope migration (0181_org_api_keys_scope, renumbered from 0178 after the
 # env_profiles_runner_docker collision) re-parented onto 0180 as the chain head,
-# and the error-tracking migration (0182_error_events_indexes_jsonb) re-parented
-# onto 0181 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0182_error_events_indexes_jsonb"
+# and the FAR-604 active-sweep migration (0182_hitl_claims_active_sweep_indexes)
+# re-parented onto 0181_org_api_keys_scope, and the error-tracking migration
+# (0183_error_events_indexes_jsonb, renumbered from 0182 after the
+# error_events_indexes_jsonb collision) re-parented onto
+# 0182_hitl_claims_active_sweep_indexes as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0183_error_events_indexes_jsonb"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

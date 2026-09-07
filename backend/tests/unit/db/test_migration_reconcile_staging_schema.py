@@ -27,9 +27,9 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
-# Current chain head (tracks the latest migration; 0182 promotes
+# Current chain head (tracks the latest migration; 0183 promotes
 # error_events.context_json to JSONB and adds status/level indexes).
-_CHAIN_HEAD_MIGRATION = "0182_error_events_indexes_jsonb"
+_CHAIN_HEAD_MIGRATION = "0183_error_events_indexes_jsonb"
 
 
 def _source(name: str) -> str:
