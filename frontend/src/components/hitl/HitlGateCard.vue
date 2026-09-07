@@ -147,7 +147,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
@@ -199,7 +199,7 @@ const claiming = ref(false)
 const actioning = ref<'approve' | 'reject' | null>(null)
 const notes = ref('')
 const message = ref<HitlMessage | null>(null)
-const messageTimers: ReturnType<typeof setTimeout>[] = []
+let messageTimer: ReturnType<typeof setTimeout> | null = null
 
 const status = computed(() => {
   if (props.gate.decision === 'approved') return 'approved'
@@ -244,11 +244,22 @@ async function copyText(text: string) {
 }
 
 function showMessage(payload: HitlMessage, transient = true) {
+  // One timer at a time: a stale timer from a previous success message must
+  // not clear a newer one (e.g. claim banner followed seconds later by the
+  // approve banner).
+  if (messageTimer !== null) {
+    clearTimeout(messageTimer)
+    messageTimer = null
+  }
   message.value = payload
   if (transient && payload.type === 'success') {
-    messageTimers.push(setTimeout(() => { message.value = null }, 5000))
+    messageTimer = setTimeout(() => { message.value = null; messageTimer = null }, 5000)
   }
 }
+
+onBeforeUnmount(() => {
+  if (messageTimer !== null) clearTimeout(messageTimer)
+})
 
 async function claimGate() {
   claiming.value = true

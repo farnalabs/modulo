@@ -1341,14 +1341,22 @@ async function cancelRun() {
 // FAR-631 invariant: approve/reject empties pendingGates and flips the run
 // status, unmounting the section — so the message emitted by the card is
 // hoisted into hitlMessage, rendered OUTSIDE the section (see template).
-function onHitlClaimed(payload: { type: string; text: string }) {
+let hitlMessageTimer: ReturnType<typeof setTimeout> | null = null
+
+// One timer at a time: a stale claim banner timer must not clear a newer
+// decided banner shown seconds later.
+function hoistHitlMessage(payload: { type: string; text: string }) {
+  if (hitlMessageTimer !== null) clearTimeout(hitlMessageTimer)
   hitlMessage.value = payload
-  setTimeout(() => { hitlMessage.value = null }, 5000)
+  hitlMessageTimer = setTimeout(() => { hitlMessage.value = null; hitlMessageTimer = null }, 5000)
+}
+
+function onHitlClaimed(payload: { type: string; text: string }) {
+  hoistHitlMessage(payload)
 }
 
 function onHitlDecided(payload: { type: string; text: string }) {
-  hitlMessage.value = payload
-  setTimeout(() => { hitlMessage.value = null }, 5000)
+  hoistHitlMessage(payload)
   pendingGates.value = []
   if (run.value && (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked')) {
     run.value.status = 'running'

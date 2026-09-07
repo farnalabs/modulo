@@ -990,16 +990,18 @@ async def list_org_pending_gates(
         ) from e
 
     # Org-level: gates span many runs, so per-run snapshot lookups are
-    # expensive. Leave label=None here — the frontend falls back to shortId.
-    # Only the run-level endpoint (used by RunDetailView) resolves the label.
-    # Description IS resolved (FAR-613) via the batched snapshot reads above.
+    # expensive. Description IS resolved (FAR-613) and labels (FAR-686) are
+    # both resolved in one batched pass each, keyed by (run_id, gate_id)
+    # because gate ids are only unique per run — two runs can reuse the same
+    # gate id with different labels/descriptions. Frontend falls back to
+    # shortId when a label is missing.
     return PendingGatesResponse(
         gates=[
             _gate_to_response(
                 g,
                 pipeline_name=pipeline_map.get(g.pipeline_id),
                 description=description_by_gate.get((g.run_id, g.gate_id)),
-                label=gate_label_map.get(g.gate_id),
+                label=gate_label_map.get((g.run_id, g.gate_id)),
             )
             for g in gates
         ]
@@ -1011,8 +1013,11 @@ async def list_org_pending_gates(
 # ---------------------------------------------------------------------------
 
 
-async def _load_gate_label_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[str, str]:
-    """Batched ``gate_id -> human label`` resolution for the org endpoint.
+async def _load_gate_label_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[tuple[uuid.UUID, str], str]:
+    """Batched ``(run_id, gate_id) -> human label`` resolution for the org endpoint.
+
+    Keyed by ``(run_id, gate_id)`` — gate ids are unique per run only, so
+    keying by bare gate_id would collide across runs sharing an id.
 
     Resolves each pending gate's run -> snapshot -> ``hitl_gate_config.label``
     with two set-based queries (runs, then snapshots). Graceful degradation:
@@ -1046,14 +1051,14 @@ async def _load_gate_label_map(session: AsyncSession, gates: list[HitlClaim]) ->
             # One corrupted snapshot must not break the whole pending list.
             logger.exception("hitl.list_org_pending_gates.label_map_failed")
 
-    gate_label_map: dict[str, str] = {}
+    gate_label_map: dict[tuple[uuid.UUID, str], str] = {}
     for g in gates:
         snap_id = run_to_snapshot.get(g.run_id)
         if snap_id is None:
             continue
         label = labels_by_snapshot.get(snap_id, {}).get(g.gate_id)
         if label:
-            gate_label_map[g.gate_id] = label
+            gate_label_map[(g.run_id, g.gate_id)] = label
     return gate_label_map
 
 
