@@ -1633,6 +1633,45 @@ class RestConnector(ConnectorBase):
             client, request, kwargs, rate_wait_timeout, request_timeout, retries + 1, host, start
         )
 
+    def _retry_status_or_raise(
+        self,
+        exc: RESTStatusError,
+        attempt: int,
+        attempts: int,
+        start: float,
+        host: str,
+        request: RestRequest,
+    ) -> tuple[float, str]:
+        """Handle a status error inside the retry loop: retry, or record + re-raise.
+
+        Returns ``(next_delay, retry_reason)`` when another attempt should run;
+        records the terminal outcome and re-raises otherwise.
+        """
+        retry_reason = "http_429" if exc.status_code == 429 else "http_5xx"
+        if not self._is_status_retryable(exc, attempt, attempts):
+            self._record_operation(start, host, request, rest_metrics.classify_status(exc.status_code))
+            raise exc
+        return self._retry_delay(exc, attempt), retry_reason
+
+    def _retry_connect_or_raise(
+        self,
+        exc: RESTConnectError,
+        attempt: int,
+        attempts: int,
+        start: float,
+        host: str,
+        request: RestRequest,
+    ) -> tuple[float, str]:
+        """Handle a transport error inside the retry loop: retry, or record + re-raise.
+
+        Returns ``(next_delay, retry_reason)`` when another attempt should run;
+        records the terminal outcome and re-raises on the final attempt.
+        """
+        if attempt == attempts - 1:
+            self._record_operation(start, host, request, exc.cause_code)
+            raise exc
+        return self._backoff(attempt), "transport"
+
     async def _send_retryable(
         self,
         client: httpx.AsyncClient,
@@ -1663,18 +1702,10 @@ class RestConnector(ConnectorBase):
             try:
                 resp, body_text = await self._perform_request(client, request, kwargs, request_timeout=request_timeout)
             except RESTStatusError as exc:
-                retry_reason = "http_429" if exc.status_code == 429 else "http_5xx"
-                if not self._is_status_retryable(exc, attempt, attempts):
-                    self._record_operation(start, host, request, rest_metrics.classify_status(exc.status_code))
-                    raise
-                last_delay = self._retry_delay(exc, attempt)
+                last_delay, retry_reason = self._retry_status_or_raise(exc, attempt, attempts, start, host, request)
                 continue
             except RESTConnectError as exc:
-                retry_reason = "transport"
-                if attempt == attempts - 1:
-                    self._record_operation(start, host, request, exc.cause_code)
-                    raise
-                last_delay = self._backoff(attempt)
+                last_delay, retry_reason = self._retry_connect_or_raise(exc, attempt, attempts, start, host, request)
                 continue
             except RESTResponseTooLargeError:
                 self._record_operation(start, host, request, rest_metrics.CAUSE_TOO_LARGE)
