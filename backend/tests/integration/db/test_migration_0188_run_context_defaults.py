@@ -20,8 +20,6 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.rls import set_rls_org
-
 pytestmark = [pytest.mark.integration]
 
 
@@ -32,7 +30,12 @@ async def test_run_context_defaults_server_default_allows_raw_insert_without_col
 ) -> None:
     insert_sql = text("INSERT INTO pipelines (id, organisation_id, name, account_id) VALUES (:id, :oid, :name, :aid)")
 
-    # Pre-0188 state: drop the server default (transaction-local, rolled back later).
+    # Pre-0188 state: drop the server default inside a savepoint so the aborted
+    # raw insert can be rolled back to the savepoint WITHOUT killing the outer
+    # RLS-scoped transaction. set_config(..., is_local=true) (set by the
+    # rls_session fixture) is bound to the top-level transaction, so that
+    # transaction must stay alive for the positive case to remain tenant-scoped.
+    savepoint = await rls_session.begin_nested()
     await rls_session.execute(text("ALTER TABLE pipelines ALTER COLUMN run_context_defaults DROP DEFAULT"))
 
     # A raw insert omitting run_context_defaults must fail with NOT NULL.
@@ -46,14 +49,10 @@ async def test_run_context_defaults_server_default_allows_raw_insert_without_col
                 "aid": str(test_user),
             },
         )
-    # Roll back the aborted transaction; this also undoes the DROP DEFAULT so the
-    # migrated schema (with the 0188 default) is restored for the positive case.
-    await rls_session.rollback()
-    # The rollback closes the transaction, but set_rls_org requires an active
-    # transaction (rls.py guards against silent no-ops). Begin a fresh one so the
-    # positive-case insert below runs with org scoping established.
-    await rls_session.begin()
-    await set_rls_org(rls_session, test_org)
+    # Roll back to the savepoint only: this restores the 0188 default while the
+    # outer RLS transaction (and its tenant scope) stays active. The fixture
+    # rolls the whole session back at teardown, so nothing is committed.
+    await savepoint.rollback()
 
     # Post-0188: the default fills run_context_defaults with an empty object.
     ok_pid = uuid.uuid4()
