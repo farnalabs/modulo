@@ -679,6 +679,91 @@ async def test_claim_same_account_reclaim_team_scoped_gate():
     assert result.claim_token == "new-token"
 
 
+async def test_claim_same_account_reclaim_on_claimed_run_succeeds():
+    """FAR-686, real lifecycle: the claim route flips the run to ``claimed``
+    via update_run_status on every successful claim, so during the
+    claimed-but-undecided window the run status IS ``claimed`` — a page
+    reload's re-claim must still succeed for the SAME account (token
+    recovery), not raise RunNotAwaitingError."""
+    old_claimed_at = datetime.now(UTC) - timedelta(minutes=10)
+    held = _gate(
+        account_id=_USER,
+        claim_token="stale-token",
+        claimed_at=old_claimed_at,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    reclaimed = _gate(
+        account_id=_USER,
+        claim_token="fresh-token",
+        claimed_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    captured: list[Any] = []
+
+    async def _execute(stmt: Any) -> Any:
+        captured.append(stmt)
+        r = MagicMock()
+        if _is_runs_select(stmt):
+            # The run is ``claimed`` because this very claim flipped it
+            r.scalar_one_or_none.return_value = _run_mock("claimed")
+        elif len(captured) == 1:
+            # Gate pre-check SELECT — held by the SAME account
+            r.scalar_one_or_none.return_value = held
+        else:
+            # Claim UPDATE ... RETURNING and any later reads
+            r.scalar_one_or_none.return_value = uuid.uuid4()
+        return r
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=reclaimed)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+
+    mgr = HITLManager()
+    with patch("modulo.core.hitl_manager.append_audit_event", new=AsyncMock()):
+        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    assert result is reclaimed
+    assert result.account_id == _USER
+    assert result.claim_token != "stale-token"
+
+    update_stmt = next(s for s in captured if hasattr(s, "_values"))
+    values = _update_values(update_stmt)
+    assert values["account_id"] == _USER
+    assert values["claim_token"] != "stale-token"
+    assert values["claimed_at"] > old_claimed_at
+
+
+async def test_claim_cross_account_on_claimed_run_still_blocked():
+    """FAR-686 composition: on a run already in ``claimed`` status, a
+    DIFFERENT account is still blocked — the claimed-by-other check fires
+    BEFORE the run-status check, so the widened ``claimed`` arm can never be
+    reached by a cross-account claimant."""
+    existing = _gate(account_id=uuid.uuid4(), claim_token="tok")
+    session = _session_update(rows_returned=0, gate=existing, pre_check_gate=existing, run_status="claimed")
+    mgr = HITLManager()
+    with pytest.raises(AlreadyClaimedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+@pytest.mark.parametrize("run_status", ["complete", "failed", "running", "cancelled"])
+async def test_claim_same_account_on_terminal_run_still_blocked(run_status: str):
+    """FAR-686 composition: the FAR-612 data-rot guard survives for every
+    non-claimed status — even a same-account claimant cannot claim a gate on
+    a terminal (or still-executing) run, so the widened arm cannot corrupt a
+    finished run."""
+    held = _gate(account_id=_USER, claim_token="tok")
+    session = _session_update(rows_returned=1, gate=held, pre_check_gate=held, run_status=run_status)
+    mgr = HITLManager()
+    with pytest.raises(RunNotAwaitingError, match=f"status: {run_status}"):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
 async def test_claim_cross_account_on_claimed_gate_raises():
     """FAR-686 keeps the cross-account guard: another account's live claim is
     never overridden — AlreadyClaimedError still fires for a different user."""

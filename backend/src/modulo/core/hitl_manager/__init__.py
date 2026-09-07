@@ -134,11 +134,14 @@ class NotTeamMemberError(HITLError, PermissionError):
 
 
 class RunNotAwaitingError(HITLError, RuntimeError):
-    """The gate's run is not in ``awaiting_human`` status, so it cannot be claimed.
+    """The gate's run is not in a claimable status, so it cannot be claimed.
 
     Claiming a gate on a terminal (or still-executing) run would flip that run
     to ``claimed`` via the claim route's ``update_run_status`` -- corrupting a
-    finished run. FAR-612.
+    finished run. FAR-612. A run already in ``claimed`` status is claimable
+    only when the existing gate claim is held by the SAME account (the
+    FAR-686 re-claim/token-recovery arm); every other claimant keeps the
+    strict guard.
     """
 
     def __init__(self, run_id: uuid.UUID, status: str) -> None:
@@ -309,11 +312,20 @@ class HITLManager:
         # decide) until a decision un-parks it, so a parked run must remain
         # claimable. Org-scoped so a foreign run id can never be probed
         # through this check.
+        # FAR-686: a same-account re-claim targets a run the claim itself
+        # flipped to "claimed" (the claim route's update_run_status), so the
+        # strict awaiting_human/hitl_parked guard would make token recovery
+        # impossible during the claimed-but-undecided window. ``claimed`` is
+        # accepted ONLY for the SAME-account re-claim arm; fresh and
+        # cross-account claims keep the FAR-612 data-rot guard as shipped.
         run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
         run = run_result.scalar_one_or_none()
         if run is None:
             raise GateNotFoundError(run_id, gate_id)
-        if run.status not in ("awaiting_human", "hitl_parked"):
+        allowed_statuses: tuple[str, ...] = ("awaiting_human", "hitl_parked")
+        if gate_check.account_id == claimant_id:
+            allowed_statuses = ("awaiting_human", "hitl_parked", "claimed")
+        if run.status not in allowed_statuses:
             raise RunNotAwaitingError(run_id, run.status)
         if gate_check.required_team_id is not None:
             # Lock the gate row so the team check is serialised with the UPDATE.
