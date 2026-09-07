@@ -48,7 +48,7 @@ class OrgDeletedError(RuntimeError):
     def __init__(self, *, org_id: uuid.UUID | None = None, deleted: bool = True) -> None:
         self.org_id = org_id
         self.deleted = deleted
-        super().__init__(f"cannot create run: organisation {org_id} is " + ("deleted" if deleted else "missing"))
+        super().__init__(f"cannot create run: organisation {org_id} is {'deleted' if deleted else 'missing'}")
 
 
 class RateLimitConflictError(RuntimeError):

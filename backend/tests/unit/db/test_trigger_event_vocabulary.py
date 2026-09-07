@@ -57,11 +57,12 @@ _MIGRATION_PATH = (
 # 0183_triggers_add_polling_ongoing_agent_signal_indexes ->
 # 0184_trigger_events_indexes_and_type_check (trigger_events index + type-check
 # sweep, renumbered from 0182/0183 after the hitl_claims collision), followed by
-# 0185_error_events_indexes_jsonb (error_events status/level partial indexes,
-# renumbered from 0183 after the collision with main's 0183_triggers migration),
-# re-parented onto the 0184 trigger_events head, and this PR's
-# 0186_agent_runner_bindings re-parented onto 0185 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0186_agent_runner_bindings"
+# 0185_error_events_indexes_jsonb (error_events status/level partial indexes),
+# re-parented onto the 0184 trigger_events head, then main's improve-database
+# migrations 0186_pipeline_check_constraints_deleted_by and
+# 0187_pipeline_performance_indexes, and this PR's 0188_agent_runner_bindings
+# re-parented onto 0187 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0188_agent_runner_bindings"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

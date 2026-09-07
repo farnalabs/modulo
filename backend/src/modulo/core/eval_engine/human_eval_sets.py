@@ -303,7 +303,7 @@ def run_human_eval_set(
             eval_id=eval_def.id,
             passed=False,
             score=_SCORE_FAIL,
-            detail=f"human set {eval_set.id} failed: " + "; ".join(failures),
+            detail=f"human set {eval_set.id} failed: {'; '.join(failures)}",
         )
     return EvalResult(
         run_id=run_id,

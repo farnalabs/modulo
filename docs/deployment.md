@@ -267,7 +267,7 @@ CORS_MAX_AGE=3600
 
 ---
 
-## Configuration
+## Related Documentation
 
 For the full environment variable reference, see [`docs/configuration-reference.md`](./configuration-reference.md).
 
@@ -335,19 +335,21 @@ DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
 | Component | How it runs |
 |---|---|
 | Database | SQLite file (`./modulo.db`), no server process needed |
-| Task scheduling | In-process asyncio loops – cron and polling triggers work |
-| Task queue | In-process, no durability across crashes |
-| Rate limiting | No-op, disabled when Redis is unavailable (all requests allowed) |
+| Task scheduling | SAQ system-worker cron (`fire_due_triggers`); cron & polling triggers fire via the Redis-backed SAQ workers |
+| Task queue | SAQ Redis queue (runs worker); Redis is required |
+| Rate limiting | Redis sliding window when Redis is reachable; per-process no-op otherwise |
 | Concurrency | Single process, single worker |
+
+Runs and triggers require Redis plus the SAQ workers — see [`docs/quickstart.md`](./quickstart.md) §3b. `REDIS_URL` defaults to `redis://localhost:6379/0`, so start a local Redis and the two SAQ workers; otherwise pipeline runs and cron/polling triggers never execute (and `api/main.py` refuses to boot if `REDIS_URL` is empty).
 
 **What you lose vs. full deployment:**
 - **No horizontal scaling** – one process, one user at a time
-- **No task durability** – if the process crashes mid-run, the run is lost (re-run manually)
+- **No task durability** – if the SAQ worker crashes mid-run, the run is lost (re-run manually)
 - **No distributed rate limiting** – without Redis the limiter is a per-process no-op, so limits don't coordinate across processes
 
 **What you keep:**
-- Cron-triggered pipelines ✓
-- Polling triggers ✓
+- Cron-triggered pipelines ✓ (with Redis + SAQ workers running)
+- Polling triggers ✓ (with Redis + SAQ workers running)
 - All pipeline features, evals, HITL, connectors ✓
 - The SQLite DB file is portable – copy it to another machine and restart `uvicorn` from the new location to pick it up
 
@@ -361,12 +363,12 @@ curl https://modulo.run/install.sh | bash
 | Component | How it runs |
 |---|---|
 | Database | PostgreSQL 16 (separate container) |
-| Task scheduling | In-process asyncio loops (default) or SAQ system worker cron (with Redis) |
-| Task queue | In-process (default) or SAQ workers (with Redis) |
-| Rate limiting | In-memory no-op (default) or Redis sliding window (with Redis) |
+| Task scheduling | SAQ system-worker cron (`fire_due_triggers`); cron & polling triggers fire via the Redis-backed SAQ workers |
+| Task queue | SAQ Redis queue (runs worker) |
+| Rate limiting | Redis sliding window |
 | Concurrency | Single backend replica, multiple simultaneous requests |
 
-If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use SAQ + Redis. `REDIS_URL` defaults to `redis://localhost:6379/0`; if it is explicitly set to an empty value, startup aborts with a `RuntimeError` (see `api/main.py`) instead of a silent fallback.
+Redis is required: the dispatcher enqueues every run to SAQ's Redis queue and cron/polling triggers run as Redis-backed SAQ system crons, and `api/main.py` refuses to boot if `REDIS_URL` is empty. `REDIS_URL` defaults to `redis://localhost:6379/0`; if it is explicitly set to an empty value, startup aborts with a `RuntimeError` (see `api/main.py`) instead of a silent fallback.
 
 ### Kubernetes (production, multi-replica)
 
@@ -382,23 +384,23 @@ properly maintained example config.
 
 ### Horizontal scaling (multiple backend replicas)
 
-For more than one backend replica, **Redis is mandatory.** Here's why:
+**Redis is mandatory, and since `REDIS_URL` must always be set (the API refuses to boot without it), a shared Redis is required even for a single replica.** As replicas grow, that shared Redis is what coordinates them. Here's why:
 
-| Feature | Without Redis | With Redis | What goes wrong at 2+ replicas |
+| Feature | Single replica (Redis required) | 2+ replicas (shared Redis) | What the shared Redis solves at 2+ replicas |
 |---|---|---|---|
-| Cron triggers | In-process asyncio loop | SAQ system worker cron | Both replicas fire every trigger. Runs execute twice. |
-| Polling triggers | In-process asyncio loop | SAQ system worker cron | Same – duplicate execution. |
-| Task queue | In-process | SAQ broker (Redis) | Jobs are scheduled in the replica that received the request. If that replica crashes or is scaled down, the job disappears. |
-| Rate limiting | In-memory no-op | Redis sliding window | Without Redis the limiter is disabled (no-op); with Redis, all replicas share one sliding-window counter in Redis |
+| Cron triggers | SAQ system worker cron | SAQ system worker cron | A single shared Redis queue ensures each trigger fires exactly once; without coordination, every replica would fire every trigger and runs would execute twice. |
+| Polling triggers | SAQ system worker cron | SAQ system worker cron | Same – duplicate execution is avoided by the shared queue. |
+| Task queue | SAQ broker (Redis) | SAQ broker (Redis) | Jobs live in Redis, so a crash or scale-down of a replica never loses the job. |
+| Rate limiting | Redis sliding window | Redis sliding window | All replicas share one sliding-window counter in Redis instead of each counting independently. |
 | Lock coordination | PG advisory locks | PG advisory locks | These work across replicas via PostgreSQL – no Redis needed for locks. |
 
-**The pattern:** without Redis, each replica independently runs its own scheduler and rate limiter. They don't coordinate. This is fine for a single replica. For two or more, the system behaves incorrectly.
+**The pattern:** every replica connects to the same Redis. SAQ runs one system worker that owns the triggers and queue, so each run and trigger executes exactly once no matter how many replicas are running.
 
-**The one exception** is PG advisory locks – they coordinate across any number of replicas via PostgreSQL itself, so locking patterns work without Redis regardless of replica count.
+**The one exception** is PG advisory locks – they coordinate across any number of replicas via PostgreSQL itself, so locking patterns work regardless of replica count.
 
 ### Vertical scaling (bigger machine)
 
-Adding CPU/RAM to a single replica works without Redis. The asyncio event loop handles many concurrent requests within one process. Uvicorn worker processes (configurable via `uvicorn --workers`) use multiple CPU cores on a single machine.
+Adding CPU/RAM to a single replica still requires Redis (`REDIS_URL` must always be set). The asyncio event loop handles many concurrent requests within one process. Uvicorn worker processes (configurable via `uvicorn --workers`) use multiple CPU cores on a single machine.
 
 ### Configuration
 

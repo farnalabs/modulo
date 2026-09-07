@@ -64,4 +64,4 @@ class Node(OrgScoped):
         lazy="selectin",
     )
     pipeline: Mapped["Pipeline"] = relationship()
-    creator: Mapped["Account"] = relationship()
+    creator: Mapped["Account"] = relationship(foreign_keys=[account_id])

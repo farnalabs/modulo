@@ -27,10 +27,10 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
-# Current chain head (tracks the latest migration; 0185 adds error_events
-# status/level partial indexes re-parented onto the 0184 trigger_events head,
-# and this PR's 0186_agent_runner_bindings re-parents onto 0185 as the head).
-_CHAIN_HEAD_MIGRATION = "0186_agent_runner_bindings"
+# Current chain head (tracks the latest migration; 0187_pipeline_performance_indexes
+# is main's index sweep head, and this PR's 0188_agent_runner_bindings re-parents onto
+# 0187 as the single head).
+_CHAIN_HEAD_MIGRATION = "0188_agent_runner_bindings"
 
 
 def _source(name: str) -> str:

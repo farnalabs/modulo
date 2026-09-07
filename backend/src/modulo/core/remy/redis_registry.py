@@ -153,7 +153,7 @@ class RemyRedisRegistry:
     async def publish_permission_response(self, request_id: str, decision: JsonObject) -> None:
         await _redis_result(self._redis.publish(f"remy:channel:permission:{request_id}", json.dumps(decision)))
 
-    async def subscribe_permission_response(self, request_id: str, timeout: float = 60.0) -> JsonObject | None:  # noqa: ASYNC109
+    async def subscribe_permission_response(self, request_id: str, timeout: float = 60.0) -> JsonObject | None:  # noqa: ASYNC109 — Redis pubsub timeout, not asyncio.wait_for()
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"remy:channel:permission:{request_id}")
         try:
@@ -172,7 +172,7 @@ class RemyRedisRegistry:
     async def publish_ui_results(self, session_id: str) -> None:
         await _redis_result(self._redis.publish(f"remy:channel:ui_results:{session_id}", "ready"))
 
-    async def subscribe_ui_results(self, session_id: str, timeout: float = 120.0) -> bool:  # noqa: ASYNC109
+    async def subscribe_ui_results(self, session_id: str, timeout: float = 120.0) -> bool:  # noqa: ASYNC109 — Redis pubsub timeout, not asyncio.wait_for()
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"remy:channel:ui_results:{session_id}")
         try:
@@ -185,7 +185,7 @@ class RemyRedisRegistry:
     async def publish_resume(self, session_id: str) -> None:
         await _redis_result(self._redis.publish(f"remy:channel:resume:{session_id}", "resume"))
 
-    async def subscribe_resume(self, session_id: str, timeout: float = 300.0) -> bool:  # noqa: ASYNC109
+    async def subscribe_resume(self, session_id: str, timeout: float = 300.0) -> bool:  # noqa: ASYNC109 — Redis pubsub timeout, not asyncio.wait_for()
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(f"remy:channel:resume:{session_id}")
         try:

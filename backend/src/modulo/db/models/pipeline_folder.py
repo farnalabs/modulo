@@ -28,4 +28,4 @@ class PipelineFolder(OrgScoped):
     children: Mapped[list["PipelineFolder"]] = relationship(
         "PipelineFolder", remote_side="PipelineFolder.parent_id", back_populates="parent"
     )
-    creator: Mapped["Account"] = relationship()
+    creator: Mapped["Account"] = relationship(foreign_keys=[account_id])
