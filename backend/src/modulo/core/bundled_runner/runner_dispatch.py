@@ -27,6 +27,7 @@ import asyncio
 import base64
 import json
 import logging
+import shlex
 import time
 import uuid
 from dataclasses import dataclass
@@ -237,7 +238,7 @@ async def _write_file_via_exec(provider: Any, provider_ref: str, path: str, cont
     cmd = [
         "sh",
         "-c",
-        f"mkdir -p '{parent}' && printf '%s' '{payload}' | base64 -d > '{path}'",
+        f"mkdir -p {shlex.quote(parent)} && printf '%s' {shlex.quote(payload)} | base64 -d > {shlex.quote(path)}",
     ]
     result = await provider.exec_command(provider_ref, cmd, cmd_timeout=30)
     if result.exit_code != 0:
@@ -252,7 +253,7 @@ async def _read_file_via_exec(provider: Any, provider_ref: str, path: str) -> st
     try:
         result = await provider.exec_command(
             provider_ref,
-            ["sh", "-c", f"if [ -f {path} ]; then cat {path}; fi"],
+            ["sh", "-c", f"if [ -f {shlex.quote(path)} ]; then cat {shlex.quote(path)}; fi"],
             cmd_timeout=30,
         )
     except asyncio.CancelledError:
@@ -592,7 +593,7 @@ async def run_bundled_runner_node(
                     f"sandbox_agent node '{node_id}' rendered agent_command is empty after "
                     "template resolution — a sandbox agent cannot run an empty command"
                 ) from None
-            input_json = ""
+            input_json = json.dumps(raw_input)
 
         # DB-atomic dispatch fence (same fenced WHERE as the E2B path).
         attempt_key = await _sandbox_acquire_dispatch_marker(
