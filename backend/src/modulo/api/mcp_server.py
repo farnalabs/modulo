@@ -3023,7 +3023,6 @@ async def _create_eval_definition_impl(
     from modulo.api.routes.evals import (
         _MSG_PIPELINE_NOT_FOUND,
         _eval_def_to_dict,
-        _validate_guardrail_request,
     )
 
     if (err := _assert_create_eval_definition_params(name, eval_type, failure_behaviour, pass_threshold)) is not None:
@@ -3041,14 +3040,8 @@ async def _create_eval_definition_impl(
 
     cfg = config_json if config_json is not None else {}
 
-    try:
-        _validate_guardrail_request(
-            eval_type=eval_type,
-            failure_behaviour=failure_behaviour,
-            config_json=cfg,
-        )
-    except StarletteHTTPException as exc:
-        return {"error": "validation_failed", "detail": str(exc.detail)}
+    if (guard_err := _eval_def_guardrail_validation_error(eval_type, failure_behaviour, cfg)) is not None:
+        return guard_err
 
     from modulo.db.models.eval_definition import EvalDefinition
     from modulo.db.models.pipeline import Pipeline
@@ -3139,6 +3132,163 @@ async def create_eval_definition(
     "fields (node_id, pass_threshold, suite_id) cannot be cleared to NULL via "
     "this tool - the REST PUT route must be used to unset them.",
 )
+def _assert_update_eval_definition_params(
+    eval_type: str | None,
+    failure_behaviour: str | None,
+    pass_threshold: float | None,
+    name: str | None,
+) -> dict[str, Any] | None:
+    """Validate the scalar update-inputs of an eval definition; error dict or None."""
+    if eval_type is not None and (err := _assert_eval_type(eval_type)) is not None:
+        return err
+    if failure_behaviour is not None and (err := _assert_failure_behaviour(failure_behaviour)) is not None:
+        return err
+    if (err := _assert_pass_threshold(pass_threshold)) is not None:
+        return err
+    if name is not None and (not name or not name.strip()):
+        return {"error": "invalid_name", "detail": "name must be a non-empty string when provided"}
+    if name is not None and len(name) > _EVAL_NAME_MAX_LENGTH:
+        return {
+            "error": "invalid_name",
+            "detail": f"name must be at most {_EVAL_NAME_MAX_LENGTH} characters",
+        }
+    return None
+
+
+def _collect_eval_definition_updates(
+    node_id: str | None,
+    nid: uuid.UUID | None,
+    name: str | None,
+    eval_type: str | None,
+    config_json: dict[str, Any] | None,
+    failure_behaviour: str | None,
+    pass_threshold: float | None,
+    suite_id: str | None,
+) -> dict[str, Any]:
+    """Build the partial-update field map from the provided (non-None) inputs."""
+    updates: dict[str, Any] = {}
+    if node_id is not None:
+        updates["node_id"] = nid
+    if name is not None:
+        updates["name"] = name
+    if eval_type is not None:
+        updates["eval_type"] = eval_type
+    if config_json is not None:
+        updates["config_json"] = config_json
+    if failure_behaviour is not None:
+        updates["failure_behaviour"] = failure_behaviour
+    if pass_threshold is not None:
+        updates["pass_threshold"] = pass_threshold
+    if suite_id is not None:
+        updates["suite_id"] = suite_id
+    return updates
+
+
+def _eval_def_guardrail_validation_error(
+    eval_type: Any,
+    failure_behaviour: Any,
+    config_json: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Run the REST guardrail validator; returns a validation_failed dict or None."""
+    from modulo.api.routes.evals import _validate_guardrail_request
+
+    try:
+        _validate_guardrail_request(
+            eval_type=eval_type,
+            failure_behaviour=failure_behaviour,
+            config_json=config_json,
+        )
+    except StarletteHTTPException as exc:
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+    return None
+
+
+async def _update_eval_definition_impl(
+    eval_id: str,
+    node_id: str | None,
+    name: str | None,
+    eval_type: str | None,
+    config_json: dict[str, Any] | None,
+    failure_behaviour: str | None,
+    pass_threshold: float | None,
+    suite_id: str | None,
+) -> dict[str, Any]:
+    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper."""
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("update_eval_definition")
+
+    from modulo.api.routes.evals import (
+        _MSG_EVAL_DEFINITION_NOT_FOUND,
+        _eval_def_to_dict,
+        _stamp_eval_definition_version,
+    )
+
+    val_err: dict[str, Any] | None = _assert_update_eval_definition_params(
+        eval_type, failure_behaviour, pass_threshold, name
+    )
+    if val_err is not None:
+        return val_err
+
+    _assert_admin_scope("update")
+
+    org_id = _ctx_org_id_val()
+
+    eid, nid, params_err = _parse_eval_ref_ids(eval_id, "eval_id", node_id)
+    if params_err is not None:
+        return params_err
+    assert eid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+
+    updates = _collect_eval_definition_updates(
+        node_id=node_id,
+        nid=nid,
+        name=name,
+        eval_type=eval_type,
+        config_json=config_json,
+        failure_behaviour=failure_behaviour,
+        pass_threshold=pass_threshold,
+        suite_id=suite_id,
+    )
+
+    from modulo.db.models.eval_definition import EvalDefinition
+
+    async with _session(org_id) as s:
+        eval_def = (
+            await s.execute(
+                select(EvalDefinition).where(
+                    EvalDefinition.id == eid,
+                    EvalDefinition.organisation_id == org_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if eval_def is None:
+            return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
+
+        guard_err = _eval_def_guardrail_validation_error(
+            eval_type=updates.get("eval_type", eval_def.eval_type),
+            failure_behaviour=updates.get("failure_behaviour", eval_def.failure_behaviour),
+            config_json=updates.get("config_json", eval_def.config_json),
+        )
+        if guard_err is not None:
+            return guard_err
+
+        # FAR-382: snapshot the pre-edit config, then bump the version so a
+        # rubric/config change is an explicitly version-scoped event.
+        _stamp_eval_definition_version(eval_def)
+        for key, value in updates.items():
+            setattr(eval_def, key, value)
+        await s.flush()
+        return _eval_def_to_dict(eval_def)
+
+
+@mcp.tool(
+    description="Update an eval definition (admin only). Bumps the definition "
+    "version and snapshots the pre-edit config, mirroring the REST semantics. "
+    "Requires an admin caller; non-admins receive an insufficient_scope error. "
+    "NOTE: because None means 'not provided' in the tool signature, nullable "
+    "fields (node_id, pass_threshold, suite_id) cannot be cleared to NULL via "
+    "this tool - the REST PUT route must be used to unset them.",
+)
 @_RETRY_DB
 async def update_eval_definition(
     eval_id: str,
@@ -3151,93 +3301,16 @@ async def update_eval_definition(
     suite_id: str | None = None,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        _check_agent_tool_scope("update_eval_definition")
-
-        from modulo.api.routes.evals import (
-            _MSG_EVAL_DEFINITION_NOT_FOUND,
-            _eval_def_to_dict,
-            _stamp_eval_definition_version,
-            _validate_guardrail_request,
+        return await _update_eval_definition_impl(
+            eval_id,
+            node_id,
+            name,
+            eval_type,
+            config_json,
+            failure_behaviour,
+            pass_threshold,
+            suite_id,
         )
-
-        if eval_type is not None and (err := _assert_eval_type(eval_type)) is not None:
-            return err
-        if failure_behaviour is not None and (err := _assert_failure_behaviour(failure_behaviour)) is not None:
-            return err
-        if (err := _assert_pass_threshold(pass_threshold)) is not None:
-            return err
-        if name is not None and (not name or not name.strip()):
-            return {"error": "invalid_name", "detail": "name must be a non-empty string when provided"}
-        if name is not None and len(name) > _EVAL_NAME_MAX_LENGTH:
-            return {
-                "error": "invalid_name",
-                "detail": f"name must be at most {_EVAL_NAME_MAX_LENGTH} characters",
-            }
-
-        _assert_admin_scope("update")
-
-        org_id = _ctx_org_id_val()
-
-        eid, eid_err = _parse_uuid_param(eval_id, "eval_id")
-        if eid_err:
-            return eid_err
-        nid: uuid.UUID | None = None
-        if node_id is not None:
-            nid, nid_err = _parse_uuid_param(node_id, "node_id")
-            if nid_err:
-                return nid_err
-
-        updates: dict[str, Any] = {}
-        if node_id is not None:
-            updates["node_id"] = nid
-        if name is not None:
-            updates["name"] = name
-        if eval_type is not None:
-            updates["eval_type"] = eval_type
-        if config_json is not None:
-            updates["config_json"] = config_json
-        if failure_behaviour is not None:
-            updates["failure_behaviour"] = failure_behaviour
-        if pass_threshold is not None:
-            updates["pass_threshold"] = pass_threshold
-        if suite_id is not None:
-            updates["suite_id"] = suite_id
-
-        from modulo.db.models.eval_definition import EvalDefinition
-
-        async with _session(org_id) as s:
-            eval_def = (
-                await s.execute(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eid,
-                        EvalDefinition.organisation_id == org_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if eval_def is None:
-                return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
-
-            new_type = updates.get("eval_type", eval_def.eval_type)
-            new_behaviour = updates.get("failure_behaviour", eval_def.failure_behaviour)
-            new_config = updates.get("config_json", eval_def.config_json)
-            try:
-                _validate_guardrail_request(
-                    eval_type=new_type,
-                    failure_behaviour=new_behaviour,
-                    config_json=new_config,
-                )
-            except StarletteHTTPException as exc:
-                return {"error": "validation_failed", "detail": str(exc.detail)}
-
-            # FAR-382: snapshot the pre-edit config, then bump the version so a
-            # rubric/config change is an explicitly version-scoped event.
-            _stamp_eval_definition_version(eval_def)
-            for key, value in updates.items():
-                setattr(eval_def, key, value)
-            await s.flush()
-            return _eval_def_to_dict(eval_def)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except StarletteHTTPException as exc:
