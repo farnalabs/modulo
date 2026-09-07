@@ -429,14 +429,14 @@ async def test_read_file_via_exec_missing_returns_empty(patch_node_runner) -> No
         async def exec_command(self, ref, cmd, *, cmd_timeout=None):
             return _ExecResult(exit_code=0, stdout="")
 
-    assert await _read_file_via_exec(_P(), "ws", "/home/user/a.txt") == ""
+    assert not await _read_file_via_exec(_P(), "ws", "/home/user/a.txt")
 
 
-async def test_publish_stream_chunk_no_broker(patch_node_runner) -> None:
-    _publish_stream_chunk(None, node_id="n", chunk="", stream="stdout", throttle_state={})
+def test_publish_stream_chunk_no_broker(patch_node_runner) -> None:
+    assert _publish_stream_chunk(None, node_id="n", chunk="", stream="stdout", throttle_state={}) is None
 
 
-async def test_publish_stream_chunk_buffers_within_window(patch_node_runner) -> None:
+def test_publish_stream_chunk_buffers_within_window(patch_node_runner) -> None:
     import time as _time
 
     published = []
@@ -448,7 +448,7 @@ async def test_publish_stream_chunk_buffers_within_window(patch_node_runner) -> 
     assert published == []
 
 
-async def test_publish_stream_chunk_flushes_after_interval(patch_node_runner, monkeypatch) -> None:
+def test_publish_stream_chunk_flushes_after_interval(patch_node_runner, monkeypatch) -> None:
     published = []
     broker = SimpleNamespace(publish=lambda topic, payload: published.append((topic, payload)))
 
@@ -468,10 +468,10 @@ async def test_publish_stream_chunk_flushes_after_interval(patch_node_runner, mo
     assert published[0][1]["chunk"] == "ab"
 
 
-async def test_publish_stream_chunk_broker_error_swallowed(patch_node_runner) -> None:
+def test_publish_stream_chunk_broker_error_swallowed(patch_node_runner) -> None:
     broker = SimpleNamespace(publish=lambda topic, payload: (_ for _ in ()).throw(RuntimeError("closed")))
     state = {"buf": ["x"], "last_ts": 0.0}
-    _publish_stream_chunk(broker, node_id="n", chunk="x", stream="stdout", throttle_state=state)
+    assert _publish_stream_chunk(broker, node_id="n", chunk="x", stream="stdout", throttle_state=state) is None
 
 
 async def test_consume_stream_success(patch_node_runner) -> None:
