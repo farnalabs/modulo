@@ -49,6 +49,11 @@ _VALID_PRIMITIVE_TYPES = {
 }
 
 
+# Error message for an unresolvable registry entry (missing manifest, unknown/
+# revoked id, or an entry whose required fields are unusable).
+_ERR_ENTRY_NOT_FOUND = "entry not found"
+
+
 async def _enter_org_context(session: AsyncSession, org_id: uuid.UUID) -> bool:
     """Set RLS org context on *session*, beginning a transaction when none is active.
 
@@ -194,11 +199,11 @@ async def install_community_entry(
     """
     manifest = await get_cached_manifest(session)
     if not manifest:
-        raise ValueError("entry not found")
+        raise ValueError(_ERR_ENTRY_NOT_FOUND)
     data = parse_manifest(manifest)
     entry = _find_entry(data.entries, entry_id)
     if entry is None or await is_revoked(session, entry_id):
-        raise ValueError("entry not found")
+        raise ValueError(_ERR_ENTRY_NOT_FOUND)
 
     if target_team_id is not None:
         raise ValueError("registry entries are org-owned")
@@ -218,7 +223,7 @@ async def install_community_entry(
         or not isinstance(version, str)
         or not isinstance(author, str)
     ):
-        raise ValueError("entry not found")
+        raise ValueError(_ERR_ENTRY_NOT_FOUND)
 
     began = await _enter_org_context(session, org_id)
     try:

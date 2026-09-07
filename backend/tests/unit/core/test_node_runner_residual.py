@@ -1317,7 +1317,9 @@ async def test_connector_node_write_success_stamps_and_completes(monkeypatch: py
         result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
         assert result["artifacts"][0]["status"] == "completed"
         resolve.assert_awaited_once()
-        assert "exception" not in resolve.await_args.kwargs
+        # The refactor's wrapper always forwards ``exception=`` explicitly
+        # (None on success) — the success path must not CLASSIFY an exception.
+        assert resolve.await_args.kwargs.get("exception") is None
     finally:
         set_connector_hub(None)
 

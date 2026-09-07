@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from modulo.api.constants import (
+    MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
     MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
     MSG_RESOURCE_ALREADY_EXISTS,
     MSG_UNEXPECTED_ERROR,
@@ -93,7 +94,6 @@ from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
 
 _CODE_ROUTE_DB_ERROR = "route.db_error"
-_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 _CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR = "pipeline_execution.unexpected_error"
 _MSG_RUN_NOT_FOUND = "Run not found"
 _CODE_RUN_OUTPUT = "run.output"
@@ -551,7 +551,7 @@ async def list_runs_endpoint(
         _log.exception(_CODE_ROUTE_DB_ERROR)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -1047,7 +1047,7 @@ async def trigger_run(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except OrgDeletedError as exc:
@@ -1106,7 +1106,7 @@ async def get_run_stats_endpoint(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -1143,7 +1143,7 @@ async def get_run_heatmap_endpoint(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -1187,7 +1187,7 @@ async def get_run_status(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except RunNotFoundError:
         raise HTTPException(
@@ -1281,7 +1281,7 @@ async def cancel_run(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -1488,7 +1488,7 @@ async def get_run_io_endpoint(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -1543,7 +1543,7 @@ async def export_run_fixture(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -1648,7 +1648,7 @@ async def get_run_workspace_events(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -1753,7 +1753,7 @@ async def get_run_node_output(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -1900,7 +1900,7 @@ async def observe_run_node(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -1941,7 +1941,7 @@ async def observe_run_node(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -2114,7 +2114,7 @@ async def recover_run_node(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -2272,7 +2272,7 @@ async def guardrail_override_run(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:
@@ -2724,7 +2724,7 @@ async def diff_node_output(
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
 
     except HTTPException:

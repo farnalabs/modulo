@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import (
+    MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_INTERNAL_SERVER_ERROR,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
@@ -29,7 +33,6 @@ from modulo.db.crud.composite_template import (
 )
 from modulo.db.rls import set_rls_org
 
-_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 _MSG_COMPOSITE_TEMPLATE_NOT_FOUND = "Composite template not found"
 _PERM_PIPELINE_UPDATE = "pipeline.update"
 
@@ -137,7 +140,7 @@ async def list_composite_templates_endpoint(
         logger.exception("composite_templates.list_composite_templates_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -189,7 +192,7 @@ async def create_composite_template_endpoint(
         logger.exception("composite_templates.create_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -222,7 +225,7 @@ async def get_composite_template_endpoint(
         logger.exception("composite_templates.get_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -265,7 +268,7 @@ async def update_composite_template_endpoint(
         logger.exception("composite_templates.update_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -301,7 +304,7 @@ async def delete_composite_template_endpoint(
         logger.exception("composite_templates.delete_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -336,7 +339,7 @@ async def restore_composite_template_endpoint(
         logger.exception("composite_templates.restore_composite_template_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -436,7 +439,7 @@ async def save_composite_editor_endpoint(
         logger.exception("composite_templates.save_composite_editor_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -581,7 +584,7 @@ async def publish_composite_endpoint(
         logger.exception("composite_templates.publish_composite_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise

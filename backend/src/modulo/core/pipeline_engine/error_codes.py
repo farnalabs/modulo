@@ -62,6 +62,7 @@ _CODE_CAPACITY_ORG = "capacity.org"
 # dotted spelling mirrors the ``script.side_effect_unknown`` taxonomy pattern
 # ("side-effect state unknown; never retried").
 _CODE_CONNECTOR_UNKNOWN = "connector.side_effect_unknown"
+_CODE_SCOPE_VIOLATION = "scope.violation"
 
 
 ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
@@ -321,7 +322,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
     # FAR-418: node-level capability_scope violation — a node used a connector /
     # tool / run_context key excluded by its scope (deny-by-default). Permanent
     # (re-dispatching would reproduce the same violation), so never retryable.
-    "scope.violation": ErrorCodeSpec(
+    _CODE_SCOPE_VIOLATION: ErrorCodeSpec(
         error_class="scope",
         retryable=False,
         alert_severity="critical",
@@ -513,8 +514,8 @@ LEGACY_ALIASES: dict[str, str] = {
     "capacity_timeout": "capacity.timeout",
     # FAR-418: scope violation (legacy snake_case spelling canonicalized to
     # scope.violation).
-    "scope_violation": "scope.violation",
-    "ScopeViolationError": "scope.violation",
+    "scope_violation": _CODE_SCOPE_VIOLATION,
+    "ScopeViolationError": _CODE_SCOPE_VIOLATION,
 }
 
 
