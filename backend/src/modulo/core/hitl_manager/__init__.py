@@ -697,9 +697,7 @@ class HITLManager:
         ]
         if not include_claimed:
             filters.append(HitlClaim.account_id.is_(None))
-        result = await session.execute(
-            select(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*filters)
-        )
+        result = await session.execute(select(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*filters))
         return list(result.scalars())
 
     async def list_overdue(

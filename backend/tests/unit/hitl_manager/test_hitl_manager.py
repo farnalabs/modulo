@@ -596,11 +596,14 @@ async def test_claim_same_account_reclaim_issues_fresh_token():
     async def _execute(stmt: Any) -> Any:
         captured.append(stmt)
         r = MagicMock()
-        if len(captured) == 1:
-            # Pre-check SELECT — the gate is held by the SAME account
+        if _is_runs_select(stmt):
+            # FAR-612 run-status check — the run still awaits a human
+            r.scalar_one_or_none.return_value = _run_mock("awaiting_human")
+        elif len(captured) == 1:
+            # Gate pre-check SELECT — the gate is held by the SAME account
             r.scalar_one_or_none.return_value = held
         else:
-            # UPDATE ... RETURNING and any later reads
+            # Claim UPDATE ... RETURNING and any later reads
             r.scalar_one_or_none.return_value = uuid.uuid4()
         return r
 
@@ -619,8 +622,12 @@ async def test_claim_same_account_reclaim_issues_fresh_token():
     assert result.account_id == _USER
     assert result.claim_token != "stale-token"
 
-    assert len(captured) >= 2
-    values = _update_values(captured[1])
+    # Gate statements in ``captured``: pre-check SELECT, claim UPDATE
+    # (the runs SELECT is dispatched above and never stored). FAR-612's
+    # run-status check fires between them, so the UPDATE is captured[2].
+    update_stmt = next(s for s in captured if hasattr(s, "_values"))
+    assert len(captured) >= 3
+    values = _update_values(update_stmt)
     assert values["account_id"] == _USER
     assert values["claim_token"] != "stale-token"
     assert values["claimed_at"] is not None
@@ -640,16 +647,21 @@ async def test_claim_same_account_reclaim_team_scoped_gate():
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
-    call_no = 0
+    gate_call_no = 0
 
     async def _execute(stmt: Any) -> Any:
-        nonlocal call_no
-        call_no += 1
+        nonlocal gate_call_no
+        if _is_runs_select(stmt):
+            # FAR-612 run-status check — the run still awaits a human
+            r_run = MagicMock()
+            r_run.scalar_one_or_none.return_value = _run_mock("awaiting_human")
+            return r_run
+        gate_call_no += 1
         r = MagicMock()
-        if call_no in (1, 2):
-            # Pre-check SELECT + FOR UPDATE row lock (same-account hold passes)
+        if gate_call_no in (1, 2):
+            # Gate pre-check SELECT + FOR UPDATE row lock (same-account hold passes)
             r.scalar_one_or_none.return_value = held
-        elif call_no in (3, 5):
+        elif gate_call_no in (3, 5):
             # Membership pre-check + post-claim TOCTOU re-verification
             r.scalar_one_or_none.return_value = membership
         else:
@@ -681,7 +693,9 @@ async def test_claim_update_where_allows_unclaimed_or_same_account_only():
     """The claim UPDATE's WHERE admits unclaimed gates and same-account
     re-claims (FAR-686) but still requires the gate to be undecided."""
     _mgr, _session, captured = await _claim_capture()
-    update_stmt = captured[1]  # execute call 2 is the UPDATE ... RETURNING
+    update_stmt = captured[
+        2
+    ]  # execute calls: pre-check SELECT, run-status SELECT, then the UPDATE ... RETURNING (FAR-612)
     sql = str(update_stmt.compile())
     assert "account_id IS NULL" in sql
     assert "decision IS NULL" in sql
@@ -1880,9 +1894,12 @@ async def test_list_pending_filters_to_actionable_run_statuses():
     assert "complete" not in sql, f"terminal status must not be an allowed value, got: {sql}"
 
 
-async def test_list_pending_default_excludes_claimed_gates():
-    """Default list_pending() matches unclaimed + undecided gates only — the
-    WHERE carries ``account_id IS NULL`` so a held claim never surfaces."""
+async def test_list_pending_include_claimed_false_excludes_claimed_gates():
+    """``include_claimed=False`` restricts list_pending() to unclaimed +
+    undecided gates — the WHERE carries ``account_id IS NULL`` so a held
+    claim never surfaces. (FAR-686 composed with FAR-612: the DEFAULT now
+    includes held gates so consumers can render the claimed state; the
+    exclusion is the explicit opt-out.)"""
     unclaimed = _gate(account_id=None)
     session = AsyncMock()
     scalars = MagicMock()
@@ -1892,7 +1909,7 @@ async def test_list_pending_default_excludes_claimed_gates():
     session.execute = AsyncMock(return_value=execute_result)
 
     mgr = HITLManager()
-    result = await mgr.list_pending(session, _ORG)
+    result = await mgr.list_pending(session, _ORG, include_claimed=False)
     assert result == [unclaimed]
     sql = str(session.execute.call_args[0][0].compile())
     assert "decision IS NULL" in sql

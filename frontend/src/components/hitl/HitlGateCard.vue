@@ -190,6 +190,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: 'claimed', payload: HitlMessage): void
   (e: 'decided', payload: HitlMessage): void
+  (e: 'claim-failed', payload: HitlMessage): void
 }>()
 
 const { t } = useI18n()
@@ -271,6 +272,23 @@ onBeforeUnmount(() => {
   if (messageTimer !== null) clearTimeout(messageTimer)
 })
 
+function claimFailureMessage(err: unknown): string {
+  // FAR-612: map the backend's claim-failure detail to a specific message so
+  // the operator knows what actually happened (conflict shapes from the claim
+  // endpoint: already claimed / already decided / run not awaiting).
+  const detail = formatApiError(err)
+  if (detail.includes('already claimed')) {
+    return t('hitl.gate.claim_failed_already_claimed')
+  }
+  if (detail.includes('already has a decision')) {
+    return t('hitl.gate.claim_failed_already_decided')
+  }
+  if (detail.includes('not awaiting a human decision')) {
+    return t('hitl.gate.claim_failed_run_not_awaiting', { reason: detail })
+  }
+  return `${t('hitl.gate.claim_failed')} ${detail}`
+}
+
 async function claimGate() {
   claiming.value = true
   message.value = null
@@ -280,7 +298,12 @@ async function claimGate() {
       body: { expiry_minutes: 15 },
     })
     if (err) {
-      showMessage({ type: 'error', text: `${t('hitl.gate.claim_failed')} ${formatApiError(err)}` }, false)
+      // FAR-612: emit too — parents may drop the card on their post-failure
+      // refresh (terminal-run / decided gates leave the pending list), so the
+      // message must survive at view level.
+      const failure: HitlMessage = { type: 'error', text: claimFailureMessage(err) }
+      showMessage(failure, false)
+      emit('claim-failed', failure)
     } else if (data) {
       const d = data as { claim_token: string; expires_at: string }
       gateState.setClaimToken(d.claim_token)
@@ -290,7 +313,11 @@ async function claimGate() {
       emit('claimed', payload)
     }
   } catch (e: unknown) {
-    showMessage({ type: 'error', text: `${t('hitl.gate.claim_failed')} ${formatApiError(e)}` }, false)
+    // Network errors also emit: the claim may have landed before the
+    // connection dropped, so the parent refreshes to converge on reality.
+    const failure: HitlMessage = { type: 'error', text: claimFailureMessage(e) }
+    showMessage(failure, false)
+    emit('claim-failed', failure)
   } finally {
     claiming.value = false
   }

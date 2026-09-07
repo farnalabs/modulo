@@ -393,14 +393,15 @@ describe('SettingsHitlReviewView', () => {
     })
 
     wrapper = mount(SettingsHitlReviewView, {
-      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
     await flushPromises()
     await nextTick()
     await expandFirstGate(wrapper!)
 
     const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
-    const claimButton = wrapper!.find('[data-testid="hitl-review-claim"]')
+    // FAR-686: the claim button lives in the shared gate card.
+    const claimButton = wrapper!.find('[data-testid="hitl-gate-claim"]')
     expect(claimButton.exists()).toBe(true)
     await claimButton.trigger('click')
     await flushPromises()
@@ -408,7 +409,8 @@ describe('SettingsHitlReviewView', () => {
 
     // The failure message lives in the VIEW-LEVEL banner, not in the gate
     // row: the immediate refresh drops terminal-run gates from the list, so
-    // a row-level message would be erased before it renders (FAR-612).
+    // a row-level message would be erased before it renders (FAR-612,
+    // composed with the shared card via the claim-failed emit).
     const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('no longer waiting for a human decision')
@@ -426,13 +428,13 @@ describe('SettingsHitlReviewView', () => {
     })
 
     wrapper = mount(SettingsHitlReviewView, {
-      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
     await flushPromises()
     await nextTick()
     await expandFirstGate(wrapper!)
 
-    await wrapper!.find('[data-testid="hitl-review-claim"]').trigger('click')
+    await wrapper!.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
@@ -447,14 +449,14 @@ describe('SettingsHitlReviewView', () => {
     ;(api.POST as any).mockRejectedValue(new Error('network down'))
 
     wrapper = mount(SettingsHitlReviewView, {
-      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
     await flushPromises()
     await nextTick()
     await expandFirstGate(wrapper!)
 
     const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
-    await wrapper!.find('[data-testid="hitl-review-claim"]').trigger('click')
+    await wrapper!.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
@@ -468,7 +470,7 @@ describe('SettingsHitlReviewView', () => {
     expect(banner.text()).toContain('network down')
   })
 
-  it('renders a claimed-by-another gate as read-only with no approve/reject buttons', async () => {
+  it('renders a claimed-by-another gate with a re-claim path and no approve/reject buttons', async () => {
     const { api } = await import('../lib/api/client')
     const claimedByOther = {
       ...pendingGateRow(),
@@ -479,17 +481,20 @@ describe('SettingsHitlReviewView', () => {
     ;(api.GET as any).mockImplementation(mockGetWithGates([claimedByOther]))
 
     wrapper = mount(SettingsHitlReviewView, {
-      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
     await flushPromises()
     await nextTick()
     await expandFirstGate(wrapper!)
 
-    expect(wrapper!.find('[data-testid="hitl-review-claimed-other"]').exists()).toBe(true)
     expect(wrapper!.text()).toContain('Claimed by')
     expect(wrapper!.text()).toContain('999e8400-e29b-41d4-a716-446655440009')
-    expect(wrapper!.find('[data-testid="hitl-review-approve"]').exists()).toBe(false)
-    expect(wrapper!.find('[data-testid="hitl-review-reject"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
+    // FAR-686: the same-account re-claim path replaces the old read-only
+    // notice — attempting re-claim is allowed and fails loudly (409 banner)
+    // when another reviewer holds the gate.
+    expect(wrapper!.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(true)
   })
 
   it('renders approve/reject buttons after this session claims the gate', async () => {
@@ -506,19 +511,19 @@ describe('SettingsHitlReviewView', () => {
     })
 
     wrapper = mount(SettingsHitlReviewView, {
-      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
     })
     await flushPromises()
     await nextTick()
     await expandFirstGate(wrapper!)
 
-    await wrapper!.find('[data-testid="hitl-review-claim"]').trigger('click')
+    await wrapper!.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
-    expect(wrapper!.find('[data-testid="hitl-review-approve"]').exists()).toBe(true)
-    expect(wrapper!.find('[data-testid="hitl-review-reject"]').exists()).toBe(true)
-    expect(wrapper!.find('[data-testid="hitl-review-claim"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
+    expect(wrapper!.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
+    expect(wrapper!.find('[data-testid="hitl-gate-claim"]').exists()).toBe(false)
   })
   it('shows the decision briefing in the expanded panel (FAR-613)', async () => {
     const { api } = await import('../lib/api/client')

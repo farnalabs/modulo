@@ -313,8 +313,8 @@ const filteredGates = computed(() => {
 // RunDetailView). The view only hoists the card's feedback: failures persist
 // in the view-level banner (FAR-612), successes clear it and refresh the list.
 
-async function onClaimFailed(text: string) {
-  showClaimFailureBanner(text)
+async function onClaimFailed(payload: { text: string }) {
+  showClaimFailureBanner(payload.text)
   // FAR-612: the list on screen is stale after a failed claim (another
   // reviewer took it, the run moved on, the gate was decided). Re-fetch
   // immediately so the list reflects reality instead of waiting for the 30s
