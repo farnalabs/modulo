@@ -285,6 +285,16 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Mobile icon-rail sidebar (experimental)",
         tier="community",
     ),
+    # ── Community tier — user-scoped MCP keys (default OFF, FAR-620) ────────
+    # Same two-mechanism precedent as ``mobile_sidebar_rail``: listed in the
+    # catalog for per-org toggling AND hardcoded in ``_refresh``'s inactive
+    # set (without the hardcode the community-tier tier-rank fallback would
+    # activate it everywhere). Orgs enable it via ``feature_overrides``.
+    FeatureFlag(
+        name="user_scoped_mcp_keys",
+        description="Per-user MCP API keys (keys operate as their creator's identity)",
+        tier="community",
+    ),
 ]
 
 
@@ -568,10 +578,14 @@ class FeatureFlagRegistry:
         # is always in the inactive set — it is default-OFF by definition, so it
         # must not come active via the tier-rank fallback when the DB catalog is
         # empty; only an explicit ``_overrides`` entry can turn it on.
+        # ``user_scoped_mcp_keys`` (FAR-620) follows the same two-mechanism
+        # precedent: default-OFF everywhere until an org ``feature_overrides``
+        # entry enables it.
         inactive: set[str] = getattr(self, "_inactive_flags", set()) | {
             "mobile_sidebar_rail",
             "dashboard_charts",
             "saved_views",
+            "user_scoped_mcp_keys",
         }
 
         for flag in self._flags:

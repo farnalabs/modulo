@@ -29,6 +29,7 @@ from modulo.core.pipeline_engine.node_runner import (
     ScriptBudgetKilledError,
     ScriptFailedError,
     ScriptInvalidOutputError,
+    _sandbox_mint_run_api_key_for_sandbox,
     make_sandbox_agent_fn,
 )
 from modulo.core.pipeline_engine.sandbox_mode import (
@@ -816,6 +817,80 @@ async def test_script_mode_mint_skipped_without_session_factory():
     assert result["output"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert "MODULO_API_KEY" not in envs
+
+
+async def test_sandbox_mint_helper_binds_the_run_account_id():
+    """R7 (FAR-620): the sandbox mint path resolves ``account_id`` from the
+    RUN row - the per-run key acts as the run's triggering user (the
+    user-scoped-key rebind consequence), never a fabricated global. The
+    account resolved here is what ``mint_run_api_key`` stamps on the key."""
+    captured: dict[str, Any] = {}
+
+    async def _capture_mint(session, *, org_id, run_id, node_id, account_id, ttl_seconds):
+        captured["account_id"] = account_id
+        return MagicMock(), _FAKE_RUN_KEY
+
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=session)
+    run_result = MagicMock()
+    run_result.fetchone.return_value = (str(_ACCOUNT_ID),)
+    session.execute = AsyncMock(return_value=run_result)
+    factory = MagicMock(return_value=session)
+
+    with (
+        patch("modulo.auth.api_key.mint_run_api_key", new=_capture_mint),
+        patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+    ):
+        full_key = await _sandbox_mint_run_api_key_for_sandbox(
+            session_factory=factory,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id="n1",
+            sandbox_timeout=300,
+        )
+
+    assert full_key == _FAKE_RUN_KEY
+    assert captured["account_id"] == _ACCOUNT_ID
+
+
+async def test_sandbox_mint_helper_falls_back_to_first_active_admin():
+    """When the run row carries no account_id (webhook/cron child runs are
+    legitimately NULL), the mint falls back to the org's first active admin -
+    still a REAL account row, never a placeholder identity."""
+    captured: dict[str, Any] = {}
+    _admin_id = uuid.UUID("bbbbbbbb-cccc-dddd-eeee-ffff00000001")
+
+    async def _capture_mint(session, *, org_id, run_id, node_id, account_id, ttl_seconds):
+        captured["account_id"] = account_id
+        return MagicMock(), _FAKE_RUN_KEY
+
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=session)
+    no_account_result = MagicMock()
+    no_account_result.fetchone.return_value = None
+    admin_result = MagicMock()
+    admin_result.fetchone.return_value = (str(_admin_id),)
+    session.execute = AsyncMock(side_effect=[no_account_result, admin_result])
+    factory = MagicMock(return_value=session)
+
+    with (
+        patch("modulo.auth.api_key.mint_run_api_key", new=_capture_mint),
+        patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
+    ):
+        full_key = await _sandbox_mint_run_api_key_for_sandbox(
+            session_factory=factory,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id="n1",
+            sandbox_timeout=300,
+        )
+
+    assert full_key == _FAKE_RUN_KEY
+    assert captured["account_id"] == _admin_id
 
 
 async def test_llm_mode_does_not_inject_run_api_key():

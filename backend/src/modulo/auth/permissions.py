@@ -37,6 +37,19 @@ def reset_authz_enforce(token: Token[bool | None]) -> None:
     _authz_enforce_ctx.reset(token)
 
 
+def authz_enforce_enabled() -> bool:
+    """Return True when the per-request authz-enforce kill switch is ON.
+
+    Mirrors ``assert_org_role``'s read (``is False`` disables the hierarchy
+    comparison): an UNSET context means enforcement ON, so a request that
+    never resolved the flag fails closed. Pure ContextVar read — consumed by
+    the MCP tool-scope wiring (``check_tool_scope``) so the pure resolver
+    ``resolve_tool_access`` stays ContextVar-free while receiving the live
+    value as an argument.
+    """
+    return _authz_enforce_ctx.get() is not False
+
+
 PERMISSIONS: dict[str, str] = {
     # pipelines
     "pipeline.create": "operator",
@@ -231,6 +244,11 @@ PERMISSIONS: dict[str, str] = {
     "notification.view": "viewer",
     "notification.manage": "operator",
     "notification.self": "viewer",
+    # FAR-614: the caller's OWN HITL email-alert preference (get + set via the
+    # ``.self`` MCP tools and /me endpoints). The ``.self`` suffix derives the
+    # caller-scoped classification — an org-level service key must never alter
+    # a user's own notification configuration (FAR-620).
+    "hitl_email.self": "viewer",
     # dashboard
     "dashboard.summary": "viewer",
     "dashboard.trends": "viewer",

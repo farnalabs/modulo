@@ -27,6 +27,8 @@ class _AuthContext:
             _ctx_auth_token,
             _ctx_auth_type,
             _ctx_key_id,
+            _ctx_key_scope,
+            _ctx_node_allowed_tools,
             _ctx_org_id,
             _ctx_role,
             _ctx_user_id,
@@ -38,12 +40,16 @@ class _AuthContext:
         _ctx_key_id.set(_PLACEHOLDER_KEY_ID)
         _ctx_auth_token.set(_API_KEY)
         _ctx_auth_type.set("api_key")
+        _ctx_key_scope.set("org")
+        _ctx_node_allowed_tools.set(None)
 
     def teardown_method(self) -> None:
         from modulo.api.mcp_server import (
             _ctx_auth_token,
             _ctx_auth_type,
             _ctx_key_id,
+            _ctx_key_scope,
+            _ctx_node_allowed_tools,
             _ctx_org_id,
             _ctx_role,
             _ctx_user_id,
@@ -55,6 +61,8 @@ class _AuthContext:
         _ctx_key_id.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
+        _ctx_key_scope.set(None)
+        _ctx_node_allowed_tools.set(None)
 
 
 class TestTriggerPipelineClientKey:
@@ -80,6 +88,35 @@ class TestTriggerPipelineClientKey:
             f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:oauth:user:{_PLACEHOLDER_USER_ID}"
         )
 
+    def test_jwt_keyed_by_org_and_user_id(self) -> None:
+        """FAR-620 rider: the JWT-segment bucket format is pinned — identity
+        callers (jwt) bucket as ``user:{account_id}`` exactly like oauth."""
+        from modulo.api.mcp_server import _ctx_auth_type, _trigger_pipeline_client_key
+
+        _ctx_auth_type.set("jwt")
+        assert _trigger_pipeline_client_key() == (
+            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:jwt:user:{_PLACEHOLDER_USER_ID}"
+        )
+
+    def test_user_scoped_api_key_buckets_by_account_not_key_id(self) -> None:
+        """FAR-620: a user-scoped key acts as its creator — it shares the
+        ``user:{account_id}`` identity bucket instead of getting an
+        ``ak:{key_id}`` bucket (one user-scoped key = one client)."""
+        from modulo.api.mcp_server import _ctx_key_scope, _trigger_pipeline_client_key
+
+        _ctx_key_scope.set("user")
+        assert _trigger_pipeline_client_key() == (
+            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:api_key:user:{_PLACEHOLDER_USER_ID}"
+        )
+
+    def test_org_scoped_api_key_keeps_key_id_bucket(self) -> None:
+        from modulo.api.mcp_server import _ctx_key_scope, _trigger_pipeline_client_key
+
+        _ctx_key_scope.set("org")
+        assert _trigger_pipeline_client_key() == (
+            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:api_key:ak:{_PLACEHOLDER_KEY_ID}"
+        )
+
     def test_distinct_clients_get_distinct_keys(self) -> None:
         from modulo.api.mcp_server import _trigger_pipeline_client_key
 
@@ -87,6 +124,17 @@ class TestTriggerPipelineClientKey:
         from modulo.api.mcp_server import _ctx_key_id
 
         _ctx_key_id.set(uuid.UUID("00000000-0000-0000-0000-000000000099"))
+        key_b = _trigger_pipeline_client_key()
+        assert key_a != key_b
+
+    def test_distinct_user_scope_clients_get_distinct_keys(self) -> None:
+        """The distinctness invariant holds for user-scope callers too — the
+        mutable identity there is the ACCOUNT, not the key id."""
+        from modulo.api.mcp_server import _ctx_key_scope, _ctx_user_id, _trigger_pipeline_client_key
+
+        _ctx_key_scope.set("user")
+        key_a = _trigger_pipeline_client_key()
+        _ctx_user_id.set(uuid.UUID("00000000-0000-0000-0000-000000000099"))
         key_b = _trigger_pipeline_client_key()
         assert key_a != key_b
 
@@ -187,6 +235,10 @@ class TestTriggerPipelineToolRateLimit(_AuthContext):
         assert result["langgraph_thread_id"] == thread_id
         mock_get_pipeline.assert_awaited_once()
         mock_dispatch.assert_awaited_once()
+        # FAR-620 run attribution: manual MCP runs are stamped with the
+        # caller's account (the mock _AuthContext resolves _ctx_user_id to
+        # _PLACEHOLDER_USER_ID).
+        assert mock_create_run.await_args.kwargs["account_id"] == _PLACEHOLDER_USER_ID
 
 
 class TestTriggerPipelineSnapshotLockBusy(_AuthContext):

@@ -341,7 +341,7 @@ Every table carries `organisation_id`. Row-Level Security is enforced via `SET L
 | Method | Status | Use case |
 |--------|--------|----------|
 | JWT (access + refresh) | Alpha | Browser UI sessions – 15-min access, 7-day refresh |
-| API key (bearer token) | Alpha | CI/CD, MCP clients – role-scoped (operator/runner) |
+| API key (bearer token) | Alpha | CI/CD, MCP clients – role-scoped (operator/runner) + caller-scoped (`org`/`user` scope axis, ADR 030) |
 | Basic Auth | Alpha | Multi-user alpha (`MODULO_USERS` env var) |
 | OAuth 2.0 (authlib) | V1 | MCP clients (PKCE, exact redirect_uri) |
 | OIDC / SAML 2.0 | V1 (team) | SSO with JIT provisioning |
@@ -358,6 +358,17 @@ Every table carries `organisation_id`. Row-Level Security is enforced via `SET L
 ### API keys
 
 Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. Role set: `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only). Admin actions require human session. Keys shown once at creation.
+
+Every key carries a **caller scope** (`scope` column, immutable post-mint):
+`org` (org-level machine identity — the historical default; includes
+team-scoped and per-run sandbox keys) or `user` (a per-user key that acts as
+its creator's identity and is quota'd to 10 active per account). User-scoped
+minting is REST-JWT-only, gated by the org `user_scoped_mcp_keys` flag
+(ADR 030). MCP tools whose permission key ends in `.self` (e.g.
+`get_hitl_email_alerts`) are caller-scoped: they target the caller's own
+account and are denied under org-wide/run-scoped keys. Key lifecycle events
+are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP
+surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
 
 ### Row-Level Security
 

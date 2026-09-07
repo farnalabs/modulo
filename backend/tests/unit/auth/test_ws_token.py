@@ -26,8 +26,6 @@ class TestCreateWsToken:
         token = await create_ws_token(mock_redis, _PRINCIPAL)
 
         assert isinstance(token, str)
-        assert len(token) > 0
-        assert token, "token should not be empty"
         assert all(c.isalnum() or c in "-_" for c in token)
 
     async def test_calls_redis_setex(self, mock_redis: AsyncMock) -> None:

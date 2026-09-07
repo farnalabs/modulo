@@ -71,6 +71,21 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
       list-run/cost and other sensitive tools are role-gated, HITL-gated tools
       route through human review, and the suite guards structural tool
       coverage so new tools cannot ship unscoped
+- [x] Every API key carries an immutable caller scope (`org` | `user`,
+      ADR 030/FAR-620): user-scoped keys act as their creator and are
+      REST-JWT-minted only (flag + 10-key quota gated); MCP minting stays
+      org-only. Mint/revoke emit `api_key_created` / `api_key_revoked` audit
+      events on BOTH surfaces with `auth_type` / `key_scope` masked-prefix
+      payload stamps
+- [x] Caller-scoped (`.self` permission-key suffix) MCP tools target the
+      CALLER's own account with NO target parameter (registry-introspection
+      pinned); the first pair (`get_hitl_email_alerts` /
+      `set_hitl_email_alerts`, `hitl_email.self` @ viewer, FAR-614) reads and
+      writes the caller's own HITL email-alert preference and is
+      denied-under-org-keys with the pinned `insufficient_scope` error shape
+      (visible-but-failing in tools/list); all of its writes go through the
+      single row-locked preferences writer
+      (`db/crud/account.set_hitl_email_preference`)
 
 ## Known Gaps
 

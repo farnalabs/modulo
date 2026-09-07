@@ -5430,13 +5430,13 @@ export interface paths {
          * @description Persist the CALLER's HITL email-alert preferences under the
          *     ``hitl_email`` key of ``Account.preferences`` (other keys untouched).
          *
-         *     The row is fetched ``FOR UPDATE`` so concurrent writes via THIS endpoint
-         *     serialise per account. Known limitation (pre-existing, outside this
-         *     slice's allowlist): sibling preference writers (e.g. ``PUT /me/settings``
-         *     via the unlocked ``update_account_preferences`` read-merge-write helper)
-         *     overwrite the whole JSONB column without taking this lock, so a settings
-         *     write racing this one can still drop the other's key — closing that needs
-         *     ALL column writers to cooperate (row lock or per-key updates).
+         *     FAR-620: the write goes through the SHARED row-locked helper
+         *     (``set_hitl_email_preference``) — the single writer of the ``hitl_email``
+         *     key, now also used by the JSON column's other writers. The ``FOR UPDATE``
+         *     lock serialises this endpoint against the sibling preference writers
+         *     (``PUT /me/settings``, the in-app dashboard level), closing the
+         *     cross-endpoint lost-update race the previous unlocked settings helper
+         *     left open.
          */
         put: operations["update_hitl_email_preferences_api_v1_me_hitl_email_preferences_put"];
         post?: never;
@@ -8903,6 +8903,8 @@ export interface components {
             expires_at?: string | null;
             /** Team Id */
             team_id?: string | null;
+            /** Scope */
+            scope?: string | null;
         };
         /** ApiKeyCreatedResponse */
         ApiKeyCreatedResponse: {
@@ -8926,6 +8928,11 @@ export interface components {
             created_at: string;
             /** Team Id */
             team_id?: string | null;
+            /**
+             * Scope
+             * @default org
+             */
+            scope: string;
         };
         /** ApiKeyRevokeResponse */
         ApiKeyRevokeResponse: {
@@ -8947,6 +8954,8 @@ export interface components {
             team_id?: string | null;
             /** Expires At */
             expires_at?: string | null;
+            /** Scope */
+            scope?: string | null;
         };
         /** AppendMessageRequest */
         AppendMessageRequest: {

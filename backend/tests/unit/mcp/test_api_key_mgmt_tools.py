@@ -380,7 +380,10 @@ class TestRevokeApiKey(AuthContext):
     async def test_revoke_scoped_to_caller_org(self) -> None:
         from modulo.api.mcp_server import revoke_api_key
 
-        mock_revoke = AsyncMock(return_value=True)
+        # FAR-620: the revoke CRUD returns the revoked ROW (the audit stamps
+        # read its scope + prefix); a bool truthy works too but the row is the
+        # contract.
+        mock_revoke = AsyncMock(return_value=_make_key())
         with (
             patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
             patch("modulo.api.mcp_server._session") as mock_session,
