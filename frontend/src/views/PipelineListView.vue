@@ -47,8 +47,8 @@
       <main class="flex-1 page-wide min-w-0 overflow-y-auto">
         <div v-if="moveError && !showMoveToFolder" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="pipeline-list-move-error">
           <span>{{ moveError }}</span>
-          <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" aria-label="Dismiss" @click="moveError = null">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('common.close')" @click="moveError = null">
+            <X :size="16" />
           </button>
         </div>
         <div v-if="loading || !foldersReady">
@@ -94,14 +94,14 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="mx-auto mb-4 text-muted-foreground/40"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           <p class="text-lg font-medium text-foreground">{{ $t('views.PipelineListView.no_pipelines_yet') }}</p>
           <p class="text-sm text-muted-foreground mt-1 mb-6">
-            Create a new pipeline or browse the Library to find a template.
+            {{ $t('views.PipelineListView.empty_description') }}
           </p>
           <div class="flex items-center justify-center gap-3">
             <Button as="router-link" to="/library" data-testid="pipeline-list-new-pipeline">
-              New Pipeline
+              {{ $t('views.PipelineListView.new_pipeline') }}
             </Button>
             <Button severity="secondary" outlined as="router-link" to="/library" data-testid="pipeline-list-browse-library">
-              Browse Library
+              {{ $t('views.PipelineListView.browse_library') }}
             </Button>
           </div>
         </div>
@@ -130,7 +130,7 @@
               <button type="button" class="text-muted-foreground hover:text-foreground transition-colors" @click="onSelectFolder(null)">
                 {{ $t('views.PipelineListView.all_pipelines') }}
               </button>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
+              <ChevronRight :size="12" class="text-muted-foreground" />
               <span class="font-medium text-foreground">{{ selectedFolderName }}</span>
             </template>
             <h2 v-else class="text-base font-semibold text-foreground">{{ $t('views.PipelineListView.all_pipelines') }}</h2>
@@ -162,22 +162,12 @@
                         :aria-expanded="isFolderExpanded((row.data as FolderItem).id)"
                         data-testid="pipeline-tree-folder-toggle"
                       >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
+                        <ChevronRight
+                          :size="14"
                           :class="{ 'rotate-90': isFolderExpanded((row.data as FolderItem).id) }"
                           class="transition-transform shrink-0"
-                        >
-                          <polyline points="9 18 15 12 9 6" />
-                        </svg>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                        />
+                        <Folder :size="14" class="shrink-0" />
                         {{ (row.data as FolderItem).name }}
                         <span class="text-muted-foreground text-xs ml-2">{{ pipelineFolderCount.get((row.data as FolderItem).id) || 0 }} {{ $t('views.PipelineListView.pipelines') }}</span>
                       </button>
@@ -187,7 +177,7 @@
                   <tr v-else-if="row.type === 'uncategorised-header'" class="bg-muted/20">
                     <td colspan="8" class="px-4 py-2">
                       <span class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        <FolderOpen :size="14" class="shrink-0" />
                         {{ $t('views.PipelineListView.uncategorised') }}
                       </span>
                     </td>
@@ -212,7 +202,7 @@
                     </td>
                     <td class="px-4 py-3">
                       <span class="badge text-xs" :class="(row.data as PipelineItem).visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'">
-                        {{ (row.data as PipelineItem).visibility === 'org' ? 'Org' : 'Team' }}
+                        {{ (row.data as PipelineItem).visibility === 'org' ? $t('views.PipelineListView.visibility_org') : $t('views.PipelineListView.visibility_team') }}
                       </span>
                     </td>
                     <td class="px-4 py-3">
@@ -230,7 +220,7 @@
                     <td class="px-4 py-3">
                       <div class="flex justify-end items-center gap-1">
                         <button type="button" class="rounded p-1 hover:bg-accent" :aria-label="$t('views.PipelineListView.pipeline_actions')" data-testid="pipeline-list-action-menu" @click.stop="openActionMenu($event, row.data as PipelineItem)">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                          <MoreVertical :size="14" />
                         </button>
                       </div>
                     </td>
@@ -264,7 +254,7 @@
               :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"
               @click="moveToFolderId = f.id"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+              <Folder :size="14" class="shrink-0 text-muted-foreground" />
               {{ f.name }}
             </button>
             <button type="button"
@@ -272,7 +262,7 @@
               :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
               @click="moveToFolderId = null"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <FolderOpen :size="14" class="shrink-0 text-muted-foreground" />
               {{ $t('views.PipelineListView.no_folder') }}
             </button>
           </div>
@@ -306,7 +296,7 @@
               <input id="pipelinelistview-field-1"
                 v-model="renameName"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="Pipeline name"
+                :placeholder="$t('views.PipelineListView.pipeline_name_placeholder')"
                 @keyup.enter="handleRename"
               />
             </div>
@@ -319,10 +309,10 @@
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
                 @click="closeRename"
               >
-                Cancel
+                {{ $t('common.cancel') }}
               </button>
               <Button :disabled="!renameName.trim() || renaming" @click="handleRename">
-                {{ renaming ? 'Saving...' : 'Save' }}
+                {{ renaming ? $t('common.saving') : $t('common.save') }}
               </Button>
             </div>
           </div>
@@ -340,7 +330,7 @@
       >
           <h3 class="mb-4 text-lg font-semibold text-destructive">{{ $t('views.PipelineListView.delete_pipeline') }}</h3>
           <p class="mb-4 text-sm text-muted-foreground">
-            Are you sure? This permanently deletes the pipeline and all its runs.
+            {{ $t('views.PipelineListView.delete_confirm') }}
           </p>
           <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             {{ deleteError }}
@@ -351,14 +341,14 @@
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="closeDelete"
             >
-              Cancel
+              {{ $t('common.cancel') }}
             </button>
             <button
               type="button"
               class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
               @click="handleDelete"
             >
-              Delete
+              {{ $t('common.delete') }}
             </button>
           </div>
         </dialog>
@@ -378,6 +368,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTrap'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import { ChevronRight, Folder, FolderOpen, MoreVertical, X } from '@lucide/vue'
 import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
