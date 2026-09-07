@@ -140,11 +140,19 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > drifting apart (they did: the older inline copy still named features whose trackers
 > had already landed in the index below).
 >
-> **Closed this walk:** `feat-environments` gained its behaviour-tracker entry
-> (`environments/environments.md`) — see the graph index above.
+> **Closed this walk:** `feat-environments`, `feat-auth`, `feat-sso`, `feat-org`,
+> `feat-runtime`, `feat-system-config`, `feat-system-orgs`, `feat-connectors`,
+> `feat-lifecycle-maps`, `feat-feedback`, `feat-hitl`, `feat-router`, `feat-library`,
+> `feat-license`, `feat-mcp`, `feat-model-backends`, `feat-onboarding`, `feat-remy`,
+> `feat-schemas`, `feat-teams`, `feat-evals`, `feat-guardrails`, `feat-variants`,
+> `feat-product-analytics`, `feat-pipelines`, `feat-runs`, `feat-dashboard`,
+> `feat-costs`, `feat-notifications`, `feat-observability`, `feat-plugins`,
+> `feat-triggers`, `feat-analytics`, `feat-audit` gained their behaviour-tracker
+> entries — see the graph index below.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
+- [feat-plugins](admin/plugins.md) => PRD N/A
 
 ### Analytics
 - [feat-analytics](analytics/analytics.md) => PRD N/A
@@ -153,51 +161,44 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-audit](audit/audit-trail.md) => PRD N/A
 
 ### Auth and Security
+- [feat-auth](auth/auth.md) => PRD N/A
 - [feat-core-oidc-integration](auth/oidc-integration.md) => PRD 9.4
 - [feat-core-saml-integration](auth/saml-integration.md) => PRD 9.4
 - [feat-auth-jwt-auth](auth/jwt-auth.md) => PRD N/A
-- [feat-auth-sso-provider-ui](auth/sso-provider-ui.md) => PRD 9.4
+- [feat-sso](auth/sso-provider-ui.md) => PRD 9.4
 - [feat-onboarding](auth/onboarding.md) => PRD N/A
 
+### Build
+- [feat-dashboard](build/dashboard.md) => PRD 8.20
+- [feat-runs](build/runs.md) => PRD N/A
+
 ### Configure
+- [feat-connectors](configure/connectors.md) => PRD N/A
 - [feat-guardrails](configure/guardrails.md) => PRD N/A
 - [feat-mcp](configure/mcp.md) => PRD N/A
-- [feat-environments](environments/environments.md) => PRD N/A
+- [feat-model-backends](configure/model-backends.md) => PRD N/A
+- [feat-remy](configure/remy.md) => PRD 8.23
 
 ### Core Platform
-- [feat-hitl](hitl/hitl-gates.md) => PRD N/A
 - [feat-core-runtime-provider-core](core/runtime-provider-core.md) => PRD 6
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD N/A
 - [feat-core-run-context](core/run-context.md) => PRD N/A
 - [feat-core-ssrf](core/ssrf.md) => PRD N/A
 - [feat-core-secrets-backend](core/secrets-backend.md) => PRD N/A
 
+### Environments
+- [feat-environments](environments/environments.md) => PRD N/A
+
+### HITL
+- [feat-hitl](hitl/hitl-gates.md) => PRD N/A
+
 ### Improve
 - [feat-evals](improve/evals.md) => PRD N/A
 - [feat-variants](improve/variants.md) => PRD N/A
 - [feat-feedback](improve/feedback.md) => PRD 8.20
 
-### Improve
-- [feat-evals](improve/evals.md) => PRD N/A
-
 ### Infra
 - [feat-infra-health](infra/health-checks.md) => PRD N/A
-
-### Schema & Data
-- [feat-schemas](schemas/schemas.md) => PRD N/A
-
-### Build & Pipelines
-- [feat-pipelines](pipelines/pipelines.md) => PRD N/A
-- [feat-pipelines-pipeline-versioning](pipelines/snapshot-versioning.md) => PRD 8.13
-- [feat-pipelines-pipeline-diff-rollback](pipelines/pipeline-diff-rollback.md) => PRD 8.13
-- [feat-router (Router & HITL nodes)](pipelines/router-hitl-nodes.md) => PRD N/A
-
-### Configure
-- [feat-model-backends](configure/model-backends.md) => PRD N/A
-- [feat-mcp](configure/mcp.md) => PRD N/A
-
-### Notifications
-- [feat-notifications](notifications/notifications.md) => PRD N/A
 
 ### Library
 - [feat-library](library/library.md) => PRD N/A
@@ -205,8 +206,28 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 ### Licensing
 - [feat-license](licensing/license.md) => PRD N/A
 
-### Observability
+### Monitor
+- [feat-costs](monitor/costs.md) => PRD 8.10, 9.3
 - [feat-observability](observability/observability.md) => PRD N/A
+
+### Notifications
+- [feat-notifications](notifications/notifications.md) => PRD N/A
+
+### Pipelines
+- [feat-pipelines](pipelines/pipelines.md) => PRD N/A
+- [feat-pipelines-pipeline-versioning](pipelines/snapshot-versioning.md) => PRD 8.13
+- [feat-pipelines-pipeline-diff-rollback](pipelines/pipeline-diff-rollback.md) => PRD 8.13
+- [feat-router](pipelines/router-hitl-nodes.md) => PRD N/A
+- [feat-lifecycle-maps](pipelines/lifecycle-maps.md) => PRD N/A
+
+### Schema & Data
+- [feat-schemas](schemas/schemas.md) => PRD N/A
+
+### System
+- [feat-org](admin/org.md) => PRD N/A
+- [feat-runtime](system/runtime.md) => PRD N/A
+- [feat-system-config](system/system-config.md) => PRD N/A
+- [feat-system-orgs](system/system-orgs.md) => PRD N/A
 
 ### Teams
 - [feat-teams](teams/teams.md) => PRD N/A
@@ -215,24 +236,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 ### Triggers
 - [feat-triggers](triggers/trigger-engine.md) => PRD N/A
 
-### Build
-- [feat-dashboard](build/dashboard.md) => PRD 8.20
-- [feat-runs](build/runs.md) => PRD N/A
-
-### Monitor
-- [feat-costs](monitor/costs.md) => PRD 8.10, 9.3
-
-### Configure
-- [feat-remy](configure/remy.md) => PRD 8.23
-
-### Admin
-- [feat-plugins](admin/plugins.md) => PRD N/A
-
 ## Known graph gaps
 
-Registered manifest features with no `docs/product-map/` behaviour-tracker yet (the
-graph stays honest about what remains untracked; each improve-architecture product-map
-walk closes a batch): `feat-auth`, `feat-connectors` (behaviours are tracked inline in
-`manifest.yaml`), `feat-lifecycle-maps`, `feat-org`,
-`feat-runtime`, `feat-sso`, `feat-system-config`, `feat-system-orgs` —
-8 registered features remain untracked after this walk.
+All registered manifest features now have a `docs/product-map/` behaviour-tracker
+entry. No untracked features remain.
