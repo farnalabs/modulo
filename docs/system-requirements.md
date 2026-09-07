@@ -86,7 +86,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 
 | Deployment Type | Redis Required? | Reason |
 |----------------|-----------------|--------|
-| Single replica, single process | **No** | In-process asyncio loops handle scheduling and queuing; rate limiting falls back to no-op (all requests allowed). Redis is optional but recommended for production. See [`docs/deployment.md`](./deployment.md) §Deployment Modes |
+| Single replica, single process | **Yes** | The dispatcher enqueues every run to SAQ's Redis queue (`core/dispatch.py`) and cron/polling triggers fire via Redis-backed SAQ system crons (`fire_due_triggers`, `fire_cron_trigger`, `fire_polling_trigger` in `core/saq_worker.py`); `api/main.py` refuses to boot without `REDIS_URL`. This reconciles with the "Redis \| Yes (production)" prerequisite row above and [`docs/quickstart.md`](./quickstart.md) §3b. |
 | Multiple replicas | **Yes** | SAQ worker coordination, distributed rate limiting |
 | Horizontal scaling | **Yes** | Cross-replica event broker, cron triggers |
 | Production with 2+ backend pods | **Yes** | See [`docs/deployment.md`](./deployment.md) §Scaling |

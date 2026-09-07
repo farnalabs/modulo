@@ -335,19 +335,21 @@ DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
 | Component | How it runs |
 |---|---|
 | Database | SQLite file (`./modulo.db`), no server process needed |
-| Task scheduling | In-process asyncio loops – cron and polling triggers work |
-| Task queue | In-process, no durability across crashes |
-| Rate limiting | No-op, disabled when Redis is unavailable (all requests allowed) |
+| Task scheduling | SAQ system-worker cron (`fire_due_triggers`); cron & polling triggers fire via the Redis-backed SAQ workers |
+| Task queue | SAQ Redis queue (runs worker); Redis is required |
+| Rate limiting | Redis sliding window when Redis is reachable; per-process no-op otherwise |
 | Concurrency | Single process, single worker |
+
+Runs and triggers require Redis plus the SAQ workers — see [`docs/quickstart.md`](./quickstart.md) §3b. `REDIS_URL` defaults to `redis://localhost:6379/0`, so start a local Redis and the two SAQ workers; otherwise pipeline runs and cron/polling triggers never execute (and `api/main.py` refuses to boot if `REDIS_URL` is empty).
 
 **What you lose vs. full deployment:**
 - **No horizontal scaling** – one process, one user at a time
-- **No task durability** – if the process crashes mid-run, the run is lost (re-run manually)
+- **No task durability** – if the SAQ worker crashes mid-run, the run is lost (re-run manually)
 - **No distributed rate limiting** – without Redis the limiter is a per-process no-op, so limits don't coordinate across processes
 
 **What you keep:**
-- Cron-triggered pipelines ✓
-- Polling triggers ✓
+- Cron-triggered pipelines ✓ (with Redis + SAQ workers running)
+- Polling triggers ✓ (with Redis + SAQ workers running)
 - All pipeline features, evals, HITL, connectors ✓
 - The SQLite DB file is portable – copy it to another machine and restart `uvicorn` from the new location to pick it up
 
@@ -361,12 +363,12 @@ curl https://modulo.run/install.sh | bash
 | Component | How it runs |
 |---|---|
 | Database | PostgreSQL 16 (separate container) |
-| Task scheduling | In-process asyncio loops (default) or SAQ system worker cron (with Redis) |
-| Task queue | In-process (default) or SAQ workers (with Redis) |
-| Rate limiting | In-memory no-op (default) or Redis sliding window (with Redis) |
+| Task scheduling | SAQ system-worker cron (`fire_due_triggers`); cron & polling triggers fire via the Redis-backed SAQ workers |
+| Task queue | SAQ Redis queue (runs worker) |
+| Rate limiting | Redis sliding window |
 | Concurrency | Single backend replica, multiple simultaneous requests |
 
-If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use SAQ + Redis. `REDIS_URL` defaults to `redis://localhost:6379/0`; if it is explicitly set to an empty value, startup aborts with a `RuntimeError` (see `api/main.py`) instead of a silent fallback.
+Redis is required: the dispatcher enqueues every run to SAQ's Redis queue and cron/polling triggers run as Redis-backed SAQ system crons, and `api/main.py` refuses to boot if `REDIS_URL` is empty. `REDIS_URL` defaults to `redis://localhost:6379/0`; if it is explicitly set to an empty value, startup aborts with a `RuntimeError` (see `api/main.py`) instead of a silent fallback.
 
 ### Kubernetes (production, multi-replica)
 
