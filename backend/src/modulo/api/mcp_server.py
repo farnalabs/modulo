@@ -167,6 +167,10 @@ _MSG_DB_MIGRATION_REQUIRED = "Database migration required. Run `alembic upgrade 
 _MSG_DB_MIGRATION_REQUIRED_HEADS = "Database migration required. Run alembic upgrade heads."
 _MSG_TRIGGER_NOT_FOUND = "Trigger not found"
 _MSG_UUID_PARSE_FAILED = "UUID parse failed"
+_MSG_EVAL_DEF_CREATE_FAILED = "create_eval_definition failed"
+_MSG_EVAL_DEF_UPDATE_FAILED = "update_eval_definition failed"
+_MSG_EVAL_DEF_DELETE_FAILED = "delete_eval_definition failed"
+_MSG_DB_OPERATION_FAILED = "Database operation failed. Please try again."
 _MSG_CREATE_API_KEY_FAILED = "create_api_key failed"
 _MSG_LIST_API_KEYS_FAILED = "list_api_keys failed"
 _MSG_REVOKE_API_KEY_FAILED = "revoke_api_key failed"
@@ -2959,6 +2963,126 @@ def _assert_admin_scope(action: str) -> None:
         raise MCPAuthorizationError(f"Only admins can {action} eval definitions")
 
 
+def _parse_eval_ref_ids(
+    primary_value: str,
+    primary_field: str,
+    node_id: str | None,
+) -> tuple[uuid.UUID | None, uuid.UUID | None, dict[str, Any] | None]:
+    """Parse a primary eval-reference UUID plus an optional node UUID.
+
+    Returns ``(primary, node, None)`` on success or ``(primary_or_None, None,
+    error_dict)`` when parsing fails.
+    """
+    primary, primary_err = _parse_uuid_param(primary_value, primary_field)
+    if primary_err is not None:
+        return None, None, primary_err
+    node: uuid.UUID | None = None
+    if node_id is not None:
+        node, node_err = _parse_uuid_param(node_id, "node_id")
+        if node_err is not None:
+            return primary, None, node_err
+    return primary, node, None
+
+
+def _assert_create_eval_definition_params(
+    name: str,
+    eval_type: str,
+    failure_behaviour: str,
+    pass_threshold: float | None,
+) -> dict[str, Any] | None:
+    """Validate the scalar create-inputs of an eval definition; error dict or None."""
+    if not name or not name.strip():
+        return {"error": "invalid_name", "detail": "name must be a non-empty string"}
+    if len(name) > _EVAL_NAME_MAX_LENGTH:
+        return {
+            "error": "invalid_name",
+            "detail": f"name must be at most {_EVAL_NAME_MAX_LENGTH} characters",
+        }
+    if (err := _assert_eval_type(eval_type)) is not None:
+        return err
+    if (err := _assert_failure_behaviour(failure_behaviour)) is not None:
+        return err
+    return _assert_pass_threshold(pass_threshold)
+
+
+async def _create_eval_definition_impl(
+    pipeline_id: str,
+    node_id: str | None,
+    name: str,
+    eval_type: str,
+    config_json: dict[str, Any] | None,
+    failure_behaviour: str,
+    pass_threshold: float | None,
+    suite_id: str | None,
+) -> dict[str, Any]:
+    """Persist a new EvalDefinition; shared with the MCP tool wrapper."""
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("create_eval_definition")
+
+    from modulo.api.routes.evals import (
+        _MSG_PIPELINE_NOT_FOUND,
+        _eval_def_to_dict,
+        _validate_guardrail_request,
+    )
+
+    if (err := _assert_create_eval_definition_params(name, eval_type, failure_behaviour, pass_threshold)) is not None:
+        return err
+
+    _assert_admin_scope("create")
+
+    org_id = _ctx_org_id_val()
+    account_id = _ctx_user_id_val()
+
+    pid, nid, pid_err = _parse_eval_ref_ids(pipeline_id, "pipeline_id", node_id)
+    if pid_err is not None:
+        return pid_err
+    assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+
+    cfg = config_json if config_json is not None else {}
+
+    try:
+        _validate_guardrail_request(
+            eval_type=eval_type,
+            failure_behaviour=failure_behaviour,
+            config_json=cfg,
+        )
+    except StarletteHTTPException as exc:
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+
+    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.models.pipeline import Pipeline
+
+    async with _session(org_id) as s:
+        pipeline = (
+            await s.execute(
+                select(Pipeline).where(
+                    Pipeline.id == pid,
+                    Pipeline.organisation_id == org_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if pipeline is None:
+            return {"error": "pipeline_not_found", "detail": _MSG_PIPELINE_NOT_FOUND}
+
+        eval_def = EvalDefinition(
+            organisation_id=org_id,
+            pipeline_id=pid,
+            node_id=nid,
+            name=name,
+            eval_type=eval_type,
+            config_json=cfg,
+            failure_behaviour=failure_behaviour,
+            pass_threshold=pass_threshold,
+            suite_id=suite_id,
+            account_id=account_id,
+            version=1,
+        )
+        s.add(eval_def)
+        await s.flush()
+        return _eval_def_to_dict(eval_def)
+
+
 @mcp.tool(
     description="Create a new eval definition (admin only). Persists an "
     "EvalDefinition row scoped to the caller's org and returns its details. "
@@ -2976,104 +3100,34 @@ async def create_eval_definition(
     suite_id: str | None = None,
 ) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        _check_agent_tool_scope("create_eval_definition")
-
-        from modulo.api.routes.evals import (
-            _MSG_PIPELINE_NOT_FOUND,
-            _eval_def_to_dict,
-            _validate_guardrail_request,
+        return await _create_eval_definition_impl(
+            pipeline_id,
+            node_id,
+            name,
+            eval_type,
+            config_json,
+            failure_behaviour,
+            pass_threshold,
+            suite_id,
         )
-
-        if not name or not name.strip():
-            return {"error": "invalid_name", "detail": "name must be a non-empty string"}
-        if len(name) > _EVAL_NAME_MAX_LENGTH:
-            return {
-                "error": "invalid_name",
-                "detail": f"name must be at most {_EVAL_NAME_MAX_LENGTH} characters",
-            }
-        if (err := _assert_eval_type(eval_type)) is not None:
-            return err
-        if (err := _assert_failure_behaviour(failure_behaviour)) is not None:
-            return err
-        if (err := _assert_pass_threshold(pass_threshold)) is not None:
-            return err
-
-        _assert_admin_scope("create")
-
-        org_id = _ctx_org_id_val()
-        account_id = _ctx_user_id_val()
-
-        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
-        if pid_err:
-            return pid_err
-        nid: uuid.UUID | None = None
-        if node_id is not None:
-            nid, nid_err = _parse_uuid_param(node_id, "node_id")
-            if nid_err:
-                return nid_err
-
-        cfg = config_json if config_json is not None else {}
-
-        try:
-            _validate_guardrail_request(
-                eval_type=eval_type,
-                failure_behaviour=failure_behaviour,
-                config_json=cfg,
-            )
-        except StarletteHTTPException as exc:
-            return {"error": "validation_failed", "detail": str(exc.detail)}
-
-        from modulo.db.models.eval_definition import EvalDefinition
-        from modulo.db.models.pipeline import Pipeline
-
-        async with _session(org_id) as s:
-            pipeline = (
-                await s.execute(
-                    select(Pipeline).where(
-                        Pipeline.id == pid,
-                        Pipeline.organisation_id == org_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if pipeline is None:
-                return {"error": "pipeline_not_found", "detail": _MSG_PIPELINE_NOT_FOUND}
-
-            eval_def = EvalDefinition(
-                organisation_id=org_id,
-                pipeline_id=pid,
-                node_id=nid,
-                name=name,
-                eval_type=eval_type,
-                config_json=cfg,
-                failure_behaviour=failure_behaviour,
-                pass_threshold=pass_threshold,
-                suite_id=suite_id,
-                account_id=account_id,
-                version=1,
-            )
-            s.add(eval_def)
-            await s.flush()
-            return _eval_def_to_dict(eval_def)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except StarletteHTTPException as exc:
         return {"error": "validation_failed", "detail": str(exc.detail)}
     except IntegrityError as exc:
-        _log.exception("create_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_CREATE_FAILED)
         return {
             "error": "conflict",
             "detail": f"Eval definition references a resource that does not exist: {exc.orig}",
         }
     except ProgrammingError:
-        _log.exception("create_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_CREATE_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("create_eval_definition failed")
-        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+        _log.exception(_MSG_EVAL_DEF_CREATE_FAILED)
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("create_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_CREATE_FAILED)
         return _tool_error("Failed to create eval definition")
 
 
@@ -3189,19 +3243,19 @@ async def update_eval_definition(
     except StarletteHTTPException as exc:
         return {"error": "validation_failed", "detail": str(exc.detail)}
     except IntegrityError as exc:
-        _log.exception("update_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_UPDATE_FAILED)
         return {
             "error": "conflict",
             "detail": f"Update would violate a constraint. Check referenced pipeline/suite: {exc.orig}",
         }
     except ProgrammingError:
-        _log.exception("update_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_UPDATE_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("update_eval_definition failed")
-        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+        _log.exception(_MSG_EVAL_DEF_UPDATE_FAILED)
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("update_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_UPDATE_FAILED)
         return _tool_error("Failed to update eval definition")
 
 
@@ -3275,19 +3329,19 @@ async def delete_eval_definition(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError as exc:
-        _log.exception("delete_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_DELETE_FAILED)
         return {
             "error": "conflict",
             "detail": f"Delete would violate a constraint: {exc.orig}",
         }
     except ProgrammingError:
-        _log.exception("delete_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_DELETE_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("delete_eval_definition failed")
-        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+        _log.exception(_MSG_EVAL_DEF_DELETE_FAILED)
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("delete_eval_definition failed")
+        _log.exception(_MSG_EVAL_DEF_DELETE_FAILED)
         return _tool_error("Failed to delete eval definition")
 
 
@@ -6176,7 +6230,7 @@ async def create_schema(
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
-        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return _tool_error("Failed to create schema")
