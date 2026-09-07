@@ -32,6 +32,11 @@ from modulo.db.crud.agent import (
     rollback_prompt_version,
     update_agent,
 )
+from modulo.db.crud.agent_runner_binding import (
+    delete_binding,
+    list_bindings_for_agent,
+    replace_agent_bindings,
+)
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
@@ -1013,8 +1018,6 @@ async def list_bindings_endpoint(
     principal: TenantPrincipal = require_permission(_CODE_AGENT_LIST),
 ) -> AgentBindingListResponse:
     """List the agent's runner bindings (agent.list permission)."""
-    from modulo.db.crud.agent_runner_binding import list_bindings_for_agent
-
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1054,7 +1057,6 @@ async def replace_bindings_endpoint(
     credential fields) at SAVE time; the referenced backend must be visible to
     the org. VALUES ARE NEVER LOGGED.
     """
-    from modulo.db.crud.agent_runner_binding import replace_agent_bindings
     from modulo.db.models.agent_runner_binding import AgentRunnerBinding
     from modulo.db.runner_binding_constraints import BindingValidationError
 
@@ -1143,8 +1145,6 @@ async def delete_binding_endpoint(
     principal: TenantPrincipal = require_permission(_CODE_MODEL_BACKEND_BINDING_MANAGE),
 ) -> None:
     """Delete one of the agent's binding rows (elevated, audit-logged)."""
-    from modulo.db.crud.agent_runner_binding import delete_binding
-
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
