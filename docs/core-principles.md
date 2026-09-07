@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Date:** 11 August 2026
-**Related:** `architecture.md`, ADRs (`Repos/devtools/adr/` in the private `farnalabs/devtools` repo — migrated out of this repo 2026-09-02, FAR-434). This is the source of truth for Modulo's engineering principles; public blog content at modulo.run/blog derives from it.
+**Related:** `architecture.md`, ADRs (`Repos/devtools/adr/` in the private `farnalabs/devtools` repo, migrated out of this repo 2026-09-02, FAR-434). This is the source of truth for Modulo's engineering principles; public blog content at modulo.run/blog derives from it.
 
 ## 1. Schema seams
 Every boundary in a pipeline is a typed contract. Inputs validate against `input_schema`, outputs against `output_schema` (JSON Schema draft-07), before anything moves. Schemas are org-scoped, versioned (semver), reusable, composable; abstract schemas enable type-constraint matching during workflow import; schema inference generates drafts from connector data.
