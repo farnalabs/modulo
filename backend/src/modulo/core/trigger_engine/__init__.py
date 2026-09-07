@@ -832,13 +832,22 @@ class TriggerEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def cleanup_expired_dedup_hashes(session: AsyncSession) -> int:
+    async def cleanup_expired_dedup_hashes(session: AsyncSession, limit: int | None = None) -> int:
         """Delete expired webhook_dedup_hashes rows.
 
         Acquires a Postgres advisory lock (key=20250601) on PostgreSQL to prevent
         concurrent cleanup across workers. On other backends the lock is skipped.
         Returns the number of deleted rows.
+
+        Args:
+            session: Active database session.
+            limit: Optional cap on the rows deleted per call (SAQ cron batching
+                — FAR-661); ``None`` (the default) deletes every expired row in
+                one pass, preserving the manual ``POST /triggers/cleanup-expired``
+                behaviour.
         """
+        if limit is not None and limit < 1:
+            raise ValueError(f"limit must be >= 1 or None, got {limit}")
         dialect = session.get_bind().dialect.name
         if dialect == "postgresql":
             lock_acquired = await session.execute(text("SELECT pg_try_advisory_xact_lock(20250601)"))
@@ -846,7 +855,10 @@ class TriggerEngine:
                 return 0
 
         now = datetime.now(UTC)
-        result = await session.execute(select(WebhookDedupHash.id).where(WebhookDedupHash.expires_at <= now))
+        expired_query = select(WebhookDedupHash.id).where(WebhookDedupHash.expires_at <= now)
+        if limit is not None:
+            expired_query = expired_query.limit(limit)
+        result = await session.execute(expired_query)
         expired_ids = result.scalars().all()
         if not expired_ids:
             return 0
