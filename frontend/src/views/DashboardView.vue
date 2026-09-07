@@ -376,8 +376,9 @@ const spendDeltaArrow = computed(() => {
   return '→'
 })
 const spendDeltaClass = computed(() => {
-  if (spendDeltaDirection.value === 'up') return 'text-success'
-  if (spendDeltaDirection.value === 'down') return 'text-destructive'
+  // Inverted for a cost metric: spend going UP is bad (red), spend going DOWN is good (green).
+  if (spendDeltaDirection.value === 'up') return 'text-destructive'
+  if (spendDeltaDirection.value === 'down') return 'text-success'
   return 'text-muted-foreground'
 })
 const spendDeltaPctText = computed(() => {

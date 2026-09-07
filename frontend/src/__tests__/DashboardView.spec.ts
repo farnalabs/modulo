@@ -103,6 +103,40 @@ function setupEmptyMocks() {
   })
 }
 
+function setupPeriodSpendMock(delta_pct: number | null) {
+  mockGet.mockImplementation((url: string) => {
+    if (url === '/api/v1/dashboard/summary') {
+      return Promise.resolve({
+        data: {
+          ...mockSummaryData,
+          period: {
+            days: 7,
+            metrics: {
+              total_runs: { current: 50, previous: 40, delta_pct: 25.0 },
+              active_pipelines: { current: 8, previous: 9, delta_pct: -11.1 },
+              run_counts_by_status: {
+                running: { current: 0, previous: 0, delta_pct: null },
+                awaiting_human: { current: 0, previous: 0, delta_pct: null },
+                failed: { current: 5, previous: 3, delta_pct: 66.7 },
+                idle: { current: 0, previous: 0, delta_pct: null },
+              },
+              eval_pass_rate: { current: 82.5, previous: 80.0, delta_pct: 3.1 },
+              spend: { current: 100.25, previous: 90.0, delta_pct },
+              tokens: { current: 15000, previous: 12000, delta_pct: 25.0 },
+              success_rate: { current: 85.0, previous: 80.0, delta_pct: 6.2 },
+              avg_duration_ms: { current: 1250.5, previous: 1300.0, delta_pct: -3.8 },
+            },
+          },
+        },
+        error: undefined,
+      })
+    }
+    if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+    if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+    return Promise.resolve({ data: null, error: undefined })
+  })
+}
+
 describe('DashboardView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -340,6 +374,43 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('25.0%') // total runs up
     expect(wrapper.text()).toContain('66.7%') // failed up
     expect(wrapper.text()).toContain('11.4%') // spend up
+  })
+
+  it('renders the token-spend delta span destructive when spend went up (cost metric: higher spend is bad)', async () => {
+    setupPeriodSpendMock(11.4)
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
+    expect(deltaSpan.exists()).toBe(true)
+    expect(deltaSpan.classes()).toContain('text-destructive')
+    expect(deltaSpan.classes()).not.toContain('text-success')
+  })
+
+  it('renders the token-spend delta span success when spend went down (cost metric: lower spend is good)', async () => {
+    setupPeriodSpendMock(-11.4)
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
+    expect(deltaSpan.exists()).toBe(true)
+    expect(deltaSpan.classes()).toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-destructive')
+  })
+
+  it('renders the token-spend delta span muted when spend is flat', async () => {
+    setupPeriodSpendMock(0)
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    const deltaSpan = wrapper.find('[data-testid="dashboard-token-spend"] span.text-xs.font-medium')
+    expect(deltaSpan.exists()).toBe(true)
+    expect(deltaSpan.classes()).toContain('text-muted-foreground')
+    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-destructive')
   })
 
   it('shows the no-prior-data fallback on stat cards whose delta_pct is null when a window is selected', async () => {
