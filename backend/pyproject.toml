@@ -483,6 +483,12 @@ filterwarnings = [
     "error::ResourceWarning",
     "error::DeprecationWarning",
     "ignore::DeprecationWarning:onelogin",
+    # anyio >= 4.7 deprecated the `anyio.abc.BlockingPortal` alias that
+    # starlette.testclient still references at import time. The warning is
+    # emitted from inside anyio, not our code, so we suppress it. Listed
+    # last so Python's warnings machinery treats it as highest priority
+    # (it overrides the catch-all error::DeprecationWarning above).
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
 ]
 testpaths = ["tests"]
 addopts = "-q -m 'not awaiting-implementation'"
