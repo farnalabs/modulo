@@ -56,7 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.connectors.base import ConnectorQuery
-from modulo.core.connector_hub.locking import _uuid_to_lock_keys as _uuid_to_lock_keys
+from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.exceptions import RateLimitConflictError
 from modulo.core.release_channels import (
     is_routable_channel,

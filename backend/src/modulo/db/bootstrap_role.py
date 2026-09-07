@@ -269,7 +269,7 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
     )
     if member_rows:
         violations.append(
-            f"app role {app_user} is a member of: " + ", ".join(sorted(r["rolname"] for r in member_rows))
+            f"app role {app_user} is a member of: {', '.join(sorted(r['rolname'] for r in member_rows))}"
         )
 
     # modulo_system must have BYPASSRLS — it is the dedicated cross-org system

@@ -70,7 +70,7 @@ def connector_team_mismatch_detail(mismatches: list[ConnectorTeamMismatch]) -> s
         )
         for m in mismatches
     ]
-    return f"{CONNECTOR_TEAM_MISMATCH}: " + "; ".join(parts)
+    return f"{CONNECTOR_TEAM_MISMATCH}: {'; '.join(parts)}"
 
 
 def extract_connector_bindings(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -139,7 +139,7 @@ def model_backend_team_mismatch_detail(mismatches: list[ModelBackendTeamMismatch
         )
         for m in mismatches
     ]
-    return f"{MODEL_BACKEND_TEAM_MISMATCH}: " + "; ".join(parts)
+    return f"{MODEL_BACKEND_TEAM_MISMATCH}: {'; '.join(parts)}"
 
 
 async def _find_team_scope_mismatches[MismatchT](

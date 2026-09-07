@@ -444,7 +444,7 @@ async def _assert_no_owner_rows(settings: Settings) -> None:
     # Message text only — never executed as SQL. The prescription mirrors the
     # migration's owner->admin UPDATE for operators who hit this FATAL.
     raise RuntimeError(
-        "FATAL: org_memberships still contain the dropped 'owner' role "  # noqa: S608
+        "FATAL: org_memberships still contain the dropped 'owner' role "  # noqa: S608 — error message text, not SQL
         f"({len(owners)} rows, account_ids={account_ids}). Prescribed fix: "
         "UPDATE org_memberships SET role='admin' WHERE role='owner'"  # nosec
     )
