@@ -321,4 +321,10 @@ FLAGS: list[dict[str, str | None]] = [
         "tier_id": "community",
         "depends_on": None,
     },
+    {
+        "name": "lifecycle_map_journeys",
+        "description": "Journey cards and journey detail on the Lifecycle Map view (attribution display)",
+        "tier_id": "community",
+        "depends_on": None,
+    },
 ]

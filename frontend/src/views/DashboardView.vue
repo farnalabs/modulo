@@ -76,7 +76,7 @@
               </span>
               <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
             </div>
-            <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="hsl(var(--primary))" :show-y-axis="true" />
+            <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--primary))" :show-y-axis="true" />
           </div>
           <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">{{ $t('views.DashboardView.no_eval_data_yet') }}</div>
         </router-link>
@@ -156,7 +156,7 @@
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.eval_pass_rate_label') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" unit="%" color="hsl(var(--success))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--success))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
@@ -233,9 +233,11 @@ const expandedTeamData = computed(() => {
   return summary.value.teams.find(t => t.id === expandedTeam.value) ?? null
 })
 
-const evalSparklineData = computed(() => {
+const evalSparklineData = computed((): Array<number | null> => {
   if (!summary.value?.trend) return []
-  return summary.value.trend.map(d => d.eval_pass_rate ?? 0)
+  // Raw values: null means "no evals that day" and is carried forward by the
+  // sparkline instead of crashing to a 0% line.
+  return summary.value.trend.map(d => d.eval_pass_rate)
 })
 
 const lastEvalRates = computed(() => {
@@ -376,8 +378,9 @@ const spendDeltaArrow = computed(() => {
   return '→'
 })
 const spendDeltaClass = computed(() => {
-  if (spendDeltaDirection.value === 'up') return 'text-success'
-  if (spendDeltaDirection.value === 'down') return 'text-destructive'
+  // Inverted for a cost metric: spend going UP is bad (red), spend going DOWN is good (green).
+  if (spendDeltaDirection.value === 'up') return 'text-destructive'
+  if (spendDeltaDirection.value === 'down') return 'text-success'
   return 'text-muted-foreground'
 })
 const spendDeltaPctText = computed(() => {
@@ -414,7 +417,7 @@ const trendData = computed(() => {
 })
 
 const trendRunCounts = computed(() => trendData.value.map(d => d.run_count))
-const trendEvalRates = computed(() => trendData.value.map(d => d.eval_pass_rate ?? 0))
+const trendEvalRates = computed((): Array<number | null> => trendData.value.map(d => d.eval_pass_rate))
 const trendSpendData = computed(() => trendData.value.map(d => d.token_spend_usd))
 const trendLabels = computed(() => trendData.value.map(d => d.date))
 

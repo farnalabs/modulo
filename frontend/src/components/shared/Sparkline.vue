@@ -51,12 +51,20 @@
             stroke-linejoin="round"
             :points="linePoints"
           />
-          <circle
+          <!-- Endpoint marker: a <circle r="2.5"> would be stretched into a
+               flat dash by the non-uniform preserveAspectRatio="none" scale.
+               A zero-length path with a round linecap renders a uniform dot
+               (diameter = stroke width), and vector-effect="non-scaling-stroke"
+               keeps the stroke width in screen pixels so the dot stays round
+               regardless of the chart's X/Y scale factors. -->
+          <path
             data-testid="sparkline-endpoint"
-            :cx="xFor(chartData.length - 1)"
-            :cy="yFor(chartData[chartData.length - 1])"
-            r="2.5"
-            :fill="color"
+            :d="`M ${xFor(chartData.length - 1)} ${yFor(chartData[chartData.length - 1])} l 0 0`"
+            :stroke="color"
+            stroke-width="5"
+            stroke-linecap="round"
+            fill="none"
+            vector-effect="non-scaling-stroke"
           />
           <!-- X-axis ticks: plain vertical lines, no text — a squashed short
                line still reads fine as a tick mark, so it's safe to leave
@@ -148,7 +156,7 @@ defineOptions({ name: "SparklineChart" });
 
 const props = withDefaults(
   defineProps<{
-    data: number[];
+    data: Array<number | null>;
     color?: string;
     width?: number;
     height?: number;
@@ -162,6 +170,12 @@ const props = withDefaults(
     showXTicks?: boolean;
     // Number of y-axis ticks (default 3).
     tickCount?: number;
+    // How missing (null) values are rendered. "zero" plots them at the chart
+    // floor (historical behaviour, used by absolute counts like run totals and
+    // spend). "carry-forward" drops leading nulls and extends the last known
+    // value across interior/trailing gaps, so a day with no evals holds the
+    // previous rate instead of reading as a 0% crash.
+    missingData?: "carry-forward" | "zero";
   }>(),
   {
     color: "currentColor",
@@ -172,6 +186,7 @@ const props = withDefaults(
     showYAxis: false,
     showXTicks: false,
     tickCount: 3,
+    missingData: "zero",
   },
 );
 
@@ -180,17 +195,53 @@ const gradientId = computed(() => {
   return `sparkline-${++sparklineUid}-${hashString(seed)}`;
 });
 
+// --- Missing-data handling --------------------------------------------------
+// A single transform consumed by ALL geometry (x/y mapping, line, area,
+// endpoint, ticks, tooltip) so the drawn line and the hover labels can never
+// disagree. "zero" keeps the historical behaviour (null -> 0). "carry-forward"
+// drops LEADING nulls (the line starts at the first day that has data) and
+// replaces every interior/trailing null with the last known value before it.
 // Number.isFinite excludes Infinity/-Infinity (isNaN does not), which would
 // otherwise leak into max/range and produce NaN, out-of-viewBox geometry.
-const normalizedData = computed(() =>
-  props.data.filter((v) => typeof v === "number" && Number.isFinite(v)),
-);
+const transformedSeries = computed<{ values: number[]; labelOffset: number }>(() => {
+  const raw = props.data;
+  if (props.missingData !== "carry-forward") {
+    return {
+      values: raw
+        .map((v) => (v === null ? 0 : v))
+        .filter((v): v is number => typeof v === "number" && Number.isFinite(v)),
+      labelOffset: 0,
+    };
+  }
+  let start = 0;
+  while (
+    start < raw.length &&
+    !(typeof raw[start] === "number" && Number.isFinite(raw[start]))
+  ) {
+    start++;
+  }
+  const values: number[] = [];
+  let lastKnown: number | null = null;
+  for (let i = start; i < raw.length; i++) {
+    const v = raw[i];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      lastKnown = v;
+      values.push(v);
+    } else if (lastKnown !== null) {
+      values.push(lastKnown);
+    }
+  }
+  return { values, labelOffset: start };
+});
 
 // A sparkline needs at least two points to draw a meaningful line. Fewer than
 // that renders the "no data" placeholder instead of a fabricated line.
-const hasData = computed(() => normalizedData.value.length >= 2);
+const chartData = computed(() => transformedSeries.value.values);
+const hasData = computed(() => chartData.value.length >= 2);
 
-const chartData = computed(() => normalizedData.value);
+// The labels array must shift by the same offset the series was sliced by, so
+// hover tooltips stay date-aligned after leading nulls are dropped.
+const labelOffset = computed(() => transformedSeries.value.labelOffset);
 
 const max = computed(() => Math.max(...chartData.value));
 const min = computed(() => Math.min(...chartData.value));
@@ -309,7 +360,7 @@ const tooltipText = computed(() => {
   const v = chartData.value[idx];
   if (idx < 0 || v === undefined) return "";
   const valueText = formatWithUnit(v);
-  const label = props.labels?.[idx];
+  const label = props.labels?.[idx + labelOffset.value];
   return label ? `${label}: ${valueText}` : valueText;
 });
 

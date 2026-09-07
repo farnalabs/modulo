@@ -17,6 +17,7 @@
 </p>
 
 <p align="center">
+  <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=coverage" alt="Coverage"/></a>
   <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=alert_status" alt="Quality Gate"/></a>
   <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=bugs" alt="Bugs"/></a>
   <a href="https://sonarcloud.io/summary/new_code?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=vulnerabilities" alt="Vulnerabilities"/></a>

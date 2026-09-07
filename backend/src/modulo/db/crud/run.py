@@ -144,8 +144,12 @@ _FAILURE_REASON_STATUSES: frozenset[str] = frozenset(
 )
 
 _SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
-_SANDBOX_CONCURRENCY_MIN = 1
 _SANDBOX_CONCURRENCY_MAX = 100
+# FAR-589 D3b: the Docker-tier default for an ABSENT ``sandbox_concurrency_limit``
+# key (ADR 029 as amended). The provider-filtered Docker-tier count that enforces
+# this default is D8's; the reader only reports it (``is_default=True``). No
+# numeric seeding anywhere — the default is resolved at read time, never written.
+_SANDBOX_CONCURRENCY_DEFAULT = 4
 
 _RUN_CONCURRENCY_KEY = "run_concurrency_limit"
 _RUN_CONCURRENCY_MIN = 1
@@ -2369,22 +2373,96 @@ async def _read_org_int_limit(
     return raw
 
 
-async def get_sandbox_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> int | None:
-    """Read the org's sandbox concurrency limit from ``settings_json``.
+@dataclass(frozen=True)
+class SandboxConcurrencyLimit:
+    """Resolved org sandbox/runner capacity contract (FAR-589 D3b).
 
-    ``None`` means no cap. Fail-open: a malformed value (non-dict settings,
-    string, float, bool) or a missing org returns ``None`` with a warning and
-    never raises. An out-of-range ``int`` is clamped to ``[1, 100]`` so a
-    direct-DB edit cannot crash the capacity claim.
+    One reader, one contract, consumed by all five call sites (dispatch gate,
+    HITL pre-check, claim-time cap read, resume gate, admin GET endpoint).
+    ``cap`` is the resolved cap; ``is_default`` marks the ABSENT-key case
+    (the Docker-tier default) so D8's gate can scope its provider-filtered
+    count to it, and the admin UI can render "4 (default)".
     """
-    return await _read_org_int_limit(
-        session,
-        org_id,
-        _SANDBOX_CONCURRENCY_KEY,
-        _SANDBOX_CONCURRENCY_MIN,
-        _SANDBOX_CONCURRENCY_MAX,
-        "sandbox_concurrency",
-    )
+
+    cap: int | None
+    is_default: bool = False
+
+    @property
+    def enforced_cap(self) -> int | None:
+        """The cap the flag-off-window gates enforce.
+
+        Flag-off + absent key means NO gate: the Docker-tier default
+        (``is_default=True``) activates only with D8's short-lived rollout
+        flag — the unfiltered racy count must never enforce default-4, or the
+        rollout window silently caps the dogfood org's E2B workload at 4.
+        Explicit values (including ``0`` deny-all) and explicit ``null``
+        (no gate) enforce on every path.
+        """
+        if self.is_default:
+            return None
+        return self.cap
+
+
+def _resolve_sandbox_concurrency_limit(settings: Any, org_id: uuid.UUID) -> SandboxConcurrencyLimit:
+    """Pure resolver for the ``sandbox_concurrency_limit`` key (FAR-589 D3b).
+
+    Distinguishes the previously-conflated ABSENT key (Docker-tier default 4,
+    ``is_default=True``) from an explicit ``null`` (no gate). The clamp range
+    drops the old ``_SANDBOX_CONCURRENCY_MIN = 1`` floor — ``0`` is now a
+    meaningful value (deny-all) — so out-of-range values clamp to ``[0, 100]``.
+    Fail-open: a non-dict settings blob or a non-int value resolves to no gate
+    with a warning; never raises.
+    """
+    if not isinstance(settings, dict):
+        _log.warning(
+            "sandbox_concurrency.settings_not_dict",
+            extra={"org_id": str(org_id), "value_type": type(settings).__name__},
+        )
+        return SandboxConcurrencyLimit(cap=None)
+    if _SANDBOX_CONCURRENCY_KEY not in settings:
+        return SandboxConcurrencyLimit(cap=_SANDBOX_CONCURRENCY_DEFAULT, is_default=True)
+    raw = settings[_SANDBOX_CONCURRENCY_KEY]
+    if raw is None:
+        return SandboxConcurrencyLimit(cap=None)
+    if not _is_valid_int_limit_value(raw):
+        _log.warning(
+            "sandbox_concurrency.invalid_type",
+            extra={"org_id": str(org_id), "value": repr(raw)},
+        )
+        return SandboxConcurrencyLimit(cap=None)
+    if raw < 0 or raw > _SANDBOX_CONCURRENCY_MAX:
+        _log.warning(
+            "sandbox_concurrency.out_of_range",
+            extra={"org_id": str(org_id), "value": raw},
+        )
+        return SandboxConcurrencyLimit(cap=max(0, min(_SANDBOX_CONCURRENCY_MAX, raw)))
+    return SandboxConcurrencyLimit(cap=raw)
+
+
+async def get_sandbox_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> "SandboxConcurrencyLimit":
+    """Read the org's sandbox/runner concurrency contract from ``settings_json``.
+
+    FAR-589 D3b semantics for the stored ``sandbox_concurrency_limit`` key
+    (identifier frozen — no key rename, no data migration):
+
+    - key ABSENT → Docker-tier default 4 (``is_default=True``)
+    - explicit int → gates ALL runner dispatches; ``0`` = deny-all
+    - explicit ``null`` → no gate
+    - fail-open (missing org, non-dict settings, non-int value) → no gate,
+      with a warning; never raises. An out-of-range int is clamped to
+      ``[0, 100]`` so a direct-DB edit cannot crash the capacity gates.
+
+    The absent-vs-null conflation is fixed: an absent key resolves to the
+    Docker-tier default while an explicit ``null`` disables the gate. The
+    Docker-tier PROVIDER FILTER and the rollout flag that activates default
+    enforcement are D8's — until then the gates enforce
+    :attr:`SandboxConcurrencyLimit.enforced_cap` only.
+    """
+    org = await get_organisation(session, org_id)
+    if org is None:
+        _log.warning("sandbox_concurrency.org_not_found", extra={"org_id": str(org_id)})
+        return SandboxConcurrencyLimit(cap=None)
+    return _resolve_sandbox_concurrency_limit(org.settings_json, org_id)
 
 
 async def get_org_run_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> int | None:

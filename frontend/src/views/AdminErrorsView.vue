@@ -93,8 +93,45 @@
               {{ value }}
             </span>
           </template>
-          <template #cell-sample_message="{ value }">
-            <span class="max-w-xs truncate font-medium">{{ value || '(no message)' }}</span>
+          <template #cell-sample_message="{ row, value }">
+            <div class="flex items-start gap-1">
+              <button
+                type="button"
+                class="mt-0.5 inline-flex shrink-0 items-center rounded p-0.5 text-muted-foreground hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :aria-label="isMessageExpanded((row as any).id) ? $t('views.AdminErrorsView.collapse_message') : $t('views.AdminErrorsView.expand_message')"
+                :aria-expanded="isMessageExpanded((row as any).id)"
+                :data-testid="'admin-errors-expand-' + (row as any).id"
+                @click.stop="toggleMessage((row as any).id)"
+                @keydown.stop
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="transition-transform"
+                  :class="isMessageExpanded((row as any).id) ? 'rotate-90' : ''"
+                  aria-hidden="true"
+                >
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </button>
+              <span
+                v-if="isMessageExpanded((row as any).id)"
+                data-testid="admin-errors-message-full"
+                class="min-w-0 max-w-xs whitespace-normal break-words font-medium"
+              >{{ value || '(no message)' }}</span>
+              <span
+                v-else
+                data-testid="admin-errors-message-truncated"
+                class="min-w-0 max-w-xs truncate font-medium"
+              >{{ value || '(no message)' }}</span>
+            </div>
           </template>
           <template #cell-first_seen="{ value }">
             <span class="whitespace-nowrap text-muted-foreground">{{ formatDate(value as string) }}</span>
@@ -210,6 +247,25 @@ useIntervalFn(loadStarvation, 60_000)
 
 const starvationItems = computed(() => starvationData.value?.items ?? [])
 const starvationThresholdMinutes = computed(() => starvationData.value?.threshold_minutes ?? 10)
+
+// Per-row message expand state (FAR-655): client-side only — a row's full
+// sample message is already in the list payload, so expanding wraps it inside
+// the bounded column instead of navigating or refetching.
+const expandedMessageIds = ref<Set<string>>(new Set())
+
+function isMessageExpanded(id: string): boolean {
+  return expandedMessageIds.value.has(id)
+}
+
+function toggleMessage(id: string) {
+  const next = new Set(expandedMessageIds.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  expandedMessageIds.value = next
+}
 
 function formatStarvationAge(minutes: number): string {
   if (minutes < 120) return t('views.AdminErrorsView.scheduler_starvation_age_minutes', { minutes: Math.round(minutes) })

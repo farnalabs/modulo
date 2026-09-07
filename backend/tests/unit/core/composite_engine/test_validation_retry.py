@@ -16,20 +16,8 @@ from modulo.core.composite_engine.expander import (
     run_output_validation,
 )
 
-
-def _template(nodes: list[dict] | None = None) -> dict:
-    return {
-        "nodes": nodes or [{"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"}],
-        "edges": [],
-    }
-
-
-def _node_def() -> dict:
-    return {
-        "id": str(uuid.uuid4()),
-        "node_type": "composite",
-        "composite_ref": str(uuid.uuid4()),
-    }
+from .conftest import make_default_template as _template
+from .conftest import make_node_def as _node_def
 
 
 class TestRunOutputValidation:
@@ -435,18 +423,13 @@ class TestExecuteCompositeWithRetry:
         )
         assert result == {"status": "ok"}
 
-    async def test_retry_on_failure_succeeds_after_retry(self) -> None:
+    async def test_retry_on_failure_succeeds_after_retry(self, patch_expander) -> None:
         call_count = 0
-
-        import modulo.core.composite_engine.expander as expander_mod
 
         def fake_expand(node_def, template, params):
             nonlocal call_count
             call_count += 1
             return [{"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"}]
-
-        original_expand = expander_mod.expand_composite_node
-        expander_mod.expand_composite_node = fake_expand
 
         ov = OutputValidation(
             eval_definitions=[
@@ -467,10 +450,7 @@ class TestExecuteCompositeWithRetry:
             ValidationResult(passed=True),
         ]
 
-        original_validate = expander_mod.run_output_validation
-        expander_mod.run_output_validation = lambda mo, ov, ljc=None: results.pop(0)
-
-        try:
+        with patch_expander(expand=fake_expand, validate=lambda mo, ov, ljc=None: results.pop(0)):
             result = await execute_composite_with_retry(
                 _node_def(),
                 _template(),
@@ -480,11 +460,8 @@ class TestExecuteCompositeWithRetry:
             )
             assert call_count == 3
             assert result == {"status": "fail"}
-        finally:
-            expander_mod.expand_composite_node = original_expand
-            expander_mod.run_output_validation = original_validate
 
-    async def test_retry_budget_exhausted_raises(self) -> None:
+    async def test_retry_budget_exhausted_raises(self, patch_expander) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
@@ -498,20 +475,16 @@ class TestExecuteCompositeWithRetry:
             max_validation_retries=1,
         )
 
-        import modulo.core.composite_engine.expander as expander_mod
+        def always_fail(mo, ov, ljc=None):
+            return ValidationResult(
+                passed=False,
+                failures=["Eval 'check': regex /ok/ did not match field 'status'"],
+            )
 
-        original_expand = expander_mod.expand_composite_node
-        expander_mod.expand_composite_node = lambda nd, ct, pv: [
-            {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"},
-        ]
+        def fake_expand(nd, ct, pv):
+            return [{"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"}]
 
-        original_validate = expander_mod.run_output_validation
-        expander_mod.run_output_validation = lambda mo, ov, ljc=None: ValidationResult(
-            passed=False,
-            failures=["Eval 'check': regex /ok/ did not match field 'status'"],
-        )
-
-        try:
+        with patch_expander(expand=fake_expand, validate=always_fail):
             with pytest.raises(CompositeValidationError) as exc_info:
                 await execute_composite_with_retry(
                     _node_def(),
@@ -521,11 +494,8 @@ class TestExecuteCompositeWithRetry:
                     output_validation=ov,
                 )
             assert exc_info.value.retry_count == 1
-        finally:
-            expander_mod.expand_composite_node = original_expand
-            expander_mod.run_output_validation = original_validate
 
-    async def test_block_behaviour_immediate_failure(self) -> None:
+    async def test_block_behaviour_immediate_failure(self, patch_expander) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
@@ -539,15 +509,13 @@ class TestExecuteCompositeWithRetry:
             max_validation_retries=3,
         )
 
-        import modulo.core.composite_engine.expander as expander_mod
+        def always_fail(mo, ov, ljc=None):
+            return ValidationResult(
+                passed=False,
+                failures=["Eval 'block_check': regex /ok/ did not match field 'status'"],
+            )
 
-        original_validate = expander_mod.run_output_validation
-        expander_mod.run_output_validation = lambda mo, ov, ljc=None: ValidationResult(
-            passed=False,
-            failures=["Eval 'block_check': regex /ok/ did not match field 'status'"],
-        )
-
-        try:
+        with patch_expander(validate=always_fail):
             with pytest.raises(CompositeValidationError) as exc_info:
                 await execute_composite_with_retry(
                     _node_def(),
@@ -557,10 +525,8 @@ class TestExecuteCompositeWithRetry:
                     output_validation=ov,
                 )
             assert exc_info.value.retry_count == 0
-        finally:
-            expander_mod.run_output_validation = original_validate
 
-    async def test_warn_behaviour_does_not_retry(self) -> None:
+    async def test_warn_behaviour_does_not_retry(self, patch_expander) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
@@ -574,15 +540,13 @@ class TestExecuteCompositeWithRetry:
             max_validation_retries=3,
         )
 
-        import modulo.core.composite_engine.expander as expander_mod
+        def always_fail(mo, ov, ljc=None):
+            return ValidationResult(
+                passed=False,
+                failures=["Eval 'warn_check': regex /ok/ did not match field 'status'"],
+            )
 
-        original_validate = expander_mod.run_output_validation
-        expander_mod.run_output_validation = lambda mo, ov, ljc=None: ValidationResult(
-            passed=False,
-            failures=["Eval 'warn_check': regex /ok/ did not match field 'status'"],
-        )
-
-        try:
+        with patch_expander(validate=always_fail):
             result = await execute_composite_with_retry(
                 _node_def(),
                 _template(),
@@ -591,10 +555,8 @@ class TestExecuteCompositeWithRetry:
                 output_validation=ov,
             )
             assert result == {"status": "fail"}
-        finally:
-            expander_mod.run_output_validation = original_validate
 
-    async def test_eval_def_without_matching_failure_is_skipped(self) -> None:
+    async def test_eval_def_without_matching_failure_is_skipped(self, patch_expander) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig(
@@ -615,32 +577,25 @@ class TestExecuteCompositeWithRetry:
             max_validation_retries=1,
         )
 
-        import modulo.core.composite_engine.expander as expander_mod
+        def always_fail(mo, ov, ljc=None):
+            return ValidationResult(
+                passed=False,
+                failures=["Eval 'check': regex /ok/ did not match field 'status'"],
+            )
 
-        original_expand = expander_mod.expand_composite_node
-        expander_mod.expand_composite_node = lambda nd, ct, pv: [
-            {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"},
-        ]
-        original_validate = expander_mod.run_output_validation
-        expander_mod.run_output_validation = lambda mo, ov, ljc=None: ValidationResult(
-            passed=False,
-            failures=["Eval 'check': regex /ok/ did not match field 'status'"],
-        )
+        def fake_expand(nd, ct, pv):
+            return [{"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"}]
 
-        try:
-            with pytest.raises(CompositeValidationError):
-                await execute_composite_with_retry(
-                    _node_def(),
-                    _template(),
-                    parameter_values={},
-                    input_payload={"status": "fail"},
-                    output_validation=ov,
-                )
-        finally:
-            expander_mod.expand_composite_node = original_expand
-            expander_mod.run_output_validation = original_validate
+        with patch_expander(expand=fake_expand, validate=always_fail), pytest.raises(CompositeValidationError):
+            await execute_composite_with_retry(
+                _node_def(),
+                _template(),
+                parameter_values={},
+                input_payload={"status": "fail"},
+                output_validation=ov,
+            )
 
-    async def test_unmatched_eval_def_with_invalid_behaviour_skipped(self) -> None:
+    async def test_unmatched_eval_def_with_invalid_behaviour_skipped(self, patch_expander) -> None:
         ov = OutputValidation(
             eval_definitions=[
                 EvalDefinitionConfig.model_construct(
@@ -654,19 +609,16 @@ class TestExecuteCompositeWithRetry:
             max_validation_retries=0,
         )
 
-        import modulo.core.composite_engine.expander as expander_mod
+        def always_fail(mo, ov, ljc=None):
+            return ValidationResult(
+                passed=False,
+                failures=["Eval 'check': regex /ok/ did not match field 'status'"],
+            )
 
-        original_expand = expander_mod.expand_composite_node
-        expander_mod.expand_composite_node = lambda nd, ct, pv: [
-            {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"},
-        ]
-        original_validate = expander_mod.run_output_validation
-        expander_mod.run_output_validation = lambda mo, ov, ljc=None: ValidationResult(
-            passed=False,
-            failures=["Eval 'check': regex /ok/ did not match field 'status'"],
-        )
+        def fake_expand(nd, ct, pv):
+            return [{"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "prompt": "Hello"}]
 
-        try:
+        with patch_expander(expand=fake_expand, validate=always_fail):
             result = await execute_composite_with_retry(
                 _node_def(),
                 _template(),
@@ -675,6 +627,3 @@ class TestExecuteCompositeWithRetry:
                 output_validation=ov,
             )
             assert result == {"status": "fail"}
-        finally:
-            expander_mod.expand_composite_node = original_expand
-            expander_mod.run_output_validation = original_validate

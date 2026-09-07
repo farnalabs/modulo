@@ -1,0 +1,46 @@
+---
+id: feat-system-config
+prd: N/A
+adr: []
+code:
+  - backend/src/modulo/api/routes/admin_system_config.py
+  - backend/src/modulo/db/models/system_config.py
+unit-tests:
+  - backend/tests/unit/api/test_admin_system_config.py
+  - backend/tests/unit/db/test_system_config.py
+bdd:
+  - backend/tests/bdd/features/system_admin/system_admin_config.feature
+depends-on: []
+status: covered
+---
+
+# System Config
+
+System-level configuration administration for deployment-wide `SystemConfig`
+entries. System admins can list, create/update, and delete config key-value pairs
+with sensitive value masking.
+
+## Behaviours
+
+- [x] GET `/api/v1/system-admin/config` lists all config entries with sensitive
+      value masking; gated on `system.config.manage` (system admin only)
+      (`admin_system_config.py`)
+- [x] PUT `/api/v1/system-admin/config/{key}` creates or updates a config entry
+      (upsert) with `updated_by` tracking
+      (`backend/tests/bdd/features/system_admin/system_admin_config.feature`)
+- [x] DELETE `/api/v1/system-admin/config/{key}` deletes a config entry; returns
+      404 if not found
+- [x] Regular admin receives 403 Forbidden on all system-config endpoints
+      (`backend/tests/bdd/features/system_admin/system_admin_config.feature`)
+
+## Known Gaps
+
+- No BDD for DELETE system config; coverage is via unit tests.
+
+## QA History
+
+- 2026-09-07: **improve-architecture (product-map walk)** — added this
+  behaviour-tracker for `feat-system-config`, which previously had no
+  `docs/product-map/` entry. Behaviours verified against
+  `routes/admin_system_config.py`, the system-config unit tests, and the
+  `system_admin_config.feature` BDD. Status: covered.

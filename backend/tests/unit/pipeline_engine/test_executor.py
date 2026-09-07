@@ -39,6 +39,7 @@ from modulo.core.pipeline_engine.runtime_retry import (
     COMPENSATION_FAILED_CODE,
     CompensationFailedError,
 )
+from modulo.db.crud.run import SandboxConcurrencyLimit
 from modulo.otel_bridge import trace_id_for_thread
 
 
@@ -2056,7 +2057,7 @@ def test_graph_contains_sandbox_agent_false_for_other_node_types():
 
 
 # ---------------------------------------------------------------------------
-# get_sandbox_concurrency_limit — fail-open setting reader
+# get_sandbox_concurrency_limit — reader semantics (FAR-589 D3b)
 # ---------------------------------------------------------------------------
 
 
@@ -2066,30 +2067,70 @@ def _org_with_settings(settings: Any) -> MagicMock:
     return org
 
 
-async def test_get_sandbox_concurrency_limit_unset_returns_none():
+def _cap_limit(cap: int | None) -> SandboxConcurrencyLimit:
+    """A patched reader returning an EXPLICIT cap (or explicit null = no gate)."""
+    return SandboxConcurrencyLimit(cap=cap, is_default=False)
+
+
+async def test_get_sandbox_concurrency_limit_absent_resolves_docker_tier_default():
+    """An ABSENT key resolves to the Docker-tier default 4 (is_default=True)."""
     from modulo.db.crud.run import get_sandbox_concurrency_limit
 
     with patch("modulo.db.crud.run.get_organisation", return_value=_org_with_settings({})):
-        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap == 4
+    assert limit.is_default is True
+    # Flag-off window: the default does NOT gate until D8's rollout flag.
+    assert limit.enforced_cap is None
 
 
-async def test_get_sandbox_concurrency_limit_returns_int():
+async def test_get_sandbox_concurrency_limit_explicit_value_is_not_default():
     from modulo.db.crud.run import get_sandbox_concurrency_limit
 
     org = _org_with_settings({"sandbox_concurrency_limit": 5})
     with patch("modulo.db.crud.run.get_organisation", return_value=org):
-        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) == 5
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap == 5
+    assert limit.is_default is False
+    assert limit.enforced_cap == 5
 
 
-async def test_get_sandbox_concurrency_limit_clamps_out_of_range():
+async def test_get_sandbox_concurrency_limit_stored_zero_reads_as_zero_deny_all():
+    """Stored ``0`` reads as an explicit 0 (deny-all), never as unset."""
+    from modulo.db.crud.run import get_sandbox_concurrency_limit
+
+    org = _org_with_settings({"sandbox_concurrency_limit": 0})
+    with patch("modulo.db.crud.run.get_organisation", return_value=org):
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap == 0
+    assert limit.is_default is False
+    assert limit.enforced_cap == 0
+
+
+async def test_get_sandbox_concurrency_limit_explicit_null_means_no_gate():
+    """An explicit ``null`` value resolves to no gate (absent-vs-null fixed)."""
+    from modulo.db.crud.run import get_sandbox_concurrency_limit
+
+    org = _org_with_settings({"sandbox_concurrency_limit": None})
+    with patch("modulo.db.crud.run.get_organisation", return_value=org):
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap is None
+    assert limit.is_default is False
+    assert limit.enforced_cap is None
+
+
+async def test_get_sandbox_concurrency_limit_clamps_out_of_range_to_0_100():
     from modulo.db.crud.run import get_sandbox_concurrency_limit
 
     org_high = _org_with_settings({"sandbox_concurrency_limit": 9999})
     with patch("modulo.db.crud.run.get_organisation", return_value=org_high):
-        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) == 100
-    org_low = _org_with_settings({"sandbox_concurrency_limit": 0})
-    with patch("modulo.db.crud.run.get_organisation", return_value=org_low):
-        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) == 1
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap == 100
+    assert limit.is_default is False
+    org_neg = _org_with_settings({"sandbox_concurrency_limit": -5})
+    with patch("modulo.db.crud.run.get_organisation", return_value=org_neg):
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap == 0
 
 
 @pytest.mark.parametrize(
@@ -2103,14 +2144,27 @@ async def test_get_sandbox_concurrency_limit_fail_open_on_bad_type(bad_value):
         "modulo.db.crud.run.get_organisation",
         return_value=_org_with_settings({"sandbox_concurrency_limit": bad_value}),
     ):
-        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap is None
+    assert limit.is_default is False
 
 
 async def test_get_sandbox_concurrency_limit_fail_open_on_non_dict_settings():
     from modulo.db.crud.run import get_sandbox_concurrency_limit
 
     with patch("modulo.db.crud.run.get_organisation", return_value=_org_with_settings("not-a-dict")):
-        assert await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap is None
+    assert limit.is_default is False
+
+
+async def test_get_sandbox_concurrency_limit_fail_open_on_missing_org():
+    from modulo.db.crud.run import get_sandbox_concurrency_limit
+
+    with patch("modulo.db.crud.run.get_organisation", AsyncMock(return_value=None)):
+        limit = await get_sandbox_concurrency_limit(AsyncMock(), uuid.uuid4())
+    assert limit.cap is None
+    assert limit.is_default is False
 
 
 # ---------------------------------------------------------------------------
@@ -2166,7 +2220,7 @@ async def test_check_capacity_skips_org_path_when_no_sandbox_node():
     executor = _make_capacity_executor(session)
     run = _capacity_run()
     calls: list[tuple[str, dict[str, Any]]] = []
-    cap_read = AsyncMock(return_value=5)
+    cap_read = AsyncMock(return_value=_cap_limit(5))
     org_count = AsyncMock(return_value=0)
 
     with (
@@ -2199,7 +2253,7 @@ async def test_check_capacity_skips_org_count_when_cap_none():
     executor = _make_capacity_executor(session)
     run = _capacity_run()
     calls: list[tuple[str, dict[str, Any]]] = []
-    cap_read = AsyncMock(return_value=None)
+    cap_read = AsyncMock(return_value=_cap_limit(None))
     org_count = AsyncMock(return_value=99)
 
     with (
@@ -2243,7 +2297,7 @@ async def test_check_capacity_org_cap_blocks_on_org_count():
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
         patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=2),
-        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(2)),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -2275,7 +2329,7 @@ async def test_check_capacity_pipeline_cap_blocks_before_org():
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=2),
         patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
-        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=10),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(10)),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -2306,7 +2360,7 @@ async def test_check_capacity_unlimited_pipeline_still_enforces_org_cap():
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
         patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=3),
-        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=3),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(3)),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -2467,7 +2521,7 @@ async def test_check_capacity_admission_clears_marker():
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
         patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
-        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=5),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(5)),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -2501,7 +2555,7 @@ async def test_check_capacity_never_resurrects_terminal_run(terminal_status: str
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
         patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
-        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=5),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(5)),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -2558,7 +2612,7 @@ async def test_check_capacity_fail_open_when_org_count_raises():
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
         patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", side_effect=_raise_count),
-        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(2)),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -2575,7 +2629,7 @@ async def test_check_capacity_fail_open_when_graph_scan_raises():
     session = _make_capacity_session()
     executor = _make_capacity_executor(session)
     run = _capacity_run()
-    cap_read = AsyncMock(return_value=2)
+    cap_read = AsyncMock(return_value=_cap_limit(2))
     org_count = AsyncMock(return_value=99)
 
     def _raise_graph(_g: Any) -> bool:
@@ -2602,6 +2656,76 @@ async def test_check_capacity_fail_open_when_graph_scan_raises():
     assert result.status == "running"
     cap_read.assert_not_awaited()
     org_count.assert_not_awaited()
+
+
+async def test_check_capacity_absent_key_default_does_not_gate_flag_off():
+    """FAR-589 D3b flag-off: an ABSENT key resolves to the Docker-tier default
+    (``is_default=True``) which must NOT gate — the unfiltered racy count must
+    never enforce default-4 (that would silently cap the dogfood org's E2B
+    workload at 4). The Docker-tier default activates only with D8's rollout
+    flag."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+    cap_read = AsyncMock(return_value=SandboxConcurrencyLimit(cap=4, is_default=True))
+    org_count = AsyncMock(return_value=99)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", new=org_count),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", new=cap_read),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "running"
+    cap_read.assert_awaited_once()
+    org_count.assert_not_awaited()
+
+
+async def test_check_capacity_stored_zero_denies_all():
+    """A stored ``0`` is an explicit deny-all: even with ZERO active sandbox
+    runs the claim is refused (0 active >= 0 cap)."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(0)),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=0,
+            graph_json={"nodes": [{"id": "a", "node_type": "sandbox_agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert calls[-1][1]["error_code"] == "org_capacity_limited"
 
 
 # ---------------------------------------------------------------------------
@@ -2779,7 +2903,7 @@ async def test_resume_at_org_sandbox_capacity_raises():
         patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=run),
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(2)),
         patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=2),
         pytest.raises(SandboxCapacityExceededError),
     ):
@@ -2787,6 +2911,47 @@ async def test_resume_at_org_sandbox_capacity_raises():
 
     graph_lock_exec = session.execute.await_args_list[1]
     assert "pg_advisory_xact_lock" in graph_lock_exec.args[0].text
+
+
+async def test_resume_stored_zero_sandbox_capacity_denies_even_with_zero_active():
+    """FAR-589 D3b: a stored ``0`` is deny-all on the resume gate too — the
+    resume proceeds only when the enforced cap is absent (no gate), and 0 is
+    an enforced cap that no active count satisfies."""
+    from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+
+    run = _make_run()
+    snapshot = _make_snapshot()
+    snapshot.graph_json = {"nodes": [{"id": "agent-a", "node_type": "sandbox_agent"}]}
+
+    graph_json_result = MagicMock()
+    graph_json_result.scalar_one_or_none.return_value = snapshot.graph_json
+
+    session = AsyncMock(spec=AsyncSession)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(return_value=graph_json_result)
+
+    @asynccontextmanager
+    async def _ctx():
+        yield session
+
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = MagicMock(side_effect=lambda: _ctx())
+
+    org_id = uuid.uuid4()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=_cap_limit(0)),
+        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
+        pytest.raises(SandboxCapacityExceededError),
+    ):
+        await executor.resume(run_id=run.id, org_id=org_id, resume_data={"action": "approved"})
 
 
 @pytest.mark.parametrize("terminal_status", ["complete", "failed", "cancelled", "eval_failed"])

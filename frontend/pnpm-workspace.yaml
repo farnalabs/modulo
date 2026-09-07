@@ -12,7 +12,7 @@ overrides:
   # FAR-646: @redocly/openapi-core pins js-yaml 4.3.1 exactly (its adapter reads
   # the `types` export that js-yaml 5.x removed). Remove this scoped pin once
   # openapi-typescript upgrades to @redocly/openapi-core 2.x (js-yaml ^5.2.2).
-  "@redocly/openapi-core>js-yaml": "4.3.1"
+  "@redocly/openapi-core>js-yaml": "4.3.2"
   "postcss>nanoid": "^6.0.0"
   rollup: "4.63.1"
   "@tanstack/query-core": "5.102.8"
@@ -82,3 +82,5 @@ minimumReleaseAgeExclude:
   - 'eslint@10.10.0'
   - 'playwright-core@1.63.0'
   - 'playwright@1.63.0'
+  - 'eslint-plugin-vue@10.11.0'
+  - 'vue-echarts@8.3.0'

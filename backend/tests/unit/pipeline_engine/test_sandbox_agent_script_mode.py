@@ -39,6 +39,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_resource_limits_config,
     validate_sandbox_agent_command_jinja,
 )
+from modulo.db.crud.run import SandboxConcurrencyLimit
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _DEFAULT_RUN_ID = str(uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
@@ -1347,8 +1348,8 @@ async def test_dispatch_capacity_denied_before_provisioning():
     async def _fake_count(*_a: Any, **_kw: Any) -> int:
         return 5  # at or above cap
 
-    async def _fake_get_limit(*_a: Any, **_kw: Any) -> int:
-        return 5
+    async def _fake_get_limit(*_a: Any, **_kw: Any) -> SandboxConcurrencyLimit:
+        return SandboxConcurrencyLimit(cap=5, is_default=False)
 
     async def _noop_set_rls(*_a: Any, **_kw: Any) -> None:
         pass
