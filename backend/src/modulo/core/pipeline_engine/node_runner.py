@@ -4403,6 +4403,44 @@ def _is_sandbox_session_lost_echo(output_json: Any) -> bool:
     return any(_SANDBOX_SESSION_LOST_SUMMARY in s for s in haystack)
 
 
+def _parse_org_uuid(org_id: str) -> uuid.UUID | None:
+    """Parse a run's org id string to a UUID, or ``None`` when absent/invalid."""
+    if not org_id:
+        return None
+    try:
+        return uuid.UUID(str(org_id))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _read_org_vault_secret(
+    session_factory: Callable[..., Any],
+    org_uuid: uuid.UUID,
+    secret_key: str,
+) -> str | None:
+    """Read one secret from the org vault under the org's RLS context.
+
+    Returns ``None`` when the key is not in the vault or the read fails (the
+    failure is logged, never raised) — the ref is then omitted from the
+    sandbox env rather than failing the node.
+    """
+    from modulo.core.secrets_backend import create_secrets_backend
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.settings import get_settings
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
+            return await backend.get_secret(secret_key)
+    except KeyError:
+        return None  # not in vault -> return None
+    except Exception:
+        _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
+        return None
+
+
 async def _sandbox_resolve_secret_ref(
     secret_key: str,
     *,
@@ -4422,42 +4460,22 @@ async def _sandbox_resolve_secret_ref(
     silent, which made an unresolved ``{{ secrets.X }}`` env ref invisible in
     production until the sandbox failed on the missing credential.
     """
-    if session_factory is not None:
-        org_uuid: uuid.UUID | None = None
-        org_id_raw = org_id
-        if org_id_raw:
-            try:
-                org_uuid = uuid.UUID(str(org_id_raw))
-            except (TypeError, ValueError):
-                org_uuid = None
-        if org_uuid is not None:
-            from modulo.core.secrets_backend import create_secrets_backend
-            from modulo.db.rls import set_rls_execution_context, set_rls_org
-            from modulo.settings import get_settings
-
-            try:
-                async with session_factory() as session, session.begin():
-                    await set_rls_org(session, org_uuid)
-                    await set_rls_execution_context(session)
-                    backend = create_secrets_backend(fernet_key=get_settings().fernet_key, session=session)
-                    return await backend.get_secret(secret_key)
-            except KeyError:
-                pass  # not in vault -> return None
-            except Exception:
-                _log.exception("env_var.secret_resolve_error", extra={"secret_key": secret_key})
-        else:
-            _log.warning(
-                "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the "
-                "org vault (run org_id is missing or invalid) — ref will be omitted from sandbox envs",
-                secret_key,
-            )
-    else:
+    if session_factory is None:
         _log.warning(
             "env_var.secret_ref_no_db_context: secret %r cannot be resolved from the "
             "org vault (no DB session factory on this execution path) — ref will be omitted from sandbox envs",
             secret_key,
         )
-    return None
+        return None
+    org_uuid = _parse_org_uuid(org_id)
+    if org_uuid is None:
+        _log.warning(
+            "env_var.secret_ref_no_org_context: secret %r cannot be resolved from the "
+            "org vault (run org_id is missing or invalid) — ref will be omitted from sandbox envs",
+            secret_key,
+        )
+        return None
+    return await _read_org_vault_secret(session_factory, org_uuid, secret_key)
 
 
 async def _sandbox_acquire_dispatch_marker(
