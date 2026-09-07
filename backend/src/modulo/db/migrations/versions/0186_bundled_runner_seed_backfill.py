@@ -93,7 +93,7 @@ def upgrade() -> None:
                    'runner_docker',
                    :tpl_image,
                    '[]'::json,
-                   :tpl_config::jsonb,
+                   CAST(:tpl_config AS jsonb),
                    'outbound',
                    'git_clone',
                    '[]'::json,
@@ -128,7 +128,7 @@ def upgrade() -> None:
             SET provider_type = 'runner_docker',
                 name = :tpl_name,
                 image_ref = :tpl_image,
-                config_json = :tpl_config::jsonb,
+                config_json = CAST(:tpl_config AS jsonb),
                 network_policy = 'outbound',
                 persistence_policy = 'ephemeral',
                 updated_at = now()
