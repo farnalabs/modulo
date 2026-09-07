@@ -206,7 +206,6 @@ async def _remove_member_checked(
 ) -> TeamMembership:
     """Authorise and remove a team member, enforcing the last-operator guard."""
     is_admin = org_role_level(current_user.org_role) >= org_role_level("admin")
-    caller_membership = None
     if not is_admin:
         caller_membership = await _require_team_operator_caller(
             session,
@@ -219,7 +218,6 @@ async def _remove_member_checked(
     # SECURITY (#1194): operator cannot remove someone with equal or higher
     # team role — prevents intra-org privilege interference.
     if not is_admin:
-        assert caller_membership is not None  # nosec B101 -- genuine invariant: when not is_admin, caller_membership is set to the operator membership above
         target_level = team_role_level(membership.role)
         caller_level = team_role_level(caller_membership.role)
         if target_level >= caller_level:
@@ -245,7 +243,6 @@ async def _change_member_role_checked(
 ) -> tuple[TeamMembership, str]:
     """Authorise and apply a member role change; returns (membership, old_role)."""
     is_admin = org_role_level(current_user.org_role) >= org_role_level("admin")
-    caller_membership = None
     if not is_admin:
         caller_membership = await _require_team_operator_caller(
             session,
@@ -265,7 +262,6 @@ async def _change_member_role_checked(
     # SECURITY (#1194): operator cannot demote someone with equal or higher
     # team role — prevents intra-org privilege interference.
     if not is_admin:
-        assert caller_membership is not None  # nosec B101 -- genuine invariant: when not is_admin, caller_membership is set to the operator membership above
         target_level = team_role_level(old_role)
         caller_level = team_role_level(caller_membership.role)
         if target_level >= caller_level:
