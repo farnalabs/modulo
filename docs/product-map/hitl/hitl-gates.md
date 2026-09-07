@@ -56,7 +56,8 @@ may decide.
 - [x] Pending-gate queues: `GET /api/v1/runs/{run_id}/hitl/pending` (per run)
       and `GET /api/v1/hitl/pending` (org-wide), gated by the `hitl.list`
       permission. The org-wide queue joins `runs` and lists only undecided
-      gates whose run is in `awaiting_human` or `claimed` status — undecided
+      gates whose run is in `awaiting_human`, `claimed`, or `hitl_parked` status
+      — undecided
       gates on terminal runs are data rot, not pending work, and are excluded
       (FAR-612); the MCP `list_pending_hitl` tool applies the same
       actionable-status filter. The review UI renders a gate held by another

@@ -910,7 +910,8 @@ async def list_org_pending_gates(
 
     Gates on terminal runs are excluded (they are data rot, not pending work):
     the manager joins ``runs`` and keeps only undecided gates whose run is in
-    ``awaiting_human`` or ``claimed`` status (FAR-612).
+    ``awaiting_human``, ``claimed``, or ``hitl_parked`` status (FAR-612,
+    FAR-604).
     """
     mgr = HITLManager()
     try:

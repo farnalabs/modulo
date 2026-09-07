@@ -658,11 +658,12 @@ class HITLManager:
     ) -> list[HitlClaim]:
         """All undecided gates for the org whose run is still actionable.
 
-        Joined to ``runs`` and filtered to runs in ``awaiting_human`` or
-        ``claimed`` status (FAR-612): an undecided gate on any other run
-        status is data rot (e.g. orphaned rows left by the since-fixed
-        auto-approve bug), not pending work. Held (claimed) gates are
-        included so consumers can render the claimed state.
+        Joined to ``runs`` and filtered to runs in ``awaiting_human``,
+        ``claimed``, or ``hitl_parked`` status (FAR-612, FAR-604): an
+        undecided gate on any other run status is data rot (e.g. orphaned
+        rows left by the since-fixed auto-approve bug), not pending work.
+        Held (claimed) gates are included so consumers can render the
+        claimed state; parked runs' gates stay listed so they are not lost.
         """
         result = await session.execute(
             select(HitlClaim)

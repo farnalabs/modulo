@@ -500,6 +500,25 @@ async def test_claim_on_non_awaiting_run_raises(run_status: str):
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
+async def test_claim_on_parked_run_succeeds():
+    """FAR-604/FAR-612: a gate on a ``hitl_parked`` run is actionable and claimable.
+
+    ``hitl_parked`` is in ``HITL_ACTIONABLE_RUN_STATUSES`` (deliberately — parked
+    runs' gates stay listed), so claim() must succeed exactly as on ``awaiting_human``
+    rather than raising ``RunNotAwaitingError``.
+    """
+    pre_check = _gate(account_id=None)
+    claimed_gate = _gate(
+        account_id=_USER,
+        claim_token="tok",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check, run_status="hitl_parked")
+    mgr = HITLManager()
+    result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+    assert result is claimed_gate
+
+
 async def test_claim_when_run_row_missing_raises_gate_not_found():
     """An undecided gate whose run row is gone (org-scoped lookup misses) is 404 data, not claimable."""
     gate = _gate(account_id=None)
