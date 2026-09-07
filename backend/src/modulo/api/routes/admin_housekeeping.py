@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
@@ -17,6 +17,13 @@ from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, purge_termin
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 
 _log = logging.getLogger(__name__)
+
+# Permission guarding every housekeeping route (same check, three routes).
+_PERM_HOUSEKEEPING_MANAGE = "housekeeping.manage"
+
+# 503 body returned when the shared database pool/connection is unavailable
+# (same message, three routes).
+_MSG_DB_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 
 router = APIRouter(prefix="/api/v1/admin/housekeeping", tags=["admin-housekeeping"])
 
@@ -59,7 +66,7 @@ class CleanupResponse(BaseModel):
 @router.get("")
 async def list_housekeeping(
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission("housekeeping.manage"),
+    principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
 ) -> HousekeepingScanResponse:
     try:
         async with session.begin():
@@ -70,13 +77,13 @@ async def list_housekeeping(
         _log.exception("admin_housekeeping.list_housekeeping")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("admin_housekeeping.list")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DB_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -114,7 +121,7 @@ async def list_housekeeping(
 async def perform_cleanup(
     req: CleanupRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission("housekeeping.manage"),
+    principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
 ) -> CleanupResponse:
     deleted_count = 0
     errors: list[dict[str, str]] = []
@@ -163,13 +170,13 @@ async def perform_cleanup(
         _log.exception("admin_housekeeping.perform_cleanup")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("admin_housekeeping.cleanup")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DB_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -198,7 +205,7 @@ class CheckpointRetentionPurgeResponse(BaseModel):
 async def purge_checkpoints(
     req: CheckpointRetentionPurgeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission("housekeeping.manage"),
+    principal: TenantPrincipal = require_permission(_PERM_HOUSEKEEPING_MANAGE),
 ) -> CheckpointRetentionPurgeResponse:
     """Purge LangGraph checkpoint rows for old terminal runs (keep the ``runs``).
 
@@ -235,13 +242,13 @@ async def purge_checkpoints(
         _log.exception("admin_housekeeping.purge_checkpoints.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("admin_housekeeping.purge_checkpoints.db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DB_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
