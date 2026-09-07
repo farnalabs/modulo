@@ -74,3 +74,53 @@ async def seed_system_schemas(session: AsyncSession, org_id: uuid.UUID, account_
         )
         session.add(schema_version)
         _log.info("seed.system_schema_created", extra={"org_id": str(org_id), "schema_name": spec["name"]})
+
+
+async def seed_bundled_runner_profile(session: AsyncSession, org_id: uuid.UUID, account_id: uuid.UUID) -> None:
+    """Seed the per-org "Bundled Runner (Docker)" EnvironmentProfile (FAR-590 D4).
+
+    Shipped-template seeding at org-creation (owned by the org's account) —
+    idempotent: an org that already carries a live Bundled Runner profile row
+    keeps it (operator-pinned older digests survive; template updates are
+    surfaced live by the drift helper, never silently applied).
+    """
+    from sqlalchemy import text
+
+    from modulo.db.bundled_runner_template import (
+        TEMPLATE_PROFILE_NAME,
+        build_bundled_runner_profile_values,
+    )
+    from modulo.db.models.environment_profile import EnvironmentProfile
+
+    existing = await session.execute(
+        text(
+            "SELECT id FROM environment_profiles "
+            "WHERE organisation_id = :oid AND provider_type = 'runner_docker' "
+            "AND deleted_at IS NULL LIMIT 1"
+        ),
+        {"oid": str(org_id)},
+    )
+    if existing.fetchone() is not None:
+        return
+    values = build_bundled_runner_profile_values()
+    profile = EnvironmentProfile(
+        organisation_id=org_id,
+        account_id=account_id,
+        name=values["name"],
+        description=values["description"],
+        provider_type=values["provider_type"],
+        image_ref=values["image_ref"],
+        capabilities_json=values["capabilities_json"],
+        config_json=values["config_json"],
+        network_policy=values["network_policy"],
+        initialisation_strategy=values["initialisation_strategy"],
+        secret_refs_json=values["secret_refs_json"],
+        persistence_policy=values["persistence_policy"],
+        visibility="org",
+    )
+    session.add(profile)
+    await session.flush()
+    _log.info(
+        "seed.bundled_runner_profile_created",
+        extra={"org_id": str(org_id), "profile_name": TEMPLATE_PROFILE_NAME},
+    )

@@ -46,6 +46,12 @@ async def create_organisation(
             await seed_system_schemas(session, org.id, created_by)
         except Exception:
             _log.warning("seed.system_schemas_failed_for_new_org", exc_info=True)
+        try:
+            from modulo.db.seed import seed_bundled_runner_profile
+
+            await seed_bundled_runner_profile(session, org.id, created_by)
+        except Exception:
+            _log.warning("seed.bundled_runner_profile_failed_for_new_org", exc_info=True)
 
     return org
 

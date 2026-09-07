@@ -58,7 +58,7 @@ _MIGRATION_PATH = (
 # 0184_trigger_events_indexes_and_type_check (this PR's trigger_events index +
 # type-check sweep, renumbered from 0182/0183 after the hitl_claims
 # collision), which is now the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0184_trigger_events_indexes_and_type_check"
+_CHAIN_HEAD_MIGRATION_NAME = "0185_bundled_runner_seed_backfill"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

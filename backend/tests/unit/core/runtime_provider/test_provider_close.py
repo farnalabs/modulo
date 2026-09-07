@@ -292,4 +292,9 @@ async def test_docker_create_workspace_maps_workspace_metadata_to_labels(
 
     assert len(ref) == 12
     created = client.containers.create.call_args.kwargs
-    assert created["config"]["Labels"] == {"org": "acme", "run": "42"}
+    labels = created["config"]["Labels"]
+    # User-supplied metadata maps 1:1 AND the deployment-identity label is
+    # always present (reconciler machine scoping, ADR 029).
+    assert labels["org"] == "acme"
+    assert labels["run"] == "42"
+    assert labels["modulo.machine.id"] == provider._deployment_identity()

@@ -236,6 +236,10 @@ async def create_profile(
             status_code=status.HTTP_409_CONFLICT,
             detail="An environment profile with this name already exists.",
         ) from None
+    except ValueError as exc:
+        # Model/crud policy violations (e.g. the Bundled Runner's locked
+        # ephemeral persistence — FAR-590 D4) are user-input errors, 422.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError:
         _log.exception(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
         raise HTTPException(
@@ -318,6 +322,10 @@ async def update_profile(
             status_code=status.HTTP_409_CONFLICT,
             detail="An environment profile with this name already exists.",
         ) from None
+    except ValueError as exc:
+        # Model/crud policy violations (e.g. the Bundled Runner's locked
+        # ephemeral persistence — FAR-590 D4) are user-input errors, 422.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError:
         _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
         raise HTTPException(

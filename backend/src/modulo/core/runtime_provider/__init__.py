@@ -6,10 +6,12 @@ sandboxed processes) and executing commands within them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -99,6 +101,11 @@ class WorkspaceSpec:
     # it to container Labels, E2B to sandbox metadata, Local ignores it).
     # Deliberately separate from ``labels``, which stays Env-var injection.
     workspace_metadata: dict[str, str] = field(default_factory=dict)
+    # Dedicated workspace network name (D4): the Docker provider attaches the
+    # container to THIS bridge network (never the compose/backend network).
+    # None -> provider default. The `none` opt-in is expressed via
+    # ``egress_policy == "none"``.
+    workspace_network: str | None = None
 
 
 @dataclass
@@ -109,6 +116,44 @@ class ExecResult:
     stdout: str
     stderr: str
     duration_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class ExecStreamChunk:
+    """One decoded output chunk from a streaming exec (D4 primitive)."""
+
+    stream: str  # "stdout" | "stderr"
+    data: str
+
+
+class ExecProcess:
+    """Streaming-exec handle (FAR-590 D4): async output chunks + a kill handle.
+
+    The provider yields decoded chunks as :class:`ExecStreamChunk` values via
+    ``chunks`` — the caller (script-mode dispatch) consumes them for live-log
+    streaming and stall detection exactly as E2B's background command stream.
+    An engine/proxy drop mid-stream is delivered as a stream ERROR (via
+    ``error``, never a fabricated ``exit_code == 0``).
+
+    Lifecycle contract:
+      - ``done`` events fire when the stream ended (normally or by error);
+      - ``exit_code`` stays ``None`` until the END of a healthy stream — a
+        consumer that finishes on a stream ERROR must treat the process as
+        failed, never as a success (no zero-exit fabrication);
+      - ``error`` carries the stream failure description (engine/proxy drop),
+        or stays None.
+    """
+
+    def __init__(self, chunks: AsyncIterator[ExecStreamChunk], kill: Callable[[], Awaitable[None]]) -> None:
+        self.chunks = chunks
+        self._kill = kill
+        self.done = asyncio.Event()
+        self.exit_code: int | None = None
+        self.error: str | None = None
+
+    async def kill(self) -> None:
+        """Terminate the exec stream + underlying command best-effort."""
+        await self._kill()
 
 
 class RuntimeProvider(ABC):
@@ -130,8 +175,27 @@ class RuntimeProvider(ABC):
         *,
         cmd_timeout: int | None = None,
     ) -> ExecResult:
-        """Run a command inside an existing workspace."""
+        """Run a command inside an existing workspace (collect-then-return)."""
         ...
+
+    async def exec_command_stream(
+        self,
+        provider_ref: str,
+        command: list[str],
+        *,
+        environment: dict[str, str] | None = None,
+    ) -> ExecProcess:
+        """Stream a command's output as async chunks with a kill handle (D4).
+
+        The streaming primitive alongside collect-then-return
+        :meth:`exec_command` so script-mode's live-log drain + stall/no-output
+        detection work on every provider exactly as on E2B. Default
+        implementation raises NotImplementedError — providers that do not
+        implement streaming keep the collect-then-return contract.
+        """
+        raise NotImplementedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement exec_command_stream"
+        )
 
     @abstractmethod
     async def destroy_workspace(self, provider_ref: str) -> None:

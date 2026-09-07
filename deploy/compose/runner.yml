@@ -1,0 +1,130 @@
+# Bundled Runner compose overlay (FAR-590, D4 — ADR 029).
+#
+# Enable with:
+#   docker compose -f docker-compose.yml -f deploy/compose/runner.yml --profile runner up -d
+#
+# Off by default (the `runner` compose profile) — enabling the overlay is the
+# operator's explicit opt-in to the Bundled Runner tier. See
+# docs/security/bundled-runner-trust-boundary.md and
+# docs/security/bundled-runner-operator-guide.md for the full posture, the
+# registration env matrix, and the digest-pinning contract.
+#
+# What the overlay adds:
+#   1. docker-socket-proxy — the FILTERED default Docker endpoint. The backend
+#      and SAQ workers get MODULO_DOCKER_HOST=tcp://docker-socket-proxy:2375
+#      (step 2 of the documented 4-step endpoint chain); the raw socket is a
+#      documented operator override, not the default.
+#   2. bundled-runner — the pinned first-party runner image BUILD target
+#      (deploy/docker/runner-opencode.Dockerfile). The *published* image is
+#      pinned by digest in backend/src/modulo/core/bundled_runner/profile.py;
+#      this target exists so self-hosters can build their own copy.
+#   3. modulo-runner-workspace — the dedicated bridge network workspace
+#      containers attach to at create-time (NetworkingConfig; no /networks/*
+#      API calls needed). It is declared + referenced by the holder service
+#      because `--profile` never creates unreferenced networks (phase-0
+#      spike note 1) — without the reference the first provision-by-API
+#      start fails with "network not found".
+#
+# CI guard scope (plan D4): no privileged: true, no host network/pid/ipc, and
+# no unrestricted cap_add anywhere in this overlay; the proxy publishes no
+# host ports.
+
+services:
+  docker-socket-proxy:
+    # FILTERED Docker endpoint (named implementation: linuxserver/socket-proxy
+    # — the phase-0 spike recommendation, FAR-595). Digest-pinned like the
+    # runner image; digest advances ride the weekly trivy cadence (weekly
+    # scan of every published tag; new high/critical opens a GitHub issue;
+    # off-cycle rebuild for critical CVEs).
+    image: lscr.io/linuxserver/socket-proxy@sha256:cba12c42b1df30a6446856028f5ab726e9d8921f1ea74be509216c5e41357d42
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # ---- endpoint -> config mapping (per-category, linuxserver) ----
+      # Derived mechanically from the backend's real Docker API surface
+      # (DockerRuntimeProvider + the deprecated shell connector), enumerated
+      # in docs/security/bundled-runner-trust-boundary.md#allowlist. The
+      # runtime completeness assertion (docker-marked, CI) FAILS on any
+      # request the allowlist rejects — the derivation is tested, not
+      # claimed.
+      #
+      # CONTAINERS (^/containers/*): list/create/start/stop/remove + inspect
+      #   + exec-create. Spike finding: per-ENDPOINT granularity is partial
+      #   — with CONTAINERS=1 the residual kill/attach/rename/update/resize/
+      #   stats/wait/prune surface stays open (kill + exec-create are
+      #   required by dispatch); the deny-refinements below close
+      #   archive/export/logs/top/change. Residual exposure enumerated in
+      #   docs/security/bundled-runner-trust-boundary.md#residual-exposure.
+      CONTAINERS: "1"
+      # EXEC (^/exec/*): exec-start (hijacked-stream — spike-verified) +
+      #   exec-inspect. NOTE: exec-create is gated by CONTAINERS, exec-start
+      #   by EXEC — different switches (spike note 3).
+      EXEC: "1"
+      # IMAGES (^/images/*): inspect/list/create. POST /images/create serves
+      #   provision pulls AND the deprecated shell connector's
+      #   `python:3.12-slim` default — its surface is inside the
+      #   completeness assertion so enabling the overlay cannot silently
+      #   re-home the connector.
+      IMAGES: "1"
+      # PING/VERSION/INFO: health + engine-shape probes.
+      PING: "1"
+      VERSION: "1"
+      INFO: "1"
+      # POST gates ALL non-GETs globally. Spike note 2: DELETE also passes
+      # when POST=1 (the method gate is "GET or POST-flag") — container
+      # destroy needs it; every other DELETE is residual-only because the
+      # volumes/networks/swarm categories stay closed.
+      POST: "1"
+      # Deny-refinements (linuxserver's strictly-better default posture).
+      ALLOW_ARCHIVE: "0"
+      ALLOW_EXPORT: "0"
+      ALLOW_LOGS: "0"
+      ALLOW_TOP: "0"
+      ALLOW_CHANGE: "0"
+      LOG_LEVEL: "info"
+    networks:
+      - default
+    # NOTE: workspaces never join `default` (they get modulo-runner-workspace
+    # at create-time), so a provisioned workspace CANNOT reach the proxy
+    # endpoint — spike-verified (name-blocked by alias absence AND IP-blocked
+    # by docker bridge isolation rules); re-asserted by the docker-marked
+    # workspace-isolation test.
+
+  backend:
+    environment:
+      # The proxy becomes the DEFAULT Docker endpoint — steps 1-2 of the
+      # documented 4-step env chain (MODULO_DOCKER_HOST -> DOCKER_HOST ->
+      # local socket). Raw socket is a documented operator override.
+      MODULO_DOCKER_HOST: tcp://docker-socket-proxy:2375
+
+  saq-runner:
+    environment:
+      MODULO_DOCKER_HOST: tcp://docker-socket-proxy:2375
+
+  saq-system:
+    environment:
+      MODULO_DOCKER_HOST: tcp://docker-socket-proxy:2375
+
+  bundled-runner:
+    # Network-reference holder + pinned build target. The published image is
+    # pinned in backend/src/modulo/core/bundled_runner/profile.py; building
+    # here is for operators who self-build the pinned version:
+    #   docker compose -f deploy/compose/runner.yml --profile runner build bundled-runner
+    build:
+      context: ../docker
+      dockerfile: runner-opencode.Dockerfile
+    image: modulo-runner:opencode
+    restart: "no"
+    entrypoint: ["/usr/bin/tini", "--", "true"]
+    networks:
+      - modulo-runner-workspace
+
+networks:
+  modulo-runner-workspace:
+    # Dedicated bridge for runner workspace containers. Egress default:
+    # permitted (the tier's purpose); `--network=none` is a per-profile
+    # opt-in (environment profile network_policy=none). Workspace containers
+    # attach here at create-time via the API — they never join the default
+    # compose network and never see the Docker endpoint.
+    driver: bridge

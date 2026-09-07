@@ -11,6 +11,19 @@ from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.environment_profile import EnvironmentProfile
 
 
+def validate_runner_docker_persistence(provider_type: str, persistence_policy: str) -> None:
+    """The Bundled Runner LOCKS persistence to ephemeral (FAR-590 D4).
+
+    Model-validator parity for ``provider_type == "runner_docker"``:
+    ``retained``/``cache`` policies are rejected before any write.
+    """
+    if provider_type.strip().lower() == "runner_docker" and persistence_policy != "ephemeral":
+        raise ValueError(
+            "The Bundled Runner (runner_docker) locks persistence_policy to 'ephemeral' "
+            f"(got '{persistence_policy}'); retained/cache workspaces are not supported."
+        )
+
+
 async def create_environment_profile(
     session: AsyncSession,
     *,
@@ -29,6 +42,7 @@ async def create_environment_profile(
     owner_team_id: uuid.UUID | None = None,
     visibility: str = "org",
 ) -> EnvironmentProfile:
+    validate_runner_docker_persistence(provider_type, persistence_policy)
     profile = EnvironmentProfile(
         organisation_id=org_id,
         name=name,
@@ -97,6 +111,7 @@ async def update_environment_profile(
     if profile is None:
         return None
     apply_updates(profile, updates)
+    validate_runner_docker_persistence(profile.provider_type, profile.persistence_policy)
     await session.flush()
     return profile
 

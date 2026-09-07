@@ -233,6 +233,14 @@ class Settings(BaseSettings):
     # terminalising the run with ``worker_lost``. Default 30 min — far above
     # the 30s DB heartbeat cadence, so a live executor is never swept.
     slot_reconcile_stale_seconds: int = Field(default=1800, alias="SLOT_RECONCILE_STALE_SECONDS", ge=60, le=86400)
+    # FAR-590 D4 Bundled Runner orphan reconciler: LOG-ONLY soak by default —
+    # orphans are logged loudly (`runner.reconciler.orphan_detected`) until
+    # the operator flips this flag; the destroy path re-checks run status
+    # and aborts on any cross-reference failure (fail-safe).
+    runner_reconciler_destroy_enabled: bool = Field(default=False, alias="RUNNER_RECONCILER_DESTROY_ENABLED")
+    # Machine deployment identity for the runner workspace-identity label
+    # (reconciler scoping; hostname fallback when unset).
+    runner_machine_id: str = Field(default="", alias="MODULO_RUNNER_MACHINE_ID")
     # FAR-604 dispatcher backpressure: a trigger fire (webhook/cron/polling) is
     # skipped when the pipeline's pending-queue OLDEST run is older than this.
     # Depth-based backpressure is derived from the pipeline's own
