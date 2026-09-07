@@ -86,7 +86,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 
 | Deployment Type | Redis Required? | Reason |
 |----------------|-----------------|--------|
-| Single replica, single process | **Yes** | Required for SAQ execution, event coordination, rate limiting, caching, and session state (defaults to `redis://localhost:6379/0`) |
+| Single replica, single process | **No** | In-process asyncio loops handle scheduling and queuing; rate limiting falls back to no-op (all requests allowed). Redis is optional but recommended for production. See [`docs/deployment.md`](./deployment.md) §Deployment Modes |
 | Multiple replicas | **Yes** | SAQ worker coordination, distributed rate limiting |
 | Horizontal scaling | **Yes** | Cross-replica event broker, cron triggers |
 | Production with 2+ backend pods | **Yes** | See [`docs/deployment.md`](./deployment.md) §Scaling |

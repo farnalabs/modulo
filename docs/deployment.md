@@ -267,7 +267,7 @@ CORS_MAX_AGE=3600
 
 ---
 
-## Configuration
+## Related Documentation
 
 For the full environment variable reference, see [`docs/configuration-reference.md`](./configuration-reference.md).
 
