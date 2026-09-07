@@ -1865,6 +1865,59 @@ class RestConnector(ConnectorBase):
         body = self._redact(body_text[:200])
         return f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body}"
 
+    @staticmethod
+    def _parse_json_body(body_text: str, content_type: str) -> Any:
+        """Parse a JSON body (declared by content type or brace/bracket-prefixed); else ``None``."""
+        if "json" in content_type.lower() or body_text.lstrip().startswith(("{", "[")):
+            try:
+                return json.loads(body_text)
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def _dict_records(self, parsed: dict[str, Any], request: RestRequest) -> tuple[list[dict[str, Any]], str | None]:
+        """Resolve ``records`` (via ``records_path`` JMESPath or the whole object) + cursor."""
+        records_path = request.records_path
+        records = self._records_via_jmespath(parsed, records_path) if records_path else ([parsed] if parsed else [])
+        next_cursor = self._extract_cursor(parsed, request.next_cursor_path)
+        return records, next_cursor
+
+    def _records_via_jmespath(self, parsed: dict[str, Any], records_path: str) -> list[dict[str, Any]]:
+        """Apply the ``records_path`` JMESPath expression to a JSON object response."""
+        source = self._search_jmespath(records_path, parsed)
+        if isinstance(source, list):
+            return safe_records_list(source)
+        if isinstance(source, dict):
+            return [source]
+        return []
+
+    def _resolve_records(
+        self,
+        request: RestRequest,
+        resp: httpx.Response,
+        body_text: str,
+        content_type: str,
+        parsed: Any,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Resolve ``(records, next_cursor)`` from the parsed body per the request config.
+
+        ``passthrough`` forces a single raw-body record wrap even for JSON
+        bodies; a top-level array is taken verbatim; a JSON object uses
+        ``records_path`` (JMESPath) or wraps the whole object; a non-JSON body
+        without a ``records_path`` falls back to the passthrough wrap.
+        """
+        records: list[dict[str, Any]] = []
+        next_cursor: str | None = None
+        if request.passthrough:
+            records = self._passthrough_record(resp, body_text, content_type)
+        elif isinstance(parsed, list):
+            records = safe_records_list(parsed)
+        elif isinstance(parsed, dict):
+            records, next_cursor = self._dict_records(parsed, request)
+        elif parsed is None and not request.records_path:
+            records = self._passthrough_record(resp, body_text, content_type)
+        return records, next_cursor
+
     def _transform(self, request: RestRequest, resp: httpx.Response, body_text: str) -> ConnectorResult:
         """Map a REST response onto :class:`ConnectorResult`.
 
@@ -1876,32 +1929,8 @@ class RestConnector(ConnectorBase):
         JMESPath consumer still gets a uniform list-of-dicts shape.
         """
         content_type = resp.headers.get("content-type", "")
-        parsed: Any = None
-        if "json" in content_type.lower() or body_text.lstrip().startswith(("{", "[")):
-            try:
-                parsed = json.loads(body_text)
-            except json.JSONDecodeError:
-                parsed = None
-
-        records: list[dict[str, Any]] = []
-        next_cursor: str | None = None
-        if request.passthrough:
-            records = self._passthrough_record(resp, body_text, content_type)
-        elif isinstance(parsed, list):
-            records = safe_records_list(parsed)
-        elif isinstance(parsed, dict):
-            records_path = request.records_path
-            if records_path:
-                source = self._search_jmespath(records_path, parsed)
-                if isinstance(source, list):
-                    records = safe_records_list(source)
-                elif isinstance(source, dict):
-                    records = [source]
-            else:
-                records = [parsed] if parsed else []
-            next_cursor = self._extract_cursor(parsed, request.next_cursor_path)
-        elif parsed is None and not request.records_path:
-            records = self._passthrough_record(resp, body_text, content_type)
+        parsed = self._parse_json_body(body_text, content_type)
+        records, next_cursor = self._resolve_records(request, resp, body_text, content_type, parsed)
 
         metadata: dict[str, Any] = {
             "status_code": resp.status_code,
