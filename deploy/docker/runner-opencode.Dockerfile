@@ -65,12 +65,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # opencode needs Node (the vendored runtime is a JS CLI). Install Node LTS from
 # NodeSource, then the pinned opencode binary via npm. The NodeSource setup
-# script is fetched over HTTPS only (--proto '=https'), saved to a local file
-# and executed explicitly (never piped straight into a shell), and npm installs
-# with --ignore-scripts so no lifecycle scripts from the published tarball run.
-RUN curl --proto '=https' --tlsv1.2 -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o /tmp/nodesource_setup.sh \
-    && bash /tmp/nodesource_setup.sh \
-    && rm -f /tmp/nodesource_setup.sh \
+# script is a downloaded artifact and MUST NOT be executed (SonarCloud S5038:
+# executing downloaded artifacts without verification). Instead the official
+# NodeSource signing key + apt source are added directly, so no downloaded
+# script ever runs inside the build. npm installs with --ignore-scripts so no
+# lifecycle scripts from the published tarball run.
+RUN curl --proto '=https' --tlsv1.2 -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g --ignore-scripts "opencode-ai@${OPENCODE_VERSION}"
