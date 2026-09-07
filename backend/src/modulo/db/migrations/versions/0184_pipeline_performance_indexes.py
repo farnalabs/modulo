@@ -13,10 +13,12 @@ Findings from improve-database lens analysis:
    Composite ``(pipeline_id, created_at, id)`` eliminates the sort.
 
 2. ``pipeline_snapshots`` — ``resolve_snapshot_for_channel`` filters
-   ``WHERE pipeline_id = ? AND channel = ? AND draft = false
-   ORDER BY snapshot_version DESC LIMIT 1``.  A partial composite index
-   ``(pipeline_id, channel, snapshot_version) WHERE draft = false`` turns
-   this into a direct index scan.
+    ``WHERE pipeline_id = ? AND channel = ? AND draft IS false
+    ORDER BY snapshot_version DESC LIMIT 1``.  A partial composite index
+    ``(pipeline_id, channel, snapshot_version) WHERE draft IS false`` turns
+    this into a direct index scan (the ``IS false`` predicate mirrors the
+    query's ``draft.is_(False)`` BooleanTest exactly, which PostgreSQL's
+    ``predtest.c`` can prove implies the index predicate).
 
 3. ``pipeline_folders`` — ``list_folders`` sorts ``ORDER BY sort_order, name``
    across all folders in an org.  Composite
@@ -62,7 +64,7 @@ _INDEXES: list[tuple[str, str, str | None]] = [
         (
             "CREATE INDEX IF NOT EXISTS ix_pipeline_snapshots_channel_version "
             "ON pipeline_snapshots (pipeline_id, channel, snapshot_version) "
-            "WHERE draft = false"
+            "WHERE draft IS false"
         ),
     ),
     (

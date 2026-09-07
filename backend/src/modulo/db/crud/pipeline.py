@@ -280,12 +280,21 @@ async def update_pipeline(
     return pipeline
 
 
-async def soft_delete_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
-    """Mark a pipeline as deleted (soft delete). Returns None if not found or already deleted."""
+async def soft_delete_pipeline(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    deleted_by: uuid.UUID | None = None,
+) -> Pipeline | None:
+    """Mark a pipeline as deleted (soft delete). Returns None if not found or already deleted.
+
+    ``deleted_by`` stamps the deleting account onto ``Pipeline.deleted_by`` for
+    audit (mirrors the eval models' soft-delete wiring). It is optional so the
+    MCP/hard-delete paths that call this without a principal keep working.
+    """
     result = await session.execute(
         update(Pipeline)
         .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
-        .values(deleted_at=func.now())
+        .values(deleted_at=func.now(), deleted_by=deleted_by)
         .returning(Pipeline)
     )
     await session.flush()

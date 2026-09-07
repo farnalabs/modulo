@@ -17,6 +17,8 @@ from modulo.db.crud.pipeline import (
     get_pipeline_graph,
     list_pipelines,
     replace_pipeline_graph,
+    restore_pipeline,
+    soft_delete_pipeline,
     update_pipeline,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -441,3 +443,75 @@ async def test_replace_pipeline_graph_removes_stale_edges(
     loaded = await get_pipeline_graph(rls_session, pipeline.id)
     assert loaded is not None
     assert not loaded[1]
+
+
+async def test_soft_delete_pipeline_stamps_deleted_by(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """soft_delete_pipeline must write the deleting account onto ``deleted_by``.
+
+    Regression guard for the improve-database audit: ``Pipeline.deleted_by`` is
+    dead schema unless soft_delete stamps it. This test fails without the wiring
+    (the column stays NULL while ``deleted_at`` is set).
+    """
+    p = await create_pipeline(
+        rls_session,
+        org_id=test_org,
+        name="Soft-delete audit target",
+        account_id=test_user,
+    )
+    await rls_session.flush()
+
+    deleter = uuid.uuid4()
+    deleted = await soft_delete_pipeline(rls_session, p.id, deleted_by=deleter)
+    await rls_session.flush()
+
+    assert deleted is not None
+    assert deleted.deleted_at is not None
+    assert deleted.deleted_by == deleter
+
+    reloaded = await get_pipeline(rls_session, p.id, include_deleted=True)
+    assert reloaded is not None
+    assert reloaded.deleted_by == deleter
+
+    restored = await restore_pipeline(rls_session, p.id)
+    await rls_session.flush()
+    assert restored is not None
+    assert restored.deleted_at is None
+
+
+async def test_pipeline_check_constraints_reject_non_positive_values(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """Migration 0183 CHECK constraints must reject non-positive config values.
+
+    Asserts the migration-built schema enforces ``ck_pipelines_*_positive``: a
+    direct insert of ``max_duration_seconds = 0`` must raise IntegrityError, and a
+    nullable column left NULL must pass. Exercises the new DDL rather than only
+    the ORM path.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    pid = uuid.uuid4()
+    await rls_session.execute(
+        text(
+            "INSERT INTO pipelines (id, organisation_id, name, account_id, max_duration_seconds) "
+            "VALUES (:id, :oid, :name, :aid, 0)"
+        ),
+        {"id": str(pid), "oid": str(test_org), "name": "bad-duration", "aid": str(test_user)},
+    )
+    with pytest.raises(IntegrityError):
+        await rls_session.flush()
+
+    await rls_session.rollback()
+
+    nullable_pid = uuid.uuid4()
+    await rls_session.execute(
+        text(
+            "INSERT INTO pipelines (id, organisation_id, name, account_id, max_steps, token_budget, "
+            "circuit_breaker_threshold) VALUES (:id, :oid, :name, :aid, NULL, NULL, NULL)"
+        ),
+        {"id": str(nullable_pid), "oid": str(test_org), "name": "nullable-ok", "aid": str(test_user)},
+    )
+    await rls_session.flush()

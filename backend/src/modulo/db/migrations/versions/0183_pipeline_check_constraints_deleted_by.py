@@ -29,6 +29,15 @@ Deploy-safety: CHECK validation acquires SHARE UPDATE EXCLUSIVE lock (not
 ACCESS EXCLUSIVE) when using NOT VALID + VALIDATE, so concurrent writes are
 not blocked.  The ADD COLUMN for ``deleted_by`` is metadata-only (PG 11+)
 for a nullable column.
+
+Pre-flight guard: ``max_steps`` / ``token_budget`` / ``circuit_breaker_threshold``
+have no app-level validation (unlike the Pydantic ``ge=1``-guarded
+``max_duration_seconds`` / ``stale_run_timeout_minutes``) and workflow
+import/export writes ``token_budget`` straight from uploaded JSON.  A single
+legacy dirty row makes ``VALIDATE CONSTRAINT`` fail and aborts the whole deploy
+chain, so ``upgrade()`` runs a pre-flight ``SELECT count(*) WHERE NOT (<expr>)``
+before each constraint and raises a descriptive ``RuntimeError`` with the
+offending-row count instead of dying mid-flight.
 """
 
 from __future__ import annotations
@@ -61,9 +70,31 @@ _CONSTRAINTS: list[tuple[str, str]] = [
 ]
 
 
+def _preflight_violation_check(name: str, expr: str) -> None:
+    """Bail out before VALIDATE if any existing row would fail the constraint.
+
+    ``max_duration_seconds`` / ``stale_run_timeout_minutes`` are Pydantic-guarded
+    (``ge=1``), but ``max_steps`` / ``token_budget`` / ``circuit_breaker_threshold``
+    have no app-level validation and workflow import/export writes ``token_budget``
+    straight from uploaded JSON. A single legacy dirty row makes ``VALIDATE
+    CONSTRAINT`` fail and aborts the whole deploy chain, so we surface the count
+    up front with a clear message instead of letting the migration die mid-flight.
+    """
+    violation_count = op.execute(
+        f"SELECT count(*) FROM {_TABLE} WHERE NOT ({expr})"  # noqa: S608  # nosec B608
+    ).scalar_one()
+    if violation_count:
+        raise RuntimeError(
+            f"Cannot add CHECK constraint {name}: {violation_count} existing row(s) "
+            f"in {_TABLE} violate `{expr}`. Quarantine or fix these rows before "
+            f"deploying this migration."
+        )
+
+
 def upgrade() -> None:
     # --- CHECK constraints (NOT VALID for online-safe add) ---
     for name, expr in _CONSTRAINTS:
+        _preflight_violation_check(name, expr)
         op.execute(f"ALTER TABLE {_TABLE} ADD CONSTRAINT {name} CHECK ({expr}) NOT VALID")
         op.execute(f"ALTER TABLE {_TABLE} VALIDATE CONSTRAINT {name}")
 
