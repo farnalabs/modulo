@@ -2729,6 +2729,12 @@ class GraphValidator:
         Valid shape: ``{"on": ["stall"|"timeout"|"failure"|"eval_failed"], "max_retries": 0-5}``.
         ``None``/``{}`` (no policy) passes. A malformed policy would silently
         disable retries at run time, so it is surfaced as a hard error here.
+
+        FAR-649: an ABSENT ``on`` key (missing — or explicitly ``null`` at
+        runtime) with a valid ``max_retries`` > 0 is VALID and means ALL
+        retryable events (the intuitive default — this shape was previously
+        write-valid but runtime-inert). An explicit ``on`` list is granular;
+        an explicit empty list (``on: []``) means "no retry".
         """
         if policy is None or policy == {}:
             return

@@ -405,11 +405,17 @@ def _retry_after_policy(
 
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
+
+    FAR-649: an ABSENT ``on`` key (key missing or explicitly ``null``) with a
+    valid ``max_retries`` > 0 means ALL retryable events — every matcher below
+    evaluates (the intuitive default: enabling a budget opts the pipeline into
+    all four retryable outcomes). An explicit non-empty ``on`` list stays
+    granular (unchanged); an explicit EMPTY list (``on: []``) stays "no retry"
+    (backward compatible — the FAR-525 GUI's inert no-op panel save shape).
+    The budget validation runs BEFORE the event-shape branch so an all-events
+    policy still fail-closes on a malformed budget.
     """
     if not isinstance(policy, dict):
-        return None
-    events = policy.get("on")
-    if not isinstance(events, list) or not events:
         return None
     max_retries = policy.get("max_retries", 0)
     if isinstance(max_retries, bool) or not isinstance(max_retries, int):
@@ -418,7 +424,17 @@ def _retry_after_policy(
         return None
     if max_retries == 0:
         return None
-    event_set = set(events)
+    events = policy.get("on")
+    if events is None:
+        # FAR-649: absent (key missing) or explicitly-null `on` with a valid
+        # budget > 0 = ALL retryable events — evaluate every matcher below.
+        event_set: set[Any] = set(_RETRY_POLICY_EVENTS)
+    elif isinstance(events, list) and events:
+        event_set = set(events)
+    else:
+        # Explicit ``on: []`` (or a malformed non-list value) = no retry,
+        # fail-closed — unchanged.
+        return None
     code = error_code or ""
     mapped = map_legacy_code(code) if code else ""
     if _stall_event_matches(event_set, final_status, code, mapped):

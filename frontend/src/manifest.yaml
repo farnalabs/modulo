@@ -2073,6 +2073,12 @@ elements:
       - testid: pipeline-editor-retry-policy-panel
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-retry-mode-all
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-mode-specific
+        type: input
+        dynamic_testid: false
       - testid: pipeline-editor-retry-policy-max
         type: input
         dynamic_testid: false

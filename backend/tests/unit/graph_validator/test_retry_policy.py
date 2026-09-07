@@ -113,6 +113,16 @@ def test_retry_policy_default_max_retries_is_valid() -> None:
     assert result.is_valid
 
 
+def test_retry_policy_absent_on_is_valid() -> None:
+    """FAR-649 (pin): an ABSENT `on` key with a budget stays write-valid. The
+    runtime now resolves it to ALL retryable events — the validator shape is
+    unchanged (no new error codes)."""
+    result = ValidationResult()
+    GraphValidator.check_retry_policy({"max_retries": 2}, result)
+    assert not result.issues
+    assert result.is_valid
+
+
 # ---------------------------------------------------------------------------
 # FAR-525 — check_retry_policy_schedule (the OPTIONAL backoff_schedule key)
 # ---------------------------------------------------------------------------

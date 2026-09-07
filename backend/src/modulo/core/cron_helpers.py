@@ -3967,17 +3967,19 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     age backstop.
 
     Retry budgeting (FAR-509, re-keyed on EVENT CONTENT by the FAR-525 qa
-    gate) — the budget bounds successful-claim CYCLES (terminal-fail once
-    ``claim_count`` exceeds it; it does NOT bound the enqueue count):
-      * ``retry_policy`` with ``"stall"`` in ``on``: honor the
-        ``max_retries`` budget. ``claim_count`` is 1 for the initial claim, so a
-        re-dispatch is allowed while ``claim_count <= max_retries`` (initial
-        attempt + up to ``max_retries`` retries).
-      * ``retry_policy`` absent/None, a non-dict, OR an ``on`` that is
-        empty/missing (this includes the ``{}`` column default AND the
-        FAR-525 GUI's no-op panel save
-        ``{on: [], max_retries: 0, backoff_schedule: {...}}``): re-dispatch
-        while ``claim_count`` is within the configurable budget
+    gate; absent-``on`` re-classified by FAR-649) — the budget bounds
+    successful-claim CYCLES (terminal-fail once ``claim_count`` exceeds it; it
+    does NOT bound the enqueue count):
+      * ``retry_policy`` covering "stall" — either ``"stall"`` in an explicit
+        non-empty ``on`` list, OR (FAR-649) an ABSENT ``on`` key (missing or
+        ``null``) with a valid ``max_retries`` > 0 (all-events default):
+        honor the ``max_retries`` budget. ``claim_count`` is 1 for the initial
+        claim, so a re-dispatch is allowed while ``claim_count <= max_retries``
+        (initial attempt + up to ``max_retries`` retries).
+      * ``retry_policy`` absent/None, a non-dict, OR an explicit ``on`` that is
+        empty (this includes the ``{}`` column default AND the FAR-525 GUI's
+        no-op panel save ``{on: [], max_retries: 0, backoff_schedule: {...}}``):
+        re-dispatch while ``claim_count`` is within the configurable budget
         (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 2). Zero nodes have
         executed, so every re-dispatch is safe; terminal-fail applies once the
         budget is exhausted. The decision keys on the POLICY's EVENT CONTENT
@@ -3989,6 +3991,16 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     """
     retry_policy = getattr(row, "retry_policy", None)
     if isinstance(retry_policy, dict):
+        # FAR-649: an ABSENT `on` (key missing or null) with a VALID budget > 0
+        # is now ALL-events coverage (stall included) — the zombie repair
+        # honors the POLICY budget, not the budget-default. An absent-`on`
+        # policy with a malformed or 0 budget falls through to the
+        # event-content branches below (budget-default repair for an empty
+        # `on`, matching the no-policy treatment of unusable data).
+        raw_budget = retry_policy.get("max_retries", 0)
+        budget_is_valid_int = isinstance(raw_budget, int) and not isinstance(raw_budget, bool) and 1 <= raw_budget <= 5
+        if budget_is_valid_int and ("on" not in retry_policy or retry_policy["on"] is None):
+            return bool(row.claim_count <= raw_budget)
         on = retry_policy.get("on") or []
         if "stall" in on:
             max_retries = int(retry_policy.get("max_retries", 0) or 0)
