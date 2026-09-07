@@ -1502,6 +1502,19 @@ class _RunScope:
     thread_id: str
 
 
+def _interrupt_gate_payload(interrupts: Any) -> dict[str, Any]:
+    """The gate payload carried by the first LangGraph interrupt (or ``{}``)."""
+    first_interrupt = interrupts[0] if interrupts else None
+    value = getattr(first_interrupt, "value", None)
+    return value if isinstance(value, dict) else {}
+
+
+def _interrupt_required_team_id(gate_payload: dict[str, Any]) -> uuid.UUID | None:
+    """Parse the interrupt payload's ``required_team_id`` (absent -> ``None``)."""
+    required_team_id_str = gate_payload.get("required_team_id")
+    return uuid.UUID(required_team_id_str) if required_team_id_str else None
+
+
 class PipelineExecutor:
     """Execute a single pipeline run (HITL-aware, supports parallel fan-out).
 
@@ -4858,6 +4871,73 @@ class PipelineExecutor:
 
         return results
 
+    async def _interrupt_pipeline_name(
+        self,
+        session: Any,
+        pipeline_id: uuid.UUID,
+        org_id: uuid.UUID,
+    ) -> str | None:
+        """Best-effort pipeline-name lookup for the awaiting notification."""
+        try:
+            pipeline = await get_pipeline(session, pipeline_id)
+            return pipeline.name if pipeline is not None else None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "hitl_gate.pipeline_name_lookup_failed",
+                extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                exc_info=True,
+            )
+            return None
+
+    async def _create_interrupt_gate(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        gate_id: str,
+        pipeline_id: uuid.UUID,
+        required_team_id: uuid.UUID | None,
+    ) -> tuple[str | None, bool]:
+        """Create the HITL gate row (or reuse a coalescing open gate).
+
+        FAR-604 D4 gate coalescing: when an OPEN gate already covers this work
+        item, the duplicate run never raises a second gate. Unchanged SHA →
+        "reuse" (the existing gate decides; this run is terminalised
+        superseded by the caller); changed SHA → the old gate was
+        auto-superseded in the same transaction and this run raises fresh.
+
+        Returns ``(pipeline_name, coalesce_reused)`` — the name is ``None``
+        when the gate was reused or the lookup failed (logged, best-effort).
+        """
+        mgr = HITLManager()
+        pipeline_name: str | None = None
+        coalesce_reused = False
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            outcome = await evaluate_gate_coalescing(
+                session,
+                run_id=run_id,
+                gate_id=gate_id,
+                pipeline_id=pipeline_id,
+                org_id=org_id,
+            )
+            if outcome == "reuse":
+                coalesce_reused = True
+            else:
+                await mgr.create_gate(
+                    session,
+                    run_id=run_id,
+                    gate_id=gate_id,
+                    pipeline_id=pipeline_id,
+                    org_id=org_id,
+                    required_team_id=required_team_id,
+                )
+                pipeline_name = await self._interrupt_pipeline_name(session, pipeline_id, org_id)
+        return pipeline_name, coalesce_reused
+
     async def _handle_graph_interrupt(
         self,
         interrupts: Any,
@@ -4874,12 +4954,9 @@ class PipelineExecutor:
         NOT segment-only. The empty-accumulator case (``{}`` → ``None``)
         normalizes so ``finalize_cost``'s merge leaves the stored set untouched.
         """
-        first_interrupt = interrupts[0] if interrupts else None
-        value = getattr(first_interrupt, "value", None)
-        gate_payload = value if isinstance(value, dict) else {}
+        gate_payload = _interrupt_gate_payload(interrupts)
         gate_id = gate_payload.get("gate_id", "")
-        required_team_id_str = gate_payload.get("required_team_id")
-        required_team_id = uuid.UUID(required_team_id_str) if required_team_id_str else None
+        required_team_id = _interrupt_required_team_id(gate_payload)
         node_token_usage = state.node_token_usage
         broker = ctx.broker
         run_id = ctx.run_id
@@ -4887,47 +4964,13 @@ class PipelineExecutor:
         org_id = ctx.org_id
 
         if pipeline_id is not None and org_id is not None:
-            mgr = HITLManager()
-            pipeline_name: str | None = None
-            coalesce_reused = False
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await set_rls_execution_context(session)
-                # FAR-604 D4 gate coalescing: when an OPEN gate already
-                # covers this work item, the duplicate run never raises a
-                # second gate. Unchanged SHA → "reuse" (the existing gate
-                # decides; this run is terminalised superseded below);
-                # changed SHA → the old gate was auto-superseded in the same
-                # transaction and this run raises fresh.
-                outcome = await evaluate_gate_coalescing(
-                    session,
-                    run_id=run_id,
-                    gate_id=gate_id,
-                    pipeline_id=pipeline_id,
-                    org_id=org_id,
-                )
-                if outcome == "reuse":
-                    coalesce_reused = True
-                else:
-                    await mgr.create_gate(
-                        session,
-                        run_id=run_id,
-                        gate_id=gate_id,
-                        pipeline_id=pipeline_id,
-                        org_id=org_id,
-                        required_team_id=required_team_id,
-                    )
-                    try:
-                        pipeline = await get_pipeline(session, pipeline_id)
-                        pipeline_name = pipeline.name if pipeline is not None else None
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        _log.warning(
-                            "hitl_gate.pipeline_name_lookup_failed",
-                            extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
-                            exc_info=True,
-                        )
+            pipeline_name, coalesce_reused = await self._create_interrupt_gate(
+                org_id=org_id,
+                run_id=run_id,
+                gate_id=gate_id,
+                pipeline_id=pipeline_id,
+                required_team_id=required_team_id,
+            )
             if coalesce_reused:
                 detail = (
                     "HITL gate coalesced (FAR-604 D4): an open gate already covers this work item "
