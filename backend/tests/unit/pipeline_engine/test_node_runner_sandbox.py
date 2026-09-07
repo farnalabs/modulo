@@ -7,9 +7,12 @@ there is no default command, and a missing command is a hard error.
 import asyncio
 import logging
 import os
+import shutil
+import subprocess
 import time
 import urllib.request
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,6 +27,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _fetch_sandbox_log_tail,
     _StallDetector,
     _wait_command_with_idle_watchdog,
+    _wrap_sandbox_command_with_log_redirect,
     make_sandbox_agent_fn,
     resolve_env_var_refs,
 )
@@ -570,7 +574,9 @@ async def test_background_command_success_still_completes():
 async def test_sandbox_command_stdout_redirected_to_log_file():
     """The agent command is wrapped so stdout/stderr are redirected to a sandbox
     log file — the process's stdout is a regular file, never a pipe that can fill
-    and block a long session (FAR-97)."""
+    and block a long session (FAR-97). The wrap is newline-safe (FAR-651): the
+    parens sit on their own lines so a command whose final line must stand alone
+    (e.g. a heredoc terminator) is never suffixed."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
@@ -581,7 +587,10 @@ async def test_sandbox_command_stdout_redirected_to_log_file():
     assert result["output"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
     assert "> /home/user/agent.log 2>&1" in wrapped
-    assert "( opencode run --auto --format json < /home/user/prompt.md )" in wrapped
+    wrapped_lines = wrapped.splitlines()
+    assert wrapped_lines[0] == "("
+    assert wrapped_lines[-1] == ") > /home/user/agent.log 2>&1"
+    assert "opencode run --auto --format json < /home/user/prompt.md" in wrapped
 
 
 async def test_drain_probe_keeps_silent_live_agent_alive():
@@ -1556,7 +1565,8 @@ async def test_agent_command_default_filter():
 
 
 async def test_agent_command_without_template_unchanged():
-    """A plain agent_command (no {{ }} templates) executes byte-for-byte unchanged."""
+    """A plain agent_command (no {{ }} templates) executes byte-for-byte unchanged
+    (the newline-safe FAR-651 wrap adds its own paren lines around it)."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
@@ -1566,8 +1576,10 @@ async def test_agent_command_without_template_unchanged():
 
     assert result["output"]["status"] == "completed"
     wrapped = sandbox.commands.run.call_args.args[0]
-    assert f"( {_AGENT_COMMAND} )" in wrapped
-    assert _AGENT_COMMAND in wrapped
+    wrapped_lines = wrapped.splitlines()
+    assert wrapped_lines[0] == "("
+    assert wrapped_lines[1] == _AGENT_COMMAND
+    assert wrapped_lines[-1] == ") > /home/user/agent.log 2>&1"
 
 
 async def test_agent_command_undefined_error_skips():
@@ -2468,3 +2480,85 @@ async def test_sandbox_provider_exception_message_visible_in_output():
     assert "Timeout cannot be greater than 1 hours" in inner["error_message"]
     assert result["output"]["error_type"] == "SandboxException"
     assert "Timeout cannot be greater than 1 hours" in result["output"]["error_message"]
+
+
+def test_wrap_log_redirect_keeps_heredoc_terminator_on_its_own_line():
+    """FAR-651: a command ending with a bare heredoc terminator and NO trailing
+    newline must keep the terminator line exactly the bare delimiter after the
+    wrap. The old inline form `( {cmd} ) > log` suffixed the terminator
+    (`PY ) > log`), which never matches the delimiter -> unterminated heredoc
+    -> bash exit 2 -> the agent never runs."""
+    agent_cmd = "python3 - <<'PY'\nprint(1)\nPY"  # no trailing newline
+    composed = _wrap_sandbox_command_with_log_redirect(agent_cmd, "/home/user/agent.log")
+    # The closing paren sits on its own line after the bare terminator.
+    assert "\nPY\n) > " in composed
+    lines = composed.splitlines()
+    assert lines[3] == "PY"
+    assert lines[4] == ") > /home/user/agent.log 2>&1"
+
+
+def _resolve_usable_bash() -> str | None:
+    """Return a bash binary that can actually execute commands, or None.
+
+    Windows gotcha: PATH often resolves to the WSL launcher stub
+    (C:\\Windows\\System32\\bash.exe), which exits 1 with a Microsoft Store
+    notice when WSL is not installed. Prefer Git's bundled bash, then PATH,
+    verifying each candidate with a trivial probe command.
+    """
+    candidates = [
+        os.environ.get("MODULO_TEST_BASH"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        shutil.which("bash"),
+    ]
+    for candidate in candidates:
+        if not candidate or not Path(candidate).is_file():
+            continue
+        try:
+            probe = subprocess.run(  # noqa: S603 - probing a trusted bash candidate
+                [candidate, "-c", "true"], capture_output=True, timeout=10, check=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if probe.returncode == 0:
+            return candidate
+    return None
+
+
+_BASH = _resolve_usable_bash()
+
+
+@pytest.mark.skipif(_BASH is None, reason="no usable (non-stub) bash available")
+def test_wrap_log_redirect_bash_executes_heredoc_terminator_without_trailing_newline(tmp_path):
+    """FAR-651 regression proof: a composed command whose heredoc terminator has
+    no trailing newline must execute cleanly under bash (exit 0, heredoc body
+    captured in the log, no here-document warning). The old inline-wrap form
+    suffixed the terminator and failed with exit 2.
+
+    Uses a RELATIVE log path with cwd=tmp_path: a Windows absolute path passed
+    into a bash -c string is mangled by backslash escaping (and differs across
+    git-bash/WSL/Linux), while the sandbox's real log path is already POSIX.
+    """
+    agent_cmd = "echo far651-before\ncat <<'FAR651EOF'\nfar651-heredoc-body\nFAR651EOF"  # no trailing newline
+    composed = _wrap_sandbox_command_with_log_redirect(agent_cmd, "agent.log")
+    proc = subprocess.run(  # noqa: S603 - executing our own composed command in tmp_path
+        [_BASH, "-c", composed], capture_output=True, text=True, timeout=30, check=False, cwd=tmp_path
+    )
+    assert proc.returncode == 0
+    log_text = (tmp_path / "agent.log").read_text()
+    assert "far651-heredoc-body" in log_text
+    assert "here-document" not in proc.stderr
+
+
+@pytest.mark.skipif(_BASH is None, reason="no usable (non-stub) bash available")
+def test_wrap_log_redirect_bash_executes_command_already_ending_with_newline(tmp_path):
+    """FAR-651: a command that ALREADY ends with a newline gains a harmless
+    blank line before the closing paren and must still execute cleanly."""
+    agent_cmd = "echo far651-newline-tail\n"  # trailing newline present
+    composed = _wrap_sandbox_command_with_log_redirect(agent_cmd, "agent.log")
+    proc = subprocess.run(  # noqa: S603 - executing our own composed command in tmp_path
+        [_BASH, "-c", composed], capture_output=True, text=True, timeout=30, check=False, cwd=tmp_path
+    )
+    assert proc.returncode == 0
+    log_text = (tmp_path / "agent.log").read_text()
+    assert "far651-newline-tail" in log_text
+    assert "here-document" not in proc.stderr
