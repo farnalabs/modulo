@@ -59,8 +59,8 @@ _MIGRATION_PATH = (
 # type-check sweep, renumbered from 0182/0183 after the hitl_claims
 # collision), then the improve-database migrations 0186_pipeline_check_constraints_deleted_by
 # (renumbered from 0183) and 0187_pipeline_performance_indexes (renumbered from
-# 0184), which is now the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0187_pipeline_performance_indexes"
+# 0184), then 0188_pipeline_run_context_defaults_default, which is now the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0188_pipeline_run_context_defaults_default"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
