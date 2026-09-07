@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0183."""
+    """Exactly one migration chains off each predecessor, and the head is 0187."""
     import re
 
     revisions = {}
@@ -756,24 +756,32 @@ def test_single_migration_head() -> None:
     # 0181_org_api_keys_scope (FAR-620 user-scoped MCP keys) chains off 0180_hitl_parked_status.
     chaining_off_0180 = [p for p in revisions if parents[p] == "0180_hitl_parked_status"]
     assert [_basename(p) for p in chaining_off_0180] == ["0181_org_api_keys_scope.py"]
-    # 0182_hitl_claims_active_sweep_indexes (hitl active-sweep, on main) chains off 0181_org_api_keys_scope.
+    # 0182_hitl_claims_active_sweep_indexes (hitl active-sweep) chains off 0181_org_api_keys_scope.
     chaining_off_0181 = [p for p in revisions if parents[p] == "0181_org_api_keys_scope"]
     assert [_basename(p) for p in chaining_off_0181] == ["0182_hitl_claims_active_sweep_indexes.py"]
-    # 0183_triggers_add_polling_ongoing_agent_signal_indexes (polling /
-    # ongoing / agent_signal tick-scan partial-index sweep) chains off 0182_hitl_claims_active_sweep_indexes.
+    # 0183_triggers_add_polling_ongoing_agent_signal_indexes (main's polling / ongoing /
+    # agent_signal tick-scan partial-index sweep) chains off 0182.
     chaining_off_0182 = [p for p in revisions if parents[p] == "0182_hitl_claims_active_sweep_indexes"]
     assert [_basename(p) for p in chaining_off_0182] == ["0183_triggers_add_polling_ongoing_agent_signal_indexes.py"]
-    # 0184_trigger_events_indexes_and_type_check (trigger_events composite
-    # indexes + trigger_type CHECK) chains off 0183.
+    # 0184_trigger_events_indexes_and_type_check (main's trigger_events composite indexes +
+    # trigger_type CHECK) chains off 0183.
     chaining_off_0183 = [p for p in revisions if parents[p] == "0183_triggers_add_polling_ongoing_agent_signal_indexes"]
     assert [_basename(p) for p in chaining_off_0183] == ["0184_trigger_events_indexes_and_type_check.py"]
-    # 0185_error_events_indexes_jsonb (error_events status/level partial indexes)
-    # chains off 0184 and is the single head.
+    # 0185_error_events_indexes_jsonb (main's error_events index + JSONB sweep) chains
+    # off 0184_trigger_events_indexes_and_type_check.
     chaining_off_0184 = [p for p in revisions if parents[p] == "0184_trigger_events_indexes_and_type_check"]
     assert [_basename(p) for p in chaining_off_0184] == ["0185_error_events_indexes_jsonb.py"]
-    # Nothing chains off 0185_error_events_indexes_jsonb -> it is the single head.
-    chaining_off_0185 = [p for p in revisions if parents[p] == "0185_error_events_indexes_jsonb"]
-    assert chaining_off_0185 == []
+    # 0186_pipeline_check_constraints_deleted_by (improve-database FK/check sweep, renumbered
+    # from 0185) chains off 0185_error_events_indexes_jsonb.
+    chaining_off_0185_error_events = [p for p in revisions if parents[p] == "0185_error_events_indexes_jsonb"]
+    assert [_basename(p) for p in chaining_off_0185_error_events] == ["0186_pipeline_check_constraints_deleted_by.py"]
+    # 0187_pipeline_performance_indexes (improve-database index sweep, renumbered from 0186)
+    # chains off 0186.
+    chaining_off_0186 = [p for p in revisions if parents[p] == "0186_pipeline_check_constraints_deleted_by"]
+    assert [_basename(p) for p in chaining_off_0186] == ["0187_pipeline_performance_indexes.py"]
+    # Nothing chains off 0187_pipeline_performance_indexes -> it is the single head.
+    chaining_off_0187 = [p for p in revisions if parents[p] == "0187_pipeline_performance_indexes"]
+    assert chaining_off_0187 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
