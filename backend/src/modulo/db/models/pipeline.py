@@ -57,7 +57,9 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     circuit_breaker_tripped: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     circuit_breaker_tripped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    run_context_defaults: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30), server_default="manual_approval")
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
