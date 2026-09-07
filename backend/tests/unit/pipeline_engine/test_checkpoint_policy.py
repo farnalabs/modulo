@@ -87,10 +87,10 @@ def test_trim_truncates_long_messages_channel():
     """A long top-level ``messages`` channel is trimmed to the tail."""
     long_messages = _messages(_CHECKPOINT_MESSAGE_TRIM_TAIL + 50)
     checkpoint: dict[str, Any] = {"channel_values": {"messages": long_messages}}
-    result = _trim_checkpoint_channels(checkpoint)
-    assert len(result["channel_values"]["messages"]) == _CHECKPOINT_MESSAGE_TRIM_TAIL
+    _trim_checkpoint_channels(checkpoint)
+    assert len(checkpoint["channel_values"]["messages"]) == _CHECKPOINT_MESSAGE_TRIM_TAIL
     # The tail (not the head) survives.
-    assert result["channel_values"]["messages"][-1]["id"] == f"m{len(long_messages) - 1}"
+    assert checkpoint["channel_values"]["messages"][-1]["id"] == f"m{len(long_messages) - 1}"
 
 
 def test_trim_truncates_messages_nested_in_root_channel():
@@ -99,14 +99,14 @@ def test_trim_truncates_messages_nested_in_root_channel():
     checkpoint: dict[str, Any] = {
         "channel_values": {"__root__": {"messages": long_messages, "run_context": {"input": {"x": 1}}}}
     }
-    result = _trim_checkpoint_channels(checkpoint)
-    assert len(result["channel_values"]["__root__"]["messages"]) == _CHECKPOINT_MESSAGE_TRIM_TAIL
+    _trim_checkpoint_channels(checkpoint)
+    assert len(checkpoint["channel_values"]["__root__"]["messages"]) == _CHECKPOINT_MESSAGE_TRIM_TAIL
     # Non-conversational state under __root__ is preserved byte-for-byte.
-    assert result["channel_values"]["__root__"]["run_context"] == {"input": {"x": 1}}
+    assert checkpoint["channel_values"]["__root__"]["run_context"] == {"input": {"x": 1}}
 
 
 def test_trim_keeps_short_or_absent_channels_untouched():
-    """Messages at/below the bound, or absent, are left entirely unmodified."""
+    """Messages below the bound, or absent, are left entirely unmodified."""
     short_messages = _messages(3)
     checkpoint: dict[str, Any] = {
         "channel_values": {
@@ -114,16 +114,32 @@ def test_trim_keeps_short_or_absent_channels_untouched():
             "artifacts": [{"node_id": "a"}],
         }
     }
-    result = _trim_checkpoint_channels(checkpoint)
-    assert result["channel_values"]["messages"] is short_messages
-    assert result["channel_values"]["artifacts"] == [{"node_id": "a"}]
+    _trim_checkpoint_channels(checkpoint)
+    assert checkpoint["channel_values"]["messages"] is short_messages
+    assert checkpoint["channel_values"]["artifacts"] == [{"node_id": "a"}]
+
+
+def test_trim_keeps_exactly_at_bound_messages_untouched():
+    """Exactly ``_CHECKPOINT_MESSAGE_TRIM_TAIL`` messages are left unmodified.
+
+    Pins the boundary: trimming fires only when the list EXCEEDS the bound
+    (``len > tail``), so a list of exactly the bound keeps its identity and
+    every element. Guards the off-by-one regression of ``>`` flipped to ``>=``.
+    """
+    boundary_messages = _messages(_CHECKPOINT_MESSAGE_TRIM_TAIL)
+    checkpoint: dict[str, Any] = {"channel_values": {"messages": boundary_messages}}
+    _trim_checkpoint_channels(checkpoint)
+    assert checkpoint["channel_values"]["messages"] is boundary_messages
+    assert len(checkpoint["channel_values"]["messages"]) == _CHECKPOINT_MESSAGE_TRIM_TAIL
+    assert checkpoint["channel_values"]["messages"][0] is boundary_messages[0]
+    assert checkpoint["channel_values"]["messages"][-1] is boundary_messages[-1]
 
 
 def test_trim_preserves_non_conversational_channels():
-    """A checkpoint with no conversational channel is returned unchanged."""
+    """A checkpoint with no conversational channel is left unchanged."""
     checkpoint: dict[str, Any] = {
         "channel_values": {"run_context": {"cancelled": False}, "artifacts": [{"node_id": "a"}]}
     }
-    result = _trim_checkpoint_channels(checkpoint)
-    assert result is checkpoint
-    assert result["channel_values"]["run_context"] == {"cancelled": False}
+    _trim_checkpoint_channels(checkpoint)
+    assert checkpoint["channel_values"]["run_context"] == {"cancelled": False}
+    assert checkpoint["channel_values"]["artifacts"] == [{"node_id": "a"}]

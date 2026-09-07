@@ -80,7 +80,7 @@ Includes:
 
 ### Pipeline Engine (`modulo/core/pipeline_engine/`)
 
-Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Node types: `agent`, `sandbox_agent`, `manual` (human output), `composite` (expand-only), `router` (ordered JMESPath rules + `default`, lowers to the conditional-edge compile path — FAR-402 P1), and `hitl` (human-in-the-loop gate that compiles to the existing synthetic-gate path — FAR-402 P1). `connector` is an internal engine resolution, never an API-authored node type. Edges carry HITL gate config, rejection routing, or a `loop`/`conditional`/`normal`/`reject` edge type.
+Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Node types: `agent`, `sandbox_agent`, `manual` (human output), `composite` (expand-only), `router` (ordered JMESPath rules + `default`, lowers to the conditional-edge compile path, FAR-402 P1), `hitl` (human-in-the-loop gate that compiles to the existing synthetic-gate path, FAR-402 P1), and `join` (fan-in for scatter/gather patterns). `connector` is an internal engine resolution, never an API-authored node type. Edges carry HITL gate config, rejection routing, or a `loop`/`conditional`/`normal`/`reject` edge type.
 
 Key design:
 - Compiled graphs cached by `(pipeline_id, snapshot_id)` with LRU eviction
@@ -113,7 +113,7 @@ Features:
 - `manual` node type – same as HITL but human provides full output
 - `hitl` node type (FAR-402 P1) – a draggable human-in-the-loop gate; compiles to the same synthetic-gate path as a legacy edge-level HITL gate. `manual` remains the non-gating human-output step.
 
-**Decision-payload contract (normative, FAR-541):** every resume decision is a dict `{"action": <verdict>, "gate_id": <the identity it resolves>}` plus any per-action members (`output`, `modified_output`, `reason`, `notes`). `HITLManager._decide` is the single stamp authority: it stamps a payload that lacks `gate_id` with the claim row's gate id and refuses (422) a payload stamped for a *different* gate; call-site stamps (API routes, MCP) remain because they feed the direct `executor.resume` injection that bypasses `_decide`. A decision is honoured ONLY by the gate/node its stamp names — every consumer verifies the stamp against its own identity and fails closed on a missing/foreign stamp (re-interrupt, never resume):
+**Decision-payload contract (normative, FAR-541):** every resume decision is a dict `{"action": <verdict>, "gate_id": <the identity it resolves>}` plus any per-action members (`output`, `modified_output`, `reason`, `notes`). `HITLManager._decide` is the single stamp authority: it stamps a payload that lacks `gate_id` with the claim row's gate id and refuses (422) a payload stamped for a *different* gate; call-site stamps (API routes, MCP) remain because they feed the direct `executor.resume` injection that bypasses `_decide`. A decision is honoured ONLY by the gate/node its stamp names: every consumer verifies the stamp against its own identity and fails closed on a missing/foreign stamp (re-interrupt, never resume):
 
 | Writer | Stamp (`gate_id`) | Consumer | Recognized actions |
 |---|---|---|---|
@@ -122,9 +122,9 @@ Features:
 | `POST /runs/{id}/nodes/{node}/recover` (operator break-glass) | the run's pending claim row's gate id (node id for manual nodes; the guardrail gate id for conformance blocks); unstamped when no undecided row exists | `_manual_node` / `_handle_conformance_resume` | `skip`, `replay` |
 | Conformance override via HITL API | the blocked node id or the block's guardrail gate id | `_handle_conformance_resume` | `approved`, `deliver_manual` (override); `rejected` fails closed |
 
-Interrupt payloads carry the same identity: the gate node interrupts with its `gate_id`, a manual node with `gate_id: <node_id>`, a conformance block with the block's guardrail gate id — the executor keys the pending `hitl_claims` row on that `gate_id` verbatim. The dispatcher reconcile resumes an `awaiting_human`/`claimed` run ONLY per this scoping matrix: claimed-undecided → skip (under the `uq_hitl_claims_run_gate` `UNIQUE (run_id, gate_id)` constraint a claimed-undecided row and a committed decision for the same gate cannot coexist — crash recovery for claimed runs routes through the no-undecided-rows branch once the decision commits); unclaimed undecided row → conservative skip; no undecided rows → crash-recovery resume when the decision's stamp routes it to a consumer that accepts it — `hitl_gate_*`/guardrail identities accept only the verdict actions, MANUAL-node identities also accept a committed `manual_output` with its `output` (legacy pre-stamping rows are stranded by design — at most the 2026-09-02 incident cohort; ops remedy is a manual DB stamp or ticket, no backfill migration). Recover-node refuses HITL gate targets (422) — gate decisions must go through approve/reject; user node ids squatting the reserved `hitl_gate_` prefix are rejected at graph-validation time.
+Interrupt payloads carry the same identity: the gate node interrupts with its `gate_id`, a manual node with `gate_id: <node_id>`, a conformance block with the block's guardrail gate id. The executor keys the pending `hitl_claims` row on that `gate_id` verbatim. The dispatcher reconcile resumes an `awaiting_human`/`claimed` run ONLY per this scoping matrix: claimed-undecided, skip (under the `uq_hitl_claims_run_gate` `UNIQUE (run_id, gate_id)` constraint a claimed-undecided row and a committed decision for the same gate cannot coexist; crash recovery for claimed runs routes through the no-undecided-rows branch once the decision commits); unclaimed undecided row, conservative skip; no undecided rows, crash-recovery resume when the decision's stamp routes it to a consumer that accepts it. `hitl_gate_*`/guardrail identities accept only the verdict actions; MANUAL-node identities also accept a committed `manual_output` with its `output` (legacy pre-stamping rows are stranded by design, at most the 2026-09-02 incident cohort; ops remedy is a manual DB stamp or ticket, no backfill migration). Recover-node refuses HITL gate targets (422), gate decisions must go through approve/reject; user node ids squatting the reserved `hitl_gate_` prefix are rejected at graph-validation time.
 
-**Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline — matched via the webhook coalesce key stamped on `runs.input_payload` — the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalised `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate — `uq_hitl_claims_run_gate` — so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run — if parked — un-parks so the committed-decision resume machinery terminalises it through the normal reject path, while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
+**Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalised `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery terminalises it through the normal reject path, while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
 
 ### Connector Hub (`modulo/connectors/`)
 
@@ -145,7 +145,7 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 | `SentryConnector` | `error-tracking` | list/search issues, create events |
 | `DatadogConnector` | `monitoring` | query metrics, create monitors |
 | `RestConnector` | `rest` | verb-agnostic HTTP read/write against a declared endpoint (see `docs/rest-connector.md`) |
-| *(40+ built-in connectors total — see `modulo/connectors/`)* | | |
+| *(40+ built-in connectors total, see `modulo/connectors/`)* | | |
 
 ### Model Backend Hub (`modulo/model_backends/`)
 
@@ -176,7 +176,7 @@ Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-s
 
 ### Runtime Provider Hub (`modulo/core/runtime_provider/`)
 
-Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner - the one-line link for that ADR is right here). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider — there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), and `runner_docker` (registered when a `MODULO_RUNNER_*` variable or a Docker endpoint — `MODULO_DOCKER_HOST`/`DOCKER_HOST` — is configured; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
+Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner, the one-line link for that ADR is right here). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), and `runner_docker` (registered when a `MODULO_RUNNER_*` variable or a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
 
 ### Auth System (`modulo/auth/`)
 
@@ -230,50 +230,50 @@ Manages the local and community library of reusable primitives (agents, schemas,
 #### Run admission and healing (FAR-604)
 
 Dispatch admission is capacity-gated twice: per pipeline (`max_concurrent_runs`,
-counted over `running`/`claimed`/`unknown` runs — `awaiting_human` and
+counted over `running`/`claimed`/`unknown` runs; `awaiting_human` and
 `hitl_parked` are EXCLUDED: a run parked on a human decision is not executing,
-and a human decision may take days without starving admission — the 2026-09-04
+and a human decision may take days without starving admission; the 2026-09-04
 incident had 20 `awaiting_human` runs consuming a 20-cap pipeline for 26h) and
 per org (`run_concurrency_limit`, still counted over
-`running`/`awaiting_human`/`hitl_parked`/`claimed`/`unknown` — the org-wide
+`running`/`awaiting_human`/`hitl_parked`/`claimed`/`unknown`; the org-wide
 worker pool stays bounded by parked runs). A capacity-deferred run stays
 `pending` (marked
 `pipeline_capacity` / `org_capacity_limited`) and is re-dispatched when a slot
 frees; `pipeline.max_concurrent_runs` must be >= 1 (create/update reject 0 and
-negatives — 0 would silently wedge admission forever; pausing admission is the
+negatives; 0 would silently wedge admission forever; pausing admission is the
 org triggers pause). Four independent mechanisms keep that gate healthy:
 
-- **Slot reconciliation sweep** — a system cron (every 5 min) terminalises
+- **Slot reconciliation sweep:** a system cron (every 5 min) terminalises
   `running` runs whose heartbeat is stale past `SLOT_RECONCILE_STALE_SECONDS`
   (default 30 min) with the `worker_lost` error code, force-releasing the
   pipeline slots a crashed worker leaked. Journeys and daily facts advance for
   each released run.
-- **HITL park-on-expiry sweep** — a system cron (every 5 min) parks a run whose
+- **HITL park-on-expiry sweep:** a system cron (every 5 min) parks a run whose
   open HITL gate expired UNANSWERED past `HITL_PARK_GRACE_SECONDS` (default
-  24h): the run moves `awaiting_human` → `hitl_parked` (a non-terminal status
-  that holds no pipeline capacity) — the STATUS itself is the parked signal
-  the HITL UI reads to show "expired — parked". Park ≠ decide: the gate row
+  24h): the run moves `awaiting_human` to `hitl_parked` (a non-terminal status
+  that holds no pipeline capacity). The STATUS itself is the parked signal
+  the HITL UI reads to show "expired, parked". Park is not decide: the gate row
   stays OPEN AND CLAIMABLE (a claim takes a fresh TTL), and the moment a
   decision commits
   (`HITLManager._decide`, API or MCP) the run un-parks to `awaiting_human` and
-  re-enters normal admission — approve resumes from the checkpoint through the
+  re-enters normal admission: approve resumes from the checkpoint through the
   normal resume path, reject terminalises via the reject path. Each park is
   logged loudly (`hitl_park.parked`).
-- **Queue coalescing (latest-wins)** — for webhook deliveries with a stable
+- **Queue coalescing (latest-wins):** for webhook deliveries with a stable
   work-item key (GitHub: `repository.full_name` + `pull_request.number`, or
-  `issue.number`; anything else → no key, no coalescing), a new delivery folds
+  `issue.number`; anything else, no key, no coalescing), a new delivery folds
   into the pipeline's UNSTARTED `pending` run for the same key instead of
   inserting a row: the pending run's input payload is replaced and its
   `created_at` bumped, and a `coalesced` TriggerEvent is recorded. On by
   default; disable per trigger with `config_json.coalesce_pending: false`.
   Replays never coalesce.
-- **Dispatcher backpressure** — trigger dispatch (webhook, cron, polling)
+- **Dispatcher backpressure:** trigger dispatch (webhook, cron, polling)
   refuses NEW runs when the pipeline's pending queue exceeds
   `max(3 x max_concurrent_runs, 5)` rows or its oldest pending run is older
   than `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` (default 60 min). Refusals are
   loud: a `backpressure_skipped` TriggerEvent carries the depths, and the
   webhook path answers 429 so the sender retries.
-- **Legacy stale-run sweep** — pending runs past the never-dispatched window
+- **Legacy stale-run sweep:** pending runs past the never-dispatched window
   (`SAQ_NEVER_DISPATCHED_WINDOW`), capacity-marked runs past the TTL
   (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
   (`worker_lost`) are terminalised or re-dispatched as before.
@@ -368,7 +368,7 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. Role set: `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only). Admin actions require human session. Keys shown once at creation.
 
 Every key carries a **caller scope** (`scope` column, immutable post-mint):
-`org` (org-level machine identity — the historical default; includes
+`org` (org-level machine identity, the historical default; includes
 team-scoped and per-run sandbox keys) or `user` (a per-user key that acts as
 its creator's identity and is quota'd to 10 active per account). User-scoped
 minting is REST-JWT-only, gated by the org `user_scoped_mcp_keys` flag

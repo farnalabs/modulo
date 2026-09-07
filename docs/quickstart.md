@@ -15,7 +15,7 @@ Modulo is a self-hosted agent governance platform for building governed, repeata
 
 ## 1. Start infrastructure
 
-```powershell
+```bash
 # From the repository root
 docker compose -f docker-compose.local.yml up -d
 ```
@@ -26,12 +26,12 @@ This starts:
 
 ## 2. Set up the backend
 
-```powershell
+```bash
 cd backend
 uv sync
 
 # Create .env (these values work with the local Docker containers)
-@"
+cat > .env <<'EOF'
 DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
 MODULO_DB=postgres
 SECRET_KEY=local-dev-secret-key-not-for-production
@@ -41,7 +41,7 @@ REDIS_URL=redis://localhost:6380/0
 MODULO_PUBLIC_URL=http://localhost:8000
 MODULO_USERS=admin:admin
 CORS_ORIGINS=http://localhost:5173
-"@ | Out-File -Encoding utf8 .env
+EOF
 
 # Fix alembic_version table width for branch migration IDs
 docker compose -f ../docker-compose.local.yml exec db-local psql -U modulo -c "CREATE TABLE alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
@@ -52,7 +52,7 @@ uv run alembic upgrade heads
 
 ## 3. Start the backend
 
-```powershell
+```bash
 uv run uvicorn modulo.api.main:app --reload --port 8000
 ```
 
@@ -63,14 +63,12 @@ The API is now live at `http://localhost:8000`. OpenAPI docs at `http://localhos
 Modulo executes pipeline runs through SAQ workers. Start them in separate
 terminals:
 
-```powershell
+```bash
 # Runs worker: executes run jobs (queue: runs)
 uv run python -m saq modulo.core.saq_worker.runs_settings
 
 # System worker: scheduler (fire_due_triggers) + reconcile + system crons
-$env:SAQ_AUTH_USERNAME = "admin"
-$env:SAQ_AUTH_PASSWORD = "admin"
-uv run python -m modulo.core.saq_worker
+SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m modulo.core.saq_worker
 ```
 
 Notes:
@@ -80,7 +78,7 @@ Notes:
 
 ## 4. Start the frontend (optional)
 
-```powershell
+```bash
 cd frontend
 pnpm install --frozen-lockfile
 pnpm run dev
@@ -102,10 +100,10 @@ Everything above gets you a running stack. Now you'll build and run your first r
 
 No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/modulo/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown; it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`:
 
-```powershell
-curl -X POST http://localhost:8000/api/v1/model-backends `
-  -u admin:admin `
-  -H "Content-Type: application/json" `
+```bash
+curl -X POST http://localhost:8000/api/v1/model-backends \
+  -u admin:admin \
+  -H "Content-Type: application/json" \
   -d '{"name":"stub","display_name":"Stub","provider":"custom","model_id":"stub","default_params":{"fixture_map":{"hello":"hello from the stub"}}}'
 ```
 
@@ -128,10 +126,10 @@ curl -X POST http://localhost:8000/api/v1/model-backends `
 
 With the pipeline open in the editor, click **Run Pipeline** (a dialog opens; enter a prompt or leave it blank) and confirm. You can also trigger from the pipelines list via the **Run** button on a pipeline card. Both call `POST /api/v1/runs` with a `pipeline_id` and `input_payload`:
 
-```powershell
-curl -X POST http://localhost:8000/api/v1/runs `
-  -u admin:admin `
-  -H "Content-Type: application/json" `
+```bash
+curl -X POST http://localhost:8000/api/v1/runs \
+  -u admin:admin \
+  -H "Content-Type: application/json" \
   -d '{"pipeline_id":"<pipeline-id>","input_payload":{"prompt":"hello"}}'
 ```
 

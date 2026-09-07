@@ -23,7 +23,6 @@ an injected ``now`` expression is accepted for deterministic tests only.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -33,6 +32,8 @@ from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.expression import TextClause, text
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy.engine import Dialect
 
 from modulo.db.models.account import Account

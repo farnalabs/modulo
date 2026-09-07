@@ -2251,6 +2251,13 @@ export default {
       "saving": "Saving...",
       "test_email": "Send Test Email",
       "testing": "Sending...",
+      "organisation_id_not_available": "Organisation ID not available",
+      "could_not_determine_organisation": "Could not determine organisation",
+      "save_failed": "Save failed: {message}",
+      "email_settings_saved": "Email settings saved.",
+      "test_failed": "Test failed: {message}",
+      "test_failed_default": "Test failed.",
+      "test_email_sent": "Test email sent successfully.",
       "email_config_not_available": "Email configuration is not available on your current plan."
     },
     "SettingsMonitorConfigView": {
