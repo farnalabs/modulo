@@ -164,11 +164,11 @@ export interface HitlGate {
   label?: string | null
   description?: string | null
   context?: Record<string, unknown> | null
-  claimed_by: string | null
-  claimed_at: string | null
-  expires_at: string | null
-  decision: string | null
-  decision_at: string | null
+  claimed_by?: string | null
+  claimed_at?: string | null
+  expires_at?: string | null
+  decision?: string | null
+  decision_at?: string | null
   created_at?: string
   team_scope?: string
 }
