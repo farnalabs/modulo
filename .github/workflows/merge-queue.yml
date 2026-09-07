@@ -871,14 +871,15 @@ jobs:
           # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a
           # Modulo outage can NEVER fail the merge queue. The payload is always
           # recorded in the log; the POST only fires when MODULO_SELF_REPORT_URL is
-          # configured. No such ingestion endpoint exists yet — see the follow-up
-          # ticket for the required API.
+          # configured. The endpoint is POST
+          # /api/v1/lifecycle-maps/{lifecycle_map_id}/journeys/self-report
+          # (FAR-143); the URL secret points at the dogfood map's endpoint.
           PR_NUMS=$(git log main..merge-queue --oneline 2>/dev/null | grep -oP 'PR #\K\d+' | tac || true)
           [ -z "$PR_NUMS" ] && { echo "No PRs merged this cycle - nothing to self-report."; exit 0; }
 
           REFS="[]"
           for NUM in $PR_NUMS; do
-            REFS=$(echo "$REFS" | jq -c --arg ref "#${NUM}" '. + [{"kind": "github_pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
+            REFS=$(echo "$REFS" | jq -c --arg ref "${NUM}" '. + [{"kind": "pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
           done
           PAYLOAD=$(jq -n --argjson refs "$REFS" \
             '{event: "workflow_self_report", source: "github_actions", workflow: "merge-queue", stage_id: "merge", work_item_refs: $refs}' 2>/dev/null) \
