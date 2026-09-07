@@ -370,6 +370,8 @@ def _probe_database() -> None:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         _log.info("Database connection probe passed")
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         _log.warning("Database probe failed (non-fatal): %s — DB may recover before first job", exc)
     finally:
@@ -915,6 +917,8 @@ async def claim_expiry(_ctx: dict[str, Any]) -> dict[str, Any]:
     notifier: Notifier | None = None
     try:
         notifier = Notifier(_get_async_engine(), settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         _log.exception("claim_expiry: notifier init failed — DB expiry still runs")
     expired = await expire_stale_claims(factory, notifier=notifier)
@@ -933,6 +937,8 @@ async def hitl_overdue(_ctx: dict[str, Any]) -> dict[str, Any]:
     notifier: Notifier | None = None
     try:
         notifier = Notifier(_get_async_engine(), settings.fernet_key)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         _log.exception("hitl_overdue: notifier init failed — overdue dispatch still runs")
     dispatched = await dispatch_overdue_notifications(factory, notifier=notifier)
