@@ -495,15 +495,16 @@ async def test_pipeline_check_constraints_reject_non_positive_values(
     from sqlalchemy.exc import IntegrityError
 
     pid = uuid.uuid4()
-    await rls_session.execute(
-        text(
-            "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, "
-            "max_duration_seconds) VALUES (:id, :oid, :name, :aid, '{}'::jsonb, 0)"
-        ),
-        {"id": str(pid), "oid": str(test_org), "name": "bad-duration", "aid": str(test_user)},
-    )
     with pytest.raises(IntegrityError):
-        await rls_session.flush()
+        await rls_session.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, "
+                "max_duration_seconds) VALUES (:id, :oid, :name, :aid, '{}'::jsonb, 0)"
+            ),
+            {"id": str(pid), "oid": str(test_org), "name": "bad-duration", "aid": str(test_user)},
+        )
+
+    await rls_session.rollback()
 
     await rls_session.rollback()
 
