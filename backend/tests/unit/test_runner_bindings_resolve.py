@@ -130,14 +130,14 @@ def _patch_resolver(hub: _Hub, settings: MagicMock = _settings_patch()) -> list[
 
 
 async def test_resolve_returns_empty_when_session_factory_none() -> None:
-    assert await resolve_agent_bindings(session_factory=None, org_id=_ORG_ID, agent_id=_AGENT_ID) == {}
+    assert not await resolve_agent_bindings(session_factory=None, org_id=_ORG_ID, agent_id=_AGENT_ID)
 
 
 async def test_resolve_returns_empty_when_org_id_invalid() -> None:
     factory = _make_session_factory(bindings=[], backends=[])
     patchers = _patch_resolver(_Hub())
     try:
-        assert await resolve_agent_bindings(session_factory=factory, org_id="not-a-uuid", agent_id=_AGENT_ID) == {}
+        assert not await resolve_agent_bindings(session_factory=factory, org_id="not-a-uuid", agent_id=_AGENT_ID)
     finally:
         for p in patchers:
             p.stop()
@@ -147,7 +147,7 @@ async def test_resolve_returns_empty_when_no_bindings() -> None:
     factory = _make_session_factory(bindings=[], backends=[])
     patchers = _patch_resolver(_Hub())
     try:
-        assert await resolve_agent_bindings(session_factory=factory, org_id=_ORG_ID, agent_id=_AGENT_ID) == {}
+        assert not await resolve_agent_bindings(session_factory=factory, org_id=_ORG_ID, agent_id=_AGENT_ID)
     finally:
         for p in patchers:
             p.stop()

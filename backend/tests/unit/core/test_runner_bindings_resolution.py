@@ -62,9 +62,9 @@ def _make_session(execute_results: list[MagicMock]) -> tuple[MagicMock, AsyncMoc
 
 @pytest.mark.asyncio
 async def test_resolve_empty_when_inputs_missing() -> None:
-    assert await resolve_agent_bindings(session_factory=None, org_id=None, agent_id=None) == {}
-    assert await resolve_agent_bindings(session_factory=MagicMock(), org_id=None, agent_id=uuid.uuid4()) == {}
-    assert await resolve_agent_bindings(session_factory=MagicMock(), org_id=uuid.uuid4(), agent_id=None) == {}
+    assert not await resolve_agent_bindings(session_factory=None, org_id=None, agent_id=None)
+    assert not await resolve_agent_bindings(session_factory=MagicMock(), org_id=None, agent_id=uuid.uuid4())
+    assert not await resolve_agent_bindings(session_factory=MagicMock(), org_id=uuid.uuid4(), agent_id=None)
 
 
 @pytest.mark.asyncio
