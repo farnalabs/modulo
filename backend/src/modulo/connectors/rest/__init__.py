@@ -924,64 +924,104 @@ class RestConnector(ConnectorBase):
             )
         return self._rate_limiter
 
-    async def _acquire_rate_token(self, destination: str, *, deadline_seconds: float | None = None) -> None:
-        """Consume one token from the per-destination bucket (fail-closed).
+    def _rate_limit_params(self) -> tuple[float, int] | None:
+        """Resolve + validate the configured rate (requests/s) and burst.
 
-        Each call waits until a token is available (refill is continuous).
-        *deadline_seconds*, when provided, bounds the wait: if a token cannot be
-        supplied within that window a :class:`RESTRateLimitTimeoutError` is
-        raised rather than spinning forever (the per-item fan-out budget). The
-        deadline is enforced DURING each ``consume`` (via ``asyncio.wait_for``),
-        not just between hops, so a slow Redis round-trip cannot overshoot it. A
-        missing/disabled ``rate_limit`` config is a no-op. When a ``redis_client``
-        is supplied the shared Redis bucket is authoritative (one budget across
-        workers) and FAILS CLOSED on a Redis outage — it never mints from an
-        uncounted per-process bucket; otherwise the per-process connector-local
-        bucket is used.
-
-        Constraint (intentional fail-loud): ``requests_per_second`` must be ``> 0``
-        and ``burst`` must be ``>= 1``. A ``0``/negative rate or ``< 1`` burst is a
-        hard ``ValueError`` at request time — it deliberately replaces the previous
-        silent "disable the limiter" behaviour (an undocumented ``rate_limit:
-        requests_per_second: 0`` is not a supported way to turn limiting off; omit
-        the ``rate_limit`` block to disable it). Configure these at save time and
-        treat a ``ValueError`` here as a misconfiguration, not a runtime surprise.
+        Returns ``None`` when no ``rate_limit`` config is present (limiting is
+        off). Constraint (intentional fail-loud): ``requests_per_second`` must be
+        ``> 0`` and ``burst`` must be ``>= 1``. A ``0``/negative rate or ``< 1``
+        burst is a hard ``ValueError`` at request time — it deliberately replaces
+        the previous silent "disable the limiter" behaviour (an undocumented
+        ``rate_limit: requests_per_second: 0`` is not a supported way to turn
+        limiting off; omit the ``rate_limit`` block to disable it). Configure
+        these at save time and treat a ``ValueError`` here as a misconfiguration,
+        not a runtime surprise.
         """
         rate = self._rate_limit_config.get("requests_per_second")
         if rate is None:
-            return
+            return None
         requests_per_second = float(rate)
         if requests_per_second <= 0:
             raise ValueError(f"REST rate_limit.requests_per_second must be > 0 (got {requests_per_second})")
         burst = int(self._rate_limit_config.get("burst", max(1, int(requests_per_second))))
         if burst < 1:
             raise ValueError(f"REST rate_limit.burst must be >= 1 (got {burst})")
+        return requests_per_second, burst
 
-        limiter = self._get_rate_limiter(requests_per_second, burst)
-        deadline = time.monotonic() + max(0.0, deadline_seconds) if deadline_seconds is not None else None
-        # consume() returns False when the budget is exhausted (consuming nothing);
-        # wait out a bounded refill hop and retry. The deadline bounds EACH Redis
-        # hop via wait_for, so a Redis socket timeout cannot overshoot the deadline.
+    async def _consume_one_hop(
+        self,
+        limiter: PerDestinationRateLimiter,
+        destination: str,
+        requests_per_second: float,
+        deadline: float | None,
+        deadline_seconds: float | None,
+    ) -> tuple[float, bool]:
+        """One bounded consume attempt; returns ``(refill_hop_seconds, acquired)``.
+
+        When a *deadline* is set the wait is enforced DURING each ``consume``
+        (via ``asyncio.wait_for``), not just between hops, so a slow Redis
+        round-trip cannot overshoot it; an exhausted deadline raises
+        :class:`RESTRateLimitTimeoutError`.
+        """
+        if deadline is None:
+            ok = await limiter.consume(destination)
+            return min(1.0 / requests_per_second, 1.0), ok
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            raise RESTRateLimitTimeoutError(
+                f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
+            )
+        try:
+            ok = await asyncio.wait_for(limiter.consume(destination), timeout=remaining)
+        except TimeoutError as exc:
+            raise RESTRateLimitTimeoutError(
+                f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
+            ) from exc
+        return min(1.0 / requests_per_second, 1.0, remaining), ok
+
+    async def _wait_for_rate_token(
+        self,
+        limiter: PerDestinationRateLimiter,
+        destination: str,
+        requests_per_second: float,
+        deadline: float | None,
+        deadline_seconds: float | None,
+    ) -> None:
+        """Wait until a token is available (refill is continuous), bounded by the deadline.
+
+        ``consume()`` returns False when the budget is exhausted (consuming
+        nothing); wait out a bounded refill hop and retry. The deadline bounds
+        EACH Redis hop via wait_for (see :meth:`_consume_one_hop`), so a Redis
+        socket timeout cannot overshoot the deadline.
+        """
         while True:
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0.0:
-                    raise RESTRateLimitTimeoutError(
-                        f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
-                    )
-                try:
-                    ok = await asyncio.wait_for(limiter.consume(destination), timeout=remaining)
-                except TimeoutError as exc:
-                    raise RESTRateLimitTimeoutError(
-                        f"REST rate-limit wait exceeded deadline {deadline_seconds:.1f}s for {destination}"
-                    ) from exc
-                hop = min(1.0 / requests_per_second, 1.0, remaining)
-            else:
-                ok = await limiter.consume(destination)
-                hop = min(1.0 / requests_per_second, 1.0)
-            if ok:
+            hop, acquired = await self._consume_one_hop(
+                limiter, destination, requests_per_second, deadline, deadline_seconds
+            )
+            if acquired:
                 return
             await asyncio.sleep(hop)
+
+    async def _acquire_rate_token(self, destination: str, *, deadline_seconds: float | None = None) -> None:
+        """Consume one token from the per-destination bucket (fail-closed).
+
+        Each call waits until a token is available (refill is continuous).
+        *deadline_seconds*, when provided, bounds the wait: if a token cannot be
+        supplied within that window a :class:`RESTRateLimitTimeoutError` is
+        raised rather than spinning forever (the per-item fan-out budget). A
+        missing/disabled ``rate_limit`` config is a no-op. When a ``redis_client``
+        is supplied the shared Redis bucket is authoritative (one budget across
+        workers) and FAILS CLOSED on a Redis outage — it never mints from an
+        uncounted per-process bucket; otherwise the per-process connector-local
+        bucket is used.
+        """
+        params = self._rate_limit_params()
+        if params is None:
+            return
+        requests_per_second, burst = params
+        limiter = self._get_rate_limiter(requests_per_second, burst)
+        deadline = time.monotonic() + max(0.0, deadline_seconds) if deadline_seconds is not None else None
+        await self._wait_for_rate_token(limiter, destination, requests_per_second, deadline, deadline_seconds)
 
     async def _fanout_write(
         self,
