@@ -667,6 +667,18 @@ function sanitizeExtract(el: Element): string {
   return clone.textContent?.trim() || ''
 }
 
+/** Wait one animation frame pair before declaring DOM stability, so pending
+ * paints triggered by the mutation settle first. */
+function scheduleDomStableCheck(done: () => void, delayMs = 200): ReturnType<typeof setTimeout> {
+  return setTimeout(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        done()
+      })
+    })
+  }, delayMs)
+}
+
 function waitForDomStable(timeout = 10000): Promise<void> {
   return new Promise((resolve) => {
     const scope = document.querySelector('main') || document.querySelector('[role="main"]') || document.body
@@ -689,25 +701,13 @@ function waitForDomStable(timeout = 10000): Promise<void> {
       if (resolved) return
       if (checkSpinners()) return
       if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            done()
-          })
-        })
-      }, 200)
+      timer = scheduleDomStableCheck(done)
     })
 
     observer.observe(scope, { childList: true, subtree: true, characterData: true })
 
     if (!checkSpinners()) {
-      timer = setTimeout(() => {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            done()
-          })
-        })
-      }, 200)
+      timer = scheduleDomStableCheck(done)
     }
 
     setTimeout(() => {
