@@ -3245,7 +3245,7 @@ features:
         description: Model Context Protocol tool configuration
     feat-model-backends:
         description: Model backend management and setup
-        status: partial
+        status: covered
         behaviours:
             # Per-agent runner bindings (FAR-592 / D6)
             - "[x] A per-agent runner binding injects one decrypted Model Backend credential field into the agent's runner env at provision time under a named EN var (agent_runner_bindings, org-scoped, UNIQUE per org+agent+target; RESTRICT FK blocks deleting a bound backend at the DB level while the CRUD pre-delete inventory reports 'in use by N agents')"
