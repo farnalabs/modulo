@@ -135,8 +135,9 @@ class TestPricingTable:
                 assert entry.input_price_per_1k == 0.0
                 assert entry.output_price_per_1k == 0.0
 
-    def test_table_is_not_empty(self) -> None:
-        assert len(PRICING_TABLE) > 0
+    def test_table_contains_multiple_providers(self) -> None:
+        providers = {entry.provider for entry in PRICING_TABLE}
+        assert len(providers) > 1, "PRICING_TABLE must cover multiple providers"
 
     def test_duplicates_take_first_match(self) -> None:
         gpt4o_exact = get_pricing("openai", "gpt-4o")

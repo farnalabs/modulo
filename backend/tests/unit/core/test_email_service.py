@@ -33,15 +33,24 @@ class MockSettingsNoSMTP:
     email_from = ""
 
 
+@pytest.fixture
+def mock_settings() -> MockSettings:
+    return MockSettings()
+
+
+@pytest.fixture
+def mock_settings_no_smtp() -> MockSettingsNoSMTP:
+    return MockSettingsNoSMTP()
+
+
 class TestSendEmail:
-    def test_send_email_success(self) -> None:
-        settings = MockSettings()
+    def test_send_email_success(self, mock_settings: MockSettings) -> None:
         with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
             result = send_email(
-                settings,
+                mock_settings,
                 to=["admin@example.com"],
                 subject="Test Subject",
                 body_html="<html><body><h1>Test</h1></body></html>",
@@ -58,14 +67,13 @@ class TestSendEmail:
             assert msg["From"] == "noreply@example.com"
             assert msg["To"] == "admin@example.com"
 
-    def test_send_email_no_body_text(self) -> None:
-        settings = MockSettings()
+    def test_send_email_no_body_text(self, mock_settings: MockSettings) -> None:
         with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
             result = send_email(
-                settings,
+                mock_settings,
                 to=["admin@example.com"],
                 subject="Test",
                 body_html="<html><body><h1>Test</h1></body></html>",
@@ -74,15 +82,14 @@ class TestSendEmail:
             assert result is True
             mock_server.send_message.assert_called_once()
 
-    def test_send_email_custom_timeout(self) -> None:
-        settings = MockSettings()
-        settings.smtp_timeout = 15
+    def test_send_email_custom_timeout(self, mock_settings: MockSettings) -> None:
+        mock_settings.smtp_timeout = 15
         with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
             mock_server = MagicMock()
             mock_smtp.return_value.__enter__.return_value = mock_server
 
             result = send_email(
-                settings,
+                mock_settings,
                 to=["admin@example.com"],
                 subject="Test",
                 body_html="<html><body><h1>Test</h1></body></html>",
@@ -194,10 +201,9 @@ class TestSendEmail:
             msg = mock_server.send_message.call_args[0][0]
             assert msg["To"] == "a@example.com, b@example.com"
 
-    def test_send_email_disabled_no_smtp_host(self) -> None:
-        settings = MockSettingsNoSMTP()
+    def test_send_email_disabled_no_smtp_host(self, mock_settings_no_smtp: MockSettingsNoSMTP) -> None:
         result = send_email(
-            settings,
+            mock_settings_no_smtp,
             to=["admin@example.com"],
             subject="Test",
             body_html="<html><body><h1>Test</h1></body></html>",
