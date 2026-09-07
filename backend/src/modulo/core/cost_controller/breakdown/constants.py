@@ -65,7 +65,7 @@ TOTAL_CLAMPED_MARKER = {"total_clamped": True, "amount_usd": "0.000000"}
 # The canonical warning code emitted when a self_reported cost component had at
 # least one eligible sandbox node but no agent reported a model cost (a phantom
 # $0.000000 "reported" row). Surfaced as a run-level warning (see
-# compute_run_warnings) and mirrored in the frontend RunWarningsList.
+# compute_run_warnings) and mirrored in the frontend run detail warnings strip.
 RUN_WARNING_MISSING_SELF_REPORT = "missing_self_report"
 # The severity tag carried by every run-level cost warning (reserved for a
 # future "error" tier — nothing is a hard error today).

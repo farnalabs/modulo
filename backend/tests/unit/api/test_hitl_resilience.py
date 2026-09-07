@@ -14,7 +14,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.hitl_manager import NotTeamMemberError
+from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -76,11 +76,12 @@ class TestClaimGateKeepsParkedRunParked:
     NOT transition the run to ``claimed`` — a claim is not a decision, and
     the claim-expiry sweep would otherwise un-park the run via the
     claimed→awaiting_human reset. The un-park happens at decision time
-    (``HITLManager._decide``). The guard lives INSIDE the status write
-    (``update_run_status(not_status=...)``) instead of a route-level
-    read-then-write: the pre-read could not see the park sweep's concurrent
-    commit (TOCTOU), so a run parked between the read and the write used to
-    be flipped to ``claimed``."""
+    (``HITLManager._decide``). FAR-612 rebased the guard onto the fenced
+    transition authority: the flip is guarded INSIDE the conditional UPDATE
+    (``allowed_from={"awaiting_human"}``) — ``hitl_parked`` is not an
+    admissible source state, so a parked run is never flipped and the park
+    sweep's concurrent commit is fenced out (TOCTOU-safe, same property the
+    old ``update_run_status(not_status=...)`` guard provided)."""
 
     @staticmethod
     def _claim_gate_response() -> MagicMock:
@@ -91,23 +92,29 @@ class TestClaimGateKeepsParkedRunParked:
         gate.expires_at = datetime.now(UTC)
         return gate
 
-    @patch("modulo.api.routes.hitl.update_run_status", new_callable=AsyncMock)
-    @patch("modulo.api.routes.hitl.HITLManager.claim", new_callable=AsyncMock)
-    def test_claim_write_is_guarded_against_parked(
-        self, claim: AsyncMock, update_run_status: AsyncMock, client: TestClient
-    ) -> None:
-        claim.return_value = self._claim_gate_response()
-        resp = client.post(
-            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
-            json={"expiry_minutes": 15},
-        )
+    def test_claim_write_is_guarded_against_parked(self, client: TestClient) -> None:
+        transition = AsyncMock(return_value=True)
+        with (
+            patch(
+                "modulo.api.routes.hitl.HITLManager",
+                return_value=MagicMock(claim=AsyncMock(return_value=self._claim_gate_response())),
+            ),
+            patch("modulo.api.routes.hitl.transition_run", new=transition),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+                json={"expiry_minutes": 15},
+            )
+
         assert resp.status_code == 200
         assert resp.json()["claim_token"] == "tok-123"
-        update_run_status.assert_awaited_once()
-        assert update_run_status.call_args.args[1] == _RUN_ID
-        assert update_run_status.call_args.args[2] == "claimed"
-        # The parked guard rides INSIDE the write — the route never pre-reads.
-        assert update_run_status.call_args.kwargs["not_status"] == "hitl_parked"
+        transition.assert_awaited_once()
+        assert transition.await_args.args[1] == _RUN_ID
+        assert transition.await_args.kwargs["target_status"] == "claimed"
+        # The parked guard rides INSIDE the conditional UPDATE — the route
+        # never pre-reads, and "hitl_parked" must never be an admissible
+        # source state for the claim's status flip.
+        assert "hitl_parked" not in transition.await_args.kwargs["allowed_from"]
 
 
 class TestClaimGateNotTeamMemberError:
@@ -121,6 +128,80 @@ class TestClaimGateNotTeamMemberError:
             json={"expiry_minutes": 15},
         )
         assert resp.status_code == 403
+
+
+class TestClaimGateRunNotAwaitingError:
+    """FAR-612: a gate whose run is not awaiting_human must 409 with the run's
+    actual status -- a terminal run is never flipped to "claimed" by a stale
+    gate claim."""
+
+    @patch(
+        "modulo.api.routes.hitl.HITLManager.claim",
+        new=AsyncMock(side_effect=RunNotAwaitingError(_RUN_ID, "complete")),
+    )
+    def test_claim_gate_returns_409_when_run_not_awaiting(self, client: TestClient) -> None:
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+            json={"expiry_minutes": 15},
+        )
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "not awaiting a human decision" in detail
+        assert "status: complete" in detail
+
+
+class TestClaimGateRunStatusFence:
+    """FAR-612: the claim route's run-status flip must go through the fenced
+    transition authority guarded on ``allowed_from={"awaiting_human"}`` so a
+    run that goes terminal between claim()'s status pre-check and the flip is
+    never clobbered to "claimed"."""
+
+    @staticmethod
+    def _claimed_gate() -> MagicMock:
+        gate = MagicMock()
+        gate.claim_token = "tok-123"
+        gate.run_id = _RUN_ID
+        gate.gate_id = "gate-1"
+        gate.expires_at = datetime(2026, 1, 1, tzinfo=UTC)
+        return gate
+
+    def test_claim_flip_is_fenced_to_awaiting_human(self, client: TestClient) -> None:
+        transition = AsyncMock(return_value=True)
+        with (
+            patch(
+                "modulo.api.routes.hitl.HITLManager",
+                return_value=MagicMock(claim=AsyncMock(return_value=self._claimed_gate())),
+            ),
+            patch("modulo.api.routes.hitl.transition_run", new=transition),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 200
+        transition.assert_awaited_once()
+        assert transition.await_args.kwargs["target_status"] == "claimed"
+        assert transition.await_args.kwargs["allowed_from"] == frozenset({"awaiting_human"})
+
+    def test_claim_still_succeeds_when_status_flip_fences_out(self, client: TestClient) -> None:
+        """Fenced-miss degradation: the gate claim stands (200 + token); the
+        run keeps its terminal status and the claim token expires unused."""
+        transition = AsyncMock(return_value=False)
+        with (
+            patch(
+                "modulo.api.routes.hitl.HITLManager",
+                return_value=MagicMock(claim=AsyncMock(return_value=self._claimed_gate())),
+            ),
+            patch("modulo.api.routes.hitl.transition_run", new=transition),
+        ):
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["claim_token"] == "tok-123"
 
 
 class TestApproveGateSQLAlchemyError:

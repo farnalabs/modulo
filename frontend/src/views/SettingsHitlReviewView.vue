@@ -54,6 +54,19 @@
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       {{ $t('views.SettingsHitlReviewView.auto_refresh', { seconds: refreshCountdown }) }}
     </div>
+    <!-- FAR-612: claim failures render at VIEW level so the immediate list
+         refresh below (which drops terminal-run / already-decided gates) can
+         never erase the message before it renders. Cleared on the next
+         successful action, via the dismiss button, or after 10s. -->
+    <ErrorAlert
+      v-if="claimFailureBanner"
+      data-testid="hitl-review-claim-failure-banner"
+      class="mb-4"
+      :message="claimFailureBanner"
+      :retryable="false"
+      :on-dismiss="clearClaimFailureBanner"
+      :dismiss-label="$t('views.SettingsHitlReviewView.dismiss')"
+    />
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
     <template v-else>
@@ -165,7 +178,7 @@
                       {{ claiming[expandKey(gate)] ? $t('views.SettingsHitlReviewView.claiming') : $t('views.SettingsHitlReviewView.claim_gate') }}
                     </Button>
                   </div>
-                  <div v-if="gateStatus(gate) === 'claimed'">
+                  <div v-if="gateStatus(gate) === 'claimed' && claimTokens[expandKey(gate)]">
                     <div class="space-y-2">
                       <textarea :aria-label="$t('views.SettingsHitlReviewView.review_notes')"
                         v-model="reviewNotes[expandKey(gate)]"
@@ -195,6 +208,11 @@
                         </button>
                       </div>
                     </div>
+                  </div>
+                  <!-- FAR-612: claimed by another session (no local claim token) is read-only —
+                       its approve/reject buttons could only ever fail with "no claim token". -->
+                  <div v-else-if="gateStatus(gate) === 'claimed'" data-testid="hitl-review-claimed-other" class="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
+                    {{ $t('views.SettingsHitlReviewView.claimed_by_other', { user: gate.claimed_by, time: formatDate(gate.claimed_at) }) }}
                   </div>
                   <div v-if="gateStatus(gate) === 'approved'" class="rounded-lg bg-success/10 p-3 text-sm text-success">
                     {{ $t('views.SettingsHitlReviewView.approved_banner') }}
@@ -296,6 +314,25 @@ const actioning = ref<Record<string, string | null>>({})
 const actionLoading = ref<Record<string, boolean>>({})
 const actionMessage = ref<Record<string, { type: string; text: string } | null>>({})
 const reviewNotes = ref<Record<string, string>>({})
+// FAR-612: view-level claim-failure banner. Lives OUTSIDE the gate rows so
+// the immediate loadGates() refresh after a failed claim (which drops
+// terminal-run / already-decided gates from the pending list) cannot erase
+// the message.
+const claimFailureBanner = ref<string | null>(null)
+let claimBannerTimer: ReturnType<typeof setTimeout> | null = null
+
+function showClaimFailureBanner(text: string) {
+  claimFailureBanner.value = text
+  if (claimBannerTimer) clearTimeout(claimBannerTimer)
+  // Failure banners persist longer than the 5s success toasts (the operator
+  // needs time to read why the claim failed) but never stay forever.
+  claimBannerTimer = setTimeout(() => { claimFailureBanner.value = null }, 10000)
+}
+
+function clearClaimFailureBanner() {
+  claimFailureBanner.value = null
+  if (claimBannerTimer) { clearTimeout(claimBannerTimer); claimBannerTimer = null }
+}
 
 const refreshInterval = ref(30000)
 const refreshCountdown = ref(30)
@@ -382,6 +419,23 @@ const filteredGates = computed(() => {
     matchesStatus(gate) && matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
 })
 
+function claimFailureMessage(err: unknown): string {
+  // FAR-612: map the backend's claim-failure detail to a specific message so
+  // the operator knows what actually happened (conflict shapes from the claim
+  // endpoint: already claimed / already decided / run not awaiting).
+  const detail = formatApiError(err)
+  if (detail.includes('already claimed')) {
+    return t('views.SettingsHitlReviewView.claim_failed_already_claimed')
+  }
+  if (detail.includes('already has a decision')) {
+    return t('views.SettingsHitlReviewView.claim_failed_already_decided')
+  }
+  if (detail.includes('not awaiting a human decision')) {
+    return t('views.SettingsHitlReviewView.claim_failed_run_not_awaiting', { reason: detail })
+  }
+  return `${t('views.SettingsHitlReviewView.claim_failed')} ${detail}`
+}
+
 async function claimGate(gate: GateItem) {
   const key = expandKey(gate)
   claiming.value[key] = true
@@ -392,11 +446,16 @@ async function claimGate(gate: GateItem) {
       body: { expiry_minutes: 15 },
     })
     if (err) {
-      actionMessage.value[key] = {
-        type: 'error',
-        text: `${t('views.SettingsHitlReviewView.claim_failed')} ${formatApiError(err)}`,
-      }
+      // View-level banner: the immediate refresh below may drop this gate
+      // (terminal run / already decided), which would erase a row-level
+      // message before it ever renders.
+      showClaimFailureBanner(claimFailureMessage(err))
+      // The row on screen is stale after a failed claim (another reviewer took
+      // it, the run moved on, the gate was decided). Re-fetch immediately so
+      // the list reflects reality instead of waiting for the 30s auto-refresh.
+      await loadGates()
     } else if (data) {
+      clearClaimFailureBanner()
       const d = data as any
       claimTokens.value[key] = d.claim_token
       updateGate(key, { claimed_by: t('views.SettingsHitlReviewView.claimed_by_you'), claimed_at: new Date().toISOString(), expires_at: d.expires_at })
@@ -404,7 +463,16 @@ async function claimGate(gate: GateItem) {
       actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
     }
   } catch (e: unknown) {
-    actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.claim_failed')} ${formatApiError(e)}` }
+    // FAR-612: network errors land here. They also refresh: the claim may
+    // have landed before the connection dropped, leaving the row stale.
+    // vue-query's refetch never rejects, but wrap anyway so no unhandled
+    // rejection escapes claimGate.
+    showClaimFailureBanner(`${t('views.SettingsHitlReviewView.claim_failed')} ${formatApiError(e)}`)
+    try {
+      await loadGates()
+    } catch {
+      // Refresh failure must not mask the claim-failure banner above.
+    }
   } finally {
     claiming.value[key] = false
   }
@@ -431,6 +499,7 @@ async function approveGate(gate: GateItem) {
         text: `${t('views.SettingsHitlReviewView.approve_failed')} ${formatApiError(err)}`,
       }
     } else {
+      clearClaimFailureBanner()
       updateGate(key, { decision: 'approved', decision_at: new Date().toISOString() })
       actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_approved_pipeline_resuming') }
       actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
@@ -465,6 +534,7 @@ async function rejectGate(gate: GateItem) {
         text: `${t('views.SettingsHitlReviewView.reject_failed')} ${formatApiError(err)}`,
       }
     } else {
+      clearClaimFailureBanner()
       updateGate(key, { decision: 'rejected', decision_at: new Date().toISOString() })
       actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_rejected_pipeline_routed_to_reject_target') }
       actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
@@ -516,6 +586,7 @@ onMounted(async () => {
 onUnmounted(() => {
   disposed = true
   stopAutoRefresh()
+  clearClaimFailureBanner()
   actionMessageTimers.forEach(timer => clearTimeout(timer))
   actionMessageTimers.length = 0
 })

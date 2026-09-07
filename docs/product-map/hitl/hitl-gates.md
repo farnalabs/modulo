@@ -19,6 +19,7 @@ unit-tests:
   - backend/tests/unit/api/test_hitl_resilience.py
   - backend/tests/unit/api/test_rate_limit_hitl_review.py
   - backend/tests/unit/pipeline_engine/test_node_runner_hitl.py
+  - frontend/src/__tests__/SettingsHitlReviewView.spec.ts
 bdd:
   - backend/tests/bdd/features/hitl/claim.feature
   - backend/tests/bdd/features/hitl/approve.feature
@@ -54,11 +55,22 @@ may decide.
       `awaiting_human`
 - [x] Pending-gate queues: `GET /api/v1/runs/{run_id}/hitl/pending` (per run)
       and `GET /api/v1/hitl/pending` (org-wide), gated by the `hitl.list`
-      permission
+      permission. The org-wide queue joins `runs` and lists only undecided
+      gates whose run is in `awaiting_human`, `claimed`, or `hitl_parked` status
+      — undecided
+      gates on terminal runs are data rot, not pending work, and are excluded
+      (FAR-612); the MCP `list_pending_hitl` tool applies the same
+      actionable-status filter. The review UI renders a gate held by another
+      session as read-only (claimed by \<user\> at \<time\>) and shows
+      approve/reject only to the session holding that gate's claim token
 - [x] Claim is atomic — `claim()` issues a short-lived (15-minute) JWT
       `claim_token` scoped to run + gate + client; an already-claimed gate →
-      409, expired/invalid claim token rejected (claim.feature,
-      `test_hitl_manager`, `test_hitl_jwt`)
+      409, expired/invalid claim token rejected; the gate's run must be in
+      `awaiting_human` status — claiming a gate whose run is not awaiting a
+      human decision → 409 `RunNotAwaitingError`, so a terminal run is never
+      flipped to `claimed` by a stale gate (re-claim after expiry works: the
+      expiry sweep resets the run back to `awaiting_human`) (FAR-612)
+      (claim.feature, `test_hitl_manager`, `test_hitl_jwt`)
 - [x] Approve resumes the run (`action: approved`, optional notes) — gated by
       `hitl.approve`; a claimed-by-other caller cannot approve
 - [x] Reject records the decision and resumes the graph through a router on
