@@ -495,13 +495,11 @@ async def test_pipeline_check_constraints_reject_non_positive_values(
     from sqlalchemy.exc import IntegrityError
 
     pid = uuid.uuid4()
-    # The CHECK constraint is enforced at INSERT (execute) time, not at flush
-    # time, so the IntegrityError must be caught around the execute call.
     with pytest.raises(IntegrityError):
         await rls_session.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, "
-                "max_duration_seconds) VALUES (:id, :oid, :name, :aid, '{}'::jsonb, 0)"
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_duration_seconds, "
+                "run_context_defaults) VALUES (:id, :oid, :name, :aid, 0, '{}'::json)"
             ),
             {"id": str(pid), "oid": str(test_org), "name": "bad-duration", "aid": str(test_user)},
         )

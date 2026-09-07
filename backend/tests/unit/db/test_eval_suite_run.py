@@ -779,9 +779,12 @@ def test_single_migration_head() -> None:
     # chains off 0186.
     chaining_off_0186 = [p for p in revisions if parents[p] == "0186_pipeline_check_constraints_deleted_by"]
     assert [_basename(p) for p in chaining_off_0186] == ["0187_pipeline_performance_indexes.py"]
-    # Nothing chains off 0187_pipeline_performance_indexes -> it is the single head.
+    # 0188_pipeline_run_context_defaults_default (fix/deploy server_default sweep) chains off 0187.
     chaining_off_0187 = [p for p in revisions if parents[p] == "0187_pipeline_performance_indexes"]
-    assert chaining_off_0187 == []
+    assert [_basename(p) for p in chaining_off_0187] == ["0188_pipeline_run_context_defaults_default.py"]
+    # Nothing chains off 0188_pipeline_run_context_defaults_default -> it is the single head.
+    chaining_off_0188 = [p for p in revisions if parents[p] == "0188_pipeline_run_context_defaults_default"]
+    assert chaining_off_0188 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
