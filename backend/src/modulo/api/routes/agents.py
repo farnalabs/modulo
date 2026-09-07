@@ -13,7 +13,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.constants import (
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_NOT_FOUND,
+    MSG_RESOURCE_ALREADY_EXISTS,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -41,7 +45,6 @@ _MSG_DATABASE_OPERATION_FAILED = "Database operation failed"
 _MSG_DATABASE_OPERATION_FAILED_PLEASE = "Database operation failed. Please try again."
 _MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE = "An unexpected error occurred. Please try again."
 _MSG_AGENT_NOT_FOUND = "Agent not found"
-_MSG_NOT_FOUND = "Not found"
 _CODE_AGENT_UPDATE = "agent.update"
 _CODE_AGENTS_UPDATE_AGENT_ENDPOINT = "agents.update_agent_endpoint"
 _CODE_AGENTS_OPTIMIZE_PROMPT = "agents.optimize_prompt"
@@ -437,7 +440,7 @@ async def update_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
             if agent is None or agent.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
     except ProgrammingError:
         _log.exception(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
         raise HTTPException(
@@ -674,7 +677,7 @@ async def apply_optimized_prompt(
             await set_rls_org(session, principal.organisation_id)
             existing_agent = await get_agent(session, agent_id)
             if existing_agent is None or existing_agent.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
             agent = await add_prompt_version(
                 session,
                 agent_id,
@@ -822,7 +825,7 @@ async def rollback_prompt(
             await set_rls_org(session, principal.organisation_id)
             existing_agent = await get_agent(session, agent_id)
             if existing_agent is None or existing_agent.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
             agent = await rollback_prompt_version(session, agent_id, version)
     except IntegrityError:
         _log.exception("agents.rollback_prompt")
@@ -938,7 +941,7 @@ async def delete_agent_endpoint(
             await set_rls_org(session, principal.organisation_id)
             existing_agent = await get_agent(session, agent_id)
             if existing_agent is None or existing_agent.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
             deleted = await delete_agent(session, agent_id)
     except IntegrityError:
         _log.exception("agents.delete_agent_endpoint")

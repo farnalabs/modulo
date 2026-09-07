@@ -13,6 +13,8 @@ import asyncio
 import logging
 from typing import Any
 
+from modulo.core.pipeline_engine.error_codes import _CODE_CONNECTOR_UNKNOWN
+
 _log = logging.getLogger(__name__)
 
 # Module-level metric handles — initialised once by _init_metrics().
@@ -38,7 +40,6 @@ _connector_unknown_total: Any = None
 
 # The UNKNOWN-outcome error code stamped on the span (error.code / error.type /
 # status description — one value, three attributes of the same code).
-_CONNECTOR_SIDE_EFFECT_UNKNOWN = "connector.side_effect_unknown"
 
 
 def _get_meter() -> Any:
@@ -413,8 +414,8 @@ def record_connector_unknown_span(connector: str, node_id: str | None = None, de
         span = _otel_trace.get_current_span()
         if span is not None and span.is_recording():
             attrs: dict[str, str] = {
-                "error.code": _CONNECTOR_SIDE_EFFECT_UNKNOWN,
-                "error.type": _CONNECTOR_SIDE_EFFECT_UNKNOWN,
+                "error.code": _CODE_CONNECTOR_UNKNOWN,
+                "error.type": _CODE_CONNECTOR_UNKNOWN,
             }
             if connector:
                 attrs["connector"] = connector
@@ -422,7 +423,7 @@ def record_connector_unknown_span(connector: str, node_id: str | None = None, de
                 attrs["node_id"] = node_id
             if detail:
                 attrs["error.message"] = detail[:256]
-            span.set_status(Status(StatusCode.ERROR, _CONNECTOR_SIDE_EFFECT_UNKNOWN))
+            span.set_status(Status(StatusCode.ERROR, _CODE_CONNECTOR_UNKNOWN))
             span.set_attributes(attrs)
     except Exception:
         _log.warning("metrics.connector_unknown_span_failed", exc_info=True)

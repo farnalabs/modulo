@@ -20,3 +20,4 @@ MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT = (
 )
 MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 MSG_ORGANISATION_NOT_FOUND = "Organisation not found"
+MSG_NOT_FOUND = "Not found"

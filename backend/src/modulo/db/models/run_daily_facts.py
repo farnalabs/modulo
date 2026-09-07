@@ -41,17 +41,12 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import ONDELETE_SET_NULL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.pipeline_folder import PipelineFolder
     from modulo.db.models.team import Team
-
-
-# SQL referential action shared by every nullable FK on this model: when the
-# referenced row is deleted, the column is nulled rather than cascading.
-ONDELETE_SET_NULL = "SET NULL"
 
 
 class RunDailyFact(OrgScoped):

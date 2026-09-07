@@ -23,7 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import expression
 from sqlalchemy.sql.compiler import SQLCompiler
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import ONDELETE_SET_NULL, OrgScoped
 
 if TYPE_CHECKING:
     from modulo.db.models.organisation import Organisation
@@ -31,10 +31,6 @@ if TYPE_CHECKING:
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
     from modulo.db.models.team import Team
 
-
-# SQL referential action shared by every nullable FK on this model: when the
-# referenced row is deleted, the column is nulled rather than cascading.
-ONDELETE_SET_NULL: Final[str] = "SET NULL"
 
 # Single source of truth for run status sets (ADR 020 / dist/runtime-core A1).
 # Both are subsets of the ``ck_runs_status`` CHECK-constraint values. The

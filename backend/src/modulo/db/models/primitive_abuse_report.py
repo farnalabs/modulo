@@ -6,11 +6,7 @@ from datetime import datetime
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
-
-# SQL referential action shared by every nullable FK on this model: when the
-# referenced row is deleted, the column is nulled rather than cascading.
-ONDELETE_SET_NULL = "SET NULL"
+from modulo.db.models.base import ONDELETE_SET_NULL, OrgScoped
 
 
 class PrimitiveAbuseReport(OrgScoped):
