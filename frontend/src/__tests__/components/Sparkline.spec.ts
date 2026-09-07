@@ -188,4 +188,106 @@ describe('Sparkline', () => {
     await movePointer(wrapper, 100, 10)
     expect(wrapper.find('[data-testid="sparkline-tooltip"]').exists()).toBe(false)
   })
+
+  it('zero mode (default) maps null values to 0 at the chart floor', () => {
+    const wrapper = mount(Sparkline, { props: { data: [null, 50, null] } })
+    const ys = wrapper
+      .find('polyline')
+      .attributes('points')!
+      .split(' ')
+      .map(p => Number(p.split(',')[1]))
+    // [0, 50, 0]: the null days render as 0 (floor, y=58), the 50 day at the top.
+    expect(ys).toHaveLength(3)
+    expect(ys[0]).toBe(58)
+    expect(ys[1]).toBe(2)
+    expect(ys[2]).toBe(58)
+  })
+
+  it('carry-forward replaces interior and trailing nulls with the last known value', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [80, null, 100, null], missingData: 'carry-forward' },
+    })
+    const ys = wrapper
+      .find('polyline')
+      .attributes('points')!
+      .split(' ')
+      .map(p => Number(p.split(',')[1]))
+    expect(ys).toHaveLength(4)
+    const expected = mount(Sparkline, { props: { data: [80, 80, 100, 100] } })
+    const expectedYs = expected
+      .find('polyline')
+      .attributes('points')!
+      .split(' ')
+      .map(p => Number(p.split(',')[1]))
+    expect(ys).toEqual(expectedYs)
+  })
+
+  it('carry-forward draws a straight line across null days instead of crashing to the floor', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [100, null, null, 100, null], missingData: 'carry-forward' },
+    })
+    const ys = wrapper
+      .find('polyline')
+      .attributes('points')!
+      .split(' ')
+      .map(p => Number(p.split(',')[1]))
+    // Flat series at 100 -> centred vertically (height 60), one point per raw day.
+    expect(ys).toHaveLength(5)
+    ys.forEach(y => expect(y).toBe(30))
+  })
+
+  it('carry-forward drops leading nulls so the line starts at the first day with data', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [null, null, 80, 100, null], missingData: 'carry-forward' },
+    })
+    const ys = wrapper
+      .find('polyline')
+      .attributes('points')!
+      .split(' ')
+      .map(p => Number(p.split(',')[1]))
+    // Transformed series [80, 100, 100]: leading nulls are gone, the trailing
+    // null carries 100 forward. 80 sits on the floor (58), 100 at the top (2).
+    expect(ys).toEqual([58, 2, 2])
+  })
+
+  it('keeps hover tooltips date-aligned after dropping leading nulls', async () => {
+    const wrapper = mount(Sparkline, {
+      props: {
+        data: [null, null, 80, 100, null],
+        labels: ['d0', 'd1', 'd2', 'd3', 'd4'],
+        missingData: 'carry-forward',
+        width: 200,
+      },
+    })
+    await movePointer(wrapper, 2, 10)
+    let tooltip = wrapper.find('[data-testid="sparkline-tooltip"]')
+    expect(tooltip.text()).toContain('d2')
+    expect(tooltip.text()).toContain('80')
+    await movePointer(wrapper, 198, 10)
+    tooltip = wrapper.find('[data-testid="sparkline-tooltip"]')
+    expect(tooltip.text()).toContain('d4')
+    expect(tooltip.text()).toContain('100')
+  })
+
+  it('renders the no-data placeholder when every value is null', () => {
+    const wrapper = mount(Sparkline, {
+      props: { data: [null, null, null], missingData: 'carry-forward' },
+    })
+    expect(wrapper.find('polyline').exists()).toBe(false)
+    expect(wrapper.find('.sparkline-no-data').exists()).toBe(true)
+  })
+
+  it('renders a uniform scaling-independent endpoint dot', () => {
+    const wrapper = mount(Sparkline, { props: { data: [1, 4, 2, 8] } })
+    const dot = wrapper.find('[data-testid="sparkline-endpoint"]')
+    expect(dot.exists()).toBe(true)
+    // A <circle> would be squashed into a flat dash by the non-uniform svg
+    // scale; the dot must be a zero-length path with a round, non-scaling stroke.
+    expect(wrapper.find('circle[data-testid="sparkline-endpoint"]').exists()).toBe(false)
+    expect(dot.element.tagName.toLowerCase()).toBe('path')
+    expect(dot.attributes('vector-effect')).toBe('non-scaling-stroke')
+    expect(dot.attributes('stroke-linecap')).toBe('round')
+    expect(dot.attributes('stroke-width')).toBe('5')
+    expect(dot.attributes('fill')).toBe('none')
+  })
 })
