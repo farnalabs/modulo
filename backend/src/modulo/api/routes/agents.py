@@ -52,6 +52,7 @@ _MSG_DATABASE_OPERATION_FAILED = "Database operation failed"
 _MSG_DATABASE_OPERATION_FAILED_PLEASE = "Database operation failed. Please try again."
 _MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE = "An unexpected error occurred. Please try again."
 _MSG_AGENT_NOT_FOUND = "Agent not found"
+_MSG_BINDING_NOT_FOUND = "Binding not found"
 _CODE_AGENT_UPDATE = "agent.update"
 _CODE_AGENTS_UPDATE_AGENT_ENDPOINT = "agents.update_agent_endpoint"
 _CODE_AGENTS_OPTIMIZE_PROMPT = "agents.optimize_prompt"
@@ -1081,8 +1082,8 @@ async def replace_bindings_endpoint(
             # Audit diff carries env-var NAMES only — never values (values are
             # not stored on the binding row at all; the credential stays
             # encrypted in the referenced backend).
-            before_bindings = await list_bindings_for_agent(session, agent_id)
-            before_targets = {b.target_env_var for b in before_bindings}
+            before_rows = await list_bindings_for_agent(session, agent_id)
+            before_targets = {row.target_env_var for row in before_rows}
             after_targets = {spec["target_env_var"] for spec in specs}
             created = await replace_agent_bindings(
                 session,
@@ -1145,24 +1146,34 @@ async def delete_binding_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_MODEL_BACKEND_BINDING_MANAGE),
 ) -> None:
-    """Delete one of the agent's binding rows (elevated, audit-logged)."""
+    """Delete one of the agent's binding rows (elevated, audit-logged).
+
+    The delete is SCOPED to the agent (a binding from a different agent under
+    the same org is a 404, never a cross-agent delete), and the audit event is
+    appended ONLY for a committed delete — inside the transaction, BEFORE any
+    404 raise — so a nonexistent or foreign binding can never leave a phantom
+    audit trail.
+    """
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             agent = await get_agent(session, agent_id)
             if agent is None or agent.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
-            deleted = await delete_binding(session, binding_id, agent_id=agent_id)
-            if deleted:
-                await append_audit_event(
-                    session,
-                    org_id=principal.organisation_id,
-                    event_type="agent_runner_binding.deleted",
-                    actor_user_id=principal.account_id,
-                    resource_type="agent",
-                    resource_id=agent_id,
-                    payload_json={"binding_id": str(binding_id), "operation": "delete"},
-                )
+            deleted = await delete_binding(session, binding_id=binding_id, agent_id=agent_id)
+            if not deleted:
+                # Raised inside the transaction: RLS-scoped miss -> rollback
+                # and NO audit row (the delete never happened).
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_BINDING_NOT_FOUND)
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="agent_runner_binding.deleted",
+                actor_user_id=principal.account_id,
+                resource_type="agent",
+                resource_id=agent_id,
+                payload_json={"binding_id": str(binding_id), "operation": "delete"},
+            )
     except SQLAlchemyError:
         _log.exception(_MSG_DATABASE_OPERATION_FAILED)
         raise HTTPException(
@@ -1177,5 +1188,3 @@ async def delete_binding_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
         ) from None
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Binding not found")

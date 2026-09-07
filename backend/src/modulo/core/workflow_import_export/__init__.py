@@ -8,6 +8,7 @@ Import resolves local equivalents via a binding wizard.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import io
 import json
@@ -343,6 +344,15 @@ async def _build_agents_list(
         for binding_row in binding_rows.scalars():
             backend_row = await session.get(ModelBackend, binding_row.model_backend_id)
             if backend_row is None:
+                # FAR-592 (D6 qa rider): the backend row is not visible — warn
+                # (symmetric with the import-side omit warning) instead of
+                # silently dropping the binding from the export.
+                logger.warning(
+                    "export_pipeline_bundle: agent '%s' binding references an invisible model "
+                    "backend '%s'; the binding is omitted from the export",
+                    _sanitise_log_value(a.name),
+                    binding_row.model_backend_id,
+                )
                 continue
             bindings_list.append(
                 {
@@ -1031,6 +1041,7 @@ async def materialize_import(
         existing_agent_names,
         schema_id_map,
         schema_version_map,
+        bundle_model_backends=[mb for mb in bundle.get("model_backends", []) if isinstance(mb, dict)],
     )
 
     pipeline, pipeline_edges_added, prim = await _materialize_pipeline_and_edges(
@@ -1419,6 +1430,7 @@ async def _materialize_agents(
     existing_agent_names: set[str],
     schema_id_map: dict[str, str],
     schema_version_map: dict[str, str],
+    bundle_model_backends: list[dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     """Create the bundle's agents; return the export→local agent id map."""
     agent_id_map: dict[str, str] = {}
@@ -1441,8 +1453,9 @@ async def _materialize_agents(
 
         agent_id_map[export_agent_id] = str(agent.id)
 
-        # FAR-592 (D6): name-based runner-binding rebind (the bundle's bound
-        # backends resolve through the bundle's model_backends section too).
+        # FAR-592 (D6): name-based runner-binding rebind — the backend for
+        # each binding resolves through the override map (bundle export id),
+        # a stamped id, or the org backend by name, in that order.
         if ad.get("model_backend_bindings"):
             bundle_backend_rows = await ctx.session.execute(
                 select(ModelBackend).where(
@@ -1451,7 +1464,14 @@ async def _materialize_agents(
                 )
             )
             backends_by_name = {row.name: row for row in bundle_backend_rows.scalars()}
-            await _apply_agent_bindings(ctx, agent, ad, backends_by_name, ctx.warnings)
+            await _apply_agent_bindings(
+                ctx,
+                agent,
+                ad,
+                backends_by_name,
+                ctx.warnings,
+                bundle_model_backends=bundle_model_backends,
+            )
 
     return agent_id_map
 
@@ -1535,21 +1555,97 @@ async def _apply_agent_bindings(
     ad: dict[str, Any],
     backends_by_name: dict[str, ModelBackend],
     warnings: list[str],
+    *,
+    bundle_model_backends: list[dict[str, Any]] | None = None,
 ) -> None:
+    """Rebind the bundle's runner bindings onto the freshly imported agent.
+
+    Backend resolution order per binding (FAR-592 qa F9):
+    ``ctx.overrides.model_backends`` (the operator's per-backend override,
+    keyed by the BUNDLE's model-backend export id looked up by the binding's
+    backend name) -> a stamped ``_resolved_model_backend_id`` on the payload
+    (honoured when an upstream resolver set it) -> the org backend by NAME.
+    Unresolvable, malformed, or validator-rejected bindings are OMITTED with
+    a warning — never raised as an import-crashing error.
+    """
+    export_id_by_name = {
+        str(mb.get("name", "")): str(mb.get("id", "")) for mb in (bundle_model_backends or []) if isinstance(mb, dict)
+    }
+
+    def _id_backend(candidate: Any) -> ModelBackend | None:
+        if candidate is None:
+            return None
+        try:
+            cand_uuid = uuid.UUID(str(candidate))
+        except ValueError:
+            return None
+        return org_backends_by_id.get(cand_uuid)
+
+    # One RLS-scoped query for every id-resolved candidate (overrides +
+    # stamped ids) so the chain above can consult org rows directly.
+    resolved_ids: set[uuid.UUID] = set()
+    binding_payloads = list(ad.get("model_backend_bindings", []))
+    for binding_payload in binding_payloads:
+        if not isinstance(binding_payload, dict):
+            continue
+        bname = str(binding_payload.get("model_backend_name", "") or "")
+        export_id = export_id_by_name.get(bname, "")
+        override_id = ctx.overrides.model_backends.get(export_id) if export_id else None
+        for candidate in (override_id, binding_payload.get("_resolved_model_backend_id")):
+            with contextlib.suppress(ValueError):
+                resolved_ids.add(uuid.UUID(str(candidate)))
+    org_backends_by_id: dict[uuid.UUID, ModelBackend] = {}
+    if resolved_ids:
+        id_rows = await ctx.session.execute(
+            select(ModelBackend).where(
+                ModelBackend.organisation_id == ctx.org_id,
+                ModelBackend.id.in_(resolved_ids),
+            )
+        )
+        org_backends_by_id = {row.id: row for row in id_rows.scalars()}
+
     specs: list[dict[str, Any]] = []
-    for binding_payload in ad.get("model_backend_bindings", []):
-        backend = backends_by_name.get(str(binding_payload.get("model_backend_name", "")))
+    for binding_payload in binding_payloads:
+        if not isinstance(binding_payload, dict):
+            warnings.append(f"Agent '{agent.name}' has a malformed runner-binding spec (not an object); omitted.")
+            continue
+        # Malformed bundle specs (missing keys) warn + omit — a bare KeyError
+        # would crash the whole import with a 500.
+        try:
+            bname = str(binding_payload["model_backend_name"])
+            raw_target = str(binding_payload["target_env_var"])
+            raw_source = str(binding_payload["source_field"])
+        except KeyError as exc:
+            warnings.append(f"Agent '{agent.name}' runner binding is missing key '{exc}'; the binding will be omitted.")
+            continue
+
+        try:
+            export_id = export_id_by_name.get(bname, "")
+            override_id = ctx.overrides.model_backends.get(export_id) if export_id else None
+            backend = (
+                _id_backend(override_id)
+                or _id_backend(binding_payload.get("_resolved_model_backend_id"))
+                or backends_by_name.get(bname)
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            warnings.append(
+                f"Agent '{agent.name}' binding to model backend '{bname}' "
+                f"could not be resolved ({exc}); the binding will be omitted."
+            )
+            continue
         if backend is None:
             warnings.append(
                 f"Agent '{agent.name}' binding to model backend "
-                f"'{binding_payload.get('model_backend_name', '')}' did not resolve "
-                "by name; the binding will be omitted."
+                f"'{bname}' did not resolve "
+                "(overrides, stamped id, or name all missed); the binding will be omitted."
             )
             continue
         try:
-            validate_binding_pair(
-                target_env_var=str(binding_payload["target_env_var"]),
-                source_field=str(binding_payload["source_field"]),
+            target, source = validate_binding_pair(
+                target_env_var=raw_target,
+                source_field=raw_source,
                 provider=backend.provider,
             )
         except BindingValidationError as exc:
@@ -1557,12 +1653,14 @@ async def _apply_agent_bindings(
                 f"Agent '{agent.name}' runner binding rejected at import ({exc}); the binding will be omitted."
             )
             continue
+        # The CANONICAL pair from the validator is what persists — the raw
+        # payload spelling is never written through untouched.
         specs.append(
             {
                 "_backend_id": backend.id,
                 "_account_id": ctx.created_by,
-                "target_env_var": str(binding_payload["target_env_var"]),
-                "source_field": str(binding_payload["source_field"]),
+                "target_env_var": target,
+                "source_field": source,
             }
         )
     if specs:

@@ -5618,14 +5618,18 @@ def _runner_binding_env_profile_id() -> uuid.UUID | None:
     """FAR-592 (D6): the run's environment profile id, for the Local refusal.
 
     Read from the run-scoped conformance context (set by the executor via
-    ``set_conformance_ctx``); the second tuple slot carries
-    ``environment_profile_id``. Absent context (unit tests, direct dispatch) ->
-    None (no tier refusal applied).
+    ``set_conformance_ctx``). The tuple is
+    ``(session_factory, org_id, environment_profile_id, pipeline_id,
+    claimed_guardrails, claims_load_failed)`` — the THIRD slot (index 2)
+    carries ``environment_profile_id``, unpacked positionally below with a
+    named local so the slot contract is explicit. Absent context (unit tests,
+    direct dispatch) -> None (no tier refusal applied).
     """
     ctx = get_conformance_ctx()
     if ctx is None or len(ctx) < 3:
         return None
-    return _parse_uuid_opt(ctx[2])
+    _session_factory, _org_id, environment_profile_id = ctx[:3]
+    return _parse_uuid_opt(environment_profile_id)
 
 
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
@@ -5675,6 +5679,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     from modulo.core.runner_bindings import (
         AgentBindingResolutionError,
         LocalProviderBindingsRefusedError,
+        resolve_agent_bindings,
     )
 
     # FAR-215: mid-run capability re-check at node start (block -> HITL).
@@ -6062,8 +6067,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _runner_bindings: dict[str, str] = {}
         if agent_id is not None:
             try:
-                from modulo.core.runner_bindings import resolve_agent_bindings
-
                 _runner_bindings = await resolve_agent_bindings(
                     session_factory=session_factory,
                     org_id=org_id,
@@ -6072,14 +6075,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     run_id=run_id,
                     node_id=node_id,
                 )
-            except LocalProviderBindingsRefusedError:
+            except LocalProviderBindingsRefusedError as exc:
                 _log.warning(
                     "sandbox_agent.bindings_local_refused",
                     extra={"run_id": run_id, "node_id": node_id},
                 )
+                # The typed refusal carries the remediation copy (opt-in flag
+                # / tier alternatives) — surface it, never drop it.
                 raise SandboxTierRefusedError(
-                    f"Local provider tier refused runner bindings for node '{node_id}'"
-                ) from None
+                    f"Local provider tier refused runner bindings for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
+                ) from exc
             except AgentBindingResolutionError as exc:
                 _log.warning(
                     "sandbox_agent.bindings_resolution_failed",
@@ -6088,6 +6093,23 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         "node_id": node_id,
                         "exc_msg": str(exc)[:_MAX_ERROR_MSG],
                     },
+                )
+                raise SandboxBindingResolutionError(
+                    f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
+                ) from exc
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # FAR-592 (D6 F12): a SECRETS-BACKEND hard failure (DB down,
+                # fernet misconfig, unexpected exception shape) must NOT fall
+                # through to the generic ``harness.unknown`` classification —
+                # the pre-claim bindings block is re-dispatch safe, so
+                # non-timeout secrets failures classify as the RETRYABLE
+                # ``sandbox.binding_resolution`` code the D6 rollback trigger
+                # reads.
+                _log.warning(
+                    "sandbox_agent.bindings_resolution_failed",
+                    extra={"run_id": run_id, "node_id": node_id, "exc_type": type(exc).__name__},
                 )
                 raise SandboxBindingResolutionError(
                     f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"

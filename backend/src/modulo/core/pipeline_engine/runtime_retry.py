@@ -77,6 +77,9 @@ _BACKOFF_CAP_SECONDS = 300.0
 #   * FAR-296 Phase 2 Script*Error — script PROCESS started → exactly-once.
 #   * Superseded / rejected / evaled / runaway / interrupt — already finalised
 #     or must flow to the run-level terminal path, not a node retry.
+#   * FAR-592 D6 Local-tier refusal — a deterministic config fault (the profile
+#     opt-in cannot change mid-run); re-executing the node body would re-hit
+#     the same refusal, so it is terminal here too.
 _NEVER_RETRYABLE_NAMES: frozenset[str] = frozenset(
     {
         "ScriptFailedError",
@@ -89,6 +92,7 @@ _NEVER_RETRYABLE_NAMES: frozenset[str] = frozenset(
         "RunCancelledError",
         "RunawayRunError",
         "GraphInterrupt",
+        "SandboxTierRefusedError",
     }
 )
 
@@ -115,6 +119,7 @@ _CONTROL_FLOW_NO_COMPENSATION_NAMES: frozenset[str] = frozenset(
         "RunCancelledError",
         "NodeCancelledError",
         "GraphInterrupt",
+        "SandboxTierRefusedError",
     }
 )
 

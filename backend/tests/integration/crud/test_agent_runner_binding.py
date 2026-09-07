@@ -11,18 +11,18 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.runner_bindings import resolve_agent_bindings
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.agent_runner_binding import (
     delete_binding,
-    get_binding,
     list_bindings_for_agent,
     replace_agent_bindings,
 )
 from modulo.db.crud.model_backend import create_model_backend, delete_model_backend
+from modulo.db.models.agent_runner_binding import AgentRunnerBinding
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 
 pytestmark = pytest.mark.integration
@@ -114,7 +114,9 @@ async def test_replace_agent_bindings_round_trip(rls_session, test_org, test_use
         bindings_specs=[_binding_spec(mb.id, test_user, target="STRIPE_KEY")],
     )
     assert [b.target_env_var for b in await list_bindings_for_agent(rls_session, agent.id)] == ["STRIPE_KEY"]
-    assert await get_binding(rls_session, created[0].id) is None
+    # The replace deleted the superseded binding row (same-agent lookup misses).
+    gone_rows = await rls_session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == created[0].id))
+    assert gone_rows.scalar_one_or_none() is None
     assert replaced[0].target_env_var == "STRIPE_KEY"
 
 
@@ -227,12 +229,18 @@ async def test_delete_binding_scoped_to_agent(rls_session, test_org, test_user) 
     )
 
     # Wrong-agent DELETE is scoped out: not deleted, row survives.
-    assert await delete_binding(rls_session, created_b[0].id, agent_id=agent_a.id) is False
-    assert (await get_binding(rls_session, created_b[0].id)) is not None
+    # (delete_binding resolves the row SCOPED to the path's agent — the F8
+    # contract; a foreign binding is a plain False, never a cross-agent hit.)
+    assert await delete_binding(rls_session, binding_id=created_b[0].id, agent_id=agent_a.id) is False
+    assert (
+        await rls_session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == created_b[0].id))
+    ).scalar_one_or_none() is not None
 
     # Correct-agent DELETE removes the row.
-    assert await delete_binding(rls_session, created_a[0].id, agent_id=agent_a.id) is True
-    assert (await get_binding(rls_session, created_a[0].id)) is None
+    assert await delete_binding(rls_session, binding_id=created_a[0].id, agent_id=agent_a.id) is True
+    assert (
+        await rls_session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == created_a[0].id))
+    ).scalar_one_or_none() is None
 
 
 async def test_org_teardown_with_bindings_present(db_engine: AsyncEngine, test_user: uuid.UUID) -> None:
@@ -396,6 +404,185 @@ async def test_local_profile_refuses_bindings_without_opt_in(
             agent_id=agent_id,
             environment_profile_id=profile_id,
         )
+
+
+async def test_string_opt_in_is_not_an_opt_in(
+    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-592 qa F10: a TRUTHY STRING ("true") is NOT an opt-in.
+
+    Only an explicit JSON ``true`` opts the Local tier in — a
+    string-configured flag must FAIL the refusal, never silently host a
+    standing host-env credential.
+    """
+    from modulo.core.runner_bindings import LocalProviderBindingsRefusedError
+
+    agent_id, _backend_id, profile_id = await _seed_resolution_scene(
+        db_engine, test_org, test_user, profile_opt_in=True
+    )
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "UPDATE environment_profiles "
+                'SET config_json = \'{"allow_runner_env_bindings": "true"}\'::json '
+                "WHERE id = :pid"
+            ),
+            {"pid": str(profile_id)},
+        )
+
+    with pytest.raises(LocalProviderBindingsRefusedError):
+        await resolve_agent_bindings(
+            session_factory=_app_session_factory(app_engine),
+            org_id=test_org,
+            agent_id=agent_id,
+            environment_profile_id=profile_id,
+        )
+
+
+async def test_unresolvable_profile_fails_closed(
+    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-592 qa F10: a PROVIDED but unresolvable profile refuses (fail-closed).
+
+    The open E2B-default path only applies when NO profile id is handed over —
+    an absent profile row for a provided id cannot prove its tier is
+    container-isolated.
+    """
+    from modulo.core.runner_bindings import LocalProviderBindingsRefusedError
+
+    agent_id, _backend_id, _real_profile_id = await _seed_resolution_scene(
+        db_engine, test_org, test_user, profile_opt_in=True
+    )
+
+    with pytest.raises(LocalProviderBindingsRefusedError, match="fail-closed"):
+        await resolve_agent_bindings(
+            session_factory=_app_session_factory(app_engine),
+            org_id=test_org,
+            agent_id=agent_id,
+            environment_profile_id=uuid.uuid4(),
+        )
+
+
+async def test_missing_backend_fails_resolution_typed(
+    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-592 qa F3: a binding to a backend that is NOT org-visible fails
+    typed in the validating PRE-PASS (never a raw dict-index KeyError)."""
+    from modulo.core.runner_bindings import AgentBindingResolutionError
+
+    agent_id, backend_id, _profile_id = await _seed_resolution_scene(
+        db_engine, test_org, test_user, profile_opt_in=True
+    )
+    # The binding row CANNOT point at a nonexistent backend (FK), so make the
+    # backend row invisible to the org instead: repoint it to a scratch org.
+    # The FK on model_backends.organisation_id is satisfied by org B; the
+    # resolver's org-scoped backend query now misses -> the validating
+    # PRE-PASS raises typed.
+    ghost_org = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            _INSERT_ORG_SQL,
+            {"id": str(ghost_org), "n": "Ghost Org", "s": f"ghost-{ghost_org.hex[:8]}"},
+        )
+        await conn.execute(
+            text("UPDATE model_backends SET organisation_id = :ghost_org WHERE id = :bid"),
+            {"ghost_org": str(ghost_org), "bid": str(backend_id)},
+        )
+
+    with pytest.raises(AgentBindingResolutionError, match="no longer visible"):
+        await resolve_agent_bindings(
+            session_factory=_app_session_factory(app_engine),
+            org_id=test_org,
+            agent_id=agent_id,
+        )
+
+
+async def test_replace_reserved_target_returns_422(
+    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-592 qa F7: BindingValidationError surfaces as HTTP 422 — the
+    validator message travels in ``detail`` (never a raw 500)."""
+    agent, mb = await _seed_agent_and_backend(rls_session, test_org, test_user, "BindAgent-422")
+    specs = [_binding_spec(mb.id, test_user, target="GITHUB_TOKEN")]
+    with pytest.raises(HTTPException) as excinfo:
+        await replace_agent_bindings(rls_session, org_id=test_org, agent_id=agent.id, bindings_specs=specs)
+    assert excinfo.value.status_code == 422
+    assert "reserved" in str(excinfo.value.detail)
+    assert "GITHUB_TOKEN" in str(excinfo.value.detail)
+
+
+async def test_concurrent_replace_serialises_no_union(
+    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-592 qa F6: concurrent replace calls serialise on the agent row lock.
+
+    While a replace sits UNCOMMITTED holding the agent row lock, a second
+    replace on the same agent BLOCKS (lock_timeout proves the wait) — the
+    committed outcome is LAST-WRITER-WINS, never the union of both var sets.
+    """
+    from modulo.db.crud.agent_runner_binding import list_bindings_for_agent
+
+    factory = _app_session_factory(app_engine)
+
+    async with factory() as seed, seed.begin():
+        await set_rls_org(seed, test_org)
+        await set_rls_execution_context(seed)
+        agent, mb = await _seed_agent_and_backend(seed, test_org, test_user, "BindAgent-race")
+        agent_id, backend_id = agent.id, mb.id
+
+    # Writer A: hold the (uncommitted) replace — it owns the agent row lock.
+    # The transaction stays OPEN (no commit) so the FOR UPDATE lock on the
+    # agent row is held while writer B runs.
+    writer_a = factory()
+    await writer_a.begin()
+    await set_rls_org(writer_a, test_org)
+    await set_rls_execution_context(writer_a)
+    await replace_agent_bindings(
+        writer_a,
+        org_id=test_org,
+        agent_id=agent_id,
+        bindings_specs=[_binding_spec(backend_id, test_user, target="FIRST_VAR")],
+    )
+
+    # Writer B: a concurrent replace must BLOCK on A's lock (bounded by
+    # lock_timeout) rather than interleave delete-all + inserts behind it.
+    # asyncpg raises LockNotAvailableError; SQLAlchemy surfaces it at the
+    # session layer as ``DBAPIError`` (the raw adapter wrapper appears only
+    # as the chained cause) — pin that class; match= pins the semantic.
+    from sqlalchemy.exc import DBAPIError
+
+    writer_b = factory()
+    async with writer_b.begin():
+        await set_rls_org(writer_b, test_org)
+        await set_rls_execution_context(writer_b)
+        await writer_b.execute(text("SET LOCAL lock_timeout = '800ms'"))
+        with pytest.raises(DBAPIError, match=r"[Ll]ock timeout"):
+            await replace_agent_bindings(
+                writer_b,
+                org_id=test_org,
+                agent_id=agent_id,
+                bindings_specs=[_binding_spec(backend_id, test_user, target="SECOND_VAR")],
+            )
+
+    # Roll A's in-flight replace back, then the committed state is decided by
+    # a fresh writer: last-writer-wins, not FIRST + SECOND unioned.
+    await writer_a.rollback()
+    await writer_a.close()
+    await writer_b.close()
+
+    async with factory() as final, final.begin():
+        await set_rls_org(final, test_org)
+        await set_rls_execution_context(final)
+        created = await replace_agent_bindings(
+            final,
+            org_id=test_org,
+            agent_id=agent_id,
+            bindings_specs=[_binding_spec(backend_id, test_user, target="FAULT_VAR")],
+        )
+        rows = await list_bindings_for_agent(final, agent_id)
+
+    assert [b.target_env_var for b in rows] == ["FAULT_VAR"]
+    assert rows[0].id == created[0].id
 
 
 async def test_local_profile_opt_in_resolves_decrypted_secret(
