@@ -1276,33 +1276,54 @@ class RestConnector(ConnectorBase):
         Values shorter than 4 chars are ignored — redacting a 1-2 char secret
         would mangle every occurrence of the common substring it appears in.
         """
+        secrets = self._raw_credential_values()
+        auth = self._auth
+        mode = auth.get("mode")
+        if mode == "basic":
+            self._collect_basic_secrets(auth, secrets)
+        elif mode == "bearer":
+            self._collect_bearer_secrets(auth, secrets)
+        elif mode == "api_key":
+            self._collect_api_key_secrets(auth, secrets)
+        # Deduplicate while preserving order (raw value + derived forms can overlap).
+        return list(dict.fromkeys(secrets))
+
+    def _raw_credential_values(self) -> list[str]:
+        """The raw credential-field values (>= 4 chars) from the creds dict."""
         secrets: list[str] = []
         for key in ("username", "token", "api_key", "password", "secret"):
             value = self._creds.get(key)
             if isinstance(value, str) and len(value) >= 4:
                 secrets.append(value)
-        auth = self._auth
-        mode = auth.get("mode")
-        if mode == "basic":
-            raw = f"{auth.get('username', '')}:{auth.get('password', '')}"
-            b64 = base64.b64encode(raw.encode()).decode()
-            if len(raw) >= 4:
-                secrets.append(raw)
-            if len(b64) >= 4:
-                secrets.extend([b64, f"Basic {b64}"])
-        elif mode == "bearer":
-            token = auth.get("token")
-            if token:
-                secrets.append(f"Bearer {token}")
-        elif mode == "api_key":
-            api_key = auth.get("api_key")
-            if api_key:
-                if auth.get("in") == "header":
-                    secrets.append(f"{auth.get('header_name', '')}: {api_key}")
-                else:
-                    secrets.append(f"{auth.get('query_param_name', '')}={api_key}")
-        # Deduplicate while preserving order (raw value + derived forms can overlap).
-        return list(dict.fromkeys(secrets))
+        return secrets
+
+    @staticmethod
+    def _collect_basic_secrets(auth: dict[str, Any], secrets: list[str]) -> None:
+        """Append the basic-auth wire forms (raw pair, base64 blob, header value)."""
+        raw = f"{auth.get('username', '')}:{auth.get('password', '')}"
+        b64 = base64.b64encode(raw.encode()).decode()
+        if len(raw) >= 4:
+            secrets.append(raw)
+        if len(b64) >= 4:
+            secrets.extend([b64, f"Basic {b64}"])
+
+    @staticmethod
+    def _collect_bearer_secrets(auth: dict[str, Any], secrets: list[str]) -> None:
+        """Append the bearer wire form (the full ``Bearer <token>`` header value)."""
+        token = auth.get("token")
+        if token:
+            secrets.append(f"Bearer {token}")
+
+    @staticmethod
+    def _collect_api_key_secrets(auth: dict[str, Any], secrets: list[str]) -> None:
+        """Append the api_key wire form (``<header>: <key>`` or ``<param>=<key>``)."""
+        api_key = auth.get("api_key")
+        if not api_key:
+            return
+        if auth.get("in") == "header":
+            secrets.append(f"{auth.get('header_name', '')}: {api_key}")
+        else:
+            secrets.append(f"{auth.get('query_param_name', '')}={api_key}")
 
     def _redact(self, text: str) -> str:
         """Strip credential values from *text* so error detail never echoes secrets.
