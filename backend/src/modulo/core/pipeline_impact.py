@@ -209,6 +209,40 @@ def _edge_target(edge: dict[str, Any]) -> str | None:
     return str(raw) if raw is not None else None
 
 
+def _optional_str_field(item: Mapping[Any, Any], key: str) -> str | None:
+    """Read an optional string field from a changed-port mapping entry."""
+    value = item.get(key)
+    return str(value) if value is not None else None
+
+
+def _normalise_mapping_port_entry(
+    item: Mapping[Any, Any],
+) -> tuple[str, str, str | None, str | None] | None:
+    """Normalise one mapping changed-port entry, or ``None`` when it has no node id."""
+    node_id = item.get("node_id")
+    if node_id is None:
+        return None
+    return (
+        str(node_id),
+        str(item.get("direction") or ""),
+        _optional_str_field(item, "port"),
+        _optional_str_field(item, "change"),
+    )
+
+
+def _normalise_port_entry(item: Any) -> tuple[str, str, str | None, str | None] | None:
+    """Normalise a single changed-port entry, or ``None`` when it scopes nothing.
+
+    Mapping entries carry ``{"node_id", ...}``; a falsy positional entry is
+    dropped (it names no node).
+    """
+    if isinstance(item, Mapping):
+        return _normalise_mapping_port_entry(item)
+    if not item:
+        return None
+    return (str(item[0]), "", None, None)
+
+
 def _normalise_changed_ports(
     changed_ports: Iterable[Any],
 ) -> list[tuple[str, str, str | None, str | None]]:
@@ -220,22 +254,9 @@ def _normalise_changed_ports(
     """
     result: list[tuple[str, str, str | None, str | None]] = []
     for item in changed_ports:
-        if isinstance(item, Mapping):
-            node_id = item.get("node_id")
-            if node_id is None:
-                continue
-            result.append(
-                (
-                    str(node_id),
-                    str(item.get("direction") or ""),
-                    str(item["port"]) if item.get("port") is not None else None,
-                    str(item["change"]) if item.get("change") is not None else None,
-                )
-            )
-        else:
-            if not item:
-                continue
-            result.append((str(item[0]), "", None, None))
+        normalised = _normalise_port_entry(item)
+        if normalised is not None:
+            result.append(normalised)
     return result
 
 
