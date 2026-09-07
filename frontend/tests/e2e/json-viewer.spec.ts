@@ -1,5 +1,21 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
+/**
+ * Left edge of every rendered line of `el`, grouped by line (y). Chromium
+ * reports the trailing space of a wrapped line as its own rect, so each
+ * line's min x is the authoritative left edge.
+ */
+function collectLineLeftEdges(el: Element): number[] {
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  const byLine = new Map<number, number[]>()
+  for (const r of Array.from(range.getClientRects()).filter((r) => r.width > 0)) {
+    const y = Math.round(r.y)
+    byLine.set(y, [...(byLine.get(y) ?? []), Math.round(r.x)])
+  }
+  return Array.from(byLine.values()).map((xs) => Math.min(...xs))
+}
+
 test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
   // Local runs need a generous timeout: the first SPA bundle compile on the
   // dev server can exceed the 30s default before any assertion runs.
@@ -222,6 +238,87 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
 
     await page.getByTestId('json-viewer-string-expand').first().click()
     await expect(page.getByTestId('json-viewer-string-expanded').first()).toContainText(longText)
+  })
+
+  test('wrapped long values stay inside their node without crushing the expand controls', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+
+    // Two wrap shapes: a spaced sentence above the truncation threshold (the
+    // truncated preview wraps to several lines at desktop width) and an
+    // unbreakable token below it (the dep's default value path must wrap at
+    // the container edge without horizontal overflow). FAR-626.
+    const wrappedText = 'The quick brown fox jumps over the lazy dog. '.repeat(14)
+    const unbreakableToken = 'x'.repeat(430)
+
+    await page.route('**/api/v1/runs/run-json-viewer', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            run_id: 'run-json-viewer',
+            run_number: 42,
+            pipeline_id: 'p-1',
+            pipeline_name: 'JSON Viewer Test',
+            status: 'failed',
+            trace_id: 'trace-abc',
+            total_cost_usd: '0.000100',
+            node_token_usage: { format: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
+          }),
+        })
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/io', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          input_payload: { big_text: wrappedText, session_blob: unbreakableToken },
+          outputs_json: { format: { output: { result: 'success' } } },
+        }),
+      })
+    })
+
+    await page.goto('/runs/run-json-viewer')
+    await expect(page.locator('[data-testid="run-detail-input-payload"]')).toBeVisible()
+    await expect(page.locator('.json-viewer').first()).toBeVisible()
+
+    const truncated = page.getByTestId('json-viewer-string-truncated').first()
+    await expect(truncated).toBeVisible()
+
+    // The expand toggle and char count keep their natural size next to the
+    // wrapped preview — they must never be squeezed into vertical slivers.
+    const toggleBox = await page.getByTestId('json-viewer-string-expand').first().boundingBox()
+    expect(toggleBox, 'expand toggle rendered').not.toBeNull()
+    expect(toggleBox!.width, 'expand toggle must keep its label width').toBeGreaterThan(40)
+    expect(toggleBox!.height, 'expand toggle must stay one label tall').toBeLessThanOrEqual(30)
+    const countBox = await truncated.locator('.json-viewer-string-count').boundingBox()
+    expect(countBox, 'char count rendered').not.toBeNull()
+    expect(countBox!.height, 'char count must stay one line tall').toBeLessThanOrEqual(20)
+
+    // The wrapped preview's line boxes share one left edge (hanging indent at
+    // the value start) and actually wrap.
+    const lines = await truncated.locator('.json-viewer-string-truncated-text').evaluate(collectLineLeftEdges)
+    expect(lines.length, 'preview wraps to several lines at desktop width').toBeGreaterThan(1)
+    expect(new Set(lines).size, `wrapped lines share one left edge: ${JSON.stringify(lines)}`).toBe(1)
+
+    // The default dep path wraps the unbreakable token at the container edge.
+    const blobValue = page.locator('.vjs-value-string', { hasText: 'xxxxxxxxxx' }).first()
+    await expect(blobValue).toBeVisible()
+    const blobLines = await blobValue.evaluate(collectLineLeftEdges)
+    expect(blobLines.length, 'unbreakable token wraps to several lines').toBeGreaterThan(1)
+    expect(new Set(blobLines).size, `wrapped token lines share one left edge: ${JSON.stringify(blobLines)}`).toBe(1)
+
+    // Nothing spills out of the scroll container horizontally.
+    const overflow = await page.evaluate(() => {
+      const el = document.querySelector('.json-viewer .overflow-auto')
+      return el ? el.scrollWidth - el.clientWidth : null
+    })
+    expect(overflow, 'no horizontal overflow in the viewer scroll container').toBe(0)
   })
 
   test('copy still copies the FULL long string value when the tree truncates it', { tag: '@regression' }, async ({ page, env }) => {
