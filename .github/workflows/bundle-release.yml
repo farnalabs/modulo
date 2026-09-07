@@ -216,6 +216,16 @@ jobs:
           # TODO(FAR-671): the venv's python symlink targets the runner's
           # uv-managed interpreter; the launcher rewires it to runtime/ at boot.
 
+      - name: Set up Node + pnpm (pinned to match frontend/package.json)
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.26.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
       - name: Build frontend dist (pnpm) and stage into the bundle
         run: |
           set -euo pipefail
@@ -253,7 +263,6 @@ jobs:
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "Modulo bundle ${TAG}" \
-              --notes "Single-install bundle artifact (P1a). Verify with SHA256SUMS before install — see scripts/install.sh. P1a ships checksums only; signed manifests land in P1b (FAR-675)." \
-              --latest=false
+              --notes "Single-install bundle artifact (P1a). Verify with SHA256SUMS before install — see scripts/install.sh. P1a ships checksums only; signed manifests land in P1b (FAR-675)."
           fi
           gh release upload "$TAG" "build/${TARBALL_NAME}" "build/SHA256SUMS" --repo "$GITHUB_REPOSITORY" --clobber

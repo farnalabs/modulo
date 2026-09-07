@@ -121,7 +121,7 @@ resolve_latest_tag() {
   # Follow the /releases/latest redirect (no API token, no API rate limit):
   # https://github.com/farnalabs/modulo/releases/latest -> .../tag/<tag>
   local effective
-  effective="$(curl -fsSI --proto '=https' --tlsv1.2 --connect-timeout 15 -o /dev/null -w '%{url_effective}' "${RELEASES_LATEST_URL}")" || {
+  effective="$(curl -fsSLI --proto '=https' --tlsv1.2 --connect-timeout 15 -o /dev/null -w '%{url_effective}' "${RELEASES_LATEST_URL}")" || {
     printf 'ERROR: could not resolve the latest bundle release (network or proxy problem).\n' >&2
     printf 'Set VERSION=<tag> to pin one, or use --from-file for offline installs.\n' >&2
     exit 1
