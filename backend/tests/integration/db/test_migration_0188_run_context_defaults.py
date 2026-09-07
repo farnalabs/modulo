@@ -50,9 +50,11 @@ async def test_run_context_defaults_server_default_allows_raw_insert_without_col
     # migrated schema (with the 0188 default) is restored for the positive case.
     await rls_session.rollback()
     # The rollback above closed the fixture's outer transaction, and set_rls_org
-    # now requires an active transaction. Re-open one (the fixture rolls it back
-    # at teardown, so the positive-case row is never committed) and re-scope RLS.
-    await rls_session.begin()
+    # now requires an active transaction (it raises without one). Re-open one if
+    # none is active (the fixture rolls it back at teardown, so the positive-case
+    # row is never committed) and re-scope RLS.
+    if not rls_session.in_transaction():
+        await rls_session.begin()
     await set_rls_org(rls_session, test_org)
 
     # Post-0188: the default fills run_context_defaults with an empty object.
