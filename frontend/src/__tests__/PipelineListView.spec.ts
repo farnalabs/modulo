@@ -452,4 +452,55 @@ describe('PipelineListView', () => {
       expect(options?.params?.query?.page_size, `${url} page_size must be clamped to the backend max`).toBeLessThanOrEqual(100)
     }
   })
+
+  it('opens the delete confirmation dialog and renders its i18n copy', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Delete Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openDelete: (p: typeof pipeline) => void }
+    vm.openDelete(pipeline)
+    await nextTick()
+
+    const dialog = wrapper.find('[aria-label="Delete Pipeline"]')
+    expect(dialog.exists()).toBe(true)
+    // The UX-sweep i18n strings for the delete confirm dialog must render.
+    expect(wrapper.text()).toContain('Are you sure? This permanently deletes the pipeline and all its runs.')
+    const buttons = wrapper.findAll('button')
+    expect(buttons.some(b => b.text() === 'Cancel')).toBe(true)
+    expect(buttons.some(b => b.text() === 'Delete')).toBe(true)
+  })
+
+  it('opens the move-to-folder dialog and renders the folder choices with icons', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+    ]
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Move Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: null }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openMoveToFolder: (p: typeof pipeline) => void }
+    vm.openMoveToFolder(pipeline)
+    await flushPromises()
+    await nextTick()
+
+    const dialog = wrapper.find('[aria-label="Move to Folder"]')
+    expect(dialog.exists()).toBe(true)
+    // The folder choices (with their lucide icons) and the "No folder" option
+    // introduced by the UX sweep must render.
+    expect(wrapper.text()).toContain('Folder One')
+    expect(wrapper.text()).toContain('No folder')
+  })
 })
