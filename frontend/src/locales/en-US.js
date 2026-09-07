@@ -3504,6 +3504,13 @@ export default {
       "ongoing": "Ongoing",
       "correction": "Correction",
       "slack_app_mention": "Slack Mention"
+    },
+    "heartbeat": {
+      "just_now": "just now",
+      "seconds_ago": "{s}s ago",
+      "minutes_seconds_ago": "{m}m {s}s ago",
+      "hours_minutes_ago": "{h}h {m}m ago",
+      "days_hours_ago": "{d}d {h}h ago"
     }
   },
   "nav": {

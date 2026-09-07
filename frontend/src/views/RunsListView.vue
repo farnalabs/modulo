@@ -488,7 +488,7 @@ function isListHeartbeatStale(run: RunListItem): boolean {
 }
 
 function formatHeartbeat(age: number | null): string {
-  return formatHeartbeatAge(age)
+  return formatHeartbeatAge(age, t)
 }
 
 </script>

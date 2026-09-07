@@ -105,18 +105,21 @@ function pad2(n: number): string {
  * Humanized heartbeat age (FAR-624). Single shared formatter so the runs list
  * and run detail never drift: "just now" for <10s, seconds below a minute,
  * then zero-padded compound units ("3m 05s ago", "2h 05m ago", "1d 3h ago").
+ * Strings are composed from locale keys (passed via `t`) so the humanized age
+ * stays translatable, matching how the sibling `triggerTypeLabel` /
+ * `runStatusLabel` formatters resolve their copy.
  */
-export function formatHeartbeatAge(age: number | null): string {
+export function formatHeartbeatAge(age: number | null, t: (key: string, named?: Record<string, unknown>) => string): string {
   if (age == null) return '—'
-  if (age < 10) return 'just now'
-  if (age < 60) return `${age}s ago`
+  if (age < 10) return t('common.heartbeat.just_now')
+  if (age < 60) return t('common.heartbeat.seconds_ago', { s: age })
   const seconds = age % 60
   const totalMinutes = Math.floor(age / 60)
   const days = Math.floor(age / 86400)
   const hours = Math.floor((age % 86400) / 3600)
-  if (days >= 1) return `${days}d ${hours}h ago`
-  if (totalMinutes >= 60) return `${hours}h ${pad2(totalMinutes % 60)}m ago`
-  return `${totalMinutes}m ${pad2(seconds)}s ago`
+  if (days >= 1) return t('common.heartbeat.days_hours_ago', { d: days, h: hours })
+  if (totalMinutes >= 60) return t('common.heartbeat.hours_minutes_ago', { h: hours, m: pad2(totalMinutes % 60) })
+  return t('common.heartbeat.minutes_seconds_ago', { m: totalMinutes, s: pad2(seconds) })
 }
 
 /** Human-readable label for a dotted run error code (e.g. `agent.stall` →
