@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
+from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.api.models.team_visibility import TeamVisibilityMixin
@@ -48,7 +48,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_LIFECYCLE_MAPS_AUDIT_FAILED = "lifecycle_maps.audit_failed"
 _CODE_LIFECYCLE_MAP_LIST = "lifecycle_map.list"
-_MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 _CODE_LIFECYCLE_MAP_CREATE = "lifecycle_map.create"
 _CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE = "lifecycle_maps.create_lifecycle_map_endpoint"
 _MSG_LIFECYCLE_MAP_CONFLICTS_EXISTING = "Lifecycle map conflicts with an existing resource."
@@ -499,7 +498,7 @@ async def list_lifecycle_maps_endpoint(
         _log.exception("lifecycle_maps.list_lifecycle_maps_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -567,7 +566,7 @@ async def create_lifecycle_map_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_CREATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -632,7 +631,7 @@ async def import_lifecycle_map_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_IMPORT_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -668,7 +667,7 @@ async def export_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.export_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -706,7 +705,7 @@ async def get_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.get_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -771,7 +770,7 @@ async def update_lifecycle_map_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -815,7 +814,7 @@ async def delete_lifecycle_map_endpoint(
         _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -871,7 +870,7 @@ async def restore_lifecycle_map_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_RESTORE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -908,7 +907,7 @@ async def list_lifecycle_map_versions_endpoint(
         _log.exception("lifecycle_maps.list_versions_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -980,7 +979,7 @@ async def save_lifecycle_map_version_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_SAVE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1054,7 +1053,7 @@ async def update_lifecycle_map_version_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_VERSION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1092,7 +1091,7 @@ async def get_lifecycle_map_version_endpoint(
         _log.exception("lifecycle_maps.get_version_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1160,7 +1159,7 @@ async def graduate_lifecycle_map_stage_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_GRADUATE_STAGE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1255,7 +1254,7 @@ async def list_journeys_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1320,7 +1319,7 @@ async def get_journey_endpoint(
         _log.exception(_CODE_LIFECYCLE_MAPS_GET_JOURNEY)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise
@@ -1432,7 +1431,7 @@ async def self_report_journeys_endpoint(
         _log.exception("lifecycle_maps.self_report_journeys_endpoint")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except HTTPException:
         raise

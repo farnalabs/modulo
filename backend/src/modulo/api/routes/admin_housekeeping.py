@@ -9,7 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import (
+    MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_INTERNAL_SERVER_ERROR,
+)
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.housekeeping import ENTITY_MODEL_MAP, NON_DELETABLE_ENTITY_TYPES, scan_all
@@ -20,10 +24,6 @@ _log = logging.getLogger(__name__)
 
 # Permission guarding every housekeeping route (same check, three routes).
 _PERM_HOUSEKEEPING_MANAGE = "housekeeping.manage"
-
-# 503 body returned when the shared database pool/connection is unavailable
-# (same message, three routes).
-_MSG_DB_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 
 router = APIRouter(prefix="/api/v1/admin/housekeeping", tags=["admin-housekeeping"])
 
@@ -83,7 +83,7 @@ async def list_housekeeping(
         _log.exception("admin_housekeeping.list")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DB_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -176,7 +176,7 @@ async def perform_cleanup(
         _log.exception("admin_housekeeping.cleanup")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DB_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -248,7 +248,7 @@ async def purge_checkpoints(
         _log.exception("admin_housekeeping.purge_checkpoints.db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DB_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise

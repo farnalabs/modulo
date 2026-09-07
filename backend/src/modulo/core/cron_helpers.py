@@ -96,9 +96,9 @@ _CATCHUP_MARKER_PREFIX = "saq:cron:catchup"
 _CATCHUP_MARKER_TTL = FIRE_JOB_TIMEOUT * (FIRE_JOB_RETRIES + 1) + 60  # 960s >= worst-case in-flight (300*3)
 
 # SAQ task path for the per-item suite-run fire job (FAR-377) — the SAME task
-# the worker registers (saq_worker) ; every enqueue site must use this constant
-# so the scheduler and worker never drift apart.
-_SAQ_TASK_FIRE_SUITE_RUN = "modulo.core.saq_worker.fire_suite_run_trigger"
+# path the worker registers in saq_worker._runs_functions(); both sides import
+# this constant so the scheduler and worker never drift apart.
+SAQ_TASK_FIRE_SUITE_RUN = "modulo.core.saq_worker.fire_suite_run_trigger"
 
 # Report delivery (plan F1): failure backs off next_send_at +5min; deactivate
 # after 5 consecutive failures. NEVER re-enqueue every 30s.
@@ -2771,7 +2771,7 @@ async def _enqueue_catchup_fire(
         if getattr(row, "run_kind", "run") == "suite_run":
             job_id = await _enqueue_fire_job_async(
                 q,
-                _SAQ_TASK_FIRE_SUITE_RUN,
+                SAQ_TASK_FIRE_SUITE_RUN,
                 f"suite_catchup:{row.id}:{int(now.timestamp())}",
                 trigger_id=str(row.id),
                 org_id=str(org_id),
@@ -3386,7 +3386,7 @@ async def _enqueue_cron_fire(
         if getattr(row, "run_kind", "run") == "suite_run":
             job_id = await _enqueue_fire_job_async(
                 q,
-                _SAQ_TASK_FIRE_SUITE_RUN,
+                SAQ_TASK_FIRE_SUITE_RUN,
                 f"suite_fire:{row.id}:{int(now.timestamp())}",
                 trigger_id=str(row.id),
                 org_id=str(org_id),
@@ -3586,7 +3586,7 @@ async def _enqueue_suite_run_fire(
     try:
         job_id = await _enqueue_fire_job_async(
             q,
-            _SAQ_TASK_FIRE_SUITE_RUN,
+            SAQ_TASK_FIRE_SUITE_RUN,
             f"suite_fire:{row.id}:{int(now.timestamp())}",
             trigger_id=str(row.id),
             org_id=str(org_id),
