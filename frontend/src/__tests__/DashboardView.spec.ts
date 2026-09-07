@@ -569,8 +569,46 @@ describe('DashboardView', () => {
     // Card sparklines carry units.
     expect(sparklines[0].props('unit')).toBe('%')
     expect(sparklines[1].props('unit')).toBe('$')
+    // Rate sparklines carry forward missing days; the spend sparkline keeps the
+    // zero-fill default.
+    expect(sparklines[0].props('missingData')).toBe('carry-forward')
+    expect(sparklines[1].props('missingData')).toBe('zero')
     // Card sparkline labels come from summary.trend dates.
     expect(sparklines[0].props('labels')).toEqual(mockSummaryData.trend.map(d => d.date))
+  })
+
+  it('passes raw eval_pass_rate nulls (not flattened to 0) to the eval sparkline', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            trend: [
+              { date: '2026-06-23', run_count: 1, eval_pass_rate: null, token_spend_usd: 2.0 },
+              { date: '2026-06-24', run_count: 2, eval_pass_rate: 80, token_spend_usd: 3.0 },
+              { date: '2026-06-25', run_count: 3, eval_pass_rate: null, token_spend_usd: 4.0 },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const sparklines = wrapper.findAllComponents({ name: 'SparklineChart' })
+    const evalSparkline = sparklines.find(s => s.props('unit') === '%')
+    expect(evalSparkline).toBeDefined()
+    // Nulls must reach the sparkline untouched — flattening to 0 would render
+    // "no evals" days as a 0% pass-rate crash to the chart floor.
+    expect(evalSparkline!.props('data')).toEqual([null, 80, null])
+    expect(evalSparkline!.props('missingData')).toBe('carry-forward')
+    // The spend sparkline is untouched by the null-handling change.
+    const spendSparkline = sparklines.find(s => s.props('unit') === '$')
+    expect(spendSparkline).toBeDefined()
+    expect(spendSparkline!.props('data')).toEqual([2.0, 3.0, 4.0])
   })
 
   it('renders the no-data placeholder inside sparklines when the trend is empty', async () => {

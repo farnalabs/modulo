@@ -6,10 +6,15 @@ code), the ``map_legacy_code`` / ``class_for`` / ``is_retryable`` lookups, the
 ``sanitize_error_text`` / ``present_error`` read-surface helpers.
 """
 
+from importlib import import_module
+
+import pytest
+
 from modulo.core.pipeline_engine.error_codes import (
     ERROR_CODE_REGISTRY,
     LEGACY_ALIASES,
     class_for,
+    error_code_map_conflicts,
     expand_code_variants,
     is_retryable,
     known_error_codes,
@@ -499,3 +504,93 @@ def test_sandbox_agent_failed_is_known_non_retryable():
     assert map_legacy_code("sandbox.agent_failed") == "sandbox.agent_failed"
     assert class_for("sandbox.agent_failed") == "sandbox"
     assert "sandbox.agent_failed" in expand_code_variants("sandbox.agent_failed")
+
+
+# ---------------------------------------------------------------------------
+# FAR-589 D3b � bare-name uniqueness guard + unmapped-fallback signal
+# ---------------------------------------------------------------------------
+
+
+def test_error_code_map_conflicts_clean_on_real_maps():
+    """The guard reports ZERO conflicts for the shipped maps: no key claimed by
+    both tables, no alias target outside the registry, every bare (class-name /
+    snake_case) key unambiguous."""
+    assert isinstance(error_code_map_conflicts(), list)
+    assert not error_code_map_conflicts()
+
+
+def test_error_code_map_conflicts_catches_cross_map_key_conflict(monkeypatch):
+    """A bare name claimed by BOTH maps is a conflict even to the same target �
+    map_legacy_code checks LEGACY_ALIASES first, so which table owns the name
+    must be unambiguous."""
+    import modulo.core.pipeline_engine.error_codes as ec
+
+    monkeypatch.setattr(ec, "LEGACY_ALIASES", {**ec.LEGACY_ALIASES, "capacity.org": ec._CODE_CAPACITY_ORG})
+    conflicts = ec.error_code_map_conflicts()
+    assert any("both ERROR_CODE_REGISTRY and LEGACY_ALIASES" in c for c in conflicts)
+
+
+def test_error_code_map_conflicts_catches_conflicting_targets(monkeypatch):
+    """A key in both maps with DIFFERENT targets is the drift the guard exists
+    for: the alias silently shadows the registry entry's meaning."""
+    import modulo.core.pipeline_engine.error_codes as ec
+
+    monkeypatch.setattr(ec, "LEGACY_ALIASES", {**ec.LEGACY_ALIASES, "agent.failed": "contract.no_output"})
+    conflicts = ec.error_code_map_conflicts()
+    assert any("agent.failed" in c for c in conflicts)
+
+
+def test_error_code_map_conflicts_catches_unresolvable_alias_target(monkeypatch):
+    """An alias pointing OUTSIDE the registry would silently degrade
+    class_for/is_retryable to "unknown"/False � the guard rejects it."""
+    import modulo.core.pipeline_engine.error_codes as ec
+
+    monkeypatch.setattr(ec, "LEGACY_ALIASES", {**ec.LEGACY_ALIASES, "SomeNewError": "runner.missing_code"})
+    conflicts = ec.error_code_map_conflicts()
+    assert any("not a registry key" in c for c in conflicts)
+
+
+@pytest.fixture(autouse=False)
+def _clean_unmapped_signal():
+    """Isolate the per-process seen-set for the signal tests."""
+    ec_module = import_module("modulo.core.pipeline_engine.error_codes")
+    ec_module._reset_unmapped_code_signal_for_tests()
+    yield ec_module
+    ec_module._reset_unmapped_code_signal_for_tests()
+
+
+@pytest.mark.usefixtures("_clean_unmapped_signal")
+def test_unmapped_fallback_signal_carries_the_class_name(caplog):
+    """The harness.unknown fallback choke point emits the distinct, queryable
+    ``harness.unknown.fallback`` event carrying the unmapped code � analytics
+    canonicalizes unknown classes away, so the log event is the only place the
+    raw name survives."""
+    with caplog.at_level("WARNING"):
+        assert map_legacy_code("SomeUnmappedCapacityError") == "harness.unknown"
+    records = [r for r in caplog.records if r.getMessage() == "harness.unknown.fallback"]
+    assert len(records) == 1
+    assert getattr(records[0], "unmapped_code", None) == "SomeUnmappedCapacityError"
+
+
+@pytest.mark.usefixtures("_clean_unmapped_signal")
+def test_unmapped_fallback_signal_emits_once_per_distinct_code(caplog):
+    """Read surfaces hit map_legacy_code per row; the signal fires for the
+    FIRST occurrence of each distinct unmapped code per process and never
+    floods on repeats."""
+    with caplog.at_level("WARNING"):
+        assert map_legacy_code("RepeatUnmappedError") == "harness.unknown"
+        first_events = [r for r in caplog.records if r.getMessage().startswith("harness.unknown.fallback")]
+        assert len(first_events) == 1
+        assert map_legacy_code("RepeatUnmappedError") == "harness.unknown"
+        assert map_legacy_code("RepeatUnmappedError") == "harness.unknown"
+        assert len([r for r in caplog.records if r.getMessage().startswith("harness.unknown.fallback")]) == 1
+
+
+@pytest.mark.usefixtures("_clean_unmapped_signal")
+def test_unmapped_fallback_signal_skips_empty_codes(caplog):
+    """None/empty is the ABSENT-code case, not an unmapped class name � no
+    signal (the present_error contract keeps None on the wire)."""
+    with caplog.at_level("WARNING"):
+        assert map_legacy_code(None) == "harness.unknown"
+        assert map_legacy_code("") == "harness.unknown"
+    assert "harness.unknown.fallback" not in caplog.text
