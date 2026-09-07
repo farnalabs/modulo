@@ -304,6 +304,26 @@ def _check_parameter_set_drift(
         )
 
 
+def _collect_parameter_ref_id(node: dict[str, Any], key: str, ids: set[uuid.UUID]) -> None:
+    """Add the node's *key* value to *ids* when it parses as a UUID (else ignore)."""
+    raw = node.get(key)
+    if raw is None:
+        return
+    parsed = try_parse_uuid(raw)
+    if parsed is not None:
+        ids.add(parsed)
+
+
+def _collect_parameter_ref_ids(nodes: list[dict[str, Any]]) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+    """Collect the referenced parameter schema + set UUIDs from the graph nodes."""
+    schema_ids: set[uuid.UUID] = set()
+    set_ids: set[uuid.UUID] = set()
+    for node in nodes:
+        _collect_parameter_ref_id(node, "parameter_schema_id", schema_ids)
+        _collect_parameter_ref_id(node, "parameter_set_id", set_ids)
+    return schema_ids, set_ids
+
+
 def _check_parameter_node(
     node: dict[str, Any],
     schemas: dict[uuid.UUID, ParameterSchema],
@@ -2156,6 +2176,22 @@ class GraphValidator:
     # Parameter schema / set references
     # ------------------------------------------------------------------
 
+    async def _fetch_parameter_schemas(
+        self, session: AsyncSession, ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, ParameterSchema]:
+        """Load the referenced ParameterSchema rows (empty map when nothing referenced)."""
+        if not ids:
+            return {}
+        rows = (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(ids)))).scalars().all()
+        return {s.id: s for s in rows}
+
+    async def _fetch_parameter_sets(self, session: AsyncSession, ids: set[uuid.UUID]) -> dict[uuid.UUID, ParameterSet]:
+        """Load the referenced ParameterSet rows (empty map when nothing referenced)."""
+        if not ids:
+            return {}
+        rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(ids)))).scalars().all()
+        return {s.id: s for s in rows}
+
     async def _check_parameter_references(
         self,
         graph_json: dict[str, Any],
@@ -2172,40 +2208,11 @@ class GraphValidator:
         3. If schema version has drifted since the set was created, warn.
         """
         nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
-        schema_ids: set[uuid.UUID] = set()
-        set_ids: set[uuid.UUID] = set()
-
-        for node in nodes:
-            raw_schema_id = node.get("parameter_schema_id")
-            if raw_schema_id is not None:
-                parsed = try_parse_uuid(raw_schema_id)
-                if parsed is not None:
-                    schema_ids.add(parsed)
-            raw_set_id = node.get("parameter_set_id")
-            if raw_set_id is not None:
-                parsed = try_parse_uuid(raw_set_id)
-                if parsed is not None:
-                    set_ids.add(parsed)
-
+        schema_ids, set_ids = _collect_parameter_ref_ids(nodes)
         if not schema_ids and not set_ids:
             return
-
-        # Fetch all referenced schemas.
-        schemas: dict[uuid.UUID, ParameterSchema] = {}
-        if schema_ids:
-            schema_rows = (
-                (await session.execute(select(ParameterSchema).where(ParameterSchema.id.in_(schema_ids))))
-                .scalars()
-                .all()
-            )
-            schemas = {s.id: s for s in schema_rows}
-
-        # Fetch all referenced sets.
-        sets: dict[uuid.UUID, ParameterSet] = {}
-        if set_ids:
-            set_rows = (await session.execute(select(ParameterSet).where(ParameterSet.id.in_(set_ids)))).scalars().all()
-            sets = {s.id: s for s in set_rows}
-
+        schemas = await self._fetch_parameter_schemas(session, schema_ids)
+        sets = await self._fetch_parameter_sets(session, set_ids)
         for node in nodes:
             _check_parameter_node(node, schemas, sets, result)
 
