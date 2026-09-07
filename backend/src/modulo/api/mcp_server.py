@@ -4781,42 +4781,47 @@ def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> di
     }
 
 
+async def _get_trigger_impl(trigger_id: str) -> dict[str, Any]:
+    """Load a single trigger with team-scope + streak detail; shared with the MCP tool wrapper."""
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("get_trigger")
+
+    org_id = _ctx_org_id_val()
+    tid, tid_err = _parse_uuid_param(trigger_id, "trigger_id")
+    if tid_err:
+        return tid_err
+    if tid is None:
+        return {"error": "invalid_id", "field": "trigger_id", "detail": _MSG_UUID_PARSE_FAILED}
+
+    from modulo.core.cron_helpers import _count_ongoing_runs
+
+    async with _session(org_id) as s:
+        trigger = await _load_trigger_row(s, org_id, tid)
+        if trigger is not None:
+            owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", str(trigger.pipeline_id))
+        in_flight = (
+            await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
+        )
+        # FAR-251 — surface the SAME streak_status shape as the REST
+        # trigger detail serializer (shared ``_streak_status_for``), computed
+        # INSIDE the RLS transaction (mirrors the FAR-191 fix — never read
+        # streak status post-commit).
+        streak_status = await _streak_status_for(s, trigger) if trigger is not None else None
+
+    if trigger is None:
+        return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
+
+    return _trigger_detail_dict(trigger, in_flight, streak_status)
+
+
 @mcp.tool(description="Get a single trigger by ID.")
 @_RETRY_DB
 async def get_trigger(trigger_id: str) -> dict[str, Any]:
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        _check_agent_tool_scope("get_trigger")
-
-        org_id = _ctx_org_id_val()
-        tid, tid_err = _parse_uuid_param(trigger_id, "trigger_id")
-        if tid_err:
-            return tid_err
-        if tid is None:
-            return {"error": "invalid_id", "field": "trigger_id", "detail": _MSG_UUID_PARSE_FAILED}
-
-        from modulo.core.cron_helpers import _count_ongoing_runs
-
-        async with _session(org_id) as s:
-            trigger = await _load_trigger_row(s, org_id, tid)
-            if trigger is not None:
-                owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
-                if _team_scoped_key_mismatch(owner_team_id):
-                    return _team_scope_error("pipeline", str(trigger.pipeline_id))
-            in_flight = (
-                await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
-            )
-            # FAR-251 — surface the SAME streak_status shape as the REST
-            # trigger detail serializer (shared ``_streak_status_for``), computed
-            # INSIDE the RLS transaction (mirrors the FAR-191 fix — never read
-            # streak status post-commit).
-            streak_status = await _streak_status_for(s, trigger) if trigger is not None else None
-
-        if trigger is None:
-            return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-
-        return _trigger_detail_dict(trigger, in_flight, streak_status)
+        return await _get_trigger_impl(trigger_id)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
