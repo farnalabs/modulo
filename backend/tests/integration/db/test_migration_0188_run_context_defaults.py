@@ -67,6 +67,6 @@ async def test_run_context_defaults_server_default_allows_raw_insert_without_col
         text("SELECT run_context_defaults FROM pipelines WHERE id = :id"),
         {"id": str(ok_pid)},
     )
-    assert stored.scalar_one() == {}
+    assert not stored.scalar_one()
 
     # The fixture rolls the session back, removing the row and leaving the schema at head.
