@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
@@ -51,13 +51,13 @@ async def get_org_settings(
         _log.exception("org.get_settings ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("org.get_settings SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException as exc:
         _log.debug("org.get_settings HTTPException (org_id=%s) detail=%s", current_user.organisation_id, exc.detail)
@@ -102,13 +102,13 @@ async def get_org_guardrails_kill_switch(
         _log.exception("org.get_guardrails_kill_switch ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         _log.exception("org.get_guardrails_kill_switch SQLAlchemyError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="A database error occurred. Please try again.",
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except HTTPException as exc:
         _log.debug(

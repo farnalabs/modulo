@@ -18,7 +18,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
+from modulo.api.constants import (
+    MSG_DB_OPERATION_FAILED,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_UNEXPECTED_ERROR_NO_PERIOD,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
@@ -33,9 +37,6 @@ from modulo.auth.oauth import (
 )
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
-
-_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again."
-
 
 _log = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ async def register_oauth_client(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -182,7 +183,7 @@ async def list_oauth_clients_endpoint(
         _log.warning("mcp_oauth.list_oauth_clients.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -237,7 +238,7 @@ async def remove_oauth_client(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except asyncio.CancelledError:
         raise
@@ -337,7 +338,7 @@ async def approve_consent(
         _log.warning("mcp_oauth.approve_consent.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except asyncio.CancelledError:
         raise

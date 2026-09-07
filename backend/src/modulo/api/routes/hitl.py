@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
+from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -62,7 +62,6 @@ from modulo.db.models.run import HITL_PARKED_STATUS
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
-_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
 _CODE_HITL_APPROVE = "hitl.approve"
 
 
@@ -302,7 +301,7 @@ async def claim_gate(
         logger.exception("hitl.claim_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -391,7 +390,7 @@ async def approve_gate(
         logger.exception("hitl.approve_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -494,7 +493,7 @@ async def approve_gate_with_modification(
         logger.exception("hitl.approve_gate_with_modification")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -583,7 +582,7 @@ async def reject_gate(
         logger.exception("hitl.reject_gate")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -685,7 +684,7 @@ async def deliver_manual_output(
         logger.exception("hitl.deliver_manual_output")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -777,7 +776,7 @@ async def submit_manual_output(
         logger.exception("hitl.submit_manual_output")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -862,7 +861,7 @@ async def list_run_pending_gates(
         logger.exception("hitl.list_run_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -911,7 +910,7 @@ async def list_org_pending_gates(
         logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
