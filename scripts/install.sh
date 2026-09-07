@@ -4,8 +4,14 @@
 # Spec: ADR 031 (single-install native distribution); this ticket: FAR-670.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh | bash -s -- [options]
+#   curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
+#   bash modulo-install.sh [options]
 #   ./install.sh [--force] [--from-file <tarball>]
+#
+# NOTE: download to a file and run it (as above) rather than streaming a
+# download straight into a shell. install.sh verifies every download's sha256
+# BEFORE executing anything, so the saved-file path is the one that actually
+# enforces integrity; a streamed install skips that verification entirely.
 #
 # What it does:
 #   1. Downloads the bundle release tarball for the detected architecture
@@ -70,7 +76,7 @@ Environment overrides:
   MODULO_INSTALL_ROOT      Install root (default: ~/.local/opt/modulo).
   MODULO_BIN_DIR           Shim directory (default: ~/.local/bin).
 
-When piping from curl, pass options like:  curl -fsSL <url> | bash -s -- --force
+When running the downloaded script, pass options like:  bash modulo-install.sh --force
 EOF
 }
 
