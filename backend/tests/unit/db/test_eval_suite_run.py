@@ -778,13 +778,13 @@ def test_single_migration_head() -> None:
     # 0187_pipeline_performance_indexes (improve-database index sweep) chains off 0186.
     chaining_off_0186 = [p for p in revisions if parents[p] == "0186_pipeline_check_constraints_deleted_by"]
     assert [_basename(p) for p in chaining_off_0186] == ["0187_pipeline_performance_indexes.py"]
-    # 0188_agent_runner_bindings (this PR, FAR-592 / D6; renumbered from 0186 to avoid the
+    # 0189_agent_runner_bindings (this PR, FAR-592 / D6; renumbered from 0186 to avoid the
     # collision with main's 0186_pipeline_check_constraints_deleted_by) chains off 0187 and
     # is the single head.
     chaining_off_0187 = [p for p in revisions if parents[p] == "0187_pipeline_performance_indexes"]
-    assert [_basename(p) for p in chaining_off_0187] == ["0188_agent_runner_bindings.py"]
-    # Nothing chains off 0188_agent_runner_bindings -> it is the single head.
-    chaining_off_0188 = [p for p in revisions if parents[p] == "0188_agent_runner_bindings"]
+    assert [_basename(p) for p in chaining_off_0187] == ["0189_agent_runner_bindings.py"]
+    # Nothing chains off 0189_agent_runner_bindings -> it is the single head.
+    chaining_off_0188 = [p for p in revisions if parents[p] == "0189_agent_runner_bindings"]
     assert chaining_off_0188 == []
 
 

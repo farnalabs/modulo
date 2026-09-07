@@ -28,9 +28,9 @@ _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
 # Current chain head (tracks the latest migration; 0187_pipeline_performance_indexes
-# is main's index sweep head, and this PR's 0188_agent_runner_bindings re-parents onto
+# is main's index sweep head, and this PR's 0189_agent_runner_bindings re-parents onto
 # 0187 as the single head).
-_CHAIN_HEAD_MIGRATION = "0188_agent_runner_bindings"
+_CHAIN_HEAD_MIGRATION = "0189_agent_runner_bindings"
 
 
 def _source(name: str) -> str:
