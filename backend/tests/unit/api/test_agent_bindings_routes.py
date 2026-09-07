@@ -35,7 +35,10 @@ _BINDING_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 _PREFIX = "modulo.api.routes.agents."
-_CRUD = "modulo.db.crud.agent_runner_binding."
+# The route imports the binding CRUD functions by name, so they resolve from the
+# route module namespace. Patch there (not the crud module) for the route to pick
+# up the mocked implementations.
+_CRUD = _PREFIX
 
 
 def _make_settings() -> Settings:
