@@ -1151,6 +1151,148 @@ async def _intercept_guardrails(
     )
 
 
+def _inject_engine_payload_keys(
+    stored_payload: dict[str, Any],
+    feedback_correction: dict[str, Any] | None,
+    coalesce_key: str | None,
+) -> dict[str, Any]:
+    """Stamp engine-only payload keys AFTER the reserved-key strip (never forgeable).
+
+    ``_feedback_correction`` (FAR-142): the key is reserved and stripped, so a
+    user payload can never forge correction-run context. Correction runs flow
+    the value through the explicit ``feedback_correction`` kwarg instead — the
+    value still reaches the stored input_payload (and executor._seed_state's
+    promotion to run_context), but only engine callers can set it.
+
+    ``coalesce_key`` (FAR-604): the stable coalesce key is stamped AFTER the
+    strip (system-managed, never forgeable) so the pending run is findable by
+    coalesce_pending_run. Included in input_hash like the rest of the stored
+    payload.
+    """
+    if feedback_correction is not None:
+        stored_payload["_feedback_correction"] = feedback_correction
+    if coalesce_key is not None:
+        stored_payload[_COALESCE_KEY_FIELD] = coalesce_key
+    return stored_payload
+
+
+def _stamp_guardrail_blocked_run(run: Run, guardrail_block_message: str) -> None:
+    """Stamp a guardrail-blocked run TERMINAL (eval_failed) at the ingestion edge.
+
+    The run is created only so the failure is visible in the run list. It is
+    NEVER dispatched to the executor (dispatch_run refuses terminal runs),
+    never retried, and has no HITL gate to resume.
+    """
+    run.status = "eval_failed"
+    run.error_code = "eval_blocked"
+    run.error_detail = guardrail_block_message[:5000]
+    run.completed_at = datetime.now(UTC)
+
+
+async def _resolve_owner_team_id(
+    session: AsyncSession,
+    owner_team_id: uuid.UUID | None,
+    pipeline_id: uuid.UUID,
+) -> uuid.UUID | None:
+    """Team-boundary stamping: inherit the pipeline's owner team when none passed.
+
+    ``Run.owner_team_id`` is the source of truth for the MCP team-boundary
+    guards and the analytics facts (``RunDailyFact.team_id``); without this
+    stamp, every guard reads a NULL owner and silently treats cross-team runs
+    as org-level.
+    """
+    if owner_team_id is not None:
+        return owner_team_id
+    return (
+        await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
+    ).scalar_one_or_none()
+
+
+async def _persist_guardrail_eval_results(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    guardrail_results: list[Any],
+    guardrail_observed_by_eval: dict[uuid.UUID, bool],
+) -> None:
+    """Persist guardrail eval results (evidence deltas vs the pre-act base).
+
+    detail is count-only / pattern-descriptive — never raw payload (item 7
+    no-raw-persist). Observe-mode guardrails stamp observed=True so the
+    guardrail_summary observed bucket is counted exactly once.
+    """
+    from modulo.db.models.eval_definition import EvalDefinition as _EvalDefinitionModel
+    from modulo.db.models.eval_result import EvalResult as EvalResultModel
+
+    # FAR-382: stamp the definition version snapshot so a later rubric bump
+    # never makes this guardrail outcome look like a regression. The engine
+    # DTO carries no version, so resolve it from the (org-scoped) definition
+    # rows in one batched query rather than N+1.
+    guardrail_eval_ids = {gr.eval_id for gr in guardrail_results}
+    version_by_eval_id: dict[uuid.UUID, int] = {}
+    if guardrail_eval_ids:
+        def_rows = (
+            await session.execute(
+                select(_EvalDefinitionModel.id, _EvalDefinitionModel.version).where(
+                    _EvalDefinitionModel.id.in_(guardrail_eval_ids),
+                    _EvalDefinitionModel.organisation_id == org_id,
+                )
+            )
+        ).all()
+        version_by_eval_id = {row.id: row.version for row in def_rows}
+
+    for gr in guardrail_results:
+        session.add(
+            EvalResultModel(
+                organisation_id=org_id,
+                run_id=run_id,
+                node_id=None,
+                eval_id=gr.eval_id,
+                eval_definition_version=version_by_eval_id.get(gr.eval_id),
+                passed=gr.passed,
+                score=gr.score,
+                detail=(gr.detail or "")[:2000],
+                observed=guardrail_observed_by_eval.get(gr.eval_id, False),
+            )
+        )
+
+
+async def _compensate_blocked_run_best_effort(
+    session: AsyncSession,
+    run: Run,
+    *,
+    run_id: uuid.UUID,
+    guardrail_block_message: str,
+    guardrail_blocking_eval_name: str,
+) -> None:
+    """Run-termination compensation (FAR-213) — best-effort + failure-isolated.
+
+    Runs AFTER the terminal status write (the run was flushed above): writes
+    the blocked_partial summary and, when a connector hub is supplied,
+    compensates executed nodes' external side effects. It must NEVER block or
+    delay the terminal write and never propagate — guard-the-guard: any
+    compensation raise is logged + audited here. At the ingestion edge no
+    nodes have executed (connector_hub is always None here), so only the
+    summary + summary audit are written; the mid-run terminalization paths
+    call compensate_blocked_run directly with the executed node outputs and a
+    connector hub.
+    """
+    from modulo.core.guardrails.compensation import compensate_blocked_run
+
+    try:
+        await compensate_blocked_run(
+            session,
+            run,
+            guardrail_block=guardrail_block_message,
+            blocking_eval_name=guardrail_blocking_eval_name,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("guardrails.compensation.error run=%s", run_id)
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -1237,22 +1379,7 @@ async def create_run(
     guardrail_observed_by_eval = interception.observed_by_eval
     guardrail_summary_dict = interception.summary_json
 
-    # Engine-only feedback-correction context (FAR-142): the
-    # ``_feedback_correction`` key is reserved and stripped above, so a user
-    # payload can never forge correction-run context. Correction runs flow the
-    # value through the explicit ``feedback_correction`` kwarg instead, which
-    # injects it AFTER the strip — the value still reaches the stored
-    # input_payload (and executor._seed_state's promotion to run_context), but
-    # only engine callers can set it.
-    if feedback_correction is not None:
-        stored_payload["_feedback_correction"] = feedback_correction
-
-    # FAR-604 queue coalescing: stamp the stable coalesce key AFTER the strip
-    # (system-managed, never forgeable) so the pending run is findable by
-    # coalesce_pending_run. Included in input_hash like the rest of the
-    # stored payload.
-    if coalesce_key is not None:
-        stored_payload[_COALESCE_KEY_FIELD] = coalesce_key
+    stored_payload = _inject_engine_payload_keys(stored_payload, feedback_correction, coalesce_key)
 
     thread_id = f"{org_id}:{run_id}"
     # Per-org atomic counter (FAR-168) — never MAX(run_number)+1 on Postgres,
@@ -1284,15 +1411,7 @@ async def create_run(
     )
     canonical_refs = _canonicalise_ref_entries(work_item_refs)
 
-    # Team-boundary stamping: a run inherits its owner team from the pipeline
-    # it belongs to when no explicit team is passed. ``Run.owner_team_id`` is
-    # the source of truth for the MCP team-boundary guards and the analytics
-    # facts (``RunDailyFact.team_id``); without this stamp, every guard reads a
-    # NULL owner and silently treats cross-team runs as org-level.
-    if owner_team_id is None:
-        owner_team_id = (
-            await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
-        ).scalar_one_or_none()
+    owner_team_id = await _resolve_owner_team_id(session, owner_team_id, pipeline_id)
 
     run = Run(
         id=run_id,
@@ -1319,14 +1438,7 @@ async def create_run(
         guardrail_summary_json=guardrail_summary_dict,
     )
     if guardrail_blocked:
-        # A guardrail block at the ingestion edge is TERMINAL (eval_failed) —
-        # the run is created only so the failure is visible in the run list.
-        # It is NEVER dispatched to the executor (dispatch_run refuses terminal
-        # runs), never retried, and has no HITL gate to resume.
-        run.status = "eval_failed"
-        run.error_code = "eval_blocked"
-        run.error_detail = guardrail_block_message[:5000]
-        run.completed_at = datetime.now(UTC)
+        _stamp_guardrail_blocked_run(run, guardrail_block_message)
     try:
         # Commit the insert inside a savepoint so that, on the async/Postgres
         # backend, a concurrent rate-limit conflict aborts only the nested
@@ -1352,75 +1464,28 @@ async def create_run(
             ) from exc
         raise
 
-    # Persist guardrail eval results (evidence deltas vs the pre-act base).
-    # detail is count-only / pattern-descriptive — never raw payload (item 7
-    # no-raw-persist). Observe-mode guardrails stamp observed=True so the
-    # guardrail_summary observed bucket is counted exactly once.
     if guardrail_results:
-        from modulo.db.models.eval_definition import EvalDefinition as _EvalDefinitionModel
-        from modulo.db.models.eval_result import EvalResult as EvalResultModel
-
-        # FAR-382: stamp the definition version snapshot so a later rubric bump
-        # never makes this guardrail outcome look like a regression. The engine
-        # DTO carries no version, so resolve it from the (org-scoped) definition
-        # rows in one batched query rather than N+1.
-        guardrail_eval_ids = {gr.eval_id for gr in guardrail_results}
-        version_by_eval_id: dict[uuid.UUID, int] = {}
-        if guardrail_eval_ids:
-            def_rows = (
-                await session.execute(
-                    select(_EvalDefinitionModel.id, _EvalDefinitionModel.version).where(
-                        _EvalDefinitionModel.id.in_(guardrail_eval_ids),
-                        _EvalDefinitionModel.organisation_id == org_id,
-                    )
-                )
-            ).all()
-            version_by_eval_id = {row.id: row.version for row in def_rows}
-
-        for gr in guardrail_results:
-            session.add(
-                EvalResultModel(
-                    organisation_id=org_id,
-                    run_id=run_id,
-                    node_id=None,
-                    eval_id=gr.eval_id,
-                    eval_definition_version=version_by_eval_id.get(gr.eval_id),
-                    passed=gr.passed,
-                    score=gr.score,
-                    detail=(gr.detail or "")[:2000],
-                    observed=guardrail_observed_by_eval.get(gr.eval_id, False),
-                )
-            )
+        await _persist_guardrail_eval_results(
+            session,
+            org_id=org_id,
+            run_id=run_id,
+            guardrail_results=guardrail_results,
+            guardrail_observed_by_eval=guardrail_observed_by_eval,
+        )
 
     # Journey hydration (mint-only, fail-open). A journey write failure must
     # NEVER abort create_run — a lost create-stamp is recoverable at finalise
     # via the deterministic canonical id.
     await _hydrate_journeys(session, org_id, canonical_refs)
 
-    # Run-termination compensation (FAR-213) — runs AFTER the terminal status
-    # write (the run was flushed above) as best-effort + failure-isolated: it
-    # writes the blocked_partial summary and, when a connector hub is supplied,
-    # compensates executed nodes' external side effects. It must NEVER block or
-    # delay the terminal write and never propagate — guard-the-guard: any
-    # compensation raise is logged + audited here. At the ingestion edge no
-    # nodes have executed (connector_hub is always None here), so only the
-    # summary + summary audit are written; the mid-run terminalization paths
-    # call compensate_blocked_run directly with the executed node outputs and a
-    # connector hub.
     if guardrail_blocked:
-        from modulo.core.guardrails.compensation import compensate_blocked_run
-
-        try:
-            await compensate_blocked_run(
-                session,
-                run,
-                guardrail_block=guardrail_block_message,
-                blocking_eval_name=guardrail_blocking_eval_name,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("guardrails.compensation.error run=%s", run_id)
+        await _compensate_blocked_run_best_effort(
+            session,
+            run,
+            run_id=run_id,
+            guardrail_block_message=guardrail_block_message,
+            guardrail_blocking_eval_name=guardrail_blocking_eval_name,
+        )
     return run
 
 
