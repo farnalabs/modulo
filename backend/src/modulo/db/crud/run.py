@@ -899,6 +899,210 @@ async def _derive_guardrail_summary(
         return None
 
 
+@dataclass
+class _PinnedGuardrailState:
+    """Replay pin-resolution output: pinned defs + skips + any pin-fingerprint block."""
+
+    pinned_defs: list[Any]
+    skipped_guardrails: list[Any]
+    blocked: bool
+    block_message: str
+    snap_pins: list[dict[str, Any]] | None
+    saved_fingerprint: str | None
+
+
+@dataclass
+class _GuardrailGateOutcome:
+    """Carried run state from the guardrail enforcement gate (post-interception)."""
+
+    payload: dict[str, Any]
+    results: list[Any]
+    redactions: list[Any]
+    blocked: bool
+    block_message: str
+    blocking_eval_name: str
+    observed_by_eval: dict[uuid.UUID, bool]
+    summary_json: dict[str, int] | None
+
+
+async def _resolve_pinned_guardrail_state(
+    session: AsyncSession,
+    request: _InterceptionRequest,
+    guardrail_rows: list[Any],
+) -> _PinnedGuardrailState:
+    """Item 10 — resolve the replay's PINNED guardrail set (or the live-row fallback).
+
+    A replay uses the pinned guardrail set from the snapshot, not the live
+    rows. A pinned guardrail whose live row no longer exists (soft-deleted) is
+    SKIPPED (never a run failure) with an audit event + enforcement-gap alert.
+    A snapshot with no pins (pre-migration) falls back to the live rows.
+    Non-replay runs carry an empty pinned state.
+    """
+    if not (request.is_replay and request.snapshot_id is not None):
+        return _PinnedGuardrailState(
+            pinned_defs=[],
+            skipped_guardrails=[],
+            blocked=False,
+            block_message="",
+            snap_pins=None,
+            saved_fingerprint=None,
+        )
+    snap_pins, saved_fingerprint = await _load_snapshot_guardrail_pins(session, request.org_id, request.snapshot_id)
+    pinned_defs, skipped_guardrails, blocked, block_message = await _rebuild_pinned_guardrail_defs(
+        org_id=request.org_id,
+        run_id=request.run_id,
+        snapshot_id=request.snapshot_id,
+        guardrail_rows=guardrail_rows,
+        snap_pins=snap_pins,
+        saved_fingerprint=saved_fingerprint,
+    )
+    return _PinnedGuardrailState(
+        pinned_defs=pinned_defs,
+        skipped_guardrails=skipped_guardrails,
+        blocked=blocked,
+        block_message=block_message,
+        snap_pins=snap_pins,
+        saved_fingerprint=saved_fingerprint,
+    )
+
+
+async def _run_guardrail_gate(
+    session: AsyncSession,
+    request: _InterceptionRequest,
+    *,
+    guardrail_rows: list[Any],
+    pinned: _PinnedGuardrailState,
+) -> _GuardrailGateOutcome:
+    """Run the enforcement gate over the selected guardrail definitions.
+
+    Stage order (FAR-208): definition selection → cap enforcement (fail
+    closed) → kill-switch downgrade → conformance enforcement → the
+    interception pass (only when not already blocked — a pin-fingerprint or
+    conformance block must never be cleared) → skip audit/alert → summary
+    telemetry. See :func:`_intercept_guardrails` for the documented invariants
+    each stage preserves.
+    """
+    from modulo.core.guardrails import GuardrailAction, guardrail_cap_violation
+
+    org_id = request.org_id
+    run_id = request.run_id
+    payload = request.payload
+    skipped_guardrails = pinned.skipped_guardrails
+
+    guardrail_defs = _select_guardrail_definitions(
+        guardrail_rows, pinned.pinned_defs, pinned.snap_pins, pinned.saved_fingerprint
+    )
+
+    observed_by_eval: dict[uuid.UUID, bool] = {}
+    results: list[Any] = []
+    redactions: list[Any] = []
+    blocking_eval_name = ""
+
+    # Item 7 — cap enforcement (fail closed): a single node binding more
+    # than the per-node guardrail cap is a mechanism error. Graph-save
+    # rejects the authoring-time case; this is the defensive backstop.
+    cap_violation = guardrail_cap_violation(guardrail_defs)
+    if cap_violation:
+        _log.warning("guardrails.cap_violation", extra={"org_id": str(org_id), "detail": cap_violation})
+        blocked = True
+        block_message = f"guardrail mechanism error: {cap_violation}"
+    else:
+        # Item 9 — kill-switch: downgrade EVERY bound guardrail to observe
+        # (shadow-only — compute + log, never block, never redact). Never a
+        # full disable: observe mode still computes and logs.
+        if request.guardrails_kill_switch:
+            guardrail_defs = _downgrade_guardrails_to_observe(guardrail_defs)
+            _log.warning("guardrails.kill_switch_active", extra={"org_id": str(org_id)})
+
+        observed_by_eval = {d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs}
+        any_guarding = any(
+            d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
+        )
+
+        # Conformance enforcement (FAR-223 item 7 "Plus"): a block-action
+        # guardrail carrying required_capabilities that the org cannot
+        # satisfy blocks (fail closed — absent AND unknown) and fires a
+        # paging Notification via the alert path. The derivation helper is
+        # shipped; this is its dispatch-time wiring. Only applied when a
+        # conformance block actually fires — a clean conformance result must
+        # never clear a block already set by the pin-fingerprint check.
+        conformance_blocked, conformance_message = await _enforce_guardrail_conformance(
+            session,
+            org_id=org_id,
+            run_id=run_id,
+            guardrail_defs=guardrail_defs,
+        )
+        blocked = pinned.blocked or conformance_blocked
+        block_message = conformance_message if conformance_blocked else pinned.block_message
+
+        if not blocked:
+            (
+                payload,
+                results,
+                redactions,
+                blocked,
+                block_message,
+                skipped_guardrails,
+                blocking_eval_name,
+            ) = await _run_guardrail_interception_pass(
+                org_id=org_id,
+                _run_id=run_id,
+                guardrail_defs=guardrail_defs,
+                payload=payload,
+                is_replay=request.is_replay,
+                skipped_guardrails=skipped_guardrails,
+                any_guarding=any_guarding,
+            )
+        # NOTE (item 10 invariant): a conformance block (``blocked`` True via
+        # the block above) must NOT clear the accumulated pin-skips collected
+        # earlier in this seam — they survive the conformance path and are
+        # still audited + alerted just below. The pass only ever replaces
+        # ``skipped_guardrails`` with its own carried skips (via
+        # ``outcome.skipped``), so there is no stale-skip case to clear.
+
+    # Item 10 — audit + alert skipped pinned guardrails (best-effort: the
+    # skip is the policy; a failed audit/alert never breaks the run).
+    # Item 11 — a skip NOT explained by soft-deleted pin state is
+    # UNEXPECTED and pages an additional ``guardrail_unexpected_skip``
+    # alert (Notification Log + Error Forwarders).
+    await _audit_and_alert_skipped_guardrails(
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        skipped_guardrails=skipped_guardrails,
+    )
+
+    # Item 11 — guardrail_summary telemetry snapshot + per-pattern
+    # fired-signature regression log. Computed BEFORE the run row exists so
+    # it can be persisted on the Run in one place. ``bound`` = the guardrail
+    # rows bound at run start (pinned set or live fallback) INCLUDING
+    # skipped pins, so ``evaluated + errored + skipped == bound`` holds by
+    # construction (build_guardrail_summary absorbs no-clean-detection
+    # guardrails into ``errored``). TELEMETRY: best-effort fail-open — a
+    # summary-derivation failure must never break run creation (the
+    # enforcement already happened); it degrades to no summary + a log.
+    summary_json = await _derive_guardrail_summary(
+        org_id=org_id,
+        run_id=run_id,
+        guardrail_defs=guardrail_defs,
+        guardrail_results=results,
+        guardrail_redactions=redactions,
+        skipped_guardrails=skipped_guardrails,
+        guardrail_observed_by_eval=observed_by_eval,
+    )
+
+    return _GuardrailGateOutcome(
+        payload=payload,
+        results=results,
+        redactions=redactions,
+        blocked=blocked,
+        block_message=block_message,
+        blocking_eval_name=blocking_eval_name,
+        observed_by_eval=observed_by_eval,
+        summary_json=summary_json,
+    )
+
+
 async def _intercept_guardrails(
     session: AsyncSession,
     request: _InterceptionRequest,
@@ -914,168 +1118,36 @@ async def _intercept_guardrails(
     redact action (item 7: warn-on-error applies to warn-action only);
     observe/warn-only guardrails log-and-continue on mechanism error.
     """
-    org_id = request.org_id
-    pipeline_id = request.pipeline_id
-    run_id = request.run_id
-    payload = request.payload
-    is_replay = request.is_replay
-    snapshot_id = request.snapshot_id
-    guardrails_kill_switch = request.guardrails_kill_switch
-
-    from modulo.core.guardrails import (
-        GuardrailAction,
-        guardrail_cap_violation,
-    )
     from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
 
     guardrail_rows = await load_pipeline_guardrail_rows(
         session,
-        pipeline_id=pipeline_id,
-        organisation_id=org_id,
+        pipeline_id=request.pipeline_id,
+        organisation_id=request.org_id,
     )
+    pinned = await _resolve_pinned_guardrail_state(session, request, guardrail_rows)
 
-    guardrail_blocked = False
-    guardrail_block_message = ""
-    guardrail_blocking_eval_name = ""
-    guardrail_results: list[Any] = []
-    guardrail_redactions: list[Any] = []
-    guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
-
-    # Item 10 — replay uses the PINNED guardrail set from the snapshot, not the
-    # live rows. A pinned guardrail whose live row no longer exists
-    # (soft-deleted) is SKIPPED (never a run failure) with an audit event +
-    # enforcement-gap alert. A snapshot with no pins (pre-migration) falls back
-    # to the live rows.
-    pinned_defs: list[Any] = []
-    skipped_guardrails: list[Any] = []
-    snap_pins: list[dict[str, Any]] | None = None
-    saved_fingerprint: str | None = None
-    if is_replay and snapshot_id is not None:
-        snap_pins, saved_fingerprint = await _load_snapshot_guardrail_pins(session, org_id, snapshot_id)
-        (
-            pinned_defs,
-            skipped_guardrails,
-            guardrail_blocked,
-            guardrail_block_message,
-        ) = await _rebuild_pinned_guardrail_defs(
-            org_id=org_id,
-            run_id=run_id,
-            snapshot_id=snapshot_id,
-            guardrail_rows=guardrail_rows,
-            snap_pins=snap_pins,
-            saved_fingerprint=saved_fingerprint,
+    if _has_guardrail_work(guardrail_rows, pinned.pinned_defs, pinned.skipped_guardrails, pinned.blocked):
+        gate = await _run_guardrail_gate(session, request, guardrail_rows=guardrail_rows, pinned=pinned)
+        return _GuardrailInterception(
+            payload=gate.payload,
+            results=gate.results,
+            redactions=gate.redactions,
+            blocked=gate.blocked,
+            block_message=gate.block_message,
+            blocking_eval_name=gate.blocking_eval_name,
+            observed_by_eval=gate.observed_by_eval,
+            summary_json=gate.summary_json,
         )
-
-    if _has_guardrail_work(guardrail_rows, pinned_defs, skipped_guardrails, guardrail_blocked):
-        guardrail_defs = _select_guardrail_definitions(guardrail_rows, pinned_defs, snap_pins, saved_fingerprint)
-
-        # Item 7 — cap enforcement (fail closed): a single node binding more
-        # than the per-node guardrail cap is a mechanism error. Graph-save
-        # rejects the authoring-time case; this is the defensive backstop.
-        cap_violation = guardrail_cap_violation(guardrail_defs)
-        if cap_violation:
-            _log.warning("guardrails.cap_violation", extra={"org_id": str(org_id), "detail": cap_violation})
-            guardrail_blocked = True
-            guardrail_block_message = f"guardrail mechanism error: {cap_violation}"
-        else:
-            # Item 9 — kill-switch: downgrade EVERY bound guardrail to observe
-            # (shadow-only — compute + log, never block, never redact). Never a
-            # full disable: observe mode still computes and logs.
-            if guardrails_kill_switch:
-                guardrail_defs = _downgrade_guardrails_to_observe(guardrail_defs)
-                _log.warning("guardrails.kill_switch_active", extra={"org_id": str(org_id)})
-
-            guardrail_observed_by_eval = {
-                d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs
-            }
-            any_guarding = any(
-                d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
-            )
-
-            # Conformance enforcement (FAR-223 item 7 "Plus"): a block-action
-            # guardrail carrying required_capabilities that the org cannot
-            # satisfy blocks (fail closed — absent AND unknown) and fires a
-            # paging Notification via the alert path. The derivation helper is
-            # shipped; this is its dispatch-time wiring. Only applied when a
-            # conformance block actually fires — a clean conformance result must
-            # never clear a block already set by the pin-fingerprint check.
-            conformance_blocked, conformance_message = await _enforce_guardrail_conformance(
-                session,
-                org_id=org_id,
-                run_id=run_id,
-                guardrail_defs=guardrail_defs,
-            )
-            if conformance_blocked:
-                guardrail_blocked = True
-                guardrail_block_message = conformance_message
-
-            if not guardrail_blocked:
-                (
-                    payload,
-                    guardrail_results,
-                    guardrail_redactions,
-                    guardrail_blocked,
-                    guardrail_block_message,
-                    skipped_guardrails,
-                    guardrail_blocking_eval_name,
-                ) = await _run_guardrail_interception_pass(
-                    org_id=org_id,
-                    _run_id=run_id,
-                    guardrail_defs=guardrail_defs,
-                    payload=payload,
-                    is_replay=is_replay,
-                    skipped_guardrails=skipped_guardrails,
-                    any_guarding=any_guarding,
-                )
-            # NOTE (item 10 invariant): a conformance block (``guardrail_blocked``
-            # True via the block above) must NOT clear the accumulated pin-skips
-            # collected earlier in this seam — they survive the conformance path
-            # and are still audited + alerted just below. The pass only ever
-            # replaces ``skipped_guardrails`` with its own carried skips (via
-            # ``outcome.skipped``), so there is no stale-skip case to clear.
-
-        # Item 10 — audit + alert skipped pinned guardrails (best-effort: the
-        # skip is the policy; a failed audit/alert never breaks the run).
-        # Item 11 — a skip NOT explained by soft-deleted pin state is
-        # UNEXPECTED and pages an additional ``guardrail_unexpected_skip``
-        # alert (Notification Log + Error Forwarders).
-        await _audit_and_alert_skipped_guardrails(
-            session,
-            org_id=org_id,
-            run_id=run_id,
-            skipped_guardrails=skipped_guardrails,
-        )
-
-        # Item 11 — guardrail_summary telemetry snapshot + per-pattern
-        # fired-signature regression log. Computed BEFORE the run row exists so
-        # it can be persisted on the Run in one place. ``bound`` = the guardrail
-        # rows bound at run start (pinned set or live fallback) INCLUDING
-        # skipped pins, so ``evaluated + errored + skipped == bound`` holds by
-        # construction (build_guardrail_summary absorbs no-clean-detection
-        # guardrails into ``errored``). TELEMETRY: best-effort fail-open — a
-        # summary-derivation failure must never break run creation (the
-        # enforcement already happened); it degrades to no summary + a log.
-        summary_json = await _derive_guardrail_summary(
-            org_id=org_id,
-            run_id=run_id,
-            guardrail_defs=guardrail_defs,
-            guardrail_results=guardrail_results,
-            guardrail_redactions=guardrail_redactions,
-            skipped_guardrails=skipped_guardrails,
-            guardrail_observed_by_eval=guardrail_observed_by_eval,
-        )
-    else:
-        summary_json = None
-
     return _GuardrailInterception(
-        payload=payload,
-        results=guardrail_results,
-        redactions=guardrail_redactions,
-        blocked=guardrail_blocked,
-        block_message=guardrail_block_message,
-        blocking_eval_name=guardrail_blocking_eval_name,
-        observed_by_eval=guardrail_observed_by_eval,
-        summary_json=summary_json,
+        payload=request.payload,
+        results=[],
+        redactions=[],
+        blocked=pinned.blocked,
+        block_message=pinned.block_message,
+        blocking_eval_name="",
+        observed_by_eval={},
+        summary_json=None,
     )
 
 
