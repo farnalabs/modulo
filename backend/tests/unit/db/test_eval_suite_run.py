@@ -756,9 +756,12 @@ def test_single_migration_head() -> None:
     # 0181_org_api_keys_scope (FAR-620 user-scoped MCP keys) chains off 0180_hitl_parked_status.
     chaining_off_0180 = [p for p in revisions if parents[p] == "0180_hitl_parked_status"]
     assert [_basename(p) for p in chaining_off_0180] == ["0181_org_api_keys_scope.py"]
-    # Nothing chains off 0181_org_api_keys_scope -> it is the single head.
+    # 0182_hitl_claims_active_sweep_indexes (this PR) chains off 0181_org_api_keys_scope.
     chaining_off_0181 = [p for p in revisions if parents[p] == "0181_org_api_keys_scope"]
-    assert chaining_off_0181 == []
+    assert [_basename(p) for p in chaining_off_0181] == ["0182_hitl_claims_active_sweep_indexes.py"]
+    # Nothing chains off 0182_hitl_claims_active_sweep_indexes -> it is the single head.
+    chaining_off_0182 = [p for p in revisions if parents[p] == "0182_hitl_claims_active_sweep_indexes"]
+    assert chaining_off_0182 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
