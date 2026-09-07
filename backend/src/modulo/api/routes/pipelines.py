@@ -16,7 +16,15 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, ValidationError, WithJsonSchema, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1043,7 +1051,7 @@ class HitlGateConfig(BaseModel):
 
     @field_validator("description")
     @classmethod
-    def _description_must_explain_why(cls, v: str) -> str:
+    def _description_must_explain_why(cls, v: str, info: ValidationInfo) -> str:
         """FAR-613: a HITL gate must explain WHY a human must decide on it.
 
         The description is the reviewer's decision briefing (surfaces in the
@@ -1052,7 +1060,17 @@ class HitlGateConfig(BaseModel):
         must meet the shared minimum the save-time GraphValidator enforces for
         node-level ``hitl_config`` gates too (whose config dict bypasses this
         Pydantic model).
+
+        The minimum is a WRITE-path requirement. ``_graph_response``
+        re-validates STORED edges on every graph READ (GET /graph echoes
+        persisted data), so validating strictly there would 422 every legacy
+        pipeline whose gate description predates this rule — the editor could
+        never open the pipeline to fix it. Reads validate with
+        ``context={"legacy_read": True}``; the next save still enforces the
+        minimum (this validator on the request body + the GraphValidator).
         """
+        if isinstance(info.context, dict) and info.context.get("legacy_read"):
+            return v
         if len(v.strip()) < HITL_DESCRIPTION_MIN_LENGTH:
             raise ValueError(
                 f"HITL gate requires a human-provided description (min {HITL_DESCRIPTION_MIN_LENGTH} chars) "
@@ -1129,7 +1147,10 @@ def _graph_response(
     try:
         return PipelineGraphResponse(
             nodes=[PipelineGraphNode.model_validate(node) for node in nodes],
-            edges=[PipelineGraphEdge.model_validate(edge) for edge in edges],
+            # Reads re-validate STORED edges, so gate-description enforcement
+            # must stay write-scoped (FAR-613) — legacy pipelines whose gate
+            # descriptions predate the minimum stay readable/editable.
+            edges=[PipelineGraphEdge.model_validate(edge, context={"legacy_read": True}) for edge in edges],
             validation_issues=validation_issues or [],
         )
     except ValidationError as e:

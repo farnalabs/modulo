@@ -16,7 +16,12 @@ from sqlalchemy.sql import Select
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.pipelines import PipelineGraphNode, _resolve_graph_references
+from modulo.api.routes.pipelines import (
+    HITL_DESCRIPTION_MIN_LENGTH,
+    HitlGateConfig,
+    PipelineGraphNode,
+    _resolve_graph_references,
+)
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.graph_validator._types import ValidationResult
@@ -796,7 +801,7 @@ def test_replace_pipeline_graph_round_trips_correction_target(client: TestClient
             "edge_type": "normal",
             "hitl_gate_config": {
                 "label": "Review",
-                "description": "Gate",
+                "description": "Reviewer decides whether the merged fix is safe.",
                 "reject_target": str(reject_id),
                 "correction_target": str(correction_id),
                 "claim_expiry_minutes": 60,
@@ -836,7 +841,8 @@ def test_replace_pipeline_graph_round_trips_correction_target(client: TestClient
 def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> None:
     """FAR-210 MAJOR-2: a reload (GET /graph) of a gate whose hitl_gate_config
     carries correction_target returns it — the field survives the
-    PipelineGraphEdge round-trip."""
+    PipelineGraphEdge round-trip. The stored "Gate" description is a legacy
+    sub-minimum value and MUST stay readable (FAR-613 read leniency)."""
     node_id = uuid.uuid4()
     correction_id = uuid.uuid4()
     edge = MagicMock()
@@ -868,6 +874,92 @@ def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> Non
 
     assert resp.status_code == 200
     assert resp.json()["edges"][0]["hitl_gate_config"]["correction_target"] == str(correction_id)
+
+
+def test_replace_pipeline_graph_rejects_short_gate_description(client: TestClient) -> None:
+    """FAR-613: the HitlGateConfig Pydantic validator enforces the description
+    minimum on the API WRITE path — a gate edge whose description is shorter
+    than HITL_DESCRIPTION_MIN_LENGTH is rejected with 422 at request parse,
+    before any CRUD runs."""
+    node_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+    nodes = [
+        {"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None},
+        {"id": str(target_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}, "connector_binding": None},
+    ]
+    edges = [
+        {
+            "source_node_id": str(node_id),
+            "target_node_id": str(target_id),
+            "edge_type": "normal",
+            "hitl_gate_config": {
+                "label": "Review",
+                "description": "Gate",
+                "claim_expiry_minutes": 60,
+                "human_only": False,
+            },
+        }
+    ]
+
+    resp = client.patch(
+        f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+        json={"nodes": nodes, "edges": edges},
+    )
+
+    assert resp.status_code == 422
+    assert "human-provided description" in resp.text
+
+
+def test_get_pipeline_graph_tolerates_legacy_short_gate_description(client: TestClient) -> None:
+    """FAR-613 regression: the description minimum is WRITE-scoped. A stored
+    edge whose gate description predates the minimum must stay READABLE via
+    GET /graph — otherwise a legacy pipeline could not even be opened in the
+    editor to add the missing description. Reads validate with
+    ``context={"legacy_read": True}``; the next save still rejects."""
+    node_id = uuid.uuid4()
+    edge = MagicMock()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = node_id
+    edge.target_node_id = uuid.uuid4()
+    edge.edge_type = "normal"
+    edge.condition_expression = None
+    edge.source_port = "out"
+    edge.target_port = "in"
+    edge.hitl_gate_config = {
+        "label": "Review",
+        "description": "Gate",
+        "claim_expiry_minutes": 60,
+        "human_only": False,
+    }
+    nodes = [
+        {"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None}
+    ]
+
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+
+    assert resp.status_code == 200
+    assert resp.json()["edges"][0]["hitl_gate_config"]["description"] == "Gate"
+
+
+def test_hitl_gate_config_description_minimum_boundary() -> None:
+    """FAR-613: the HitlGateConfig model itself rejects a description below
+    the shared minimum and accepts one at exactly the minimum."""
+    base = {
+        "label": "Review",
+        "claim_expiry_minutes": 60,
+        "human_only": False,
+    }
+
+    with pytest.raises(ValidationError, match="human-provided description"):
+        HitlGateConfig.model_validate({**base, "description": "too short"})
+
+    at_minimum = HitlGateConfig.model_validate({**base, "description": "x" * HITL_DESCRIPTION_MIN_LENGTH})
+    assert at_minimum.description == "x" * HITL_DESCRIPTION_MIN_LENGTH
 
 
 def test_replace_pipeline_graph_blocks_redact_correct_422(client: TestClient) -> None:
