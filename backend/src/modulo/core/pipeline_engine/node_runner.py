@@ -3585,6 +3585,38 @@ def make_hitl_gate_fn(
     return _hitl_gate
 
 
+def _manual_resume_output(
+    decision: dict[str, Any],
+    output_schema_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Manual output carried by a decision stamped for THIS node, schema-validated.
+
+    A decision's ``output`` that is not a dict resumes with ``None`` (the node
+    completes with no human payload). When the node declares an
+    ``output_schema_json`` and an output IS present, it is validated before
+    the node continues.
+    """
+    resume_data = decision.get("output")
+    manual_output: dict[str, Any] | None = resume_data if isinstance(resume_data, dict) else None
+    if output_schema_json and manual_output is not None:
+        _validate_against_schema(manual_output, output_schema_json)
+    return manual_output
+
+
+def _manual_completion_artifact(node_id: str, manual_output: dict[str, Any] | None) -> dict[str, Any]:
+    """State envelope for a completed manual node."""
+    return {
+        "artifacts": [
+            {
+                "node_id": node_id,
+                "status": "completed",
+                "human_output": manual_output,
+            }
+        ],
+        "manual_output": manual_output,
+    }
+
+
 def make_manual_node_fn(
     node_def: dict[str, Any],
     *,
@@ -3609,10 +3641,7 @@ def make_manual_node_fn(
         decision = state.get("_hitl_decision")
         stamped_gate = decision.get("gate_id") if isinstance(decision, dict) else None
         if isinstance(decision, dict) and stamped_gate == node_id:
-            resume_data = decision.get("output")
-            manual_output: dict[str, Any] | None = resume_data if isinstance(resume_data, dict) else None
-            if output_schema_json and manual_output is not None:
-                _validate_against_schema(manual_output, output_schema_json)
+            manual_output = _manual_resume_output(decision, output_schema_json)
 
             _log.info(
                 "manual_node.completed",
@@ -3622,16 +3651,7 @@ def make_manual_node_fn(
                 },
             )
 
-            return {
-                "artifacts": [
-                    {
-                        "node_id": node_id,
-                        "status": "completed",
-                        "human_output": manual_output,
-                    }
-                ],
-                "manual_output": manual_output,
-            }
+            return _manual_completion_artifact(node_id, manual_output)
         if decision is not None:
             _log.warning(
                 "manual_node.foreign_decision_ignored",
