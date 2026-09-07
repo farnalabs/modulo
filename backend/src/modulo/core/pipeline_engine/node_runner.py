@@ -2875,6 +2875,61 @@ def make_node_fn(
     return _node
 
 
+def _parse_router_rules(
+    rules: list[dict[str, Any]],
+) -> tuple[list[tuple[str | None, str | None]], str | None]:
+    """Split Router rules into ``(rule_targets, default_target)``.
+
+    ``rule_targets`` holds ``(guard_expr, target)`` for every non-default rule;
+    the first ``default`` rule's target becomes ``default_target``. The guards
+    are evaluated through the shared JMESPath evaluator so Router and the
+    conditional-edge compile path share ONE truthiness rule.
+    """
+    rule_targets: list[tuple[str | None, str | None]] = []
+    default_target: str | None = None
+    for rule in rules:
+        target = rule.get("target") or rule.get("target_port")
+        if rule.get("default"):
+            default_target = target
+            continue
+        rule_targets.append((rule.get("guard"), target))
+    return rule_targets, default_target
+
+
+def _first_matching_rule_target(
+    state: dict[str, Any],
+    rule_targets: list[tuple[str | None, str | None]],
+) -> str | None:
+    """First rule whose guard matches *state* (first-match-wins), or ``None``.
+
+    A rule with no target is skipped — its guard is not even evaluated (the
+    ``and`` short-circuits), matching the original inline loop.
+    """
+    for guard, target in rule_targets:
+        if target is not None and evaluate_jmespath_condition(state, guard):
+            return target
+    return None
+
+
+def _classifier_rule_target(state: dict[str, Any], rules: list[dict[str, Any]]) -> str | None:
+    """Target of the rule whose ``label`` matches the LLM routing decision.
+
+    LLM routing mode (``mode == "classifier"``) matches the ``_llm_next_node``
+    state value against each rule's ``label``. Returns ``None`` when the state
+    carries no decision or no rule label matches (the caller falls back to the
+    default rule).
+    """
+    label = state.get("_llm_next_node")
+    if label is None:
+        return None
+    for rule in rules:
+        if rule.get("label") == label:
+            matched: str | None = rule.get("target") or rule.get("target_port")
+            if matched is not None:
+                return matched
+    return None
+
+
 def make_router_node_fn(
     router_config: dict[str, Any],
     *,
@@ -2901,31 +2956,16 @@ def make_router_node_fn(
     """
     rules: list[dict[str, Any]] = list(router_config.get("rules", []))
     classifier_mode: bool = router_config.get("mode") == "classifier"
-
-    # Store (guard_expr, target) tuples. The guards are evaluated through the
-    # shared JMESPath evaluator so Router and the conditional-edge compile path
-    # share ONE truthiness rule.
-    rule_targets: list[tuple[str | None, str | None]] = []
-    default_target: str | None = None
-    for rule in rules:
-        target = rule.get("target") or rule.get("target_port")
-        if rule.get("default"):
-            default_target = target
-            continue
-        rule_targets.append((rule.get("guard"), target))
+    rule_targets, default_target = _parse_router_rules(rules)
 
     def _router(state: dict[str, Any]) -> str:
-        for guard, target in rule_targets:
-            if target is not None and evaluate_jmespath_condition(state, guard):
-                return target
+        first = _first_matching_rule_target(state, rule_targets)
+        if first is not None:
+            return first
         if classifier_mode:
-            label = state.get("_llm_next_node")
-            if label is not None:
-                for rule in rules:
-                    if rule.get("label") == label:
-                        matched: str | None = rule.get("target") or rule.get("target_port")
-                        if matched is not None:
-                            return matched
+            matched = _classifier_rule_target(state, rules)
+            if matched is not None:
+                return matched
         if default_target:
             return default_target
         raise RouterNoMatchError(node_id=node_id)
