@@ -128,7 +128,7 @@ def test_claim_gate_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
     gate = _gate_mock()
     with (
         patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(return_value=gate)),
-        patch("modulo.api.routes.hitl.update_run_status", new=AsyncMock()) as update_status,
+        patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)) as transition,
     ):
         resp = _claim_gate(http)
 
@@ -137,7 +137,7 @@ def test_claim_gate_happy_path(client: tuple[TestClient, AsyncMock]) -> None:
     assert body["run_id"] == str(_RUN_ID)
     assert body["gate_id"] == "gate-1"
     assert body["claim_token"] == "tok-123"
-    update_status.assert_awaited_once()
+    transition.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -164,7 +164,7 @@ def test_claim_gate_missing_claim_data_returns_500(client: tuple[TestClient, Asy
     gate = _gate_mock(claim_token=None)
     with (
         patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(return_value=gate)),
-        patch("modulo.api.routes.hitl.update_run_status", new=AsyncMock()),
+        patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
     ):
         resp = _claim_gate(http)
 

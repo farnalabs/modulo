@@ -15,6 +15,53 @@ vi.mock('../lib/api/schema', () => ({}))
 
 import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
 
+const PENDING_URL = '/api/v1/hitl/pending'
+
+function mockGetWithGates(gates: unknown[]) {
+  return (url: string) => {
+    if (url === PENDING_URL) {
+      return Promise.resolve({ data: { gates }, error: undefined })
+    }
+    if (url === '/api/v1/pipelines') {
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    }
+    return Promise.resolve({ data: { items: [] }, error: undefined })
+  }
+}
+
+function pendingGateRow() {
+  return {
+    run_id: '550e8400-e29b-41d4-a716-446655440000',
+    gate_id: 'approval-gate-1',
+    pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
+    claimed_by: null,
+    claimed_at: null,
+    expires_at: null,
+    decision: null,
+    decision_at: null,
+    created_at: '2025-06-30T10:00:00Z',
+  }
+}
+
+function problemDetail(detail: string) {
+  // Shape produced by the api client wrapper: FastAPI's ProblemDetail body
+  // (type/title/status/detail) or a raw {detail} normalized by toProblemDetail.
+  return {
+    type: 'urn:problem:modulo:conflict',
+    title: 'Conflict',
+    status: 409,
+    detail,
+  }
+}
+
+async function expandFirstGate(wrapper: VueWrapper) {
+  const toggle = wrapper.find('[data-testid="hitl-review-toggle-expand"]')
+  expect(toggle.exists()).toBe(true)
+  await toggle.trigger('click')
+  await flushPromises()
+  await nextTick()
+}
+
 describe('SettingsHitlReviewView', () => {
   let wrapper: VueWrapper | null = null
 
@@ -244,5 +291,143 @@ describe('SettingsHitlReviewView', () => {
 
     const approvedBadge = wrapper!.findAll('span').find((s) => s.classes().includes('badge'))
     expect(approvedBadge?.text()).toBe('approved')
+  })
+
+  it('maps a run-not-awaiting 409 to a specific view-level banner and re-fetches the list', async () => {
+    const { api } = await import('../lib/api/client')
+    const gates = [pendingGateRow()]
+    ;(api.GET as any).mockImplementation(mockGetWithGates(gates))
+    ;(api.POST as any).mockResolvedValue({
+      data: null,
+      error: problemDetail('Run 550e8400-e29b-41d4-a716-446655440000 is not awaiting a human decision (status: complete)'),
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    const claimButton = wrapper!.find('[data-testid="hitl-review-claim"]')
+    expect(claimButton.exists()).toBe(true)
+    await claimButton.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // The failure message lives in the VIEW-LEVEL banner, not in the gate
+    // row: the immediate refresh drops terminal-run gates from the list, so
+    // a row-level message would be erased before it renders (FAR-612).
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('no longer waiting for a human decision')
+    expect(banner.text()).toContain('status: complete')
+    const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    expect(pendingCallsAfter).toBe(pendingCallsBefore + 1)
+  })
+
+  it('maps an already-claimed 409 to a specific view-level banner', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+    ;(api.POST as any).mockResolvedValue({
+      data: null,
+      error: problemDetail("Gate 'approval-gate-1' on run 550e8400-e29b-41d4-a716-446655440000 is already claimed"),
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    await wrapper!.find('[data-testid="hitl-review-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('already claimed by another reviewer')
+  })
+
+  it('re-fetches the list even when the claim throws a network error', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+    ;(api.POST as any).mockRejectedValue(new Error('network down'))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    await wrapper!.find('[data-testid="hitl-review-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // Network errors land in the catch path: the row on screen may be stale
+    // (the claim may have landed before the connection dropped), so the
+    // refresh must fire here too — not only for API-error failures (FAR-612).
+    const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    expect(pendingCallsAfter).toBe(pendingCallsBefore + 1)
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('network down')
+  })
+
+  it('renders a claimed-by-another gate as read-only with no approve/reject buttons', async () => {
+    const { api } = await import('../lib/api/client')
+    const claimedByOther = {
+      ...pendingGateRow(),
+      claimed_by: '999e8400-e29b-41d4-a716-446655440009',
+      claimed_at: '2025-06-30T11:00:00Z',
+      expires_at: '2025-06-30T11:15:00Z',
+    }
+    ;(api.GET as any).mockImplementation(mockGetWithGates([claimedByOther]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    expect(wrapper!.find('[data-testid="hitl-review-claimed-other"]').exists()).toBe(true)
+    expect(wrapper!.text()).toContain('Claimed by')
+    expect(wrapper!.text()).toContain('999e8400-e29b-41d4-a716-446655440009')
+    expect(wrapper!.find('[data-testid="hitl-review-approve"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-review-reject"]').exists()).toBe(false)
+  })
+
+  it('renders approve/reject buttons after this session claims the gate', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+    ;(api.POST as any).mockResolvedValue({
+      data: {
+        run_id: '550e8400-e29b-41d4-a716-446655440000',
+        gate_id: 'approval-gate-1',
+        claim_token: 'tok-123',
+        expires_at: '2025-06-30T10:15:00Z',
+      },
+      error: undefined,
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    await wrapper!.find('[data-testid="hitl-review-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-approve"]').exists()).toBe(true)
+    expect(wrapper!.find('[data-testid="hitl-review-reject"]').exists()).toBe(true)
+    expect(wrapper!.find('[data-testid="hitl-review-claim"]').exists()).toBe(false)
   })
 })

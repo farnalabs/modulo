@@ -122,6 +122,7 @@ from modulo.core.hitl_manager import (
     GateNotFoundError,
     HITLManager,
     NotTeamMemberError,
+    RunNotAwaitingError,
 )
 from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
@@ -152,7 +153,7 @@ from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_ACTIONABLE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
@@ -3345,7 +3346,10 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
         base_where: list[Any] = [
             HitlClaim.organisation_id == org_id,
             HitlClaim.decision.is_(None),
-            Run.status.not_in(TERMINAL_STATUSES),
+            # FAR-612: same actionable-run-status filter as the REST org-wide
+            # pending queue — ``not_in(TERMINAL_STATUSES)`` would still list
+            # gates on pending/running/unknown runs, which claim() now refuses.
+            Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
         ]
         key_team_id = _ctx_team_id_val()
         if key_team_id is not None:
@@ -3406,6 +3410,211 @@ async def _load_pending_hitl_gates(
         .limit(page_size)
     )
     return list(result.scalars()), total
+
+
+# ---------------------------------------------------------------------------
+# FAR-641: read-only HITL gate-inspection tools. Inspection only — decisions
+# stay in review_hitl (human_only gates stay browser-human-only, ADR 017) and
+# gate configs are never written from MCP (the graph-write guard hardcodes
+# is_privileged=False for caller_type="mcp").
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    description=(
+        "List the unclaimed, undecided HITL gates for the organisation "
+        "(their runs are in awaiting_human). Read-only inspection: claim or "
+        "decide via review_hitl."
+    ),
+)
+@_RETRY_DB
+async def list_hitl_gates(limit: int = 20) -> dict[str, Any]:
+    try:
+        return await _list_hitl_gates_impl(limit)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_hitl_gates failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_hitl_gates failed")
+        return _tool_error("Failed to list HITL gates")
+
+
+async def _list_hitl_gates_impl(limit: int) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("list_hitl_gates")
+    from sqlalchemy import func, select
+
+    from modulo.db.crud.team_scope import team_scope_clause
+    from modulo.db.models.pipeline import Pipeline
+
+    org_id = _ctx_org_id_val()
+    capped = max(1, min(limit, 100))
+    async with _session(org_id) as s:
+        base_where: list[Any] = [
+            HitlClaim.organisation_id == org_id,
+            HitlClaim.account_id.is_(None),
+            HitlClaim.decision.is_(None),
+            Run.status == AWAITING_HUMAN_STATUS,
+        ]
+        key_team_id = _ctx_team_id_val()
+        if key_team_id is not None:
+            # Same team boundary as list_pending_hitl: a team-scoped key only
+            # sees gates for runs owned by its own team (or org-level runs).
+            effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+            base_where.append(team_scope_clause(effective_owner, key_team_id))
+        result = await s.execute(
+            select(HitlClaim, Pipeline.name, Run.run_number)
+            .join(Run, HitlClaim.run_id == Run.id)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(*base_where)
+            .order_by(HitlClaim.created_at.desc())
+            .limit(capped)
+        )
+        rows = result.all()
+    return {
+        "gates": [
+            {
+                "run_id": str(gate.run_id),
+                "gate_id": gate.gate_id,
+                "pipeline_id": str(gate.pipeline_id),
+                "pipeline_name": pipeline_name,
+                "run_number": run_number,
+                "claimed_by": str(gate.account_id) if gate.account_id else None,
+                "expires_at": _iso_or_none(gate.expires_at),
+                "required_team_id": str(gate.required_team_id) if gate.required_team_id else None,
+                "created_at": _iso_or_none(gate.created_at),
+            }
+            for gate, pipeline_name, run_number in rows
+        ],
+        "limit": capped,
+    }
+
+
+@mcp.tool(
+    description=(
+        "Get read-only detail for one HITL gate: run status, the gate config AS "
+        "CAPTURED IN THAT RUN'S SNAPSHOT (label, condition, human_only, "
+        "claim_expiry_minutes, reject_target, required_team_id), and the gate's "
+        "claim/decision state. Decide via review_hitl or the browser UI."
+    ),
+)
+@_RETRY_DB
+async def get_hitl_gate(run_id: str, gate_id: str) -> dict[str, Any]:
+    try:
+        return await _get_hitl_gate_impl(run_id, gate_id)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_hitl_gate failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_hitl_gate failed")
+        return _tool_error("Failed to get HITL gate")
+
+
+async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("get_hitl_gate")
+    from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
+
+    org_id = _ctx_org_id_val()
+    rid, rid_err = _parse_uuid_param(run_id, "run_id")
+    if rid_err:
+        return rid_err
+    assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+    async with _session(org_id) as s:
+        run = await _load_hitl_run(s, rid)
+        if run is _TEAM_SCOPE_ERROR:
+            return _team_scope_error("run", run_id)
+        if run is None:
+            return {"error": "run_not_found", "run_id": run_id}
+        gate = await HITLManager().get_gate(s, run_id=rid, gate_id=gate_id, org_id=org_id)
+        if gate is None:
+            return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+        # FAR-610 resolution order: the run's snapshot graph is authoritative
+        # for the gate that fired; the live edges/nodes are the fallbacks.
+        config = await resolve_hitl_gate_config(s, run_id=rid, gate_id=gate_id, org_id=org_id, run=run)
+    result = {
+        "run_id": run_id,
+        "gate_id": gate_id,
+        "run_status": run.status,
+        "gate_fired": True,
+        "claimed_by": str(gate.account_id) if gate.account_id else None,
+        "claimed_at": _iso_or_none(gate.claimed_at),
+        "expires_at": _iso_or_none(gate.expires_at),
+        "decision": gate.decision,
+        "decision_at": _iso_or_none(gate.decision_at),
+    }
+    if config is None:
+        result["gate_config"] = None
+    else:
+        required_team = config.get("required_team_id")
+        result["gate_config"] = {
+            "label": config.get("label"),
+            "condition": config.get("condition"),
+            "human_only": bool(config.get("human_only", False)),
+            "claim_expiry_minutes": config.get("claim_expiry_minutes"),
+            "reject_target": config.get("reject_target"),
+            "required_team_id": str(required_team) if required_team else None,
+        }
+    return result
+
+
+@mcp.tool(
+    description=(
+        "List the hitl_gate_config blocks on a pipeline's committed graph edges "
+        "(source/target node ids + full config). Read-only: the graph is "
+        "modified via update_pipeline_graph, never by this tool."
+    ),
+)
+@_RETRY_DB
+async def get_pipeline_gates(pipeline_id: str) -> dict[str, Any]:
+    try:
+        return await _get_pipeline_gates_impl(pipeline_id)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_pipeline_gates failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_pipeline_gates failed")
+        return _tool_error("Failed to get pipeline gates")
+
+
+async def _get_pipeline_gates_impl(pipeline_id: str) -> dict[str, Any]:
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("get_pipeline_gates")
+    from modulo.db.crud.pipeline import get_pipeline_graph
+
+    org_id = _ctx_org_id_val()
+    pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+    if pid_err:
+        return pid_err
+    assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+    async with _session(org_id) as s:
+        owner_team_id = await _pipeline_owner_team_id(s, pid)
+        if _team_scoped_key_mismatch(owner_team_id):
+            return _team_scope_error("pipeline", pipeline_id)
+        result = await get_pipeline_graph(s, pid)
+    if result is None:
+        return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+    _nodes, edges = result
+    gates = [
+        {
+            "source_node_id": str(e.source_node_id),
+            "target_node_id": str(e.target_node_id),
+            "edge_type": e.edge_type,
+            "hitl_gate_config": dict(e.hitl_gate_config),
+        }
+        for e in edges
+        if isinstance(e.hitl_gate_config, dict)
+    ]
+    return {"pipeline_id": pipeline_id, "gates": gates, "gate_count": len(gates)}
 
 
 _TEAM_SCOPE_ERROR = object()
@@ -3595,6 +3804,8 @@ def _hitl_error_response(exc: BaseException, run_id: str, gate_id: str) -> dict[
         return {"error": "claim_token_expired", "detail": "Re-claim the gate"}
     if isinstance(exc, GateAlreadyDecidedError):
         return {"error": "already_decided", "detail": "Gate already has a final decision"}
+    if isinstance(exc, RunNotAwaitingError):
+        return {"error": "run_not_awaiting", "detail": str(exc)}
     if isinstance(exc, DecisionPayloadError):
         # FAR-541 (iteration 4): ``_decide`` refusals surface as the MCP error
         # shape (mirroring the HTTP API's 422) instead of an unhandled
@@ -3660,6 +3871,7 @@ async def _review_hitl_impl(
             ClaimTokenExpiredError,
             GateAlreadyDecidedError,
             DecisionPayloadError,
+            RunNotAwaitingError,
             ProgrammingError,
         ) as exc:
             return _hitl_error_response(exc, run_id, gate_id)
