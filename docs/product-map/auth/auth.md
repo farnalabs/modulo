@@ -5,7 +5,6 @@ adr: []
 code:
   - backend/src/modulo/api/routes/auth.py
   - backend/src/modulo/api/routes/sso.py
-  - backend/src/modulo/core/auth
   - frontend/src/views/LoginView.vue
   - frontend/src/views/AcceptInviteView.vue
   - frontend/src/views/ForceChangePasswordView.vue

@@ -4,7 +4,7 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/connectors.py
-  - backend/src/modulo/connector_hub
+  - backend/src/modulo/core/connector_hub
   - backend/src/modulo/connectors/rest
   - frontend/src/views/AdminConnectorsView.vue
 unit-tests:

@@ -18,7 +18,7 @@ bdd:
   - backend/tests/bdd/features/admin/runtime-config.feature
   - backend/tests/bdd/features/admin/housekeeping.feature
   - backend/tests/bdd/features/operations/run_retention.feature
-  - backend/tests/bdd/features/rate_limiting/rate_limiting.feature
+  - backend/tests/bdd/features/model_backends/rate_limiting.feature
 depends-on:
   - feat-system-config
 status: covered
@@ -41,7 +41,7 @@ purging old run data.
       environment variables (`admin_runtime_config.py`)
 - [x] GET/PUT `/api/v1/admin/rate-limits` returns and replaces rate-limit rules;
       mode (redis/in-memory) is reported
-      (`admin_rate_limits.py`, `rate_limiting.feature`)
+      (`admin_rate_limits.py`, `model_backends/rate_limiting.feature`)
 - [x] Housekeeping scan returns cleanup candidates grouped by category;
       cleanup deletes selected candidates; checkpoint purge reclaims DB volume
       (`backend/tests/bdd/features/admin/housekeeping.feature`)
@@ -55,7 +55,7 @@ purging old run data.
 ## Known Gaps
 
 - No BDD for rate-limit middleware integration with specific endpoint types;
-  coverage is via unit tests and the `rate_limiting.feature` BDD.
+  coverage is via unit tests and the `model_backends/rate_limiting.feature` BDD.
 
 ## QA History
 
