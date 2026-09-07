@@ -225,6 +225,14 @@ def _jsonb_canonical_key(key: str) -> tuple[int, bytes]:
     return (len(encoded), encoded)
 
 
+def _reassemble_markers(items: list[tuple[str, Any]]) -> dict[str, Any]:
+    """The flat markers dict from (attempt_key, value) items in jsonb-canonical
+    key order — the ONE reassembly site used by both the ``__final__``-row
+    assembler (:func:`_assemble`) and the fenced reader
+    (:func:`read_run_markers_fenced`), so the two can never drift apart."""
+    return dict(sorted(items, key=lambda item: _jsonb_canonical_key(item[0])))
+
+
 # Sentinel for "this side is NOT being written" — an omitted side is SQL NULL
 # on insert and untouched on conflict. Distinct from a written ``None`` VALUE
 # (explicit JSON null).
@@ -337,6 +345,8 @@ def _dialect_insert(dialect: str) -> Any:
 # migration + this sweep body, read by ops SQL only). Column set matches
 # migration 0176's DDL exactly (JSONB on Postgres via the variant, generic
 # JSON elsewhere).
+# NOTE: remove this Core table (and the sweep's quarantine legs + the
+# retention purge's delete) when the quarantine table itself drops (B2b+).
 _QUARANTINE_METADATA = MetaData()
 QUARANTINE_TABLE = Table(
     "run_node_outputs_quarantine",
@@ -415,7 +425,7 @@ def _validate_sentinel_keys(
     mapping: dict[str, Any] | None,
     *,
     kind: str,
-    attempt_keys: bool = False,
+    attempt_keys: bool,
 ) -> None:
     """Reject sentinel-namespace squatting in an incoming write.
 
@@ -425,6 +435,10 @@ def _validate_sentinel_keys(
       the grammar: ``run:<uuid>:node:__sneaky__:1`` would land on the
       reserved node-id namespace). Unparseable keys map to ``__unknown__``,
       which is the ALLOWED sentinel row (evidence preserved, FAR-188).
+
+    *attempt_keys* is a REQUIRED keyword: the derived-node-id check only has
+    meaning for marker attempt keys (outputs/telemetry keys ARE node ids), so
+    a call that forgets it is a bug, not a default.
     """
     if not mapping:
         return
@@ -845,7 +859,7 @@ def _assemble(rows: Sequence[Any]) -> tuple[RunBlobs, _AssemblyInfo]:
 
     markers: dict[str, Any] | None = None
     if marker_items:
-        markers = dict(sorted(marker_items, key=lambda item: _jsonb_canonical_key(item[0])))
+        markers = _reassemble_markers(marker_items)
 
     return RunBlobs(outputs=outputs, telemetry=telemetry, markers=markers), info
 
@@ -921,6 +935,8 @@ def _direction_aware_side(
     *,
     side: str,
     run_id: uuid.UUID,
+    legacy_tiebreak_on_equal_mismatch: bool = False,
+    meta_row_exists: bool | None = None,
 ) -> dict[str, Any] | None:
     """DIRECTION-AWARE legacy fallback decision for one blob side (qa M2/M3).
 
@@ -928,7 +944,8 @@ def _direction_aware_side(
 
     * legacy ⊆ new (incl. equal, incl. legacy empty) → serve NEW — the legacy
       column is a stale subset (kill-switch-OFF write to an already-
-      represented run is NOT shadowed; legacy is only ever behind);
+      represented run is NOT shadowed; legacy is only ever behind) — WITH the
+      qa-iteration-2 tiebreak exceptions below;
     * new ⊂ legacy (proper) → serve LEGACY — the truncation guard: the new
       table is missing rows the legacy column has (partial sweep / partial
       write), legacy is the more complete store;
@@ -936,15 +953,51 @@ def _direction_aware_side(
       is a superset; the new table is the forward-looking authority and the
       divergence is reported for remediation);
     * legacy empty + new non-empty → serve NEW (the existing truncation-hole
-      guard: an empty legacy column carries no truth to fall back to).
+      guard: an empty legacy column carries no truth to fall back to) —
+      EXCEPT the shrink case below.
+
+    Tiebreak (qa iteration 2, Major 1 — *legacy_tiebreak_on_equal_mismatch*):
+    EQUAL key sets with DIVERGENT values while the kill-switch is OFF can only
+    come from a legacy-only value rewrite (e.g. ``delivery_done=true`` stamped
+    on an existing attempt key) or corruption — value inequality means the
+    legacy column moved AFTER the new table was fed, so LEGACY is the fresher
+    store and is served. Callers that read the kill-switch (the node_runner
+    gate + connector readers) pass ``not is_dual_write_enabled()``; general
+    readers (UI/analytics) keep the default ``False`` — they tolerate ≤1
+    sweep interval of staleness and the B2b repair is the backstop.
+
+    Shrink case (qa iteration 2, Major 1 — *meta_row_exists* is not None):
+    when the metadata row is ABSENT (``False``) and the LEGACY side is exactly
+    ``{}`` while the new side is non-empty → serve LEGACY. ``meta-absent +
+    legacy-'{}'`` can only arise from a POST-representation legacy-only write:
+    a backfill over legacy ``{}`` would have written the metadata row, so a
+    represented run whose legacy side reads ``{}`` with no metadata row had
+    its legacy column rewritten afterwards — legacy is fresher. Only ever
+    passed for the outputs/telemetry sides (markers have no metadata row).
 
     Empty-legacy + new empty → equal sets → serve NEW (both carry nothing).
     """
     legacy_keys = set(legacy_value) if legacy_value else set()
     new_keys = set(new_value) if new_value is not None else set()
     if not legacy_keys:
+        if meta_row_exists is False and legacy_value == {} and new_keys:
+            _log.info(
+                "run_node_outputs fallback: %s served from the legacy column (metadata row absent "
+                "with a legacy-'{}' rewrite — post-representation legacy-only write) run=%s",
+                side,
+                run_id,
+            )
+            return legacy_value
         return new_value
     if legacy_keys <= new_keys:
+        if legacy_tiebreak_on_equal_mismatch and legacy_keys == new_keys and legacy_value != new_value:
+            _log.info(
+                "run_node_outputs fallback: %s served from the legacy column (equal key sets, "
+                "divergent values — kill-switch-OFF legacy-only rewrite) run=%s",
+                side,
+                run_id,
+            )
+            return legacy_value
         return new_value
     if new_keys < legacy_keys:
         _log.info(
@@ -969,6 +1022,7 @@ async def read_run_blobs_with_fallback(
     *,
     run_id: uuid.UUID,
     organisation_id: uuid.UUID | None = None,
+    legacy_tiebreak_on_equal_mismatch: bool = False,
 ) -> RunBlobs:
     """Reassemble with the DIRECTION-AWARE legacy fallback applied (qa M2/M3).
 
@@ -981,6 +1035,14 @@ async def read_run_blobs_with_fallback(
     kill-switch-OFF legacy-only write to an already-represented run is NOT
     shadowed forever), new ⊂ legacy serves LEGACY (truncation guard), a
     divergent key set serves NEW with a warning.
+
+    *legacy_tiebreak_on_equal_mismatch* (qa iteration 2, Major 1): when True
+    (the kill-switch-OFF readers), EQUAL key sets with DIVERGENT values
+    tiebreak to LEGACY — see :func:`_direction_aware_side`. Default False:
+    UI/analytics readers tolerate ≤1 sweep interval and keep the new table
+    authoritative. The shrink blind spot (metadata row absent + legacy ``{}``
+    + new non-empty → LEGACY) is applied UNCONDITIONALLY for the
+    outputs/telemetry sides — it is deterministic, not switch-dependent.
 
     (When the metadata row exists, the backfill/writer invariants guarantee
     the reassembled value already matches the legacy column, including the
@@ -999,18 +1061,40 @@ async def read_run_blobs_with_fallback(
 
     # No new-table representation for a side -> serve the legacy column
     # verbatim (pre-sweep stragglers / kill-switch-off mode); a represented
-    # side goes through the subset-direction rule.
+    # side goes through the subset-direction rule. meta_exists drives the
+    # shrink blind spot (outputs/telemetry only — markers have no metadata
+    # row, so the marker call passes None).
     outputs = legacy.outputs
     telemetry = legacy.telemetry
     if info.out_present or info.meta_exists:
-        outputs = _direction_aware_side(blobs.outputs, legacy.outputs, side="outputs", run_id=run_id)
+        outputs = _direction_aware_side(
+            blobs.outputs,
+            legacy.outputs,
+            side="outputs",
+            run_id=run_id,
+            legacy_tiebreak_on_equal_mismatch=legacy_tiebreak_on_equal_mismatch,
+            meta_row_exists=info.meta_exists,
+        )
     if info.telemetry_present or info.meta_exists:
-        telemetry = _direction_aware_side(blobs.telemetry, legacy.telemetry, side="telemetry", run_id=run_id)
+        telemetry = _direction_aware_side(
+            blobs.telemetry,
+            legacy.telemetry,
+            side="telemetry",
+            run_id=run_id,
+            legacy_tiebreak_on_equal_mismatch=legacy_tiebreak_on_equal_mismatch,
+            meta_row_exists=info.meta_exists,
+        )
 
     if not info.markers_present:
         markers = legacy.markers
     else:
-        markers = _direction_aware_side(blobs.markers, legacy.markers, side="markers", run_id=run_id)
+        markers = _direction_aware_side(
+            blobs.markers,
+            legacy.markers,
+            side="markers",
+            run_id=run_id,
+            legacy_tiebreak_on_equal_mismatch=legacy_tiebreak_on_equal_mismatch,
+        )
 
     return RunBlobs(outputs=outputs, telemetry=telemetry, markers=markers)
 
@@ -1021,7 +1105,7 @@ async def read_run_outputs_with_fallback(
     run_id: uuid.UUID,
     organisation_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    """The reassembled outputs dict (legacy shape) with the empty-fallback."""
+    """The reassembled outputs dict (legacy shape), direction-aware legacy fallback."""
     return (await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=organisation_id)).outputs
 
 
@@ -1031,7 +1115,7 @@ async def read_run_telemetry_with_fallback(
     run_id: uuid.UUID,
     organisation_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    """The reassembled telemetry dict (legacy shape) with the empty-fallback."""
+    """The reassembled telemetry dict (legacy shape), direction-aware legacy fallback."""
     return (await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=organisation_id)).telemetry
 
 
@@ -1041,7 +1125,7 @@ async def read_run_markers_with_fallback(
     run_id: uuid.UUID,
     organisation_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    """The reassembled flat markers dict with the MISMATCH fallback."""
+    """The reassembled flat markers dict, direction-aware legacy fallback."""
     return (await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=organisation_id)).markers
 
 
@@ -1056,6 +1140,7 @@ async def read_run_markers_fenced(
     claim_token: str | None,
     for_update: bool = False,
     fence_status: bool = True,
+    legacy_tiebreak_on_equal_mismatch: bool = False,
 ) -> dict[str, Any] | None:
     """Fenced, single-statement markers read (qa M4/M5).
 
@@ -1090,6 +1175,13 @@ async def read_run_markers_fenced(
     fallback read therefore re-checks the fence by construction (a fence-miss
     can never serve legacy markers either). Reassembly uses the same
     subset-direction rule as :func:`read_run_blobs_with_fallback`.
+
+    *legacy_tiebreak_on_equal_mismatch* (qa iteration 2, Major 1): when True
+    (the kill-switch-OFF gate/connector readers), EQUAL key sets with
+    DIVERGENT values tiebreak to LEGACY — a kill-switch-OFF ``delivery_done``
+    rewrite on an existing attempt key is otherwise served from a stale
+    new-table row and the connector write duplicates. Default False
+    (UI/analytics tolerate ≤1 sweep interval; B2b repair is the backstop).
 
     ``claim_token=None`` skips the token predicate (the ``:tok IS NULL OR
     claim_token = :tok`` fence idiom) — a caller that fences by other means
@@ -1131,8 +1223,14 @@ async def read_run_markers_fenced(
     marker_items = [(row[1], row[2]) for row in joined if row[1] is not None]
     if not marker_items:
         return legacy
-    reassembled: dict[str, Any] | None = dict(sorted(marker_items, key=lambda item: _jsonb_canonical_key(item[0])))
-    return _direction_aware_side(reassembled, legacy, side="markers", run_id=run_id)
+    reassembled: dict[str, Any] | None = _reassemble_markers(marker_items)
+    return _direction_aware_side(
+        reassembled,
+        legacy,
+        side="markers",
+        run_id=run_id,
+        legacy_tiebreak_on_equal_mismatch=legacy_tiebreak_on_equal_mismatch,
+    )
 
 
 async def read_node_output_blob_bytes(

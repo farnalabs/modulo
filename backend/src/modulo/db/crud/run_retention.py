@@ -50,7 +50,7 @@ from sqlalchemy import bindparam, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run_node_outputs import (
-    QUARANTINE_TABLE,
+    QUARANTINE_TABLE,  # NOTE: remove when the quarantine table drops (B2b+)
     RunBlobs,
     read_node_output_blob_bytes,
     read_run_blobs_with_fallback,
@@ -755,15 +755,21 @@ async def _delete_quarantine_rows(session: AsyncSession, run_ids: list[Any]) -> 
 
     The quarantine table deliberately has NO foreign key to ``runs``
     (migration 0190), so purged runs leave their quarantined blob copies
-    orphaned forever unless the purge deletes them explicitly. It is also an
-    ops/remediation surface with no app-role grant on Postgres (default
-    REVOKE) and no ORM mapping, so the delete mirrors the
-    :func:`_delete_checkpoints` best-effort pattern rather than the hard
-    ``_delete_run_id_rows`` one: it runs in its OWN savepoint, and a
-    privilege / missing-table failure is logged and swallowed — the run purge
-    must never abort because the evidence copy could not be reclaimed. The
-    run_ids come from the org-scoped terminal batch, so the delete cannot
-    leak across orgs regardless of the table's missing RLS policy.
+    orphaned forever unless the purge deletes them explicitly. Its privileges
+    are explicit on Postgres (qa iteration 2, Major 5 — migration 0190 grants
+    ``SELECT, DELETE`` to ``modulo_app``, the role this purge runs on via the
+    admin run-retention route; ``SELECT, INSERT, DELETE`` to the system role
+    the catch-up sweep runs on) and it has no ORM mapping, so the delete
+    still mirrors the :func:`_delete_checkpoints` best-effort pattern rather
+    than the hard ``_delete_run_id_rows`` one: it runs in its OWN savepoint,
+    and a missing-table / ungranted-env failure is logged and swallowed —
+    the run purge must never abort because the evidence copy could not be
+    reclaimed. The run_ids come from the org-scoped terminal batch, so the
+    delete cannot leak across orgs regardless of the table's missing RLS
+    policy.
+
+    NOTE: remove this helper (and the ``QUARANTINE_TABLE`` import) when the
+    quarantine table itself drops (B2b+).
     """
 
     if not run_ids:

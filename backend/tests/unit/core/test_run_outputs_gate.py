@@ -370,10 +370,14 @@ class TestGateReadUsesFencedReader:
             fenced_calls.append(kwargs)
             return {"run:x:node:n1:1": {"delivery_done": True}}
 
+        async def _switch_on() -> bool:
+            return True
+
         session = _CountingSession()
         with (
             patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
             patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on),
             patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers = await _read_run_raw_output_markers_for_gate(
@@ -385,7 +389,13 @@ class TestGateReadUsesFencedReader:
             )
         assert not session.execute_calls, "the gate read must not issue a statement outside the repo reader"
         assert fenced_calls == [
-            {"run_id": _RUN_ID, "organisation_id": _ORG, "claim_token": "tok-1", "for_update": False}
+            {
+                "run_id": _RUN_ID,
+                "organisation_id": _ORG,
+                "claim_token": "tok-1",
+                "for_update": False,
+                "legacy_tiebreak_on_equal_mismatch": False,
+            }
         ]
         assert markers is not None
         assert "run:x:node:n1:1" in markers
@@ -395,10 +405,14 @@ class TestGateReadUsesFencedReader:
         async def _fenced(session: Any, **kwargs: Any) -> None:
             return None
 
+        async def _switch_on() -> bool:
+            return True
+
         session = _CountingSession()
         with (
             patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
             patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on),
             patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers = await _read_run_raw_output_markers_for_gate(
@@ -421,10 +435,14 @@ class TestGateReadUsesFencedReader:
             fenced_calls.append(kwargs)
             return {"run:x:node:n1:connector": {"delivery_done": True}}
 
+        async def _switch_on() -> bool:
+            return True
+
         session = _CountingSession(rows=[("run-row-id", "key-1")])
         with (
             patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
             patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on),
             patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers, persisted_key = await _read_connector_idempotency_gate_state(
@@ -441,6 +459,7 @@ class TestGateReadUsesFencedReader:
                 "claim_token": None,
                 "for_update": True,
                 "fence_status": False,
+                "legacy_tiebreak_on_equal_mismatch": False,
             }
         ], (
             "the connector read must fence by other means (no claim token) WITH the row lock, "
@@ -449,6 +468,37 @@ class TestGateReadUsesFencedReader:
         assert markers is not None
         assert "run:x:node:n1:connector" in markers
         assert len(session.execute_calls) == 1, "only the idempotency-key SELECT remains outside the repo"
+
+    @pytest.mark.asyncio
+    async def test_gate_read_tiebreaks_to_legacy_when_switch_off(self) -> None:
+        """qa iteration 2 (Major 1): with the kill-switch OFF the gate readers
+        pass ``legacy_tiebreak_on_equal_mismatch=True`` — an equal-key-set
+        delivery_done rewrite in the legacy column must be served, not
+        masked by a stale new-table row."""
+
+        async def _switch_off() -> bool:
+            return False
+
+        async def _fenced(session: Any, **kwargs: Any) -> dict[str, Any] | None:
+            captured.update(kwargs)
+            return None
+
+        captured: dict[str, Any] = {}
+        session = _CountingSession()
+        with (
+            patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
+            patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_off),
+            patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
+        ):
+            await _read_run_raw_output_markers_for_gate(
+                lambda: session,
+                run_id=str(_RUN_ID),
+                org_id_raw=str(_ORG),
+                claim_lease="tok-1",
+                node_id="n1",
+            )
+        assert captured["legacy_tiebreak_on_equal_mismatch"] is True
 
 
 class TestFenceStatusVisibilityDuringCancel:
@@ -687,3 +737,78 @@ class TestRecoveryClaimTokenFence:
         ):
             await orchestrate_dual_write_failure(exc)
         assert mark.await_args.kwargs["claim_token"] == "tok-owner"
+
+
+class TestRecoveryInheritedSentinelKeys:
+    """qa iteration 2 (Major 4): the recovery chokepoint passes the
+    PRE-mutation legacy dicts as *inherited_outputs* / *inherited_telemetry*
+    (mirroring the ORM path) — pre-0176 inherited ``__``-prefixed keys are
+    FILTERED from the new-table leg, never wedging the node's recovery."""
+
+    @pytest.mark.asyncio
+    async def test_inherited_kwargs_carry_the_pre_mutation_dicts(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from modulo.core.pipeline_engine.recovery import _apply_recovery_markers
+
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+        captured: dict[str, Any] = {}
+
+        async def _capturing_dual_write(session: Any, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        with patch("modulo.db.crud.run.dual_write_run_node_outputs", _capturing_dual_write):
+            async with sqlite_sessionmaker() as session, session.begin():
+                loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+                await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
+        assert "__sneaky__" not in (captured["inherited_outputs"] or {}), "no pre-mutation capture, no filter"
+        # (The seeded run carries no sentinel keys — the capture mirrors them.)
+        assert captured["inherited_outputs"] is not None
+        assert not captured["inherited_outputs"]
+        assert captured["inherited_telemetry"] is not None
+        assert not captured["inherited_telemetry"]
+        # The post-mutation payloads still carry the recovery marker.
+        assert captured["outputs"]["n1"] == {"recovered": True}
+
+    @pytest.mark.asyncio
+    async def test_recovery_on_an_inherited_sentinel_run_is_filtered_not_failed(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """End-to-end through the REAL chokepoint: a run whose legacy blobs
+        carry a pre-0176 ``__sneaky__`` key recovers successfully — the
+        sentinel is filtered from the new-table leg (kept on the legacy
+        column) and counted, instead of raising
+        :class:`OutputsSentinelViolation` and wedging the recovery."""
+        from modulo.core.pipeline_engine.recovery import _apply_recovery_markers
+
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+        async with sqlite_sessionmaker() as session, session.begin():
+            loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+            # Pre-0176 inherited junk in the legacy blobs:
+            loaded.outputs_json = {"__sneaky__": {"v": 0}, "a": {"v": 1}}
+            loaded.node_telemetry_json = {"a": {"ms": 1}}
+            await session.flush()
+            await set_rls_org(session, _ORG)
+            with (
+                patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", new=AsyncMock(return_value=True)),
+                patch(
+                    "modulo.core.run_outputs_dualwrite.bump_dual_write_counter",
+                    new_callable=AsyncMock,
+                ) as bump,
+            ):
+                # MUST NOT raise OutputsSentinelViolation — the M19 wedge this
+                # fix removes from the recovery path.
+                await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
+        bumps = [(call.args[0], call.args[1]) for call in bump.await_args_list]
+        assert ("outputs_dual_write_sentinel_filtered", 1) in bumps
+        async with sqlite_sessionmaker() as check, check.begin():
+            rows = (await check.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run_id))).scalars().all()
+        final_nodes = {row.node_id for row in rows if row.attempt_key == "__final__"}
+        assert "__sneaky__" not in final_nodes, "the sentinel is filtered from the new-table leg"
+        assert "a" in final_nodes
+        assert "n1" in final_nodes
+        # The legacy column (the caller's write) retains the inherited key.
+        run = await _load_run(sqlite_sessionmaker, run_id)
+        assert "__sneaky__" in run.outputs_json

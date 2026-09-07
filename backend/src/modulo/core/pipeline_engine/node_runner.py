@@ -108,6 +108,7 @@ from modulo.core.run_context.autonomy import (
 from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
 from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
+from modulo.db.sqlstates import MARKER_TXN_ABORTING_SQLSTATES
 
 _log = logging.getLogger(__name__)
 
@@ -1232,13 +1233,10 @@ async def _persist_raw_output_marker(
 # transaction rolls back), so the "legacy survives, sweep heals" claim is
 # false — the failure logs ``legacy_marker_also_lost``.
 #
-# qa Minor 7 rider: this set stays LOCAL to node_runner for now — it
-# consolidates into the shared SQLSTATE classification module at B1 (alongside
-# ``crud.run._DUAL_WRITE_RETRYABLE_SQLSTATES``); do not grow it ad hoc beyond
-# completing the txn-aborting vocabulary.
-_MARKER_TXN_ABORTING_SQLSTATES = frozenset(
-    {"40P01", "57P01", "57P02", "08000", "08001", "08003", "08004", "08006", "08007"}
-)
+# qa iteration 2 (Major 2): hoisted to the shared leaf
+# :mod:`modulo.db.sqlstates` (alongside ``crud.run``'s retryable set); the
+# name below keeps the module-local read sites unchanged.
+_MARKER_TXN_ABORTING_SQLSTATES = MARKER_TXN_ABORTING_SQLSTATES
 
 
 async def _write_raw_output_marker(
@@ -1325,10 +1323,14 @@ async def _write_raw_output_marker(
             # FAR-583: post-merge marker row into run_node_outputs inside a
             # SAVEPOINT. The MERGED dict is stored (prior pr_url preserved,
             # delivery_done monotone) — one row per attempt key, delete-absent.
-            # Savepoint failure rolls back ONLY the new-table insert; the
-            # legacy write above still commits. Log + counter, never raise
+            # A savepoint-SCOPED failure rolls back ONLY the new-table insert;
+            # the legacy write above still commits. Log + counter, never raise
             # (the persist's never-raise contract is preserved); the sweep +
-            # the 0177 repair heal the missing row.
+            # the 0177 repair heal the missing row. THE EXCEPTION is a
+            # transaction-aborting failure (deadlock / shutdown / connection
+            # loss, classified below): that poisons the WHOLE transaction, so
+            # the legacy write is rolled back too — claimed loudly as
+            # ``legacy_marker_also_lost``.
             #
             # qa M7: the new-table leg is KILL-SWITCH-GATED like every other
             # chokepoint — with the switch OFF the write is legacy-only (the
@@ -1368,9 +1370,13 @@ async def _write_raw_output_marker(
                     from sqlalchemy.exc import SQLAlchemyError
 
                     from modulo.core.run_outputs_dualwrite import note_dual_write_marker_failure
-                    from modulo.db.crud.run import _sqlstate_of
+                    from modulo.db.sqlstates import sqlstate_of
 
-                    sqlstate = _sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+                    # qa Major 2: sqlstate_of walks __context__, so the
+                    # savepoint's 25P02 rollback-wrapper failure (raised by the
+                    # __aexit__ of an already-aborted savepoint) does NOT mask
+                    # the ORIGINAL transaction-aborting state (40P01 etc.).
+                    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
                     if sqlstate in _MARKER_TXN_ABORTING_SQLSTATES:
                         # qa rider f: a transaction-aborting failure (deadlock,
                         # admin shutdown, connection loss) poisons the WHOLE
@@ -1547,6 +1553,7 @@ async def _read_run_raw_output_markers_for_gate(
         org_uuid = None
     if org_uuid is None:
         return None
+    from modulo.core.run_outputs_dualwrite import is_dual_write_enabled
     from modulo.db.crud.run_node_outputs import read_run_markers_fenced
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
@@ -1557,12 +1564,21 @@ async def _read_run_raw_output_markers_for_gate(
             # Storage re-point (FAR-583 qa M4/M5): ONE fenced statement — the
             # run-row predicate SELECT above is gone; the fence lives inside
             # the repo reader.
+            #
+            # qa iteration 2 (Major 1): with the kill-switch OFF, EQUAL key
+            # sets with DIVERGENT values can only be a legacy-only rewrite (or
+            # corruption) — the legacy column is fresher, so the gate's
+            # delivery_done suppression must tiebreak to LEGACY or a
+            # kill-switch-OFF delivery_done rewrite is missed and the
+            # connector write duplicates. Switch ON → no tiebreak (the
+            # forward-looking new table governs).
             return await read_run_markers_fenced(
                 session,
                 run_id=uuid.UUID(run_id),
                 organisation_id=org_uuid,
                 claim_token=claim_lease,
                 for_update=False,
+                legacy_tiebreak_on_equal_mismatch=not await is_dual_write_enabled(),
             )
 
     try:
@@ -1636,6 +1652,7 @@ async def _read_connector_idempotency_gate_state(
         return None, None
     from sqlalchemy import text as _sql_text
 
+    from modulo.core.run_outputs_dualwrite import is_dual_write_enabled
     from modulo.db.crud.run_node_outputs import read_run_markers_fenced
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
@@ -1665,6 +1682,9 @@ async def _read_connector_idempotency_gate_state(
             # Marker VALUES reassemble via the repo's SINGLE fenced
             # markers-scoped reader, on the SAME locked transaction so the
             # gate decision cannot read past an in-progress concurrent stamp.
+            # qa iteration 2 (Major 1): kill-switch-OFF equal-key-set value
+            # rewrites tiebreak to LEGACY (delivery_done suppression must not
+            # miss a legacy-only rewrite) — see the gate reader above.
             markers_dict = await read_run_markers_fenced(
                 session,
                 run_id=uuid.UUID(run_id),
@@ -1672,6 +1692,7 @@ async def _read_connector_idempotency_gate_state(
                 claim_token=None,
                 for_update=True,
                 fence_status=False,
+                legacy_tiebreak_on_equal_mismatch=not await is_dual_write_enabled(),
             )
             persisted_key = row[1]
             return markers_dict, (str(persisted_key) if persisted_key else None)

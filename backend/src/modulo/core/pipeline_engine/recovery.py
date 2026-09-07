@@ -276,9 +276,22 @@ async def _apply_recovery_markers(
     ``update_run_status``'s branches. Requires an active transaction on
     *session* (the caller's); a :class:`DualWriteError` propagates to
     :func:`recover_node`'s guard for the catch/orchestrate contract.
+
+    qa iteration 2 (Major 4): the PRE-mutation dicts are captured and passed
+    as *inherited_outputs* / *inherited_telemetry* (mirroring the ORM path in
+    ``crud.run``) — without them, pre-0176 legacy data carrying
+    ``__``-prefixed sentinel keys (inherited junk) would make the REPLACE
+    raise :class:`OutputsSentinelViolation` and wedge the node's recovery
+    permanently (the exact wedge the M19 fix removed from the other
+    chokepoints).
     """
     outputs = dict(run.outputs_json) if run.outputs_json else {}
     telemetry = dict(run.node_telemetry_json) if run.node_telemetry_json else {}
+
+    # qa Major 4: capture PRE-mutation state for the inherited-sentinel
+    # filter (the dual-write compares against exactly these dicts).
+    inherited_outputs = dict(outputs)
+    inherited_telemetry = dict(telemetry)
 
     if input_data is not None:
         outputs[node_id] = input_data
@@ -304,6 +317,8 @@ async def _apply_recovery_markers(
         telemetry=telemetry,
         claim_token=run.claim_token,
         origin="recovery.apply_recovery_markers",
+        inherited_outputs=inherited_outputs,
+        inherited_telemetry=inherited_telemetry,
     )
 
 

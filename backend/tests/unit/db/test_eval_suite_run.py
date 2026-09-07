@@ -791,9 +791,13 @@ def test_single_migration_head() -> None:
     # mid-chain (0155 -> 0175 -> 0156).
     chaining_off_0189 = [p for p in revisions if parents[p] == "0189_agent_runner_bindings"]
     assert [_basename(p) for p in chaining_off_0189] == ["0190_run_node_outputs.py"]
-    # Nothing chains off 0190 -> it is the single head.
+    # 0191_run_node_outputs_sweep_index (FAR-583 qa iteration 2, the sweep's
+    # partial index) chains off 0190 and is the single head.
     chaining_off_0190 = [p for p in revisions if parents[p] == "0190_run_node_outputs"]
-    assert chaining_off_0190 == []
+    assert [_basename(p) for p in chaining_off_0190] == ["0191_run_node_outputs_sweep_index.py"]
+    # Nothing chains off 0191 -> it is the single head.
+    chaining_off_0191 = [p for p in revisions if parents[p] == "0191_run_node_outputs_sweep_index"]
+    assert chaining_off_0191 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

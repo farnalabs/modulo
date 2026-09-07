@@ -531,6 +531,101 @@ class TestDirectionAwareFallback:
         _assert_bytes_round_trip(blobs.telemetry, {"a": {"ms": 1}, "b": {"ms": 2}, "c": {"ms": 3}})
 
 
+class TestEqualKeysValueTiebreak:
+    """qa iteration 2 (Major 1): EQUAL key sets with DIVERGENT values — the
+    old ``legacy ⊆ new`` rule served NEW blind to the rewrite. With the
+    kill-switch OFF a value rewrite on an existing key set can only be a
+    legacy-only write (legacy is fresher) → tiebreak to LEGACY; with the
+    switch ON the new table stays authoritative (documented posture)."""
+
+    async def test_tiebreak_on_serves_legacy_on_equal_key_sets(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, outputs={"a": {"v": 0}, "b": {"v": 0}})
+        await _replace(session, run, outputs={"a": {"v": 1}, "b": {"v": 1}}, telemetry=None)
+        # Kill-switch-OFF legacy-only value REWRITE: same keys, new values.
+        await _set_legacy_blobs(session, run, outputs={"a": {"v": 9}, "b": {"v": 9}})
+        async with session.begin():
+            blobs = await read_run_blobs_with_fallback(
+                session, run_id=run.id, organisation_id=run.organisation_id, legacy_tiebreak_on_equal_mismatch=True
+            )
+        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 9}, "b": {"v": 9}})
+
+    async def test_tiebreak_off_keeps_new_authoritative(self, session: AsyncSession) -> None:
+        """The documented general-reader posture: equal key sets with
+        divergent values serve NEW (UI/analytics tolerate ≤1 sweep interval;
+        B2b repair is the backstop)."""
+        run = await _seed_run(session, outputs={"a": {"v": 0}})
+        await _replace(session, run, outputs={"a": {"v": 1}}, telemetry=None)
+        await _set_legacy_blobs(session, run, outputs={"a": {"v": 9}})
+        blobs = await _read_blobs(session, run)
+        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}})
+
+    async def test_fenced_markers_reader_tiebreak_serves_legacy(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, status="running", claim_token="tok-1", markers={"k1": {"raw": "old"}})
+        await _write_markers(session, run, {"k1": {"raw": "old"}})
+        # Kill-switch-OFF legacy-only rewrite: same attempt key, delivery_done stamped.
+        await _set_legacy_blobs(session, run, markers={"k1": {"delivery_done": True}})
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            served = await read_run_markers_fenced(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                claim_token="tok-1",
+                legacy_tiebreak_on_equal_mismatch=True,
+            )
+        assert served == {"k1": {"delivery_done": True}}
+
+    async def test_identical_values_still_serve_new_under_tiebreak(self, session: AsyncSession) -> None:
+        """Equal key sets with EQUAL values (the steady dual-written state) do
+        NOT flip to legacy — the tiebreak fires on value DIVERGENCE only."""
+        run = await _seed_run(session, outputs={"a": {"v": 1}})
+        await _replace(session, run, outputs={"a": {"v": 1}}, telemetry=None)
+        await _set_legacy_blobs(session, run, outputs={"a": {"v": 1}})
+        async with session.begin():
+            blobs = await read_run_blobs_with_fallback(
+                session, run_id=run.id, organisation_id=run.organisation_id, legacy_tiebreak_on_equal_mismatch=True
+            )
+        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}})
+
+
+class TestShrinkBlindSpot:
+    """qa iteration 2 (Major 1): metadata row ABSENT + legacy exactly ``{}`` +
+    new non-empty → serve LEGACY. ``meta-absent + legacy-'{}'`` can only be a
+    POST-representation legacy-only rewrite (a backfill over legacy ``{}``
+    writes the metadata row), so legacy is fresher. Deterministic — NOT
+    switch-gated. Markers are exempt (no metadata row encodes empty markers)."""
+
+    async def test_meta_absent_legacy_empty_shrink_serves_legacy(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, outputs={"a": {"v": 0}})
+        await _replace(session, run, outputs={"a": {"v": 1}, "b": {"v": 2}}, telemetry=None)
+        # Post-representation legacy-only rewrite to {} — no metadata row was
+        # written (the REPLACE that represented the run saw a populated dict).
+        await _set_legacy_blobs(session, run, outputs={})
+        blobs = await _read_blobs(session, run)
+        assert blobs.outputs is not None
+        assert not blobs.outputs
+
+    async def test_legacy_null_still_serves_new(self, session: AsyncSession) -> None:
+        """The blind spot is about the EXPLICIT ``{}``: a legacy NULL (side
+        absent) keeps serving NEW — the truncation-hole guard."""
+        run = await _seed_run(session, outputs={"a": {"v": 0}})
+        await _replace(session, run, outputs={"a": {"v": 1}, "b": {"v": 2}}, telemetry=None)
+        await _set_legacy_blobs(session, run, outputs=None)
+        blobs = await _read_blobs(session, run)
+        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}, "b": {"v": 2}})
+
+    async def test_meta_present_legacy_empty_serves_new(self, session: AsyncSession) -> None:
+        """With the metadata row PRESENT the legacy ``{}`` is already
+        represented (the flags preserve it) — the shrink case must NOT fire;
+        a represented ``{}`` side serves NEW."""
+        run = await _seed_run(session, outputs={}, telemetry={"a": {"ms": 1}})
+        await _replace(session, run, outputs={}, telemetry={"a": {"ms": 1}, "b": {"ms": 2}})
+        blobs = await _read_blobs(session, run)
+        assert blobs.outputs is not None
+        assert not blobs.outputs
+        _assert_bytes_round_trip(blobs.telemetry, {"a": {"ms": 1}, "b": {"ms": 2}})
+
+
 class TestFencedMarkersReader:
     """qa M4/M5: ONE fenced statement (runs row under the fence predicates,
     LEFT-JOINed to the marker rows) reassembling flat, with the same

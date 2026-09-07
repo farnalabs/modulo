@@ -47,6 +47,7 @@ from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from modulo.core.run_outputs_dualwrite import DUAL_WRITE_COUNTERS
 
 # FAR-190 streak engine lives in its own module (extracted so cron_helpers can
 # stay focused on scheduling). Re-exported here for the dispatcher_reconcile
@@ -268,14 +269,17 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # wholesale rewrite every 60s), and the tick READS them into the summary
     # at tick end (see _overlay_dual_write_counters). The sweep_* keys are
     # populated by the catch-up sweep leg wired into _reconcile_org (pass 2b).
-    "outputs_dual_write_failed": 0,
-    "outputs_dual_write_retries": 0,
-    "outputs_dual_write_degraded": 0,
-    "outputs_dual_write_sentinel_filtered": 0,
-    "outputs_dual_write_skipped_no_org": 0,
     "outputs_sweep_healed": 0,
     "outputs_sweep_org_failed": 0,
 }
+
+# The dual_write_* counter vocabulary is IMPORTED (qa iteration 2, rider 11):
+# one source of truth — core.run_outputs_dualwrite.DUAL_WRITE_COUNTERS —
+# drives the defaults here, the stats setter, and the tick-summary defaults
+# below; a new counter cannot be added on one side and missed on the other.
+for _dual_write_counter in DUAL_WRITE_COUNTERS:
+    _dispatcher_reconcile_stats[_dual_write_counter] = 0
+del _dual_write_counter
 
 
 def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
@@ -312,13 +316,11 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     # own or reset them). outputs_sweep_failed is DEAD —
     # backfill_run_node_outputs_batch never returns a ``runs_failed`` key, so
     # the field was always 0; outputs_sweep_org_failed is the failure channel.
-    _dispatcher_reconcile_stats["outputs_dual_write_failed"] = stats.get("outputs_dual_write_failed", 0)
-    _dispatcher_reconcile_stats["outputs_dual_write_retries"] = stats.get("outputs_dual_write_retries", 0)
-    _dispatcher_reconcile_stats["outputs_dual_write_degraded"] = stats.get("outputs_dual_write_degraded", 0)
-    _dispatcher_reconcile_stats["outputs_dual_write_sentinel_filtered"] = stats.get(
-        "outputs_dual_write_sentinel_filtered", 0
-    )
-    _dispatcher_reconcile_stats["outputs_dual_write_skipped_no_org"] = stats.get("outputs_dual_write_skipped_no_org", 0)
+    # qa iteration 2 (rider 11): the dual_write_* vocabulary loops the
+    # IMPORTED DUAL_WRITE_COUNTERS (one source of truth with the defaults
+    # above and the tick summary below).
+    for _dual_write_counter in DUAL_WRITE_COUNTERS:
+        _dispatcher_reconcile_stats[_dual_write_counter] = stats.get(_dual_write_counter, 0)
     _dispatcher_reconcile_stats["outputs_sweep_healed"] = stats.get("outputs_sweep_healed", 0)
     _dispatcher_reconcile_stats["outputs_sweep_org_failed"] = stats.get("outputs_sweep_org_failed", 0)
 
@@ -4879,7 +4881,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
 
 
 def _dispatcher_summary() -> dict[str, Any]:
-    return {
+    summary: dict[str, Any] = {
         "scanned": 0,
         "repaired": 0,
         "skipped": 0,
@@ -4912,14 +4914,14 @@ def _dispatcher_summary() -> dict[str, Any]:
         # them. The sweep keys ARE tick-owned (bumped per org by the sweep leg
         # inside _reconcile_org); outputs_sweep_failed is dead (the batch
         # helper never returned ``runs_failed``) and is gone.
-        "outputs_dual_write_failed": 0,
-        "outputs_dual_write_retries": 0,
-        "outputs_dual_write_degraded": 0,
-        "outputs_dual_write_sentinel_filtered": 0,
-        "outputs_dual_write_skipped_no_org": 0,
+        # qa iteration 2 (rider 11): the dual_write_* defaults loop the
+        # IMPORTED DUAL_WRITE_COUNTERS (one vocabulary with the stats dict
+        # and the setter above).
         "outputs_sweep_healed": 0,
         "outputs_sweep_org_failed": 0,
     }
+    summary.update(dict.fromkeys(DUAL_WRITE_COUNTERS, 0))
+    return summary
 
 
 # Per-org, per-tick cap on runs the FAR-583 catch-up sweep backfills. Bounds
@@ -4956,10 +4958,16 @@ async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any])
     """FAR-583 catch-up sweep for ONE org (own session/transaction).
 
     Drains the org's un-healed TERMINAL runs into ``run_node_outputs`` by
-    calling the repo module's batched backfill helper in a drain loop: each
-    iteration backfills up to *remaining* runs and advances the high-water
-    mark to the batch's max ``completed_at`` until either the selection is
-    exhausted or the per-tick cap is consumed.
+    calling the repo module's batched backfill helper in a drain loop. The
+    selection is TRIGGER-driven, not cursor-driven (qa iteration 2 — reworded
+    to match the repo helper): the batch helper's SQL-side NOT-EXISTS trigger
+    legs pick every run still lacking its new-table representation, with NO
+    high-water filtering of the completed_at range — *high_water* /
+    ``new_high_water`` are carried only as a NO-PROGRESS SAFETY BREAK (the
+    drain loop stops when the mark cannot advance, which would otherwise
+    re-select the same rows forever) plus observability. Each iteration
+    backfills up to *remaining* runs until either the trigger selection is
+    exhausted (a not-full batch) or the per-tick cap is consumed.
 
     Isolation contract (design §CATCH-UP SWEEP): the sweep runs in its OWN
     session/transaction — never the outer reconcile transaction — so a sweep

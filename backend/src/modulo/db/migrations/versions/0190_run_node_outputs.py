@@ -42,11 +42,20 @@ then ``SET ROLE modulo_migrate`` around ``op.create_table``, then ``RESET
 ROLE``, then the role-conditional ownership assertion (the owner must be
 ``modulo_migrate`` — the app role must NOT own an RLS-FORCED table). The
 ``organisation_id`` index is created AFTER ``RESET ROLE``. The ceremony is
-conditional on the roles existing (fresh dev/BDD DBs have none). The
-quarantine side table is created by the CALLER (an ops/remediation table,
-deliberately not owned by the migrate role, with no app-role grant — the
-default REVOKE keeps ``modulo_app`` out; it is written by migrations and read
-by ops SQL only).
+conditional on the roles existing (fresh dev/BDD DBs have none).
+
+The quarantine side table is created by the CALLER (an ops/remediation table,
+deliberately not owned by the migrate role). qa iteration 2 (Major 5): its
+privileges are EXPLICIT and role-existence-guarded — ``GRANT SELECT, INSERT,
+DELETE`` to ``modulo_system`` (the catch-up sweep runs on the system role and
+both selects the NOT-EXISTS exclusion and inserts quarantine rows) and
+``GRANT SELECT, DELETE`` to ``modulo_app`` (the retention purge
+``_delete_quarantine_rows`` runs on the app role via the admin run-retention
+route). Without these grants the sweep's quarantine INSERT and the purge's
+delete depend on the role bootstrap's default-privileges accident — a fleet
+without it wedges the org's sweep forever (an un-quarantined anomaly is
+re-selected every tick). Ops SQL reads during remediation run on the
+admin/owner connection.
 
 RLS: ``ENABLE`` + ``FORCE ROW LEVEL SECURITY`` + the strict fail-closed
 ``rls_org_isolation`` policy (``organisation_id = nullif(current_setting(
@@ -140,6 +149,7 @@ _TABLES = ("run_node_outputs",)
 
 _MIGRATE_ROLE = "modulo_migrate"
 _APP_ROLE = "modulo_app"
+_SYSTEM_ROLE = "modulo_system"
 
 _ORG_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
 
@@ -372,7 +382,13 @@ _ANOMALY_COUNT_SQL = (
 # land in the catch-up sweep instead; the exclusion predicate keys on
 # COALESCE(completed_at, updated_at) >= :migration_started_at — now() is
 # transaction-start, constant for the whole one-transaction chain.
-_STARTED_AT_EXCLUSION_SQL = "COALESCE(r.completed_at, r.updated_at) < :migration_started_at"
+# qa iteration 2 (rider 12): the exclusion is widened by a 30-second clock-
+# skew margin — ``completed_at`` is stamped from the APP server's clock while
+# :migration_started_at is the DATABASE server's clock; the two hosts' clocks
+# need not agree, and an app clock running a few seconds ahead of the DB
+# clock would otherwise fail the coverage check on a run that terminalized
+# DURING the migration (still owned by the catch-up sweep, never lost).
+_STARTED_AT_EXCLUSION_SQL = "COALESCE(r.completed_at, r.updated_at) < :migration_started_at - interval '30 seconds'"
 _TERMINAL_COVERAGE_SQL = (
     f"SELECT count(*) FROM runs r WHERE {_TERMINAL_FILTER_SQL} "  # noqa: S608  # nosec B608 - interpolates module constants only, never caller data
     f"AND {_ANY_BLOB_OBJECT_SQL} "
@@ -491,12 +507,15 @@ def _create_tables(*, postgres_types: bool) -> None:
 def _create_quarantine_table() -> None:
     """The quarantine side table — created by the CALLER (ops table).
 
-    No FKs (quarantined evidence survives run deletion for audit) and no
-    app-role grant (default REVOKE keeps modulo_app out; written by
-    migrations, read by ops SQL during remediation). On Postgres this runs
-    AFTER the SET ROLE ceremony (never owned by ``modulo_migrate``); on the
-    SQLite parity path it is created plainly — the sweep's quarantine
-    exclusion + INSERT run on every backend.
+    No FKs (quarantined evidence survives run deletion for audit). qa
+    iteration 2 (Major 5): the sweep's SELECT (the NOT-EXISTS trigger leg) +
+    INSERT (the quarantine step) run on the ``modulo_system`` role, and the
+    retention purge's delete runs on ``modulo_app`` — both get EXPLICIT
+    role-existence-guarded grants in :func:`upgrade` (below), never a
+    default-privileges accident. On Postgres this runs AFTER the SET ROLE
+    ceremony (never owned by ``modulo_migrate``); on the SQLite parity path
+    it is created plainly — the sweep's quarantine exclusion + INSERT run on
+    every backend.
     """
     blob_type = sa.JSON().with_variant(JSONB(), "postgresql")
     op.create_table(
@@ -705,6 +724,7 @@ def upgrade() -> None:
 
     migrate_role = _role_exists(bind, _MIGRATE_ROLE)
     app_role = _role_exists(bind, _APP_ROLE)
+    system_role = _role_exists(bind, _SYSTEM_ROLE)
 
     if migrate_role:
         op.execute(f"GRANT CREATE ON SCHEMA public TO {_MIGRATE_ROLE}")
@@ -722,6 +742,18 @@ def upgrade() -> None:
     # organisation_id index created AFTER RESET ROLE (the ceremony ordering).
     op.create_index("ix_run_node_outputs_organisation_id", _TABLE, ["organisation_id"])
     _create_quarantine_table()
+
+    # qa iteration 2 (Major 5): EXPLICIT quarantine privileges, never the
+    # role bootstrap's default-privileges accident. The catch-up sweep runs
+    # on the SYSTEM role (SELECT for the NOT-EXISTS exclusion, INSERT for the
+    # quarantine step — DELETE for remediation SQL); the retention purge's
+    # ``_delete_quarantine_rows`` runs on the APP role (SELECT + DELETE — the
+    # admin run-retention route drives it). A missing grant wedges the org's
+    # sweep forever: an un-quarantined anomaly is re-selected every tick.
+    if system_role:
+        op.execute(f"GRANT SELECT, INSERT, DELETE ON {_QUARANTINE_TABLE} TO {_SYSTEM_ROLE}")
+    if app_role:
+        op.execute(f"GRANT SELECT, DELETE ON {_QUARANTINE_TABLE} TO {_APP_ROLE}")
 
     # Backfill strictly BEFORE RLS (FORCE makes the owner a policy subject).
     _preflight(bind)

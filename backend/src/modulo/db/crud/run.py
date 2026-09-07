@@ -44,6 +44,7 @@ from modulo.db.models.run import (
     Run,
 )
 from modulo.db.rls import OutputsRlsMismatch, read_rls_org
+from modulo.db.sqlstates import DUAL_WRITE_RETRYABLE_SQLSTATES, sqlstate_of
 from modulo.db.unique_violation import is_unique_violation
 
 _log = logging.getLogger(__name__)
@@ -1982,24 +1983,16 @@ def _apply_run_output_fields(run: Run, update: _RunStatusUpdate) -> None:
 # them fails with 25P02 (a doomed extra round-trip); they go STRAIGHT to
 # DualWriteError (the caller's full rollback + orchestration is the correct
 # recovery for them). Hard errors (42501 RLS, 23503 FK, 23505 unique) also
-# fail immediately.
-_DUAL_WRITE_RETRYABLE_SQLSTATES = frozenset({"57014"})
+# fail immediately. qa iteration 2: hoisted to the shared leaf
+# :mod:`modulo.db.sqlstates` (the node-runner marker classification consumes
+# the same vocabulary module); imported, never forked.
+_DUAL_WRITE_RETRYABLE_SQLSTATES = DUAL_WRITE_RETRYABLE_SQLSTATES
 
-
-def _sqlstate_of(exc: BaseException) -> str | None:
-    """Extract the SQLSTATE from a SQLAlchemy DBAPI error (dialect-tolerant).
-
-    asyncpg exposes ``sqlstate``; psycopg exposes ``pgcode``. Wrapped causes
-    are walked the same way ``analytics.service._is_query_canceled`` does.
-    """
-    orig = getattr(exc, "orig", None)
-    for candidate in (orig, getattr(orig, "__cause__", None), getattr(exc, "__cause__", None)):
-        if candidate is None:
-            continue
-        state = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
-        if state:
-            return str(state)
-    return None
+# qa iteration 2 (Major 2): the SQLSTATE extractor lives in the shared leaf
+# :mod:`modulo.db.sqlstates` — the bounded ``__context__`` walk is what keeps
+# a savepoint's 25P02 rollback-wrapper failure from masking the ORIGINAL
+# error's SQLSTATE (40P01 etc.) as DualWriteError.sqlstate.
+_sqlstate_of = sqlstate_of
 
 
 async def dual_write_run_node_outputs(

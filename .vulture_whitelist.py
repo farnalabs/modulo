@@ -300,4 +300,11 @@ __all__ = [
     #     REPL / script during a dual-write incident (writes the Redis key every
     #     process reads per call). Tests exercise it; vulture scans src/ only.
     "set_dual_write_enabled",
+    # --- FAR-583 qa iteration 2: the switch-read isolation reset. No
+    #     production caller (set_dual_write_enabled latches + invalidates
+    #     inline now); it exists for test isolation (the autouse fixture and
+    #     the switch tests reset the cache + latch + degraded-note maps +
+    #     single-flight lock between tests). vulture scans src/ only, so it
+    #     cannot see the test call sites.
+    "_reset_switch_read_cache",
 ]

@@ -168,12 +168,15 @@ def test_metadata_flags_are_coalesced_against_sql_null_sides() -> None:
 
 
 def test_coverage_check_excludes_runs_terminalized_after_migration_start() -> None:
-    """qa C4: the end-of-migration coverage check must exclude runs whose
-    COALESCE(completed_at, updated_at) >= the migration-start timestamp — an
-    old machine terminalizing a run after its id-chunk was scanned must not
-    abort the chain (the catch-up sweep owns it)."""
+    """qa C4 + iteration 2 rider 12: the end-of-migration coverage check must
+    exclude runs whose COALESCE(completed_at, updated_at) is within 30s of
+    the migration-start timestamp — an old machine terminalizing a run after
+    its id-chunk was scanned must not abort the chain (the catch-up sweep
+    owns it), and the 30-second margin absorbs app-clock vs DB-clock skew
+    (completed_at is stamped from the APP server's clock, the exclusion
+    compares against the DATABASE server's clock)."""
     module = _load_migration()
-    exclusion = "COALESCE(r.completed_at, r.updated_at) < :migration_started_at"
+    exclusion = "COALESCE(r.completed_at, r.updated_at) < :migration_started_at - interval '30 seconds'"
     assert exclusion in module._TERMINAL_COVERAGE_SQL
     assert exclusion in module._UNKNOWN_COVERAGE_SQL
 
@@ -223,6 +226,85 @@ def test_rls_is_enabled_forced_and_fail_closed() -> None:
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON" in code
     # RLS must come after the backfill (FORCE makes the owner a policy subject).
     assert code.index("ENABLE ROW LEVEL SECURITY") > code.index("_backfill_window(bind, terminal=True)")
+
+
+def test_quarantine_privileges_are_explicit_and_role_guarded() -> None:
+    """qa iteration 2 (Major 5): the quarantine table's privileges are
+    EXPLICIT, role-existence-guarded — the sweep's SELECT/INSERT/DELETE on
+    the system role and the retention purge's SELECT/DELETE on the app role.
+    Without them both legs depend on the role bootstrap's default-privileges
+    accident, and a fleet without it wedges the org's sweep forever."""
+    module = _load_migration()
+    code = _source_code()
+    assert module._SYSTEM_ROLE == "modulo_system"
+    assert "GRANT SELECT, INSERT, DELETE ON {_QUARANTINE_TABLE} TO {_SYSTEM_ROLE}" in code
+    assert "GRANT SELECT, DELETE ON {_QUARANTINE_TABLE} TO {_APP_ROLE}" in code
+    # Both grants are role-existence-guarded (fresh dev/BDD DBs have none).
+    assert "if system_role:" in code
+    assert "if app_role:" in code
+    assert "_role_exists(bind, _SYSTEM_ROLE)" in code
+    # No stale "no app-role grant" posture claims anywhere in the source.
+    assert "no app-role grant" not in code
+
+
+def test_quarantine_docstrings_do_not_claim_default_revoke_posture() -> None:
+    """qa iteration 2 (Major 5): the helper docstrings must describe the
+    EXPLICIT grants (the retention purge runs on modulo_app, the sweep on
+    modulo_system) — the old 'no app-role grant / default REVOKE' claims
+    drifted from the shipped ceremony."""
+    retention_src = (
+        Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "crud" / "run_retention.py"
+    ).read_text(encoding="utf-8")
+    assert "no app-role grant on Postgres (default" not in retention_src
+    assert "migration 0176 grants" in retention_src, "the docstring names the explicit grants"
+
+
+def test_sweep_index_migration_0177_chains_and_pins() -> None:
+    """qa iteration 2 (Major 7): migration 0177 creates the sweep's partial
+    index — revision chain (0176 -> 0177), the twin terminal literal, the
+    assembled predicate, and the 0171-precedent deploy-safety shape (plain
+    blocking ``CREATE INDEX IF NOT EXISTS`` — env.py's single externally-
+    managed chain transaction makes CONCURRENTLY and the autocommit_block
+    escape unavailable; see the 0177 docstring)."""
+    index_migration_name = "0177_run_node_outputs_sweep_index"
+    index_path = _VERSIONS / f"{index_migration_name}.py"
+    assert index_path.exists(), f"Migration file missing: {index_path}"
+    spec = importlib.util.spec_from_file_location(f"migration_{index_migration_name}", index_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.revision == index_migration_name
+    assert module.down_revision == "0176_run_node_outputs"
+
+    # The twin discipline: the inlined literal equals sorted(TERMINAL_STATUSES)
+    # and the predicate is assembled FROM the tuple (cannot drift by
+    # construction).
+    assert tuple(sorted(TERMINAL_STATUSES)) == module._TERMINAL_RUN_STATUSES
+    expected_predicate = "status IN (" + ", ".join(f"'{s}'" for s in module._TERMINAL_RUN_STATUSES) + ")"
+    assert expected_predicate == module._TERMINAL_PREDICATE_SQL
+    for status in module._TERMINAL_RUN_STATUSES:
+        assert f"'{status}'" in module._TERMINAL_PREDICATE_SQL
+
+    # The CREATE statement carries the index columns + the assembled
+    # predicate, and is idempotent (release.sh retries migrations 3x).
+    assert module._INDEX_NAME == "ix_runs_org_completed_at_terminal_sweep"
+    create_sql = module._CREATE_INDEX_SQL
+    assert "CREATE INDEX IF NOT EXISTS ix_runs_org_completed_at_terminal_sweep" in create_sql
+    assert "ON runs (organisation_id, completed_at)" in create_sql
+    assert expected_predicate in create_sql
+    # 0171-precedent deploy safety: NOT concurrent (see the module docstring),
+    # and the downgrade mirrors the idempotency.
+    index_code = index_path.read_text(encoding="utf-8").split('"""', 2)[2]
+    assert "postgresql_concurrently" not in index_code
+    assert "autocommit_block" not in index_code
+    assert "DROP INDEX IF EXISTS" in index_code
+    # Postgres-only guard; SQLite is a no-op — BOTH upgrade and downgrade.
+    assert index_code.count("if not _is_postgres(bind):") == 2
+    # The numbering-shift note (B2b drop -> 0178, PR C pointer -> 0179).
+    assert "0178" in index_path.read_text(encoding="utf-8")
+    assert "0179" in index_path.read_text(encoding="utf-8")
 
 
 def test_quarantine_sql_shape_is_present() -> None:
