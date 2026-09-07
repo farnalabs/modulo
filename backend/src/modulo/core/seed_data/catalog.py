@@ -315,4 +315,10 @@ FLAGS: list[dict[str, str | None]] = [
         "tier_id": "community",
         "depends_on": None,
     },
+    {
+        "name": "user_scoped_mcp_keys",
+        "description": "Per-user MCP API keys (keys operate as their creator's identity)",
+        "tier_id": "community",
+        "depends_on": None,
+    },
 ]

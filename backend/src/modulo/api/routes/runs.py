@@ -971,6 +971,11 @@ async def _create_manual_run(
         trigger_type="manual",
         input_payload=req.input_payload,
         rate_limit_key=rate_limit_key,
+        # FAR-620 run attribution: the CALLER's account (the account of the
+        # authenticating credential, NOT the human operator behind it). This
+        # enables the reject→correction guardrail dispatch for manually
+        # triggered runs and closes the MCP/REST stamping asymmetry.
+        account_id=principal.account_id,
     )
     # Attach the already-loaded pipeline so _build_run_response can read
     # run.pipeline.name without a lazy load. Otherwise the relationship is

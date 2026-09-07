@@ -138,6 +138,11 @@ describe('EnvironmentProfileForm — create mode', () => {
     await nextTick()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('cap-profile')
+
+    const pv = wrapper.vm as unknown as { form: { provider_type: string } }
+    pv.form.provider_type = 'local_docker'
+    await nextTick()
+
     expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(6)
 
     // FAR-587 made provider_type required (no default) - select it so submit passes.

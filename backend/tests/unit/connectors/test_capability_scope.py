@@ -419,9 +419,84 @@ def test_validate_capability_scopes_unrestricted_node_is_skipped():
 
     agent_id = uuid.uuid4()
     node = _scope_node(agent_id, None)
-    # No scope → skipped by the widen check; the call returns normally (None).
+    # No scope — skipped by the widen check; the call returns normally (None).
     result = _validate_capability_scopes([node], {agent_id: _FakeAgent(["github"])})
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Save-time .self guard: caller-scoped tools are forbidden from allowed_tools
+# (FAR-620 spec item 10)
+# ---------------------------------------------------------------------------
+
+
+def _scope_node_with_tools(agent_id: uuid.UUID, allowed_tools: list[str] | None):
+    """Build a PipelineGraphNode declaring allowed_tools in its scope."""
+    from modulo.api.routes.pipelines import CapabilityScope, PipelineGraphNode
+
+    payload = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "agent_id": str(agent_id),
+        "position": {"x": 0.0, "y": 0.0},
+    }
+    if allowed_tools is not None:
+        payload["capability_scope"] = CapabilityScope(allowed_tools=allowed_tools)
+    return PipelineGraphNode.model_validate(payload)
+
+
+def test_validate_capability_scopes_rejects_self_tool_in_allowed_tools():
+    """A node whose allowed_tools names a caller-scoped (``.self``) tool is
+    REFUSED at save time - a pipeline node is an org-context principal and can
+    never be the caller a ``.self`` tool operates on (FAR-620)."""
+
+    from modulo.api.routes.pipelines import _validate_capability_scopes
+
+    agent_id = uuid.uuid4()
+    node = _scope_node_with_tools(agent_id, ["get_hitl_email_alerts"])
+    with pytest.raises(ScopeViolationError, match="get_hitl_email_alerts"):
+        _validate_capability_scopes([node], {agent_id: _FakeAgent([])})
+
+
+def test_validate_capability_scopes_accepts_org_tools_in_allowed_tools():
+    """A node naming only org-level tools passes the .self guard (the check is
+    suffix-derived from the registry, never a hardcoded list)."""
+
+    from modulo.api.routes.pipelines import _validate_capability_scopes
+
+    agent_id = uuid.uuid4()
+    node = _scope_node_with_tools(agent_id, ["create_pipeline", "list_runs"])
+    result = _validate_capability_scopes([node], {agent_id: _FakeAgent([])})
+    assert result is None
+
+
+def test_validate_no_self_tools_unrestricted_passes_and_self_tool_fails():
+    """The pure check: unrestricted (None) passes; a single ``.self`` tool
+    fails; the error kind is ``self_tool``."""
+    from modulo.core.capability_scope import validate_no_self_tools
+
+    assert validate_no_self_tools(node_id="n1", allowed_tools=None) is None
+    assert validate_no_self_tools(node_id="n1", allowed_tools=[]) is None
+    with pytest.raises(ScopeViolationError) as exc_info:
+        validate_no_self_tools(node_id="n1", allowed_tools=["set_hitl_email_alerts"])
+    assert exc_info.value.kind == "self_tool"
+    assert exc_info.value.node_id == "n1"
+
+
+def test_self_scoped_tools_derived_from_registry_suffix():
+    """The ``.self`` set is DERIVED from TOOL_SCOPE_REQUIREMENTS values - the
+    FAR-614 caller-scoped tools appear through their ``hitl_email.self``
+    permission keys, with no hardcoded tool list."""
+    from modulo.core.capability_scope import self_scoped_tools
+    from modulo.core.mcp.scope_validator import _CALLER_SCOPED_SUFFIX, TOOL_SCOPE_REQUIREMENTS
+
+    derived = self_scoped_tools()
+    expected = {tool for tool, key in TOOL_SCOPE_REQUIREMENTS.items() if key.endswith(_CALLER_SCOPED_SUFFIX)}
+    assert derived == expected
+    assert "get_hitl_email_alerts" in derived
+    assert "set_hitl_email_alerts" in derived
+    # Org tools never leak into the set.
+    assert "create_pipeline" not in derived
 
 
 # ---------------------------------------------------------------------------

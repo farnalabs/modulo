@@ -460,6 +460,7 @@ async def create_snapshot_from_live_graph(
             guardrail_pins_json=guardrail_pins,
             guardrail_pins_fingerprint=guardrail_pins_fingerprint,
             run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
+            default_autonomy_level=pipeline.default_autonomy_level,
             version_kind=version_kind,
             created_kind=created_kind,
             draft=draft,

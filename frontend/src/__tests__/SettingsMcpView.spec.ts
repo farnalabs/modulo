@@ -162,6 +162,23 @@ describe('SettingsMcpView', () => {
     expect(wrapper.text()).toContain('Revoked')
   })
 
+  it('shows the org-wide key scope note (FAR-620)', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET)
+
+    const wrapper = mount(SettingsMcpView, {
+      global: { stubs },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const note = wrapper.find('[data-testid="settings-mcp-org-scope-note"]')
+    expect(note.exists()).toBe(true)
+    expect(wrapper.text()).toContain('API keys act org-wide')
+    expect(wrapper.text()).toContain('mintable via the API')
+  })
+
   it('opens create key dialog with name and role fields', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET)

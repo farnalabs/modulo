@@ -39,6 +39,7 @@ from modulo.core.capability_scope import (
     ScopeViolationError,
     agent_granted_connector_types,
     validate_allowed_connectors_subset,
+    validate_no_self_tools,
 )
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.pipeline_engine.scatter_join import (
@@ -1320,10 +1321,21 @@ def _validate_capability_scopes(
     node with no scope (UNRESTRICTED default) or no Agent reference is skipped.
     Connector instance-id entries are opaque here and enforced at run time by the
     ConnectorHub deny-by-default fetch scope.
+
+    FAR-620: every node that declares ``capability_scope.allowed_tools`` is also
+    checked against the caller-scoped (``.self``) tool set — those tools are
+    FORBIDDEN from node allowed_tools regardless of connector narrowing (a
+    pipeline node is never the "caller" a ``.self`` tool operates on).
     """
     for node in nodes:
         scope = node.capability_scope
-        if scope is None or not scope.allowed_connectors:
+        if scope is None:
+            continue
+        # FAR-620: caller-scoped (``.self``) tools may not appear in a node's
+        # allowed_tools — checked for EVERY scoped node (independent of
+        # connector narrowing, and of any Agent reference).
+        validate_no_self_tools(node_id=str(node.id), allowed_tools=scope.allowed_tools)
+        if not scope.allowed_connectors:
             continue
         if node.agent_id is None:
             # A connector node may not reference an Agent; its allowed_connectors

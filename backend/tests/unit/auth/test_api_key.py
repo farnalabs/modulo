@@ -771,28 +771,30 @@ async def test_revoke_api_key_success() -> None:
     session.execute = AsyncMock(return_value=result)
     session.flush = AsyncMock()
 
-    ok = await revoke_api_key(session, key_id, org_id)
-    assert ok is True
+    revoked = await revoke_api_key(session, key_id, org_id)
+    # FAR-620: the row (not a bool) - callers stamp audit payloads with the
+    # key's scope and masked prefix.
+    assert revoked is key
     assert key.revoked_at is not None
     assert isinstance(key.revoked_at, datetime)
 
 
 @pytest.mark.asyncio
-async def test_revoke_api_key_not_found_returns_false() -> None:
+async def test_revoke_api_key_not_found_returns_none() -> None:
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
 
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    ok = await revoke_api_key(session, uuid.uuid4(), uuid.uuid4())
-    assert ok is False
+    revoked = await revoke_api_key(session, uuid.uuid4(), uuid.uuid4())
+    assert revoked is None
 
 
 @pytest.mark.asyncio
-async def test_revoke_api_key_already_revoked_returns_false() -> None:
+async def test_revoke_api_key_already_revoked_returns_none() -> None:
     """Already-revoked keys are filtered out by the ``revoked_at IS NULL``
-    WHERE clause, so the query returns no row and the function returns False."""
+    WHERE clause, so the query returns no row and the function returns None."""
     org_id = uuid.uuid4()
     key_id = uuid.uuid4()
 
@@ -802,14 +804,14 @@ async def test_revoke_api_key_already_revoked_returns_false() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    ok = await revoke_api_key(session, key_id, org_id)
-    assert ok is False
+    revoked = await revoke_api_key(session, key_id, org_id)
+    assert revoked is None
 
 
 @pytest.mark.asyncio
 async def test_revoke_api_key_is_idempotent_when_query_returns_revoked_key() -> None:
     """If the query unexpectedly returns an already-revoked key, revoking
-    again refreshes ``revoked_at`` and still reports success."""
+    again refreshes ``revoked_at`` and still returns the key row."""
     org_id = uuid.uuid4()
     key_id = uuid.uuid4()
     key = MagicMock(spec=OrgApiKey)
@@ -823,21 +825,21 @@ async def test_revoke_api_key_is_idempotent_when_query_returns_revoked_key() -> 
     session.execute = AsyncMock(return_value=result)
     session.flush = AsyncMock()
 
-    ok = await revoke_api_key(session, key_id, org_id)
-    assert ok is True
+    revoked = await revoke_api_key(session, key_id, org_id)
+    assert revoked is key
     assert key.revoked_at is not None
 
 
 @pytest.mark.asyncio
-async def test_revoke_api_key_wrong_org_returns_false() -> None:
+async def test_revoke_api_key_wrong_org_returns_none() -> None:
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
 
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    ok = await revoke_api_key(session, uuid.uuid4(), uuid.uuid4())
-    assert ok is False
+    revoked = await revoke_api_key(session, uuid.uuid4(), uuid.uuid4())
+    assert revoked is None
 
 
 # ---------------------------------------------------------------------------

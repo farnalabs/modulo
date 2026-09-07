@@ -1179,7 +1179,12 @@ class TestOAuthMiddlewareInvalidTokens:
                 live_role="admin",
             )
             assert response.status_code == 200
-            assert _ctx_auth_type.get() == "oauth"
+            # FAR-620: a regular JWT (Remy) session carries auth_type 'jwt'
+            # (previously conflated with 'oauth') and caller scope 'user'.
+            assert _ctx_auth_type.get() == "jwt"
+            from modulo.api.mcp_server import _ctx_key_scope
+
+            assert _ctx_key_scope.get() == "user"
             assert _ctx_role.get() == "admin"
         finally:
             self._restore_ctx(saved)

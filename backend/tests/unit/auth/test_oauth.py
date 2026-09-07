@@ -2,7 +2,6 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
 import jwt as pyjwt
@@ -40,6 +39,7 @@ from modulo.auth.oauth import (
     validate_pkce_method,
     verify_pkce,
 )
+from tests.unit.auth.conftest import _make_session_mock
 
 _SECRET_KEY = "abcdefghijklmnopqrstuvwxyz0123456789ab"
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -47,27 +47,6 @@ _OTHER_ORG = uuid.UUID("11111111-1111-1111-1111-111111111111")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _CODE_VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 _CODE_CHALLENGE = compute_pkce_challenge(_CODE_VERIFIER)
-
-
-def _make_session_mock() -> AsyncMock:
-    """Create an AsyncMock session with begin() returning an async context manager."""
-
-    class _AsyncSessionContextManager:
-        async def __aenter__(self) -> Self:
-            return self
-
-        async def __aexit__(
-            self,
-            exc_type: object = None,
-            exc_val: object = None,
-            exc_tb: object = None,
-        ) -> bool:
-            return False
-
-    cm = _AsyncSessionContextManager()
-    session = AsyncMock()
-    session.begin = MagicMock(return_value=cm)
-    return session
 
 
 # ---------------------------------------------------------------------------
