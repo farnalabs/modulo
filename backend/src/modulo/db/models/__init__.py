@@ -1,5 +1,6 @@
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
+from modulo.db.models.agent_runner_binding import AgentRunnerBinding
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base, OrgScoped, TimestampMixin
@@ -94,6 +95,7 @@ from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
 __all__ = [
     "Account",
     "Agent",
+    "AgentRunnerBinding",
     "AuditChainHead",
     "AuditEvent",
     "Base",
