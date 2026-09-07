@@ -3,7 +3,9 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.feature_flags import FeatureFlagRegistry
+import pytest
+
+from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, FeatureFlagRegistry
 
 
 def _make_session() -> AsyncMock:
@@ -13,6 +15,11 @@ def _make_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     return session
+
+
+def _make_default_off_registry(tier: str = "community", has_license_key: bool = False) -> FeatureFlagRegistry:
+    FeatureFlagRegistry._overrides.clear()
+    return FeatureFlagRegistry(current_tier=tier, has_license_key=has_license_key)
 
 
 class TestInit:
@@ -376,77 +383,63 @@ class TestInactiveCatalogFlags:
         assert flag.currently_active is False
 
 
-class TestMobileRailFallbackOff:
-    """The ``mobile_sidebar_rail`` experiment must stay default-OFF in the
-    hardcoded fallback (no DB catalog loaded).
+class TestDefaultOffFlags:
+    """Flags shipped default-OFF on every tier (the ``mobile_sidebar_rail``
+    two-mechanism precedent, extended by ``user_scoped_mcp_keys`` FAR-620 and
+    ``lifecycle_map_journeys`` FAR-654): each is listed in the catalog for
+    per-org toggling AND hardcoded in ``_refresh``'s inactive set
+    (``DEFAULT_OFF_FLAGS``), so the community-tier tier-rank fallback can
+    never activate it and only an explicit override can turn it on.
 
-    Regression (PR #1062 review): ``_refresh`` seeded ``_inactive_flags`` only
-    from the DB catalog, so a registry built WITHOUT ``load_from_db()`` treated
-    the community-tier flag as active via the tier-rank comparison — leaking the
-    experimental rail on community tier until the catalog was read.
+    Regression (PR #1062 review): ``_refresh`` seeded the inactive set only
+    from the DB catalog, so a registry built WITHOUT ``load_from_db()``
+    treated community-tier members as active via the tier-rank comparison —
+    leaking the experimental rail on community tier until the catalog was
+    read.
     """
 
-    def _registry(self, tier: str = "community", has_license_key: bool = False) -> FeatureFlagRegistry:
-        FeatureFlagRegistry._overrides.clear()
-        return FeatureFlagRegistry(current_tier=tier, has_license_key=has_license_key)
-
-    def test_mobile_sidebar_rail_inactive_in_fallback_on_community(self) -> None:
-        registry = self._registry("community")
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        assert flag.currently_active is False
-
-    def test_mobile_sidebar_rail_inactive_in_fallback_on_team(self) -> None:
-        registry = self._registry("team", has_license_key=True)
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        assert flag.currently_active is False
-
-    def test_mobile_sidebar_rail_can_be_enabled_via_override_in_fallback(self) -> None:
-        registry = self._registry("community")
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        try:
-            registry.set_override("mobile_sidebar_rail", True)
-            assert flag.currently_active is True
-        finally:
-            registry.clear_override("mobile_sidebar_rail")
-        assert flag.currently_active is False
-
-
-class TestUserScopedKeysFlagOffByDefault:
-    """FAR-620: the ``user_scoped_mcp_keys`` org flag must be default-OFF
-    everywhere (the mobile_sidebar_rail two-mechanism precedent) — listed in
-    the catalog for per-org toggling AND hardcoded in ``_refresh``'s inactive
-    set, so the community-tier tier-rank fallback can never activate it."""
-
-    def _registry(self, tier: str = "community", has_license_key: bool = False) -> FeatureFlagRegistry:
-        FeatureFlagRegistry._overrides.clear()
-        return FeatureFlagRegistry(current_tier=tier, has_license_key=has_license_key)
-
-    def test_flag_registered_in_known_flags(self) -> None:
-        registry = self._registry()
-        flag = registry.get_flag("user_scoped_mcp_keys")
-        assert flag is not None, "user_scoped_mcp_keys must be registered in _KNOWN_FLAGS"
+    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
+    def test_flag_registered_in_known_flags(self, flag_name: str) -> None:
+        registry = _make_default_off_registry()
+        flag = registry.get_flag(flag_name)
+        assert flag is not None, f"{flag_name} must be registered in _KNOWN_FLAGS"
+        # The default-off mechanism targets community-tier flags: team-tier
+        # flags are already gated behind a license, so shipping one default-OFF
+        # would be redundant. Update this pin if that ever changes.
         assert flag.tier == "community"
 
-    def test_inactive_in_fallback_on_community(self) -> None:
-        registry = self._registry("community")
-        assert registry.get_flag("user_scoped_mcp_keys").currently_active is False  # type: ignore[union-attr]
+    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
+    def test_inactive_in_fallback_on_community(self, flag_name: str) -> None:
+        registry = _make_default_off_registry("community")
+        assert registry.get_flag(flag_name).currently_active is False  # type: ignore[union-attr]
 
-    def test_inactive_in_fallback_on_team(self) -> None:
-        registry = self._registry("team", has_license_key=True)
-        assert registry.get_flag("user_scoped_mcp_keys").currently_active is False  # type: ignore[union-attr]
+    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
+    def test_inactive_in_fallback_on_team(self, flag_name: str) -> None:
+        registry = _make_default_off_registry("team", has_license_key=True)
+        assert registry.get_flag(flag_name).currently_active is False  # type: ignore[union-attr]
 
-    async def test_resolve_flag_defaults_false_even_with_catalog_row_active(self) -> None:
-        """The _refresh hardcode wins over a DB catalog row marked active —
-        without the hardcode the tier-rank fallback would activate the flag
-        for community tier. An org override is the ONLY way to enable it."""
+    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
+    def test_flag_can_be_enabled_via_sys_override(self, flag_name: str) -> None:
+        registry = _make_default_off_registry("community")
+        flag = registry.get_flag(flag_name)
+        assert flag is not None
+        try:
+            registry.set_override(flag_name, True)
+            assert flag.currently_active is True
+        finally:
+            registry.clear_override(flag_name)
+        assert flag.currently_active is False
+
+    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
+    async def test_resolve_flag_defaults_false_even_with_catalog_row_active(self, flag_name: str) -> None:
+        """The ``DEFAULT_OFF_FLAGS`` hardcode wins over a DB catalog row marked
+        active — without the hardcode the tier-rank fallback would activate the
+        flag for community tier. An org override is the ONLY way to enable it."""
         session = _make_session()
         db_flags = [
             {
-                "name": "user_scoped_mcp_keys",
-                "description": "Per-user MCP API keys",
+                "name": flag_name,
+                "description": "Default-off pin",
                 "tier_id": "community",
                 "depends_on": None,
                 # Even a catalog row marked active stays default-OFF.
@@ -462,22 +455,11 @@ class TestUserScopedKeysFlagOffByDefault:
             patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
         ):
             registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
-        assert registry.get_flag("user_scoped_mcp_keys").currently_active is False  # type: ignore[union-attr]
+        assert registry.get_flag(flag_name).currently_active is False  # type: ignore[union-attr]
         # An org feature_overrides entry (the documented enable path) wins.
         with patch.object(
             FeatureFlagRegistry,
             "_get_org_override",
             new=AsyncMock(return_value=True),
         ):
-            assert await registry.resolve_flag("user_scoped_mcp_keys", org_id=uuid.uuid4()) is True
-
-    def test_flag_can_be_enabled_via_sys_override(self) -> None:
-        registry = self._registry("community")
-        flag = registry.get_flag("user_scoped_mcp_keys")
-        assert flag is not None
-        try:
-            registry.set_override("user_scoped_mcp_keys", True)
-            assert flag.currently_active is True
-        finally:
-            registry.clear_override("user_scoped_mcp_keys")
-        assert flag.currently_active is False
+            assert await registry.resolve_flag(flag_name, org_id=uuid.uuid4()) is True

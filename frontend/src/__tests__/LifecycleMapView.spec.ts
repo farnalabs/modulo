@@ -20,6 +20,9 @@ vi.mock('../lib/api/formatError', () => ({
 }))
 
 import LifecycleMapView from '../views/lifecycle-map/LifecycleMapView.vue'
+import LifecycleMapRenderer from '../components/lifecycle-map/LifecycleMapRenderer.vue'
+import { usePlanStore } from '../stores/planStore'
+import { useLifecycleMapsStore } from '../stores/lifecycleMaps'
 
 const routerPushMock = vi.fn()
 
@@ -44,6 +47,19 @@ const mapDetail = {
   current_version: 1,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
+}
+
+const journeyItem = {
+  kind: 'run',
+  ref: 'run-1',
+  canonical_work_item_id: 'run-1',
+  current_stage: null,
+  status: 'complete',
+  provenance: 'execution',
+  run_count: 3,
+  unattributed: true,
+  latest_run_id: 'run-1',
+  updated_at: '2026-01-02T00:00:00Z',
 }
 
 const i18n = createI18n({
@@ -71,11 +87,28 @@ const i18n = createI18n({
   },
 })
 
+let fetchMock: ReturnType<typeof vi.fn>
+let journeysResponse: { items: unknown[]; next_cursor?: string | null }
+
+// FAR-654: seed the plan store directly so the view never fires a plan fetch
+// against the generic fetch stub. Flags default to OFF (absent = disabled).
+function seedPlan(flags: Record<string, boolean> = {}) {
+  const planStore = usePlanStore()
+  planStore.features = flags
+  planStore.loaded = true
+}
+
+function journeysEndpointCalled(): boolean {
+  return fetchMock.mock.calls.some((call) => String(call[0]).includes('/journeys'))
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
   routerPushMock.mockClear()
-  vi.stubGlobal('fetch', vi.fn((url: string) => {
-    if (url.includes('/journeys')) return Promise.resolve(okJson({ items: [] }))
+  seedPlan()
+  journeysResponse = { items: [] }
+  fetchMock = vi.fn((url: string) => {
+    if (url.includes('/journeys')) return Promise.resolve(okJson(journeysResponse))
     if (url.includes('/export')) {
       return Promise.resolve(okJson({
         primitive_type: 'lifecycle_map',
@@ -86,7 +119,8 @@ beforeEach(() => {
       }))
     }
     return Promise.resolve(okJson(mapDetail))
-  }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
 })
 
 afterEach(() => {
@@ -252,5 +286,83 @@ describe('LifecycleMapView responsive layout (FAR-640)', () => {
     expect(classes).not.toContain('sm:flex-row')
     expect(classes).not.toContain('sm:items-center')
     expect(classes).not.toContain('sm:justify-between')
+  })
+})
+
+describe('LifecycleMapView journey flag gating (FAR-654)', () => {
+  it('flag off (default): makes no journeys API call and renders no journey UI', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(journeysEndpointCalled()).toBe(false)
+
+    // The map (stages/edges) still renders; the renderer receives an empty
+    // journeys list so no JourneyCards render on nodes.
+    const renderer = wrapper.findComponent(LifecycleMapRenderer)
+    expect(renderer.exists()).toBe(true)
+    expect(renderer.props('journeys')).toEqual([])
+
+    expect(wrapper.find('[aria-label="Unattributed journeys"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="lifecycle-map-journeys-pagination"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(false)
+  })
+
+  it('flag off hides stale journey state left by an earlier session', async () => {
+    // Simulate a previous visit with the flag on: the singleton store still
+    // holds journeys, a pagination cursor, and a selected journey.
+    const store = useLifecycleMapsStore()
+    store.journeys = [journeyItem]
+    store.journeysCursor = 'cursor-2'
+    store.selectedJourneyKey = 'run:run-1'
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(journeysEndpointCalled()).toBe(false)
+    const renderer = wrapper.findComponent(LifecycleMapRenderer)
+    expect(renderer.props('journeys')).toEqual([])
+    expect(wrapper.find('[aria-label="Unattributed journeys"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="lifecycle-map-journeys-pagination"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(false)
+  })
+
+  it('flag on: fetches journeys and renders the unattributed section and pagination', async () => {
+    seedPlan({ lifecycle_map_journeys: true })
+    journeysResponse = { items: [journeyItem], next_cursor: 'cursor-2' }
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(journeysEndpointCalled()).toBe(true)
+
+    const renderer = wrapper.findComponent(LifecycleMapRenderer)
+    expect(renderer.exists()).toBe(true)
+    expect(renderer.props('journeys')).toHaveLength(1)
+
+    expect(wrapper.find('[aria-label="Unattributed journeys"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="lifecycle-map-journeys-pagination"]').exists()).toBe(true)
+  })
+
+  it('flag on: renders the journey detail panel when a journey is selected', async () => {
+    seedPlan({ lifecycle_map_journeys: true })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const store = useLifecycleMapsStore()
+    store.selectedJourneyKey = 'run:run-1'
+    await flushPromises()
+
+    expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(true)
+  })
+
+  it('flag flipping on after mount triggers the journeys fetch', async () => {
+    mountView()
+    await flushPromises()
+    expect(journeysEndpointCalled()).toBe(false)
+
+    seedPlan({ lifecycle_map_journeys: true })
+    await flushPromises()
+
+    expect(journeysEndpointCalled()).toBe(true)
   })
 })
