@@ -384,23 +384,23 @@ properly maintained example config.
 
 ### Horizontal scaling (multiple backend replicas)
 
-For more than one backend replica, **Redis is mandatory.** Here's why:
+**Redis is mandatory, and since `REDIS_URL` must always be set (the API refuses to boot without it), a shared Redis is required even for a single replica.** As replicas grow, that shared Redis is what coordinates them. Here's why:
 
-| Feature | Without Redis | With Redis | What goes wrong at 2+ replicas |
+| Feature | Single replica (Redis required) | 2+ replicas (shared Redis) | What the shared Redis solves at 2+ replicas |
 |---|---|---|---|
-| Cron triggers | In-process asyncio loop | SAQ system worker cron | Both replicas fire every trigger. Runs execute twice. |
-| Polling triggers | In-process asyncio loop | SAQ system worker cron | Same – duplicate execution. |
-| Task queue | In-process | SAQ broker (Redis) | Jobs are scheduled in the replica that received the request. If that replica crashes or is scaled down, the job disappears. |
-| Rate limiting | In-memory no-op | Redis sliding window | Without Redis the limiter is disabled (no-op); with Redis, all replicas share one sliding-window counter in Redis |
+| Cron triggers | SAQ system worker cron | SAQ system worker cron | A single shared Redis queue ensures each trigger fires exactly once; without coordination, every replica would fire every trigger and runs would execute twice. |
+| Polling triggers | SAQ system worker cron | SAQ system worker cron | Same – duplicate execution is avoided by the shared queue. |
+| Task queue | SAQ broker (Redis) | SAQ broker (Redis) | Jobs live in Redis, so a crash or scale-down of a replica never loses the job. |
+| Rate limiting | Redis sliding window | Redis sliding window | All replicas share one sliding-window counter in Redis instead of each counting independently. |
 | Lock coordination | PG advisory locks | PG advisory locks | These work across replicas via PostgreSQL – no Redis needed for locks. |
 
-**The pattern:** without Redis, each replica independently runs its own scheduler and rate limiter. They don't coordinate. This is fine for a single replica. For two or more, the system behaves incorrectly.
+**The pattern:** every replica connects to the same Redis. SAQ runs one system worker that owns the triggers and queue, so each run and trigger executes exactly once no matter how many replicas are running.
 
-**The one exception** is PG advisory locks – they coordinate across any number of replicas via PostgreSQL itself, so locking patterns work without Redis regardless of replica count.
+**The one exception** is PG advisory locks – they coordinate across any number of replicas via PostgreSQL itself, so locking patterns work regardless of replica count.
 
 ### Vertical scaling (bigger machine)
 
-Adding CPU/RAM to a single replica works without Redis. The asyncio event loop handles many concurrent requests within one process. Uvicorn worker processes (configurable via `uvicorn --workers`) use multiple CPU cores on a single machine.
+Adding CPU/RAM to a single replica still requires Redis (`REDIS_URL` must always be set). The asyncio event loop handles many concurrent requests within one process. Uvicorn worker processes (configurable via `uvicorn --workers`) use multiple CPU cores on a single machine.
 
 ### Configuration
 
