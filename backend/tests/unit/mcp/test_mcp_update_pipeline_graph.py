@@ -185,3 +185,94 @@ class TestUpdatePipelineGraphGuardrailStrip:
         assert "error" not in result, result
         assert result["pipeline_id"] == str(pipeline_id)
         mock_replace_graph.assert_awaited_once()
+
+
+def _hitl_node(node_id: uuid.UUID, hitl_config: dict | None) -> dict:
+    return {
+        "id": str(node_id),
+        "node_type": "hitl",
+        "hitl_config": hitl_config,
+        "position": {"x": 0, "y": 0},
+    }
+
+
+class TestUpdatePipelineGraphHitlDescription:
+    """qa-iterate iteration-1 MAJOR-4 (FAR-613): the MCP graph-write path
+    bypasses the REST Pydantic contract for node-level ``hitl_config`` (a
+    plain ``dict[str, Any]``) and never runs the full graph validator, so the
+    HITL gate-description requirement is enforced explicitly before the
+    write. An agent-authored gate is exactly where an unexplained gate most
+    needs its decision briefing."""
+
+    def setup_method(self) -> None:
+        _set_ctx(role=None)
+
+    def teardown_method(self) -> None:
+        _clear_ctx()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_undescribed_node_level_hitl_gate_rejected(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A node-level ``hitl_config`` without a usable human description is
+        rejected with the ``validation_failed`` error shape BEFORE the write —
+        ``replace_pipeline_graph`` is never awaited, so no undescribed gate
+        can reach persistence through the MCP authoring path."""
+        _set_ctx(role="operator")
+        node_id = uuid.uuid4()
+        pipeline_id = uuid.uuid4()
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None)
+        mock_session.return_value.__aenter__.return_value = AsyncMock()
+
+        result = await update_pipeline_graph(
+            pipeline_id=str(pipeline_id),
+            nodes=[_hitl_node(node_id, {"label": "Review"})],
+            edges=[],
+        )
+
+        assert result["error"] == "validation_failed", result
+        assert "human-provided description" in result["detail"]
+        mock_replace_graph.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_described_node_level_hitl_gate_succeeds(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A node-level gate whose description meets the minimum passes the
+        MCP check and the write proceeds — the enforcement is scoped to the
+        description rule only."""
+        _set_ctx(role="operator")
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        described_config = {"label": "Review", "description": "Reviewer confirms the refund amount before payout."}
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None)
+        mock_replace_graph.return_value = ([_hitl_node(node_id, described_config)], [])
+        mock_session.return_value.__aenter__.return_value = AsyncMock()
+
+        result = await update_pipeline_graph(
+            pipeline_id=str(pipeline_id),
+            nodes=[_hitl_node(node_id, described_config)],
+            edges=[],
+        )
+
+        assert "error" not in result, result
+        assert result["pipeline_id"] == str(pipeline_id)
+        mock_replace_graph.assert_awaited_once()

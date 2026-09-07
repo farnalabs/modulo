@@ -1,4 +1,4 @@
-"""Structural tests for migration 0190_bundled_runner_seed_backfill (FAR-590 D4).
+"""Structural tests for migration 0191_bundled_runner_seed_backfill (FAR-590 D4).
 
 Source-only (no database): assert the migration pins its chain and — critically —
 that the **downgrade** reverts only the captured re-point rows (by primary key,
@@ -12,10 +12,10 @@ from pathlib import Path
 from types import ModuleType
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0190_bundled_runner_seed_backfill"
+_MIGRATION_NAME = "0191_bundled_runner_seed_backfill"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
-_STATE_TABLE = "_migration_0190_repoint_state"
+_STATE_TABLE = "_migration_0191_repoint_state"
 
 
 def _load_migration() -> ModuleType:
@@ -37,7 +37,7 @@ def _source_code() -> str:
 def test_metadata_pins_chain() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
-    assert module.down_revision == "0189_agent_runner_bindings"
+    assert module.down_revision == "0190_hitl_claim_context_json"
     assert module.branch_labels is None
     assert module.depends_on is None
 

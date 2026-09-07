@@ -79,7 +79,7 @@ silently applied.
 > Until the GHCR publish job lands the real released digest (or an operator
 > pins a built digest into the template constants and re-seeds/applies), **every
 > pipeline bound to a Bundled Runner profile fails at dispatch.** Critically, the
-> migration `0190_bundled_runner_seed_backfill` re-points the legacy `modulo-dev`
+> migration `0191_bundled_runner_seed_backfill` re-points the legacy `modulo-dev`
 > `local_docker` row to the Bundled Runner, so any pipeline that previously ran
 > on E2B via `modulo-dev` will **also fail at dispatch** on this branch until the
 > digest is provisioned. Remediation before relying on it: either wait for the
@@ -91,7 +91,7 @@ silently applied.
 
 Every org gets a **"Bundled Runner (Docker)"** environment profile at
 org-creation (owned by the org's admin account). Orgs that predate the hook
-receive it via the one-time migration `0190_bundled_runner_seed_backfill`,
+receive it via the one-time migration `0191_bundled_runner_seed_backfill`,
 which also re-points the legacy `modulo-dev` `local_docker` row to the
 Bundled Runner (release note covers the change; the rollback path restores
 the row, and the inserted backfill rows are left in place — additive).

@@ -97,6 +97,7 @@ from modulo.core.pipeline_engine.evidence import (
     run_evidence_probe,
 )
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
+from modulo.core.pipeline_engine.hitl_context import build_hitl_gate_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
@@ -4903,26 +4904,6 @@ class PipelineExecutor:
 
         return results
 
-    async def _interrupt_pipeline_name(
-        self,
-        session: Any,
-        pipeline_id: uuid.UUID,
-        org_id: uuid.UUID,
-    ) -> str | None:
-        """Best-effort pipeline-name lookup for the awaiting notification."""
-        try:
-            pipeline = await get_pipeline(session, pipeline_id)
-            return pipeline.name if pipeline is not None else None
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning(
-                "hitl_gate.pipeline_name_lookup_failed",
-                extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
-                exc_info=True,
-            )
-            return None
-
     async def _create_interrupt_gate(
         self,
         *,
@@ -4931,6 +4912,7 @@ class PipelineExecutor:
         gate_id: str,
         pipeline_id: uuid.UUID,
         required_team_id: uuid.UUID | None,
+        completed_node_outputs: dict[str, Any] | None = None,
     ) -> tuple[str | None, bool]:
         """Create the HITL gate row (or reuse a coalescing open gate).
 
@@ -4939,6 +4921,17 @@ class PipelineExecutor:
         "reuse" (the existing gate decides; this run is terminalised
         superseded by the caller); changed SHA → the old gate was
         auto-superseded in the same transaction and this run raises fresh.
+
+        FAR-613: the decision briefing is captured at fire time and attached to
+        the gate (``context_json``), and the pipeline name is resolved on the
+        SHARED session inside the interrupt handler's outer transaction. Both
+        reads run inside a nested savepoint (the established best-effort
+        idiom): a DB-level failure there would otherwise leave the shared
+        transaction in pending-rollback while the error is swallowed, and the
+        next statement (``create_gate``) would raise ``PendingRollbackError``
+        and fail the whole interrupt. A savepoint-scoped failure rolls back
+        only the savepoint; the briefing degrades (name/context -> None) but
+        the interrupt always proceeds.
 
         Returns ``(pipeline_name, coalesce_reused)`` — the name is ``None``
         when the gate was reused or the lookup failed (logged, best-effort).
@@ -4959,6 +4952,48 @@ class PipelineExecutor:
             if outcome == "reuse":
                 coalesce_reused = True
             else:
+                # FAR-613: resolve the pipeline name FIRST (the same
+                # failure-isolated seam the notifications use) so the fire-time
+                # briefing bundle carries it too. Runs inside a nested
+                # savepoint (see class docstring) so a DB-level failure
+                # degrades to None rather than poisoning the transaction.
+                try:
+                    async with session.begin_nested():
+                        pipeline = await get_pipeline(session, pipeline_id)
+                        pipeline_name = pipeline.name if pipeline is not None else None
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "hitl_gate.pipeline_name_lookup_failed",
+                        extra={"pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                        exc_info=True,
+                    )
+                # FAR-613: capture the decision briefing at fire time.
+                # Failure-isolated — a briefing defect must never block the
+                # interrupt (build_hitl_gate_context never raises; context is
+                # None on capture failure). The savepoint is what keeps a
+                # DB-level capture error from poisoning the shared transaction.
+                gate_context: dict[str, Any] | None = None
+                try:
+                    async with session.begin_nested():
+                        gate_context = await build_hitl_gate_context(
+                            session,
+                            run_id=run_id,
+                            gate_id=gate_id,
+                            org_id=org_id,
+                            pipeline_name=pipeline_name,
+                            completed_node_outputs=completed_node_outputs,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "hitl_gate.context_capture_failed",
+                        extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+                        exc_info=True,
+                    )
+                    gate_context = None
                 await mgr.create_gate(
                     session,
                     run_id=run_id,
@@ -4966,8 +5001,8 @@ class PipelineExecutor:
                     pipeline_id=pipeline_id,
                     org_id=org_id,
                     required_team_id=required_team_id,
+                    context_json=gate_context,
                 )
-                pipeline_name = await self._interrupt_pipeline_name(session, pipeline_id, org_id)
         return pipeline_name, coalesce_reused
 
     async def _handle_graph_interrupt(
@@ -5002,6 +5037,7 @@ class PipelineExecutor:
                 gate_id=gate_id,
                 pipeline_id=pipeline_id,
                 required_team_id=required_team_id,
+                completed_node_outputs=ctx.completed_node_outputs,
             )
             if coalesce_reused:
                 detail = (

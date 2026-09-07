@@ -431,14 +431,16 @@ def _make_hitl_gate(
     account_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
     required_team_id: uuid.UUID | None = None,
+    run_id: uuid.UUID | None = None,
 ) -> MagicMock:
     gate = MagicMock()
-    gate.run_id = uuid.uuid4()
+    gate.run_id = run_id or uuid.uuid4()
     gate.gate_id = gate_id
     gate.pipeline_id = uuid.uuid4()
     gate.account_id = account_id
     gate.expires_at = expires_at
     gate.required_team_id = required_team_id
+    gate.context_json = None
     return gate
 
 
@@ -471,17 +473,33 @@ class TestListPendingHitl(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         expires_at = datetime(2026, 1, 1, 13, 0, tzinfo=UTC)
+        shared_run_id = uuid.uuid4()
         gates = [
-            _make_hitl_gate(gate_id="gate-1", account_id=None, expires_at=expires_at, required_team_id=None),
-            _make_hitl_gate(gate_id="gate-2", account_id=uuid.uuid4(), expires_at=None, required_team_id=uuid.uuid4()),
+            _make_hitl_gate(
+                gate_id="gate-1", account_id=None, expires_at=expires_at, required_team_id=None, run_id=shared_run_id
+            ),
+            _make_hitl_gate(
+                gate_id="gate-2",
+                account_id=uuid.uuid4(),
+                expires_at=None,
+                required_team_id=uuid.uuid4(),
+                run_id=shared_run_id,
+            ),
         ]
         count_result = MagicMock()
         count_result.scalar_one.return_value = 2
         gates_result = MagicMock()
         gates_result.scalars.return_value = gates
+        # FAR-613: the description resolver runs two IN queries (runs for
+        # snapshot ids, snapshots for graphs) after the gate page loads.
+        # The fixture gates carry non-topology ids, so nothing resolves.
+        run_rows_result = MagicMock()
+        run_rows_result.all.return_value = [(shared_run_id, uuid.uuid4())]
+        snapshot_rows_result = MagicMock()
+        snapshot_rows_result.all.return_value = []
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result])
+        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result, run_rows_result, snapshot_rows_result])
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await list_pending_hitl()
@@ -499,6 +517,50 @@ class TestListPendingHitl(_AuthContext):
         assert result["gates"][1]["claimed_by"] == str(gates[1].account_id)
         assert result["gates"][1]["expires_at"] is None
         assert result["gates"][1]["required_team_id"] == str(gates[1].required_team_id)
+        # FAR-613 briefing fields: unresolvable configs map to None.
+        assert result["gates"][0]["description"] is None
+        assert result["gates"][0]["context"] is None
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_pending_gates_carry_description_and_context(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-613: topology-shaped gates resolve their snapshot description;
+        context comes from the claim row."""
+        from modulo.db.crud.hitl_gate_config import make_gate_id
+
+        source, target = str(uuid.uuid4()), str(uuid.uuid4())
+        resolved_gate_id = make_gate_id(source, target)
+        context = {"trigger": "condition", "condition": "output.severity == 'high'"}
+        gate = _make_hitl_gate(gate_id=resolved_gate_id)
+        gate.context_json = context
+        graph = {
+            "nodes": [],
+            "edges": [
+                {"source": source, "target": target, "hitl_gate_config": {"description": "MCP briefing description."}}
+            ],
+        }
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 1
+        gates_result = MagicMock()
+        gates_result.scalars.return_value = [gate]
+        snapshot_id = uuid.uuid4()
+        run_rows_result = MagicMock()
+        run_rows_result.all.return_value = [(gate.run_id, snapshot_id)]
+        snapshot_rows_result = MagicMock()
+        snapshot_rows_result.all.return_value = [(snapshot_id, graph)]
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result, run_rows_result, snapshot_rows_result])
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await list_pending_hitl()
+
+        assert result["gates"][0]["description"] == "MCP briefing description."
+        assert result["gates"][0]["context"] == context
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -529,14 +591,19 @@ class TestListPendingHitl(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        gates = [_make_hitl_gate(gate_id=f"gate-{i}") for i in range(20)]
+        shared_run_id = uuid.uuid4()
+        gates = [_make_hitl_gate(gate_id=f"gate-{i}", run_id=shared_run_id) for i in range(20)]
         count_result = MagicMock()
         count_result.scalar_one.return_value = 25
         gates_result = MagicMock()
         gates_result.scalars.return_value = gates
+        run_rows_result = MagicMock()
+        run_rows_result.all.return_value = [(shared_run_id, uuid.uuid4())]
+        snapshot_rows_result = MagicMock()
+        snapshot_rows_result.all.return_value = []
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result])
+        mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result, run_rows_result, snapshot_rows_result])
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await list_pending_hitl()

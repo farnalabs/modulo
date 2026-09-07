@@ -785,14 +785,18 @@ def test_single_migration_head() -> None:
     # now the penultimate link.
     chaining_off_0188 = [p for p in revisions if parents[p] == "0188_pipeline_run_context_defaults_default"]
     assert [_basename(p) for p in chaining_off_0188] == ["0189_agent_runner_bindings.py"]
-    # 0190_bundled_runner_seed_backfill (this PR, FAR-590 D4 Bundled Runner seed backfill,
-    # renumbered from 0189 to avoid the collision with main's 0189_agent_runner_bindings and
-    # re-parented onto 0189_agent_runner_bindings) chains off 0189 and is the single head.
+    # 0190_hitl_claim_context_json (FAR-613, already merged to main) chains off
+    # 0189_agent_runner_bindings (it renumbered past main's 0182 head to avoid a collision).
     chaining_off_0189 = [p for p in revisions if parents[p] == "0189_agent_runner_bindings"]
-    assert [_basename(p) for p in chaining_off_0189] == ["0190_bundled_runner_seed_backfill.py"]
-    # Nothing chains off 0190_bundled_runner_seed_backfill -> it is the single head.
-    chaining_off_0190 = [p for p in revisions if parents[p] == "0190_bundled_runner_seed_backfill"]
-    assert chaining_off_0190 == []
+    assert [_basename(p) for p in chaining_off_0189] == ["0190_hitl_claim_context_json.py"]
+    # 0191_bundled_runner_seed_backfill (this PR, FAR-590 D4 Bundled Runner seed backfill,
+    # renumbered from 0190 to avoid the collision with main's 0190_hitl_claim_context_json and
+    # re-parented onto 0190_hitl_claim_context_json) chains off 0190 and is the single head.
+    chaining_off_0190 = [p for p in revisions if parents[p] == "0190_hitl_claim_context_json"]
+    assert [_basename(p) for p in chaining_off_0190] == ["0191_bundled_runner_seed_backfill.py"]
+    # Nothing chains off 0191_bundled_runner_seed_backfill -> it is the single head.
+    chaining_off_0191 = [p for p in revisions if parents[p] == "0191_bundled_runner_seed_backfill"]
+    assert chaining_off_0191 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

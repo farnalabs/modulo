@@ -2637,6 +2637,9 @@ class TestResourceGaps(_AuthContext):
         gate.account_id = None
         gate.required_team_id = uuid.uuid4()
         gate.expires_at = _NOW
+        # FAR-613: a captured fire-time briefing is present on the claim row, so
+        # the resource renders it directly (no snapshot-config fallback read).
+        gate.context_json = {"description": "Gate briefing", "trigger": "node"}
         run = MagicMock()
         run.owner_team_id = None
         team = MagicMock()

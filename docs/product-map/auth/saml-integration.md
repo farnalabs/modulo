@@ -19,7 +19,7 @@ status: covered
 
 SAML 2.0 upstream integration via python3-saml: IdP metadata parsing,
 `AuthnRequest` generation, and `SAMLResponse` parsing with full XML digital
-signature verification, wired into the SSO ACS flow (`feat-auth-sso-provider-ui`).
+signature verification, wired into the SSO ACS flow (`feat-sso`).
 
 ## Behaviours
 
