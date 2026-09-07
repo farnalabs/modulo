@@ -1763,7 +1763,13 @@ export default {
       "try_adjusting_filters": "Try adjusting your filters or wait for notifications to be sent.",
       "no_additional_details": "No additional details available.",
       "view_dead_lettered": "View Dead Lettered",
-      "dead_letter_queue_description": "{count} undeliverable notification(s) across all endpoints"
+      "dead_letter_queue_description": "{count} undeliverable notification across all endpoints | {count} undeliverable notifications across all endpoints",
+      "deliveries_count": "{count} delivery | {count} deliveries",
+      "expand_delivery": "Expand delivery {id}",
+      "retry_failed": "Retry failed:",
+      "retry_request_failed": "Retry request failed:",
+      "retried_deliveries_count": "{count} delivery retried | {count} deliveries retried",
+      "errors_count": "{count} error | {count} errors"
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",

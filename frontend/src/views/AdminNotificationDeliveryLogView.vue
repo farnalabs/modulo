@@ -8,7 +8,7 @@
         <div>
           <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</label>
           <Select
-  aria-label="Status"
+  :aria-label="$t('views.AdminNotificationDeliveryLogView.status')"
   v-model="filterStatus"
   :placeholder="$t('views.AdminNotificationDeliveryLogView.status')"
   data-testid="admin-notification-log-status"
@@ -25,7 +25,7 @@
         <div>
           <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
           <Select
-  aria-label="Event Type"
+  :aria-label="$t('views.AdminAuditView.event_type')"
   v-model="filterEventType"
   :placeholder="$t('views.AdminAuditView.event_type')"
   data-testid="admin-notification-log-event-type"
@@ -82,7 +82,7 @@
         </div>
       </div>
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
-        {{ total }} delivery{{ total === 1 ? '' : 'ies' }}
+        {{ $t('views.AdminNotificationDeliveryLogView.deliveries_count', { count: total }, total) }}
       </div>
       <div
         v-if="retrySuccessMessage"
@@ -130,7 +130,7 @@
                 <button
                   type="button"
                   class="inline-flex items-center rounded p-1 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :aria-label="'Expand delivery ' + entry.id"
+                  :aria-label="$t('views.AdminNotificationDeliveryLogView.expand_delivery', { id: entry.id })"
                   :data-testid="'admin-notification-log-expand-' + entry.id"
                   @click.stop="toggleRow(entry.id)"
                 >
@@ -229,7 +229,7 @@
           <div>
             <h3 class="text-base font-semibold">{{ $t('views.AdminNotificationDeliveryLogView.dead_letter_queue') }}</h3>
             <p class="text-sm text-muted-foreground">
-              {{ $t('views.AdminNotificationDeliveryLogView.dead_letter_queue_description', { count: deadLetteredCount }) }}
+              {{ $t('views.AdminNotificationDeliveryLogView.dead_letter_queue_description', { count: deadLetteredCount }, deadLetteredCount) }}
             </p>
           </div>
           <button
@@ -261,6 +261,9 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import { ChevronRight } from '@lucide/vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 type DeliveryLogEntry = components['schemas']['DeliveryLogEntry']
 interface DeliveryLogPage {
@@ -373,7 +376,7 @@ function showDeadLettered() {
 
 async function retryDelivery(entry: DeliveryLogEntry) {
   if (!entry.endpoint_id) {
-    retryMessages.value[entry.id] = { type: 'error', text: 'Cannot retry: missing endpoint ID' }
+    retryMessages.value[entry.id] = { type: 'error', text: t('views.AdminNotificationDeliveryLogView.cannot_retry_missing_endpoint_id') }
     return
   }
   retryingId.value = entry.id
@@ -392,18 +395,18 @@ async function retryDelivery(entry: DeliveryLogEntry) {
       },
     )
     if (err) {
-      retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${formatApiError(err)}` }
+      retryMessages.value[entry.id] = { type: 'error', text: `${t('views.AdminNotificationDeliveryLogView.retry_failed')} ${formatApiError(err)}` }
     } else if (data) {
       if (data.success) {
         await loadDeliveries()
-        retryMessages.value[entry.id] = { type: 'success', text: 'Retry succeeded' }
+        retryMessages.value[entry.id] = { type: 'success', text: t('views.AdminNotificationDeliveryLogView.retry_succeeded') }
       } else {
         await loadDeliveries()
-        retryMessages.value[entry.id] = { type: 'error', text: `Retry failed: ${data.error || `HTTP ${data.status_code}`}` }
+        retryMessages.value[entry.id] = { type: 'error', text: `${t('views.AdminNotificationDeliveryLogView.retry_failed')} ${data.error || `HTTP ${data.status_code}`}` }
       }
     }
   } catch (e: unknown) {
-    retryMessages.value[entry.id] = { type: 'error', text: `Retry request failed: ${formatApiError(e)}` }
+    retryMessages.value[entry.id] = { type: 'error', text: `${t('views.AdminNotificationDeliveryLogView.retry_request_failed')} ${formatApiError(e)}` }
   } finally {
     retryingId.value = null
   }
@@ -417,15 +420,17 @@ async function retryAllFailed() {
   try {
     const { data, error: err } = await api.POST('/api/v1/admin/notifications/deliveries/retry-all-failed', {})
     if (err) {
-      error.value = `Retry all failed: ${formatApiError(err)}`
+      error.value = `${t('views.AdminNotificationDeliveryLogView.retry_all_failed_1')} ${formatApiError(err)}`
     } else if (data) {
       await loadDeliveries()
       const result = data as unknown as { retried: number; success: boolean; errors?: unknown[] }
-      const msg = `Retried ${result.retried} deliver${result.retried === 1 ? 'y' : 'ies'}`
-      retrySuccessMessage.value = result.success ? msg : `${msg} with ${result.errors?.length || 0} error(s)`
+      const msg = t('views.AdminNotificationDeliveryLogView.retried_deliveries_count', { count: result.retried }, result.retried)
+      retrySuccessMessage.value = result.success
+        ? msg
+        : `${msg} with ${t('views.AdminNotificationDeliveryLogView.errors_count', { count: result.errors?.length || 0 }, result.errors?.length || 0)}`
     }
   } catch (e: unknown) {
-    error.value = `Retry all request failed: ${formatApiError(e)}`
+    error.value = `${t('views.AdminNotificationDeliveryLogView.retry_all_request_failed')} ${formatApiError(e)}`
   } finally {
     retryingAll.value = false
   }
