@@ -13,7 +13,7 @@
     </div>
     <template v-else>
       <div v-if="showForm" class="card p-6">
-        <h2 class="mb-4 text-base font-semibold" data-testid="admin-views-form-title">{{ editingId ? 'Edit View' : 'New View' }}</h2>
+        <h2 class="mb-4 text-base font-semibold" data-testid="admin-views-form-title">{{ editingId ? $t('views.AdminViewsView.edit_view_1') : $t('views.AdminViewsView.new_view') }}</h2>
         <form class="space-y-4" @submit.prevent="handleSave">
           <div>
             <label for="adminviewsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.name') }}</label>
@@ -28,7 +28,7 @@
           <div>
             <label for="adminviewsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
             <Select
-  aria-label="View type"
+  :aria-label="$t('views.AdminViewsView.view_type')"
   v-model="form.view_type"
   placeholder="table"
   data-testid="admin-views-type-select"
@@ -74,7 +74,7 @@
             <div>
               <label for="adminviewsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
             <Select
-  aria-label="Sort order"
+  :aria-label="$t('components.NodeCategoryEditor.sort_order')"
   v-model="form.sort_order"
   placeholder="desc"
   data-testid="admin-views-sort-order-select"
@@ -106,7 +106,7 @@
         </form>
       </div>
       <div v-if="views.length === 0 && !showForm" class="card p-8 text-center">
-        <Table2 class="mx-auto h-16 w-16 text-muted-foreground/40" />
+        <Table2 class="mx-auto h-16 w-16 text-muted-foreground/40" aria-hidden="true" />
         <p class="mt-4 text-lg font-medium">{{ $t('views.AdminViewsView.no_saved_views_yet') }}</p>
         <p class="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
           {{ $t('views.AdminViewsView.empty_state_description') }}
@@ -116,8 +116,8 @@
           target="_blank"
           class="mt-4 inline-flex items-center gap-1 text-sm text-primary hover:underline"
         >
-          {{ $t('views.AdminViewsView.learn_about_saved_views') }}
-          <ExternalLink class="h-3.5 w-3.5" />
+           {{ $t('views.AdminViewsView.learn_about_saved_views') }}
+           <ExternalLink class="h-3.5 w-3.5" aria-hidden="true" />
         </a>
       </div>
       <div v-if="views.length > 0" class="overflow-hidden rounded-lg border">
@@ -154,7 +154,7 @@
       </div>
       <div v-if="deleteConfirmId" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
         <p class="text-sm font-medium text-destructive">{{ $t('views.AdminViewsView.confirm_delete_title', { name: deleteConfirmName }) }}</p>
-        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminViewsView.action_cannot_be_undone') }}</p>
+        <p class="mt-1 text-sm text-destructive/80">{{ $t('views.AdminViewsView.this_action_cannot_be_undone') }}</p>
         <div class="mt-3 flex items-center gap-2">
           <Button :disabled="deleting" severity="danger" data-testid="admin-views-delete-confirm" @click="deleteView">
             {{ deleting ? $t('views.AdminViewsView.deleting') : $t('views.AdminViewsView.delete') }}
@@ -183,10 +183,13 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatDateShort } from '../lib/formatDate'
 import { formatApiError } from '../lib/api/formatError'
+import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
 import TableActions from '../components/shared/TableActions.vue'
 import { Table2, ExternalLink } from '@lucide/vue'
+
+const { t } = useI18n()
 
 interface SavedView {
   id: string
@@ -206,7 +209,7 @@ const { data: viewsData, loading, error, load: loadViews } = useDataFetch(
       const res = await fetch('/api/v1/views', { headers: getHeaders() })
       if (!res.ok) {
         const errData = await res.json().catch(() => null)
-        return { error: { detail: errData?.detail ?? `Failed to load views (${res.status})` } }
+        return { error: { detail: errData?.detail ?? t('views.AdminViewsView.failed_to_load_views', { status: String(res.status) }) } }
       }
       const data = await res.json()
       return { data: (data.items ?? data) as SavedView[] }
@@ -298,7 +301,7 @@ async function handleSave() {
       try {
         filters = JSON.parse(form.value.filters)
       } catch {
-        throw new Error('Filters must be valid JSON')
+        throw new Error(t('views.AdminViewsView.filters_must_be_valid_json'))
       }
     }
 
@@ -324,7 +327,7 @@ async function handleSave() {
     })
     if (!res.ok) {
       const errData = await res.json().catch(() => null)
-      throw new Error(errData?.detail ?? `Save failed (${res.status})`)
+      throw new Error(errData?.detail ?? t('views.AdminViewsView.save_failed', { status: String(res.status) }))
     }
     closeForm()
     await loadViews()
@@ -353,7 +356,7 @@ async function deleteView() {
     })
     if (!res.ok && res.status !== 204) {
       const errData = await res.json().catch(() => null)
-      throw new Error(errData?.detail ?? `Delete failed (${res.status})`)
+      throw new Error(errData?.detail ?? t('views.AdminViewsView.delete_failed', { status: String(res.status) }))
     }
     deleteConfirmId.value = null
     await loadViews()
@@ -367,7 +370,7 @@ async function deleteView() {
 async function duplicateView(v: SavedView) {
   try {
     const payload: Record<string, unknown> = {
-      name: `${v.name} (copy)`,
+      name: `${v.name}${t('views.AdminViewsView.copy_suffix')}`,
       view_type: v.view_type,
       filters: v.filters,
       columns: v.columns,
@@ -381,7 +384,7 @@ async function duplicateView(v: SavedView) {
     })
     if (!res.ok) {
       const errData = await res.json().catch(() => null)
-      throw new Error(errData?.detail ?? `Duplicate failed (${res.status})`)
+      throw new Error(errData?.detail ?? t('views.AdminViewsView.duplicate_failed', { status: String(res.status) }))
     }
     await loadViews()
   } catch (e: unknown) {
@@ -393,17 +396,17 @@ function viewActions(v: SavedView) {
   return [
     {
       key: 'duplicate',
-      label: 'Duplicate',
+      label: t('views.AdminViewsView.duplicate'),
       onClick: () => duplicateView(v),
     },
     {
       key: 'edit',
-      label: 'Edit',
+      label: t('views.AdminViewsView.edit'),
       onClick: () => openEditForm(v),
     },
     {
       key: 'delete',
-      label: 'Delete',
+      label: t('views.AdminViewsView.delete'),
       onClick: () => confirmDelete(v),
       danger: true,
     },

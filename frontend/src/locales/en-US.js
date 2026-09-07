@@ -2505,7 +2505,15 @@ export default {
       "deleting": "Deleting...",
       "delete": "Delete",
       "confirm_delete_title": "Delete \"{name}\"?",
-      "action_cannot_be_undone": "This action cannot be undone"
+      "this_action_cannot_be_undone": "This action cannot be undone.",
+      "failed_to_load_views": "Failed to load views ({status})",
+      "save_failed": "Save failed ({status})",
+      "delete_failed": "Delete failed ({status})",
+      "duplicate_failed": "Duplicate failed ({status})",
+      "copy_suffix": " (copy)",
+      "edit": "Edit",
+      "delete": "Delete",
+      "duplicate": "Duplicate"
     },
     "ProductAnalytics": {
       "consent_prompt_title": "Help improve Modulo",
