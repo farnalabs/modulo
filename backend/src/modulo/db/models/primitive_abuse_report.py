@@ -8,6 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
 
+# SQL referential action shared by every nullable FK on this model: when the
+# referenced row is deleted, the column is nulled rather than cascading.
+ONDELETE_SET_NULL = "SET NULL"
+
 
 class PrimitiveAbuseReport(OrgScoped):
     """Reports of abusive/inappropriate library primitive ratings."""
@@ -27,14 +31,14 @@ class PrimitiveAbuseReport(OrgScoped):
         index=True,
     )
     rating_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("primitive_ratings.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("primitive_ratings.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
     reporter_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewer_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )

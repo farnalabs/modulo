@@ -32,6 +32,10 @@ if TYPE_CHECKING:
     from modulo.db.models.team import Team
 
 
+# SQL referential action shared by every nullable FK on this model: when the
+# referenced row is deleted, the column is nulled rather than cascading.
+ONDELETE_SET_NULL: Final[str] = "SET NULL"
+
 # Single source of truth for run status sets (ADR 020 / dist/runtime-core A1).
 # Both are subsets of the ``ck_runs_status`` CHECK-constraint values. The
 # never-entered ``waiting_for_lock`` sub-state was excised in migration 0074/0075
@@ -190,19 +194,19 @@ class Run(OrgScoped):
         Uuid(), ForeignKey("pipeline_snapshots.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     trigger_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("triggers.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("triggers.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("runs.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
     run_number: Mapped[int] = mapped_column(Integer, nullable=False)
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
     )
     account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     # FAR-410 / FAR-402 P5: the logical idempotency identity of the operator
@@ -314,7 +318,7 @@ class Run(OrgScoped):
     work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     is_replay: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     variant_group_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("variant_groups.id", ondelete="SET NULL")
+        Uuid(), ForeignKey("variant_groups.id", ondelete=ONDELETE_SET_NULL)
     )
     # FAR-332 batch-scoped variant comparison (migration 0118). Every run fired
     # together in one ``run_variant_batch`` shares the same ``batch_id``; the

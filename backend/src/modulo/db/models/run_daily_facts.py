@@ -49,6 +49,11 @@ if TYPE_CHECKING:
     from modulo.db.models.team import Team
 
 
+# SQL referential action shared by every nullable FK on this model: when the
+# referenced row is deleted, the column is nulled rather than cascading.
+ONDELETE_SET_NULL = "SET NULL"
+
+
 class RunDailyFact(OrgScoped):
     """A daily analytics fact for one terminal run.
 
@@ -77,14 +82,16 @@ class RunDailyFact(OrgScoped):
         ),
     )
     run_date: Mapped[date] = mapped_column(Date, nullable=False)
-    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="SET NULL"), index=True)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True
+    )
     team_name: Mapped[str | None] = mapped_column(String(255))
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipelines.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("pipelines.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     pipeline_name: Mapped[str | None] = mapped_column(String(255))
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipeline_folders.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("pipeline_folders.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
