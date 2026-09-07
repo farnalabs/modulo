@@ -83,8 +83,10 @@ def _preflight_violation_check(name: str, expr: str) -> None:
     violation_count = (
         op.get_bind()
         .execute(
-            sa.text(f"SELECT count(*) FROM {_TABLE} WHERE NOT ({expr})")  # noqa: S608
+            sa.text(f"SELECT count(*) FROM {_TABLE} WHERE NOT ({expr})")  # noqa: S608  # nosec B608
         )
+        .scalar_one()
+    )
         .scalar_one()
     )
     if violation_count:
