@@ -200,8 +200,18 @@ class HITLManager:
         pipeline_id: uuid.UUID,
         org_id: uuid.UUID,
         required_team_id: uuid.UUID | None = None,
+        context_json: dict[str, Any] | None = None,
     ) -> HitlClaim:
-        """Insert a new unclaimed gate row. Idempotent if called again for same key."""
+        """Insert a new unclaimed gate row. Idempotent if called again for same key.
+
+        ``context_json`` (FAR-613) is the fire-time decision briefing captured
+        by the executor's interrupt handler — the resolved gate description,
+        condition, trigger kind, source node, bounded artifact excerpts, and
+        the raising output's reason. Persisted on the claim row so the
+        reviewer's briefing reflects the graph state at FIRE time. An
+        idempotent re-entry (existing row) leaves the original context
+        untouched — a replay must never overwrite the first fire's briefing.
+        """
         # Check for existing row first (unique constraint: run_id + gate_id).
         # Race: a concurrent caller may insert between our check and flush.
         # Handle IntegrityError gracefully by fetching the existing row.
@@ -215,6 +225,7 @@ class HITLManager:
             pipeline_id=pipeline_id,
             required_team_id=required_team_id,
             expires_at=datetime.now(UTC) + timedelta(minutes=_DEFAULT_EXPIRY_MINUTES),
+            context_json=context_json,
         )
         session.add(gate)
         try:

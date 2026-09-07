@@ -43,6 +43,15 @@ class HitlClaim(OrgScoped):
     # been dispatched for this claim — keeps the job idempotent (one warning
     # per claim, no re-alerting every tick).
     overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # FAR-613: the fire-time decision briefing, captured by the executor's
+    # interrupt handler — {description, condition, trigger, source_node_id,
+    # source_node_label, artifacts, reason, pipeline_name}. Persisted on the
+    # claim row so the reviewer's briefing reflects the graph state at FIRE
+    # time and reads without a per-gate snapshot walk. Nullable: legacy gates
+    # that fired before this column existed carry NULL (the UI renders a muted
+    # "no description" fallback). jsonb in the parallel migration; generic
+    # JSON keeps SQLite/MariaDB parity (same pattern as decision_payload).
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
     # NOTE (qa F13): no ``parked_at`` column. The park sweep (run_admission.
     # park_expired_hitl_runs) marks a parked run via the RUN's ``hitl_parked``
     # status — the gate row is untouched (park ≠ decide) and a separate stamp

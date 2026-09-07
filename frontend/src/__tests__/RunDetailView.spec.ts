@@ -1587,6 +1587,49 @@ describe('RunDetailView HITL gates', () => {
     expect(wrapper.text()).toContain('reject_target_missing')
     wrapper.unmount()
   })
+
+  it('shows the decision briefing with the gate description above the controls (FAR-613)', async () => {
+    mockPendingGates = [
+      gate({
+        description: 'Approve only when the generated comments are accurate and safe to post.',
+        context: {
+          description: 'Approve only when the generated comments are accurate and safe to post.',
+          trigger: 'condition',
+          condition: "node_id=='550e8400-e29b-41d4-a716-446655440000'",
+          source_node_id: '550e8400-e29b-41d4-a716-446655440000',
+          source_node_label: 'Comment Generator',
+          artifacts: [{ node_id: '550e8400-e29b-41d4-a716-446655440000', summary: '{"ok":true}' }],
+          pipeline_name: 'PR Reviewer',
+        },
+      }),
+    ]
+    const wrapper = await mountAwaiting()
+    const briefing = wrapper.find('[data-testid="hitl-briefing"]')
+    expect(briefing.exists()).toBe(true)
+    expect(briefing.text()).toContain('Approve only when the generated comments are accurate and safe to post.')
+    // The briefing sits ABOVE the claim control in the gate section.
+    const section = wrapper.find('section')
+    expect(section.text()).toContain('Why this gate needs a decision')
+    // Details are collapsed until toggled.
+    expect(wrapper.find('[data-testid="hitl-briefing-details"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    const details = wrapper.find('[data-testid="hitl-briefing-details"]')
+    expect(details.exists()).toBe(true)
+    expect(details.text()).toContain('Comment Generator')
+    expect(details.text()).toContain('PR Reviewer')
+    wrapper.unmount()
+  })
+
+  it('renders the muted no-description fallback for a legacy gate (FAR-613)', async () => {
+    mockPendingGates = [gate({ description: null, context: null })]
+    const wrapper = await mountAwaiting()
+    const fallback = wrapper.find('[data-testid="hitl-briefing-description-fallback"]')
+    expect(fallback.exists()).toBe(true)
+    expect(fallback.text()).toContain('No description provided for this gate')
+    // The gate stays claimable — the legacy briefing never breaks the flow.
+    expect(wrapper.find('[data-testid="run-detail-claim-gate"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
 })
 
 describe('RunDetailView guardrail override access', () => {

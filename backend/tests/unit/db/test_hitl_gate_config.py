@@ -19,8 +19,11 @@ from modulo.db.crud.hitl_gate_config import (
     hitl_gate_exists_but_unresolved,
     human_only_denial,
     make_gate_id,
+    normalize_gate_description,
     parse_hitl_gate_id,
+    resolve_gate_descriptions,
     resolve_hitl_gate_config,
+    snapshot_gate_config_map,
 )
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -431,3 +434,129 @@ class TestHumanOnlyDenial:
     def test_unresolvable_not_fired_allows(self) -> None:
         verdict = human_only_denial(None, non_browser_credential=True, gate_fired=False)
         assert verdict is None
+
+
+class TestSnapshotGateConfigMap:
+    """FAR-613: the whole-snapshot gate-config walk behind the pending-gate
+    description maps — covers BOTH gate shapes with ONE walk."""
+
+    def test_covers_edge_gate_shape(self) -> None:
+        config = {"label": "Sign-off", "description": "Human approves the release."}
+        graph = {
+            "nodes": [],
+            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": config}],
+        }
+        assert snapshot_gate_config_map(graph) == {_gate_id(): config}
+
+    def test_covers_node_gate_shape_over_outgoing_edges(self) -> None:
+        config = {"description": "Human confirms the resolution."}
+        graph = {
+            "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": config}],
+            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID)}],
+        }
+        assert snapshot_gate_config_map(graph) == {_gate_id(): config}
+
+    def test_node_gate_does_not_shadow_a_matching_edge_gate(self) -> None:
+        edge_config = {"description": "Edge-level description wins."}
+        node_config = {"description": "Node-level description."}
+        graph = {
+            "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": node_config}],
+            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": edge_config}],
+        }
+        assert snapshot_gate_config_map(graph) == {_gate_id(): edge_config}
+
+    def test_inert_hitl_config_on_non_hitl_node_ignored(self) -> None:
+        graph = {
+            "nodes": [{"id": str(_SOURCE_ID), "node_type": "agent", "hitl_config": {"description": "inert"}}],
+            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID)}],
+        }
+        assert not snapshot_gate_config_map(graph)
+
+
+class TestNormalizeGateDescription:
+    def test_strips_usable_description(self) -> None:
+        config = {"description": "  Human approves the release.  "}
+        assert normalize_gate_description(config) == "Human approves the release."
+
+    def test_blank_or_missing_or_non_string_maps_none(self) -> None:
+        assert normalize_gate_description({"description": "   "}) is None
+        assert normalize_gate_description({}) is None
+        assert normalize_gate_description({"description": 42}) is None
+        assert normalize_gate_description(None) is None
+
+
+class TestResolveGateDescriptions:
+    """FAR-613: batched per-gate description resolution for the org-level
+    pending surfaces (REST + MCP) — two IN queries, never per-gate walks."""
+
+    def _make_batched_session(self, run_rows: list, snapshot_rows: list) -> AsyncMock:
+        async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+            result = MagicMock()
+            text = str(stmt)
+            if "pipeline_snapshots" in text:
+                result.all = MagicMock(return_value=snapshot_rows)
+            elif "runs" in text:
+                result.all = MagicMock(return_value=run_rows)
+            else:
+                raise AssertionError(f"Unexpected query in resolver: {text}")
+            return result
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+        return session
+
+    def _gate(self, run_id: uuid.UUID, gate_id: str) -> MagicMock:
+        gate = MagicMock()
+        gate.run_id = run_id
+        gate.gate_id = gate_id
+        return gate
+
+    async def test_resolves_description_via_batched_queries(self) -> None:
+        edge_gate_id = _gate_id()
+        graph = {
+            "nodes": [{"id": str(_SOURCE_ID), "node_type": "hitl", "hitl_config": {"description": "Node gate why."}}],
+            "edges": [
+                {
+                    "source": str(_SOURCE_ID),
+                    "target": str(_TARGET_ID),
+                    "hitl_gate_config": {"description": "Edge gate why."},
+                }
+            ],
+        }
+        gate = self._gate(_RUN_ID, edge_gate_id)
+        session = self._make_batched_session(
+            run_rows=[(_RUN_ID, _SNAPSHOT_ID)],
+            snapshot_rows=[(_SNAPSHOT_ID, graph)],
+        )
+
+        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, edge_gate_id): "Edge gate why."}
+
+    async def test_missing_snapshot_maps_none(self) -> None:
+        gate = self._gate(_RUN_ID, _gate_id())
+        session = self._make_batched_session(run_rows=[(_RUN_ID, None)], snapshot_rows=[])
+
+        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, gate.gate_id): None}
+
+    async def test_gate_without_usable_description_maps_none(self) -> None:
+        gate = self._gate(_RUN_ID, _gate_id())
+        graph = {
+            "nodes": [],
+            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": {"label": "no desc"}}],
+        }
+        session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
+
+        result = await resolve_gate_descriptions(session, gates=[gate], org_id=_ORG_ID)
+
+        assert result == {(_RUN_ID, gate.gate_id): None}
+
+    async def test_empty_gates_short_circuits_without_queries(self) -> None:
+        session = self._make_batched_session(run_rows=[], snapshot_rows=[])
+
+        result = await resolve_gate_descriptions(session, gates=[], org_id=_ORG_ID)
+
+        assert result == {}
+        assert session.execute.await_count == 0

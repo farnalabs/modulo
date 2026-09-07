@@ -408,6 +408,8 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
                             "human_only": False,
                             "gate_id": "review_before_pr",
                             "overdue_threshold_minutes": 60,
+                            # FAR-613: gates must explain why a human decides.
+                            "description": "Review the generated changes and test results before a PR is created.",
                         },
                     },
                 ],

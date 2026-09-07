@@ -665,7 +665,12 @@ class TestListPendingHitlTeamScope(_AuthContext):
         total_result.scalar_one.return_value = 1
         gates_result = MagicMock()
         gates_result.scalars.return_value = [MagicMock()]
-        session.execute.side_effect = [total_result, gates_result]
+        # FAR-613: the description resolver runs one more IN query (runs for
+        # snapshot ids) after the gate page loads; no run rows -> no
+        # resolvable description (the muted legacy fallback).
+        run_rows_result = MagicMock()
+        run_rows_result.all.return_value = []
+        session.execute.side_effect = [total_result, gates_result, run_rows_result]
         with patch("modulo.api.mcp_server._session") as mock_session:
             mock_session.return_value = _make_session_context(session)
             result = await list_pending_hitl()

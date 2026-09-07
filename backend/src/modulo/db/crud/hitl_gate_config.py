@@ -46,6 +46,7 @@ rather than silently allowed.
 """
 
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import select
@@ -150,6 +151,109 @@ def _config_from_hitl_nodes(graph_json: dict[str, Any], gate_id: str) -> dict[st
             if source == node_id and target is not None and make_gate_id(node_id, target) == gate_id:
                 return dict(config)
     return None
+
+
+def snapshot_gate_config_map(graph_json: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Map gate_id -> gate config for EVERY gate in a snapshot graph.
+
+    Covers both gate shapes: edge-level ``hitl_gate_config`` and FAR-402
+    node-level ``hitl_config`` (walked over each HITL node's outgoing edges,
+    the same derivation the compiler uses). The pending-gate endpoints use
+    this to resolve labels and descriptions for a whole run in ONE walk
+    instead of a per-gate config resolution.
+    """
+    configs: dict[str, dict[str, Any]] = {}
+    edges = graph_json.get("edges", [])
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        config = edge.get("hitl_gate_config")
+        if not isinstance(config, dict):
+            continue
+        source = edge_source_or_target(edge, "source")
+        target = edge_source_or_target(edge, "target")
+        if source is not None and target is not None:
+            configs[make_gate_id(source, target)] = config
+    for node in graph_json.get("nodes", []):
+        if not isinstance(node, dict) or node.get("node_type") != "hitl":
+            continue
+        config = node.get("hitl_config")
+        if not isinstance(config, dict):
+            continue
+        node_id = node.get("id")
+        if node_id is None:
+            continue
+        node_id = str(node_id)
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            target = edge_source_or_target(edge, "target")
+            source = edge_source_or_target(edge, "source")
+            if source == node_id and target is not None:
+                configs.setdefault(make_gate_id(node_id, target), dict(config))
+    return configs
+
+
+def normalize_gate_description(config: dict[str, Any] | None) -> str | None:
+    """The config's human description, or None when unusable (FAR-613).
+
+    Usable = a string whose non-empty trimmed form survives (whitespace-only
+    or non-string values carry no decision context). Both pending endpoints
+    and the MCP gate resource share this normalisation so every surface
+    renders the same "muted no-description fallback" for the same gates.
+    """
+    if not isinstance(config, dict):
+        return None
+    description = config.get("description")
+    if not isinstance(description, str) or not description.strip():
+        return None
+    return description.strip()
+
+
+async def resolve_gate_descriptions(
+    session: AsyncSession,
+    *,
+    gates: Sequence[HitlClaim],
+    org_id: uuid.UUID,
+) -> dict[tuple[uuid.UUID, str], str | None]:
+    """Resolve each gate's description from its run's snapshot graph (FAR-613).
+
+    The org-level pending surfaces (REST ``GET /api/v1/hitl/pending`` and the
+    MCP ``list_pending_hitl`` tool) share this — batched, two IN queries over
+    the pending gates' runs + snapshots, never a per-gate snapshot walk.
+    Keys are ``(run_id, gate_id)``. A gate whose snapshot is missing or whose
+    config carries no usable description maps to None (the UI renders the
+    muted no-description fallback). The queries add explicit
+    ``organisation_id`` filters as defence in depth (callers already set the
+    RLS org context).
+    """
+    description_by_gate: dict[tuple[uuid.UUID, str], str | None] = {}
+    if not gates:
+        return description_by_gate
+    run_rows = await session.execute(
+        select(Run.id, Run.snapshot_id).where(
+            Run.id.in_({g.run_id for g in gates}),
+            Run.organisation_id == org_id,
+        )
+    )
+    snapshot_id_by_run: dict[uuid.UUID, uuid.UUID] = {row[0]: row[1] for row in run_rows.all() if row[1] is not None}
+    graph_by_snapshot: dict[uuid.UUID, dict[str, Any]] = {}
+    if snapshot_id_by_run:
+        snap_rows = await session.execute(
+            select(PipelineSnapshot.id, PipelineSnapshot.graph_json).where(
+                PipelineSnapshot.id.in_(set(snapshot_id_by_run.values())),
+                PipelineSnapshot.organisation_id == org_id,
+            )
+        )
+        for row in snap_rows.all():
+            if isinstance(row[1], dict):
+                graph_by_snapshot[row[0]] = row[1]
+    for gate in gates:
+        snapshot_id = snapshot_id_by_run.get(gate.run_id)
+        graph = graph_by_snapshot.get(snapshot_id) if snapshot_id is not None else None
+        config = snapshot_gate_config_map(graph).get(gate.gate_id) if isinstance(graph, dict) else None
+        description_by_gate[(gate.run_id, gate.gate_id)] = normalize_gate_description(config)
+    return description_by_gate
 
 
 async def _config_from_live_edges(

@@ -269,6 +269,40 @@ def test_sanitize_redacts_secret_patterns():
     assert "<redacted>" in sanitize_error_text("postgres://user:supersecret@localhost/db")
 
 
+def test_sanitize_redacts_hyphenated_sk_key_shapes():
+    """FAR-613: the ``sk-`` redaction body class must include ``-`` so the
+    hyphenated vendor segments match. The current OpenAI key shapes run
+    ``sk-proj-…`` / ``sk-svcacct-…`` / ``sk-None-…`` and OpenRouter runs
+    ``sk-or-v1-…`` — a plain-alphanumeric body stops at the first hyphen and
+    leaked these unredacted (now load-bearing: FAR-613 persists briefing
+    excerpts through this sanitizer)."""
+    for key in (
+        "sk-proj-abcdefghij1234567890",
+        "sk-svcacct-abcdefghij1234567890",
+        "sk-None-abcdefghij1234567890",
+        "sk-or-v1-abcdefghij1234567890",
+    ):
+        sanitized = sanitize_error_text(f"key {key} here")
+        assert "<redacted>" in sanitized, key
+        assert key not in sanitized, key
+
+
+def test_sanitize_sk_pattern_keeps_short_innocuous_strings():
+    """The hyphenated body class does not widen the match surface onto short
+    innocuous strings — the 8-char minimum still applies to the whole body."""
+    assert sanitize_error_text("sk-1.5-turbo mode") == "sk-1.5-turbo mode"
+    assert sanitize_error_text("sk-or v1 short") == "sk-or v1 short"
+
+
+def test_sanitize_redacts_slack_rotateable_token_shape():
+    """The ``xox`` Slack pattern is aligned with the canonical shared list in
+    ``modulo.core.secret_patterns`` (``xox[baprs]-``) — the ``r`` (rotateable)
+    shape had drifted out of the sanitizer's char class."""
+    sanitized = sanitize_error_text("token xoxr-abcdefghij1234 here")
+    assert "<redacted>" in sanitized
+    assert "xoxr-abcdefghij1234" not in sanitized
+
+
 def test_sanitize_is_idempotent():
     sample = "boom: Bearer tok1234567890, key sk-abcdefghijkl1234"
     once = sanitize_error_text(sample)

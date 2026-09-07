@@ -786,9 +786,14 @@ def test_single_migration_head() -> None:
     # 0189_agent_runner_bindings re-parents onto 0188_pipeline_run_context_defaults_default.
     chaining_off_0188 = [p for p in revisions if parents[p] == "0188_pipeline_run_context_defaults_default"]
     assert [_basename(p) for p in chaining_off_0188] == ["0189_agent_runner_bindings.py"]
-    # Nothing chains off 0189_agent_runner_bindings -> it is the single head.
+    # 0190_hitl_claim_context_json (FAR-613) renumbers past main's head to avoid
+    # colliding with main's 0182_hitl_claims_active_sweep_indexes (already merged
+    # to main) and chains off 0189_agent_runner_bindings -> it is the single head.
     chaining_off_0189 = [p for p in revisions if parents[p] == "0189_agent_runner_bindings"]
-    assert chaining_off_0189 == []
+    assert [_basename(p) for p in chaining_off_0189] == ["0190_hitl_claim_context_json.py"]
+    # Nothing chains off 0190_hitl_claim_context_json -> single head.
+    chaining_off_0190 = [p for p in revisions if parents[p] == "0190_hitl_claim_context_json"]
+    assert chaining_off_0190 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

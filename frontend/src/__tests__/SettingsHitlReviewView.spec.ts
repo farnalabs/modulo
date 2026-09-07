@@ -370,7 +370,7 @@ describe('SettingsHitlReviewView', () => {
 
     // Network errors land in the catch path: the row on screen may be stale
     // (the claim may have landed before the connection dropped), so the
-    // refresh must fire here too — not only for API-error failures (FAR-612).
+    // refresh must fire here too ÔÇö not only for API-error failures (FAR-612).
     const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
     expect(pendingCallsAfter).toBe(pendingCallsBefore + 1)
     const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
@@ -429,5 +429,98 @@ describe('SettingsHitlReviewView', () => {
     expect(wrapper!.find('[data-testid="hitl-review-approve"]').exists()).toBe(true)
     expect(wrapper!.find('[data-testid="hitl-review-reject"]').exists()).toBe(true)
     expect(wrapper!.find('[data-testid="hitl-review-claim"]').exists()).toBe(false)
+  })
+  it('shows the decision briefing in the expanded panel (FAR-613)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/hitl/pending') {
+        return Promise.resolve({
+          data: {
+            gates: [
+              {
+                run_id: '550e8400-e29b-41d4-a716-446655440000',
+                gate_id: 'approval-gate-1',
+                pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
+                claimed_by: null,
+                claimed_at: null,
+                expires_at: null,
+                decision: null,
+                decision_at: null,
+                created_at: '2025-06-30T10:00:00Z',
+                description: 'Approve only when the generated comments are accurate and safe to post.',
+                context: {
+                  trigger: 'condition',
+                  condition: "node_id=='550e8400-e29b-41d4-a716-446655440000'",
+                  source_node_id: '550e8400-e29b-41d4-a716-446655440000',
+                  source_node_label: 'Comment Generator',
+                  artifacts: [{ node_id: '550e8400-e29b-41d4-a716-446655440000', summary: '{"ok":true}' }],
+                  pipeline_name: 'PR Reviewer',
+                },
+              },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-toggle-expand"]').trigger('click')
+    await nextTick()
+
+    const briefing = wrapper!.find('[data-testid="hitl-briefing"]')
+    expect(briefing.exists()).toBe(true)
+    expect(briefing.text()).toContain('Approve only when the generated comments are accurate and safe to post.')
+    // The briefing sits above the approve/reject controls in the actions column.
+    const actionsColumn = briefing.element.parentElement
+    expect(actionsColumn?.textContent).toContain('Approve')
+    // Details collapsed until toggled.
+    expect(wrapper!.find('[data-testid="hitl-briefing-details"]').exists()).toBe(false)
+    await wrapper!.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    expect(wrapper!.find('[data-testid="hitl-briefing-details"]').exists()).toBe(true)
+    expect(wrapper!.find('[data-testid="hitl-briefing-details"]').text()).toContain('Comment Generator')
+  })
+
+  it('renders the muted no-description fallback for a legacy gate (FAR-613)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue({
+      data: {
+        gates: [
+          {
+            run_id: '550e8400-e29b-41d4-a716-446655440000',
+            gate_id: 'approval-gate-1',
+            pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
+            claimed_by: null,
+            claimed_at: null,
+            expires_at: null,
+            decision: null,
+            decision_at: null,
+            created_at: '2025-06-30T10:00:00Z',
+            description: null,
+            context: null,
+          },
+        ],
+      },
+      error: undefined,
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await wrapper!.find('[data-testid="hitl-review-toggle-expand"]').trigger('click')
+    await nextTick()
+
+    const fallback = wrapper!.find('[data-testid="hitl-briefing-description-fallback"]')
+    expect(fallback.exists()).toBe(true)
+    expect(fallback.text()).toContain('No description provided for this gate')
+    // The gate stays claimable ÔÇö the legacy briefing never breaks the flow.
+    expect(wrapper!.find('[data-testid="hitl-review-claim"]').exists()).toBe(true)
   })
 })
