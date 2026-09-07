@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import PageHeader from '../components/shared/PageHeader.vue'
 
+const RIGHT_SLOT_FILTERS = '<span data-testid="right-slot-content">Filters</span>'
+
 function mountPageHeader(
   props: { title: string; subtitle?: string; backLink?: string; dataTestId?: string },
   options: { rightSlot?: string; routerPush?: ReturnType<typeof vi.fn> } = {},
@@ -46,7 +48,7 @@ describe('PageHeader', () => {
   })
 
   it('renders #right slot content', () => {
-    const wrapper = mountPageHeader({ title: 'Runs' }, { rightSlot: '<span data-testid="right-slot-content">Filters</span>' })
+    const wrapper = mountPageHeader({ title: 'Runs' }, { rightSlot: RIGHT_SLOT_FILTERS })
     expect(wrapper.find('[data-testid="right-slot-content"]').exists()).toBe(true)
   })
 
@@ -62,11 +64,10 @@ describe('PageHeader', () => {
     )
   })
 
-  it('makes the right-slot container full width and wrapping on mobile, nowrap intrinsic width at sm+ (FAR-627)', () => {
-    const wrapper = mountPageHeader({ title: 'Runs' }, { rightSlot: '<span data-testid="right-slot-content">Filters</span>' })
-    const rightContainer = wrapper.find('[data-testid="right-slot-content"]').element.parentElement
-    expect(rightContainer).toBeTruthy()
-    const classes = rightContainer!.className.split(' ')
-    expect(classes).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'sm:flex-nowrap', 'items-center', 'gap-2', 'w-full', 'sm:w-auto', 'sm:shrink-0']))
+  it('makes the right-slot container full width and wrapping on mobile, and rows it with nowrap intrinsic width at sm+ (FAR-627)', () => {
+    const wrapper = mountPageHeader({ title: 'Runs' }, { rightSlot: RIGHT_SLOT_FILTERS })
+    const rightContainer = wrapper.find('[data-testid="page-header-right"]')
+    expect(rightContainer.exists()).toBe(true)
+    expect(rightContainer.classes()).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'sm:flex-nowrap', 'items-center', 'gap-2', 'w-full', 'sm:w-auto', 'sm:shrink-0']))
   })
 })

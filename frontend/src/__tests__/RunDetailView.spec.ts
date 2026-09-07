@@ -1630,11 +1630,14 @@ describe('RunDetailView rendering extras', () => {
     // The detail view must still render cleanly without that section.
     mockWorkspaceLease = { status: 'failed', sandbox_id: 'sbx-123', duration_seconds: 5400, error_message: 'OOM killed' }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })
-    const ws = wrapper.text()
-    expect(ws).not.toContain('Workspace')
-    expect(ws).not.toContain('OOM killed')
-    expect(ws).not.toContain('1h 30m')
-    expect(ws).toContain('Run Detail')
+    // The /workspace-lease endpoint was dropped by migration 0177, so the UI
+    // section must not render. Assert the removed-only content is absent.
+    const text = wrapper.text()
+    expect(text).not.toContain('sbx-123')
+    expect(text).not.toContain('OOM killed')
+    expect(text).not.toContain('1h 30m')
+    expect(text).not.toContain('Workspace')
+    expect(text).toContain('Run Detail')
     wrapper.unmount()
   })
 

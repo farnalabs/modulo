@@ -49,8 +49,12 @@ _MIGRATION_PATH = (
 # 0179_drop_workspace_leases) continued off that, and the FAR-604 D2 HITL-capacity
 # migration (0180_hitl_parked_status, renumbered from 0177 after the invitations
 # collision and again from 0178 after the env_profiles_runner_docker collision)
-# re-parented onto 0179_drop_workspace_leases as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0181_hitl_claims_active_sweep_indexes"
+# re-parented onto 0179_drop_workspace_leases, the FAR-620 org-api-key scope
+# migration (0181_org_api_keys_scope) re-parented onto 0180, and this PR's
+# FAR-604 active-sweep migration (0182_hitl_claims_active_sweep_indexes,
+# renumbered from 0181 after the org_api_keys_scope collision) re-parented onto
+# 0181_org_api_keys_scope as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0182_hitl_claims_active_sweep_indexes"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

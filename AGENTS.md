@@ -51,6 +51,10 @@ modulo/
 
 ## Lessons Learned
 
+### Repo-wide pnpm overrides silently clobber transitive exact pins (2026-09-06)
+
+A frontend-workspace-wide override (`js-yaml: ^5.0.0` in `frontend/pnpm-workspace.yaml`) broke `pnpm run generate:api` (FAR-646): `@redocly/openapi-core@1.34.19` pins `js-yaml@4.3.1` exactly and reads the `types` export (`js_yaml_1.types.merge`) that js-yaml 5.x removed, so the override hoisted 5.4.1 into it and openapi-typescript crashed at require time — the fix is a scoped override (`@redocly/openapi-core>js-yaml: 4.3.1`, delete it if openapi-typescript ever upgrades to @redocly/openapi-core 2.x, which wants js-yaml ^5.2.2), and note pnpm v10+ reads overrides ONLY from pnpm-workspace.yaml (an `overrides` edit in frontend/package.json is silently ignored, so "fix it in package.json" cannot work).
+
 ### Postgres NUL-byte SQL gotcha: json-to-jsonb migrations are not lossless on populated databases
 
 Postgres forbids NUL bytes in any SQL string literal, and this makes every "obvious" pure-SQL approach to finding or stripping NUL-containing rows silently wrong. Discovered 2026-08-26 when migration `0129_runs_json_to_jsonb` (`ALTER ... TYPE jsonb USING col::jsonb`) failed on 5 NUL-byte rows in `runs.node_telemetry_json`, blocking the whole 0127-0150 migration chain on prod (DB stuck at `0126_human_set_eval_type`) and keeping the SAQ worker down (fleet-wide `fire_due_triggers` heartbeat alert storm). Three cleanup attempts failed before the root cause was understood.

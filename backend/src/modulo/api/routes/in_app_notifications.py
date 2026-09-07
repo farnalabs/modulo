@@ -21,7 +21,7 @@ from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.events.event_bus import get_event_bus
 from modulo.core.notifier.event_mapper import notification_categories
-from modulo.db.crud.account import get_account_by_id, update_account_preferences
+from modulo.db.crud.account import AccountNotFoundError, get_account_by_id, update_account_preferences
 from modulo.db.crud.notifications import (
     count_notifications_for_user,
     dismiss_notification,
@@ -346,7 +346,16 @@ async def update_preferences(
                     opt_outs=req.notification_opt_outs,
                 )
             if dashboard_level is not None:
-                await update_account_preferences(session, principal.account_id, {_DASHBOARD_LEVEL_KEY: dashboard_level})
+                # FAR-620: the helper takes the account row lock — the
+                # dashboard key can no longer drop a sibling key
+                # (e.g. ``hitl_email``) written concurrently. A missing
+                # account is now loud (404) instead of a silent no-op.
+                try:
+                    await update_account_preferences(
+                        session, principal.account_id, {_DASHBOARD_LEVEL_KEY: dashboard_level}
+                    )
+                except AccountNotFoundError:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found") from None
             opted_out = await get_opted_out_categories(
                 session=session,
                 org_id=principal.organisation_id,

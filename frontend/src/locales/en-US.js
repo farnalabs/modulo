@@ -521,7 +521,19 @@ export default {
       "password_must_be_at_least_8_characters": "Password must be at least 8 characters",
       "member_since": "Member since {date}",
       "my_teams": "My Teams",
-      "not_a_member_of_any_team": "You are not a member of any team."
+      "not_a_member_of_any_team": "You are not a member of any team.",
+      "hitl_email_alerts": "HITL email alerts",
+      "hitl_email_alerts_description": "Get an email when a pipeline stops at a HITL gate and waits for your review.",
+      "hitl_email_default_label": "Email me about HITL gates in any pipeline",
+      "hitl_email_default_help": "Emails are off by default. Per-pipeline overrides below win over this switch.",
+      "hitl_email_per_pipeline": "Per-pipeline overrides",
+      "hitl_email_overrides_help": "Choose On or Off to override the default for a pipeline; Default follows the switch above.",
+      "hitl_email_override_default": "Default",
+      "hitl_email_override_on": "On",
+      "hitl_email_override_off": "Off",
+      "hitl_email_select_aria": "HITL email preference for pipeline {name}",
+      "hitl_email_saved": "HITL email preferences saved.",
+      "hitl_email_no_pipelines": "No pipelines available."
     },
     "ForceChangePasswordView": {
       "change_your_password": "Set a new password",
@@ -1775,6 +1787,7 @@ export default {
       "the_url_clients_use_to_connect_to_the_mcp_server": "The URL clients use to connect to the MCP server",
       "server_url": "Server URL",
       "create_and_manage_api_keys_for_mcp_client_authentication": "Create and manage API keys for MCP client authentication",
+      "api_keys_act_org_wide_note": "API keys act org-wide. Per-user keys (scope: user) are mintable via the API; full key-management UX is coming in Phase 2.",
       "name": "Name",
       "key_prefix": "Key Prefix",
       "role": "Role",

@@ -1,7 +1,7 @@
 """Add HITL active-claim sweep partial indexes (FAR-604 capacity sweeps).
 
-Revision ID: 0181_hitl_claims_active_sweep_indexes
-Revises: 0180_hitl_parked_status
+Revision ID: 0182_hitl_claims_active_sweep_indexes
+Revises: 0181_org_api_keys_scope
 Create Date: 2026-09-06
 
 Two per-tick system crons scan ``hitl_claims`` for every organisation on
@@ -50,8 +50,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0181_hitl_claims_active_sweep_indexes"
-down_revision: str | None = "0180_hitl_parked_status"
+revision: str = "0182_hitl_claims_active_sweep_indexes"
+down_revision: str | None = "0181_org_api_keys_scope"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

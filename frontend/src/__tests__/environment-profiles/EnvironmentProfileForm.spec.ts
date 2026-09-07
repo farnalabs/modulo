@@ -107,9 +107,8 @@ describe('EnvironmentProfileForm — create mode', () => {
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('python-dev')
     await wrapper.find('[data-testid="envprofile-form-description"]').setValue('  dev sandbox  ')
     await wrapper.find('[data-testid="envprofile-form-image"]').setValue('python:3.12-slim')
-    const createVm = wrapper.vm as unknown as { form: { provider_type: string } }
-    createVm.form.provider_type = 'local_docker'
-    await nextTick()
+    // FAR-587 made provider_type a required field with no default, so it is
+    // selected explicitly above (provider_type = 'local_docker') before submit.
     await wrapper.find('form').trigger('submit')
     await flush()
 
@@ -139,7 +138,16 @@ describe('EnvironmentProfileForm — create mode', () => {
     await nextTick()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('cap-profile')
+
+    const pv = wrapper.vm as unknown as { form: { provider_type: string } }
+    pv.form.provider_type = 'local_docker'
+    await nextTick()
+
     expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(6)
+
+    // FAR-587 made provider_type required (no default) - select it so submit passes.
+    const vmCap = wrapper.vm as unknown as { form: { provider_type: string } }
+    vmCap.form.provider_type = 'local_docker'
 
     // Toggle 'git' (index 0) on and 'shell' (index 3) on, then 'shell' off again.
     await wrapper.findAll('input[type="checkbox"]')[0].trigger('change')
@@ -189,9 +197,9 @@ describe('EnvironmentProfileForm — create mode', () => {
     await nextTick()
 
     await wrapper.find('[data-testid="envprofile-form-name"]').setValue('doomed')
-    const failVm = wrapper.vm as unknown as { form: { provider_type: string } }
-    failVm.form.provider_type = 'local_docker'
-    await nextTick()
+    // FAR-587 made provider_type required (no default) - select it so submit reaches the API.
+    const vmFail = wrapper.vm as unknown as { form: { provider_type: string } }
+    vmFail.form.provider_type = 'local_docker'
     await wrapper.find('form').trigger('submit')
     await flush()
 

@@ -43,9 +43,18 @@ class ApiKeyInvalidError(PermissionError):
         super().__init__(detail)
 
 
+class ApiKeyScopeError(ValueError):
+    """Raised when a mint or update payload carries an invalid key scope."""
+
+
 _PREFIX_LEN = 8
 _SECRET_LEN = 32  # url-safe base64 chars
 _MK_PREFIX = "mk_"
+
+# FAR-620: caller-scope axis. 'org' = org-level caller (historical default,
+# covers org-wide AND team-scoped AND per-run keys); 'user' = per-user key
+# that acts as its creator's identity. IMMUTABLE post-mint.
+KEY_SCOPES: frozenset[str] = frozenset({"org", "user"})
 
 _UNSET = object()  # sentinel: ``team_id`` not provided in an update payload
 
@@ -88,8 +97,20 @@ async def create_api_key(
     account_id: uuid.UUID,
     team_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
+    scope: str = "org",
 ) -> tuple[OrgApiKey, str]:
-    """Create an API key. Returns (OrgApiKey, full_key). full_key is shown once."""
+    """Create an API key. Returns (OrgApiKey, full_key). full_key is shown once.
+
+    ``scope`` is the explicit mint-context (FAR-620): ``'org'`` (default) for
+    every existing surface — org-wide, team-scoped and per-run keys — and
+    ``'user'`` only when the caller's surface explicitly requests a per-user
+    key (REST POST /api/v1/api-keys with ``scope: "user"``, behind the
+    ``user_scoped_mcp_keys`` flag + quota). An unknown scope raises
+    ``ApiKeyScopeError``. The scope is stamped at mint and NEVER updated —
+    ``update_api_key`` accepts no scope parameter.
+    """
+    if scope not in KEY_SCOPES:
+        raise ApiKeyScopeError(f"Invalid API key scope '{scope}': must be one of {sorted(KEY_SCOPES)}")
     if expires_at is None:
         expires_at = datetime.now(UTC) + timedelta(days=365)
     full_key, prefix, hashed = generate_api_key()
@@ -99,6 +120,7 @@ async def create_api_key(
         lookup_prefix=prefix,
         hashed_secret=hashed,
         role=role,
+        scope=scope,
         account_id=account_id,
         team_id=team_id,
         expires_at=expires_at,
@@ -140,6 +162,10 @@ async def mint_run_api_key(
             role="runner",
             account_id=account_id,
             expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
+            # FAR-620: sandbox keys are pinned to the org scope — a run-scoped
+            # key is an org-level machine identity and is DENIED caller-scoped
+            # (.self) tools; run_id is non-null on this construction path.
+            scope="org",
         )
         key.run_id = run_id
         await session.flush()
@@ -294,13 +320,15 @@ async def revoke_api_key(
     session: AsyncSession,
     key_id: uuid.UUID,
     org_id: uuid.UUID,
-) -> bool:
-    """Revoke an API key. Returns True if the key was found and revoked.
+) -> OrgApiKey | None:
+    """Revoke an API key. Returns the revoked key ROW, or None if not found.
 
-    The key row is locked with ``FOR UPDATE`` so two concurrent revocations
-    serialise: the second waits for the first to commit, re-reads the row with
-    ``revoked_at`` already set (the ``revoked_at IS NULL`` filter excludes it)
-    and returns False instead of racing on the same row.
+    FAR-620: the row (not a bool) lets the callers stamp audit payloads with
+    the key's ``scope`` and masked prefix. The key row is locked with
+    ``FOR UPDATE`` so two concurrent revocations serialise: the second waits
+    for the first to commit, re-reads the row with ``revoked_at`` already set
+    (the ``revoked_at IS NULL`` filter excludes it) and returns None instead
+    of racing on the same row.
     """
     result = await session.execute(
         select(OrgApiKey)
@@ -314,11 +342,11 @@ async def revoke_api_key(
     key = result.scalar_one_or_none()
     if key is None:
         _log.info("api_key.revoke_not_found", extra={"key_id": str(key_id), "org_id": str(org_id)})
-        return False
+        return None
     key.revoked_at = datetime.now(UTC)
     await session.flush()
     _log.info("api_key.revoked", extra={"key_id": str(key.id)})
-    return True
+    return key
 
 
 def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
@@ -329,10 +357,14 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
     """
     now = datetime.now(UTC)
     is_active = k.revoked_at is None and (k.expires_at is None or k.expires_at > now)
+    # ``scope`` is always present on real rows (NOT NULL, server_default 'org');
+    # the isinstance guard keeps serialisation of test doubles stable.
+    raw_scope = getattr(k, "scope", None)
     return {
         "id": str(k.id),
         "name": k.name,
         "role": k.role,
+        "scope": raw_scope if isinstance(raw_scope, str) and raw_scope else "org",
         "team_id": str(k.team_id) if k.team_id else None,
         "lookup_prefix": f"{_MK_PREFIX}{k.lookup_prefix}****",
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
@@ -373,6 +405,10 @@ async def update_api_key(
     - ``_UNSET`` (default): leave the current team scope unchanged.
     - ``None``: clear the team scope (team-scoped key becomes org-wide).
     - a ``uuid.UUID``: scope the key to that team.
+
+    FAR-620: the key's caller ``scope`` ('org'/'user') is IMMUTABLE post-mint —
+    this function accepts no scope parameter and update payloads carrying one
+    are rejected (422) at the REST surface before reaching here.
     """
     stmt = select(OrgApiKey).where(
         OrgApiKey.id == key_id,

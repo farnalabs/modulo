@@ -56,8 +56,10 @@ from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 
-# Key under ``Account.preferences`` holding this feature's settings.
-PREFERENCE_KEY = "hitl_email"
+# Key under ``Account.preferences`` holding this feature's settings. Defined
+# in ``db.crud.account`` (near the row-locked writer the REST + MCP surfaces
+# route through) and re-imported here — one literal, no drift.
+from modulo.db.crud.account import PREFERENCE_KEY  # noqa: E402  (db layer owns the key constant)
 
 _SUBJECT_TEMPLATE = "HITL gate awaiting review - {gate_label}"
 

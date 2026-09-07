@@ -131,9 +131,6 @@ class TestRegistryValidation:
         for permission, role in PERMISSIONS.items():
             assert role in ORG_ROLE_HIERARCHY, f"{permission} maps to unknown role '{role}'"
 
-    def test_registry_non_empty(self) -> None:
-        assert len(PERMISSIONS) > 0
-
     def test_adr_required_keys_present(self) -> None:
         required = {
             "pipeline.graph.update",
