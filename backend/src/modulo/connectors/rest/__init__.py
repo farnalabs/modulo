@@ -1199,28 +1199,43 @@ class RestConnector(ConnectorBase):
         if mode == "bearer":
             auth["token"] = str(creds["token"])
         elif mode == "basic":
-            auth["username"] = str(creds["username"])
-            auth["password"] = str(creds["password"])
+            auth.update(RestConnector._basic_auth_fields(creds))
         else:  # api_key — auth identity pre-validated by validate_credentials
-            auth["api_key"] = str(creds["api_key"])
-            auth_in = creds.get("in")
-            auth["in"] = str(auth_in if auth_in is not None else "header").lower()
-            if auth["in"] == "header":
-                header_name = creds.get("header_name")
-                # An empty/whitespace-only name is UNSET, not a name: an empty
-                # header name makes every request fail (httpx rejects it), so
-                # coerce it to None and fall back to the default instead.
-                if isinstance(header_name, str) and not header_name.strip():
-                    header_name = None
-                auth["header_name"] = str(header_name) if header_name is not None else "X-API-Key"
-            else:
-                query_param_name = creds.get("query_param_name")
-                # Same unset treatment for the query parameter name: an empty
-                # value must never be used verbatim as a query key.
-                if isinstance(query_param_name, str) and not query_param_name.strip():
-                    query_param_name = None
-                auth["query_param_name"] = str(query_param_name) if query_param_name is not None else "api_key"
+            auth.update(RestConnector._api_key_auth_fields(creds))
         return auth
+
+    @staticmethod
+    def _basic_auth_fields(creds: dict[str, Any]) -> dict[str, Any]:
+        """The basic-auth fields (identity already validated by ``validate_credentials``)."""
+        return {"username": str(creds["username"]), "password": str(creds["password"])}
+
+    @staticmethod
+    def _api_key_auth_fields(creds: dict[str, Any]) -> dict[str, Any]:
+        """The api_key-auth fields (identity already validated by ``validate_credentials``)."""
+        auth_in = creds.get("in")
+        target = str(auth_in if auth_in is not None else "header").lower()
+        fields: dict[str, Any] = {"api_key": str(creds["api_key"]), "in": target}
+        if target == "header":
+            fields["header_name"] = RestConnector._credential_name(creds.get("header_name"), "X-API-Key")
+        else:
+            fields["query_param_name"] = RestConnector._credential_name(creds.get("query_param_name"), "api_key")
+        return fields
+
+    @staticmethod
+    def _credential_name(raw: Any, default: str) -> str:
+        """The header/query name for an api_key credential, with the unset default.
+
+        An empty/whitespace-only name is UNSET, not a name: an empty header name
+        makes every request fail (httpx rejects it), so it falls back to the
+        default instead of being used verbatim. The same unset treatment applies
+        to the query parameter name — an empty value must never be used verbatim
+        as a query key.
+        """
+        if raw is None:
+            return default
+        if isinstance(raw, str) and not raw.strip():
+            return default
+        return str(raw)
 
     @property
     def _protected_header_names(self) -> frozenset[str]:
