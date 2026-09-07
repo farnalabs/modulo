@@ -13,6 +13,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from modulo.core.bundled_runner.profile import (
+    is_placeholder_bundled_runner_image_ref,
+)
 from modulo.core.bundled_runner.runner_dispatch import (
     RunnerDispatchRoute,
     SandboxDispatchTimeoutValidationError,
@@ -33,7 +36,10 @@ def _profile(provider_type: str, **kwargs: object) -> SimpleNamespace:
         "organisation_id": _ORG,
         "name": "Bundled Runner (Docker)",
         "provider_type": provider_type,
-        "image_ref": "modulo-runner:opencode@sha256:" + "0" * 64,
+        # A realistic, non-placeholder pinned digest — the all-zero sha256 is the
+        # release-advanced placeholder that cannot provision (see the Bundled
+        # Runner operator guide) and is rejected at dispatch.
+        "image_ref": "modulo-runner:opencode@sha256:" + "a" * 64,
         "persistence_policy": "ephemeral",
         "network_policy": "outbound",
         "capabilities_json": [],
@@ -143,6 +149,25 @@ async def test_runner_docker_without_endpoint_env_is_dispatch_unbound(monkeypatc
 async def test_unknown_provider_type_is_dispatch_unbound() -> None:
     with pytest.raises(SandboxDispatchUnboundError, match="not dispatchable"):
         await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("warp_drive")), _ORG, _PROFILE_ID)
+
+
+def test_placeholder_digest_detection() -> None:
+    assert is_placeholder_bundled_runner_image_ref("modulo-runner:opencode@sha256:" + "0" * 64) is True
+    assert is_placeholder_bundled_runner_image_ref("modulo-runner:opencode@sha256:" + "a" * 64) is False
+    assert is_placeholder_bundled_runner_image_ref(None) is False
+    assert is_placeholder_bundled_runner_image_ref("") is False
+
+
+async def test_runner_docker_placeholder_digest_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail-loud (don't silently break at container-create) when the profile still
+    carries the release-advanced placeholder digest — a known GA follow-up."""
+    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "unit-test-machine")
+    placeholder_profile = _profile(
+        "runner_docker",
+        image_ref="modulo-runner:opencode@sha256:" + "0" * 64,
+    )
+    with pytest.raises(SandboxDispatchUnboundError, match="placeholder digest"):
+        await resolve_sandbox_dispatch_route(_session_factory_returning(placeholder_profile), _ORG, _PROFILE_ID)
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,9 @@ from typing import TYPE_CHECKING, Any
 import jinja2
 from jinja2.sandbox import SandboxedEnvironment
 
+from modulo.core.bundled_runner.profile import (
+    is_placeholder_bundled_runner_image_ref,
+)
 from modulo.core.runtime_provider import (
     ExecProcess,
     ProviderNotConfiguredError,
@@ -147,6 +150,24 @@ async def resolve_sandbox_dispatch_route(
     if provider_type == "e2b":
         return RunnerDispatchRoute(provider_type="e2b", profile=profile)
     if provider_type == "runner_docker":
+        # Fail-loud (and documented) when the profile still carries the release-
+        # advanced placeholder digest: such a profile cannot provision a
+        # workspace (the pinned image does not exist in any registry), so a
+        # pipeline re-pointed onto the Bundled Runner — e.g. the legacy
+        # modulo-dev row — would otherwise fail at container-create with an
+        # opaque pull error. This is a known GA follow-up (the GHCR publish job
+        # bumps the real digest); surface it explicitly rather than silently
+        # breaking the dispatch. See docs/security/bundled-runner-operator-guide.md.
+        _image_ref = getattr(profile, "image_ref", None)
+        if is_placeholder_bundled_runner_image_ref(_image_ref):
+            raise SandboxDispatchUnboundError(
+                f"Environment profile '{getattr(profile, 'name', profile)}' is bound to the Bundled "
+                "Runner (runner_docker) but its image_ref still carries the release-advanced placeholder "
+                "digest (sha256:0000…0000) and cannot provision a workspace. This is a known GA follow-up: "
+                "the GHCR publish job bumps the pinned digest. See "
+                "docs/security/bundled-runner-operator-guide.md. Re-bind the pipeline to a provisionable "
+                "profile, or wait for the digest to land."
+            )
         try:
             from modulo.settings import get_settings
 
@@ -821,14 +842,23 @@ async def run_bundled_runner_node(
                 stderr_length=len(agent_stderr_raw),
                 delivery_sentinel=delivery_sentinel,
             )
-            if sandbox_mode == "script" and script_lease_claimed:
-                raise ScriptInvalidOutputError(_no_output_message(node_id))
-            raise SandboxNodeFailedError(_no_output_message(node_id), node_id=node_id)
+            if output_json is None:
+                # Truly-empty read (read failure / JSON null): a node with zero
+                # usable work must never complete silently (A6) — raise.
+                if sandbox_mode == "script" and script_lease_claimed:
+                    raise ScriptInvalidOutputError(_no_output_message(node_id))
+                raise SandboxNodeFailedError(_no_output_message(node_id), node_id=node_id)
+            # FAR-188 parity with the E2B path (node_runner._sandbox_agent_impl):
+            # a PARSEABLE but non-dict output.json (a list, string, number,
+            # true/false) retains the raw evidence (above) and CONTINUES through
+            # the shaping path with agent_status left None — it is surfaced
+            # verbatim rather than misclassified as a no-output retryable error.
+            # Only the truly-empty read (output_json is None) raises.
 
         if sandbox_mode == "script" and exit_code != 0:
             raise ScriptFailedError(f"Script-mode Bundled Runner exited with code {exit_code} (post-claim, terminal)")
 
-        if isinstance(output_schema_json, dict):
+        if isinstance(output_schema_json, dict) and isinstance(output_json, dict):
             try:
                 _validate_against_schema(output_json, output_schema_json)
             except ValueError as schema_exc:
@@ -866,12 +896,31 @@ async def run_bundled_runner_node(
         cost = _compute_sandbox_cost(elapsed, output_json)
         status = "completed" if exit_code == 0 else "failed"
         result_summary = ""
+        # A1 elevation input (agent-failure UX, §15.4 / FAR-188): surface the
+        # agent's RAW verdict from output.json VERBATIM — never derived from
+        # exit_code — so the executor's ``_node_output_agent_failure`` can fire.
+        # A self-reported ``status: failed`` / ``outcome: failed`` with exit 0
+        # must NOT land the run ``completed`` (matching the E2B path's contract);
+        # ``agent_status`` / ``agent_outcome`` are carried into the envelope and
+        # the executor elevates to ``agent.failed``.
+        agent_status: str | None = None
+        agent_outcome: str | None = None
+        changed_files: list[str] = []
+        pr_url: str = ""
         sandbox_session_lost = False
         if sandbox_mode == "script":
             result_summary = f"script mode: exit_code={exit_code}"
-        else:
+        elif isinstance(output_json, dict):
             result_summary = output_json.get("summary", "")
+            changed_files = output_json.get("changed_files", [])
+            pr_url = output_json.get("pr_url", "")
             sandbox_session_lost = _is_sandbox_session_lost_echo(output_json)
+            _raw_status = output_json.get("status")
+            _raw_outcome = output_json.get("outcome")
+            if isinstance(_raw_status, str) and not sandbox_session_lost:
+                agent_status = _raw_status
+            if isinstance(_raw_outcome, str) and not sandbox_session_lost:
+                agent_outcome = _raw_outcome
             if sandbox_session_lost:
                 status = "failed"
         if status == "failed" and not result_summary:
@@ -915,6 +964,10 @@ async def run_bundled_runner_node(
                 stdout_length=stdout_len,
                 stderr_length=stderr_len,
                 attempt_key=attempt_key,
+                agent_status=agent_status,
+                agent_outcome=agent_outcome,
+                changed_files=changed_files,
+                pr_url=pr_url,
                 sandbox_session_lost=sandbox_session_lost,
             ),
             exclude_from_output=frozenset({"changed_files", "pr_url"}),

@@ -56,6 +56,10 @@ class _FakeOutput:
     stdout_length: int = 0
     stderr_length: int = 0
     attempt_key: str | None = None
+    agent_status: object = None
+    agent_outcome: object = None
+    changed_files: object = None
+    pr_url: object = None
     sandbox_session_lost: bool = False
     modulo_synthetic_failure: bool = False
 
@@ -381,6 +385,65 @@ async def test_run_stream_error_raises_retryable(patch_node_runner, monkeypatch)
     provider = _FakeProvider(stream_chunks=[("stdout", "x")], stream_error="engine drop")
     with pytest.raises(_FakeError):
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(provider))
+
+
+async def test_run_llm_mode_surfaces_agent_status_and_outcome(patch_node_runner, monkeypatch) -> None:
+    monkeypatch.setattr(
+        runner_dispatch,
+        "_read_file_via_exec",
+        AsyncMock(return_value='{"summary":"boom","status":"failed","outcome":"error"}'),
+    )
+    cfg = _config(sandbox_mode="llm")
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
+    # A1 elevation input: the agent's RAW verdict is surfaced verbatim (FAR-188
+    # parity with the E2B path) so the executor's _node_output_agent_failure can
+    # fire — a self-reported failure must NOT be silently swallowed as complete.
+    assert out["output"].agent_status == "failed"
+    assert out["output"].agent_outcome == "error"
+    # Node-level status still tracks exit_code (the executor elevates the run).
+    assert out["output"].status == "completed"
+
+
+async def test_run_llm_mode_surfaces_changed_files_and_pr_url(patch_node_runner, monkeypatch) -> None:
+    monkeypatch.setattr(
+        runner_dispatch,
+        "_read_file_via_exec",
+        AsyncMock(return_value='{"summary":"done","changed_files":["a.py"],"pr_url":"https://x"}'),
+    )
+    cfg = _config(sandbox_mode="llm")
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
+    assert out["output"].changed_files == ["a.py"]
+    assert out["output"].pr_url == "https://x"
+
+
+async def test_run_llm_mode_non_dict_output_continues(patch_node_runner, monkeypatch) -> None:
+    # FAR-188 parity: a parseable-but-non-dict output.json (a list here) retains
+    # the raw evidence marker and CONTINUES (agent_status stays None) rather than
+    # being misclassified as a no-output retryable SandboxNodeFailedError.
+    monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value="[1, 2, 3]"))
+    cfg = _config(sandbox_mode="llm")
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
+    assert out["output"].agent_status is None
+    assert out["output"].status == "completed"
+
+
+async def test_run_llm_mode_missing_agent_status_not_failed(patch_node_runner, monkeypatch) -> None:
+    monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value='{"summary":"ok"}'))
+    cfg = _config(sandbox_mode="llm")
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
+    assert out["output"].agent_status is None
+    assert out["output"].status == "completed"
+
+
+async def test_run_llm_mode_session_lost_forces_failed(patch_node_runner, monkeypatch) -> None:
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    monkeypatch.setattr(nrm, "_is_sandbox_session_lost_echo", lambda out: True, raising=False)
+    monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value='{"summary":"ok"}'))
+    cfg = _config(sandbox_mode="llm")
+    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
+    assert out["output"].status == "failed"
+    assert out["output"].sandbox_session_lost is True
 
 
 async def test_run_context_files_written(patch_node_runner, monkeypatch) -> None:

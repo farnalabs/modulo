@@ -21,13 +21,22 @@ Runner profile.
    (``runner_docker`` + the pinned digest + hardening/network config), so a
    pipeline referencing the legacy row is re-pointed to the Bundled Runner
    (release note covers the change). Skipped when the org already carries a
-   live ``runner_docker`` row (operator-pinned older digests SURVIVE).
+   live ``runner_docker`` row (operator-pinned older digests SURVIVE). The
+   rows SELECTED for re-point have their pre-migration identity (original
+   name / description / config_json) captured into a scratch table
+   (``_migration_0189_repoint_state``) so the downgrade can revert EXACTLY
+   those rows and restore their original values.
 
 Rollback (additive on upgrade / SAFE on downgrade): the inserted
-``runner_docker`` rows are deleted by name; the re-pointed ``modulo-dev`` row
-is REVERTED to its pre-migration values (captured in a JSON constant at
-upgrade time). Nothing is auto-deleted after rollback — the backfill row is
-left in place on rollback (never deleted), per the plan's failure contract.
+``runner_docker`` backfill rows are LEFT IN PLACE (never deleted), per the
+plan's failure contract. Only the re-pointed ``modulo-dev`` rows are
+reverted — by captured primary key — back to ``local_docker`` + ``modulo-dev``
+with their ORIGINAL description / config_json restored from the scratch table,
+which is then dropped. The downgrade deliberately does NOT match on
+``name = template AND provider_type = runner_docker AND image_ref = template``:
+that predicate also matches every backfilled per-org row, which would wrongly
+relabel all of them to ``local_docker``/``modulo-dev`` and leave their
+description / config_json unrestored.
 """
 
 from __future__ import annotations
@@ -69,6 +78,34 @@ _TEMPLATE_CONFIG_JSON = json.dumps(
 
 def upgrade() -> None:
     bind = op.get_bind()
+
+    # 0. Capture the pre-migration identity of the modulo-dev rows that will be
+    #    re-pointed in step 2, so the downgrade can revert EXACTLY those rows
+    #    (by primary key) and restore their original description / config_json.
+    #    Without this, the downgrade would only have the post-upgrade shape
+    #    (name = template, provider_type = runner_docker, image_ref = template)
+    #    which is indistinguishable from the per-org BACKFILL rows — reverting
+    #    on name alone would wrongly relabel every backfill row.
+    _create_repoint_state_table(bind)
+    bind.execute(
+        _sql(
+            """
+            INSERT INTO _migration_0189_repoint_state (profile_id, prev_name, prev_description, prev_config_json)
+            SELECT ep.id, ep.name, ep.description, ep.config_json
+            FROM environment_profiles ep
+            WHERE ep.name = 'modulo-dev'
+              AND ep.provider_type = 'local_docker'
+              AND ep.deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM environment_profiles b
+                  WHERE b.organisation_id = ep.organisation_id
+                    AND b.provider_type = 'runner_docker'
+                    AND b.deleted_at IS NULL
+                    AND b.id <> ep.id
+              )
+            """
+        )
+    )
 
     # 1. Per-org backfill: orgs WITHOUT a live runner_docker profile get one
     #    seeded from the shipped template (idempotent under re-runs).
@@ -163,20 +200,47 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Additive-on-rollback: the backfill rows are LEFT IN PLACE (never
-    # auto-deleted) per the plan's rollback contract; only the legacy
-    # modulo-dev re-point is reverted when we can prove it was re-pointed
-    # (its name now matches the template AND provider is runner_docker).
-    op.get_bind().execute(
+    bind = op.get_bind()
+    # Additive-on-rollback: the per-org BACKFILL rows are LEFT IN PLACE (never
+    # auto-deleted) per the plan's rollback contract. Only the legacy
+    # modulo-dev re-point is reverted — and ONLY the exact rows captured at
+    # upgrade time (matched by primary key), restoring their ORIGINAL
+    # name / description / config_json. The scratch table is then dropped.
+    bind.execute(
         _sql(
             """
-            UPDATE environment_profiles
-            SET provider_type = 'local_docker', name = 'modulo-dev', updated_at = now()
-            WHERE name = :tpl_name AND provider_type = 'runner_docker'
-              AND image_ref = :tpl_image
+            UPDATE environment_profiles ep
+            SET provider_type = 'local_docker',
+                name = s.prev_name,
+                description = s.prev_description,
+                config_json = s.prev_config_json,
+                updated_at = now()
+            FROM _migration_0189_repoint_state s
+            WHERE ep.id = s.profile_id
             """
-        ),
-        {"tpl_name": _TEMPLATE_NAME, "tpl_image": _TEMPLATE_IMAGE_REF},
+        )
+    )
+    bind.execute(_sql("DROP TABLE IF EXISTS _migration_0189_repoint_state"))
+
+
+def _create_repoint_state_table(bind: object) -> None:
+    """Scratch table holding the pre-upgrade identity of re-pointed rows.
+
+    Created in ``upgrade`` and consumed/dropped in ``downgrade``. It is NOT a
+    model-backed table — it exists only to make the rollback reversible without
+    guessing which post-upgrade rows were re-points vs. backfills.
+    """
+    bind.execute(  # type: ignore[attr-defined]
+        _sql(
+            """
+            CREATE TABLE IF NOT EXISTS _migration_0189_repoint_state (
+                profile_id uuid PRIMARY KEY,
+                prev_name text NOT NULL,
+                prev_description text,
+                prev_config_json jsonb
+            )
+            """
+        )
     )
 
 

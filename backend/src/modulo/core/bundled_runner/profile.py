@@ -13,20 +13,24 @@ from typing import Any
 
 from modulo.db.bundled_runner_template import (
     BUNDLED_RUNNER_IMAGE_REF,
+    BUNDLED_RUNNER_PLACEHOLDER_DIGEST,
     BUNDLED_RUNNER_PROVIDER_TYPE,
     TEMPLATE_CONFIG_JSON,
     TEMPLATE_OWNED_FIELDS,
     TEMPLATE_PROFILE_NAME,
     build_bundled_runner_profile_values,
+    is_placeholder_bundled_runner_image_ref,
 )
 
 __all__ = [
     "BUNDLED_RUNNER_IMAGE_REF",
+    "BUNDLED_RUNNER_PLACEHOLDER_DIGEST",
     "BUNDLED_RUNNER_PROVIDER_TYPE",
     "TEMPLATE_CONFIG_JSON",
     "TEMPLATE_OWNED_FIELDS",
     "TEMPLATE_PROFILE_NAME",
     "build_bundled_runner_profile_values",
+    "is_placeholder_bundled_runner_image_ref",
     "template_drift_status",
 ]
 

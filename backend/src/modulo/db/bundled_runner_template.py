@@ -14,7 +14,7 @@ Digest contract (ADR 029 / plan D4):
 - ``BUNDLED_RUNNER_IMAGE_REF`` is **release-advanced**: the GHCR publish job
   (GA item) bumps it to the latest ``released-<minor>`` digest of the pinned
   modulo-runner image and asserts the value here matches the published tag
-  (the digest-drift guard; migration 0181 mirrors these constants and the
+  (the digest-drift guard; migration 0189 mirrors these constants and the
   release job asserts they never diverge).
 - Seeded rows carry their own copy of the template-owned fields at
   creation; drift is computed LIVE against these constants (no fingerprint
@@ -37,6 +37,22 @@ BUNDLED_RUNNER_IMAGE_REF = (
 )
 
 BUNDLED_RUNNER_PROVIDER_TYPE = "runner_docker"
+
+# The release-advanced placeholder digest: an all-zero sha256. A seeded /
+# backfilled profile whose ``image_ref`` still carries this cannot provision
+# (the image does not exist in any registry) — a pipeline re-pointed onto the
+# Bundled Runner would fail at container-create with an opaque pull error until
+# the GHCR publish job (GA item) bumps the real pinned digest. This is a STABLE
+# sentinel, intentionally independent of ``BUNDLED_RUNNER_IMAGE_REF``, which
+# becomes the real released digest — so the placeholder check below keeps firing
+# only while the digest is un-landed, and never false-positives on a real digo.
+BUNDLED_RUNNER_PLACEHOLDER_DIGEST = "sha256:" + "0" * 64
+
+
+def is_placeholder_bundled_runner_image_ref(image_ref: str | None) -> bool:
+    """True when ``image_ref`` still carries the un-landed placeholder digest."""
+    return bool(image_ref) and image_ref.endswith(BUNDLED_RUNNER_PLACEHOLDER_DIGEST)
+
 
 # Template-owned fields (drift-keyed): provider, digest, hardening, and
 # network defaults. Operator-owned fields (name/description beyond the

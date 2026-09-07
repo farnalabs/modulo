@@ -68,6 +68,25 @@ Operator-pinned older digests SURVIVE: seeding is idempotent and template
 updates are surfaced per row ("shipped template updated - apply"), never
 silently applied.
 
+> **⚠️ Dispatch breakage window — placeholder digest (known GA follow-up).**
+> As shipped, `BUNDLED_RUNNER_IMAGE_REF` is the **all-zero `sha256:0000…0000`
+> placeholder** digest. A seeded or backfilled profile that still carries this
+> digest **cannot provision a workspace** — the image does not exist in any
+> registry, so a dispatch fails at container-create. This is **fail-loud by
+> design, not silent**: resolving the dispatch route raises a typed
+> `SandboxDispatchUnboundError` naming the placeholder digest and pointing here,
+> instead of letting the run appear to complete and then error at pull time.
+> Until the GHCR publish job lands the real released digest (or an operator
+> pins a built digest into the template constants and re-seeds/applies), **every
+> pipeline bound to a Bundled Runner profile fails at dispatch.** Critically, the
+> migration `0189_bundled_runner_seed_backfill` re-points the legacy `modulo-dev`
+> `local_docker` row to the Bundled Runner, so any pipeline that previously ran
+> on E2B via `modulo-dev` will **also fail at dispatch** on this branch until the
+> digest is provisioned. Remediation before relying on it: either wait for the
+> GA digest bump, or self-build the runner image
+> (`deploy/docker/runner-opencode.Dockerfile`), pin its digest in
+> `bundled_runner_template.py`, and re-seed/apply.
+
 ## 4. The seeded profile
 
 Every org gets a **"Bundled Runner (Docker)"** environment profile at
