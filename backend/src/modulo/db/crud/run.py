@@ -2737,6 +2737,49 @@ async def get_run_stats(
     return await _get_run_stats_python(session, cutoff)
 
 
+def _completed_durations_ms(completed_runs: list[Run]) -> list[int]:
+    """Wall-clock durations (ms) of completed runs, sorted ascending."""
+    return sorted(
+        int((r.completed_at - r.started_at).total_seconds() * 1000)
+        for r in completed_runs
+        if r.completed_at is not None and r.started_at is not None
+    )
+
+
+def _runs_by_day(runs: list[Run]) -> dict[str, dict[str, int]]:
+    """Per-day total / success / failed run counts."""
+    by_day: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "success": 0, "failed": 0})
+    for r in runs:
+        day = r.created_at.strftime(_DAY_FORMAT)
+        by_day[day]["count"] += 1
+        if r.status == "complete":
+            by_day[day]["success"] += 1
+        elif _is_failure_bucket_status(r.status):
+            by_day[day]["failed"] += 1
+    return by_day
+
+
+def _duration_by_day(completed_runs: list[Run]) -> dict[str, list[int]]:
+    """Per-day duration samples (ms) of completed runs."""
+    dur_by_day: dict[str, list[int]] = defaultdict(list)
+    for r in completed_runs:
+        day = r.created_at.strftime(_DAY_FORMAT)
+        if r.completed_at is None or r.started_at is None:
+            continue
+        ms = int((r.completed_at - r.started_at).total_seconds() * 1000)
+        dur_by_day[day].append(ms)
+    return dur_by_day
+
+
+def _failure_reason_counts(runs: list[Run]) -> dict[str, int]:
+    """Counts of failure-reason statuses by their ``error_code``."""
+    failure_reasons: dict[str, int] = defaultdict(int)
+    for r in runs:
+        if _is_failure_reason_status(r.status) and r.error_code:
+            failure_reasons[r.error_code] += 1
+    return failure_reasons
+
+
 async def _get_run_stats_python(
     session: AsyncSession,
     cutoff: datetime,
@@ -2758,38 +2801,15 @@ async def _get_run_stats_python(
         return _empty_run_stats()
 
     completed_runs = [r for r in runs if r.completed_at and r.started_at]
-    durations_ms = sorted(
-        int((r.completed_at - r.started_at).total_seconds() * 1000)
-        for r in completed_runs
-        if r.completed_at is not None and r.started_at is not None
-    )
+    durations_ms = _completed_durations_ms(completed_runs)
 
     success_count = sum(1 for r in runs if r.status == "complete")
     success_rate = round(success_count / total, 4)
     avg_duration = int(sum(durations_ms) / len(durations_ms)) if durations_ms else 0
 
-    by_day: dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "success": 0, "failed": 0})
-    dur_by_day: dict[str, list[int]] = defaultdict(list)
-
-    for r in runs:
-        day = r.created_at.strftime(_DAY_FORMAT)
-        by_day[day]["count"] += 1
-        if r.status == "complete":
-            by_day[day]["success"] += 1
-        elif _is_failure_bucket_status(r.status):
-            by_day[day]["failed"] += 1
-
-    for r in completed_runs:
-        day = r.created_at.strftime(_DAY_FORMAT)
-        if r.completed_at is None or r.started_at is None:
-            continue
-        ms = int((r.completed_at - r.started_at).total_seconds() * 1000)
-        dur_by_day[day].append(ms)
-
-    failure_reasons: dict[str, int] = defaultdict(int)
-    for r in runs:
-        if _is_failure_reason_status(r.status) and r.error_code:
-            failure_reasons[r.error_code] += 1
+    by_day = _runs_by_day(runs)
+    dur_by_day = _duration_by_day(completed_runs)
+    failure_reasons = _failure_reason_counts(runs)
 
     return {
         "total_runs": total,
