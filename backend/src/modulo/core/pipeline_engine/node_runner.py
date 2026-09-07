@@ -246,6 +246,28 @@ class SandboxCapacityExceededError(SandboxNodeFailedError):
     """
 
 
+class SandboxBindingResolutionError(SandboxNodeFailedError):
+    """Provision-time per-agent runner-binding resolution failed (FAR-592 D6).
+
+    A bound model backend vanished, decrypted unsuccessfully, or no longer
+    carries the bound source field. RETRYABLE config error: the run fails with
+    the ``sandbox.binding_resolution`` code — the D6 rollback trigger reads
+    that code's rate — so a re-dispatch re-resolves the (possibly reconfigured)
+    binding. The sandbox was NEVER created and the script PROCESS was NEVER
+    started, so re-dispatch is safe.
+    """
+
+
+class SandboxTierRefusedError(SandboxNodeFailedError):
+    """The Local (host-subprocess) provider tier refused this dispatch (FAR-592 D6).
+
+    Terminal (D7-refusal posture): bindings inject standing host-env
+    credentials and the Local tier has no container isolation, so a Local
+    profile without ``allow_runner_env_bindings`` MUST refuse at provision
+    time. Maps to ``sandbox.tier_refused`` via the executor's LEGACY_ALIASES.
+    """
+
+
 def _script_budget_killed_message(node_id: str) -> str:
     """Message for a platform-side budget kill (ScriptBudgetKilledError).
 
@@ -5455,6 +5477,7 @@ def _build_sandbox_envs(
     input_json: str,
     sandbox_mode: str,
     env_vars_extra: dict[str, str],
+    runner_bindings: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Compose the sandbox envs dict: system env vars FIRST, then ``**env_vars_extra`` LAST.
 
@@ -5463,6 +5486,17 @@ def _build_sandbox_envs(
     injects its own modulo-reviewbot PAT via ``env_vars_extra``). Script mode
     does NOT auto-inject the long-lived host credentials (opencode API key /
     GitHub PAT) — a script only gets what the pipeline passes explicitly.
+
+    Precedence (DELIBERATE, FAR-592 / D6): profile secrets < runner bindings <
+    node ``env_vars_extra`` — THE NODE WINS. ``runner_bindings`` (per-agent
+    Model Backend credential injections) merge AFTER the profile/host creds
+    but BEFORE the node's ``env_vars_extra``:
+
+    1. MODULO_* system vars (reserved — set exactly once here).
+    2. Profile/host standing credentials (host API key / GitHub PAT).
+    3. Per-agent model-backend runner bindings (decrypt at provision).
+    4. Node ``env_vars_extra`` — the sanctioned override; the reviewbot's
+       ``GITHUB_TOKEN`` override keeps working because this layer merges LAST.
     """
     sandbox_envs: dict[str, str] = {
         "MODULO_RUN_ID": run_id,
@@ -5477,6 +5511,8 @@ def _build_sandbox_envs(
             or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
             or os.environ.get("GITHUB_TOKEN", "")
         )
+    if runner_bindings:
+        sandbox_envs.update(runner_bindings)
     sandbox_envs.update(env_vars_extra)
     return sandbox_envs
 
@@ -5578,6 +5614,20 @@ def _run_identity_strs(state: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def _runner_binding_env_profile_id() -> uuid.UUID | None:
+    """FAR-592 (D6): the run's environment profile id, for the Local refusal.
+
+    Read from the run-scoped conformance context (set by the executor via
+    ``set_conformance_ctx``); the second tuple slot carries
+    ``environment_profile_id``. Absent context (unit tests, direct dispatch) ->
+    None (no tier refusal applied).
+    """
+    ctx = get_conformance_ctx()
+    if ctx is None or len(ctx) < 3:
+        return None
+    return _parse_uuid_opt(ctx[2])
+
+
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
     state: dict[str, Any],
     *,
@@ -5621,6 +5671,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         bridge_client_source,
         load_loop_intercept_guardrails,
         persist_loop_interception_audit,
+    )
+    from modulo.core.runner_bindings import (
+        AgentBindingResolutionError,
+        LocalProviderBindingsRefusedError,
     )
 
     # FAR-215: mid-run capability re-check at node start (block -> HITL).
@@ -5969,6 +6023,49 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             raise SupersededNodeError("E2B dispatch marker denied — run superseded or not running; sandbox not created")
         dispatch_marker_set = True
 
+        # FAR-592 (D6): per-agent runner bindings resolve at PROVISION time —
+        # BEFORE ``AsyncSandbox.create`` — so a resolution failure (or a Local
+        # tier refusal) leaves the sandbox NEVER created and the script
+        # PROCESS never started: both error classes stay pre-claim/re-dispatch
+        # safe. A fresh short-lived hub per dispatch resolves ONLY the
+        # referenced backends and is explicitly disposed inside
+        # ``resolve_agent_bindings``. Precedence is deliberate: profile secrets
+        # < runner bindings < node ``env_vars_extra`` — THE NODE WINS (see
+        # ``_build_sandbox_envs``).
+        _runner_bindings: dict[str, str] = {}
+        if agent_id is not None:
+            try:
+                from modulo.core.runner_bindings import resolve_agent_bindings
+
+                _runner_bindings = await resolve_agent_bindings(
+                    session_factory=session_factory,
+                    org_id=org_id,
+                    agent_id=agent_id,
+                    environment_profile_id=_runner_binding_env_profile_id(),
+                    run_id=run_id,
+                    node_id=node_id,
+                )
+            except LocalProviderBindingsRefusedError:
+                _log.warning(
+                    "sandbox_agent.bindings_local_refused",
+                    extra={"run_id": run_id, "node_id": node_id},
+                )
+                raise SandboxTierRefusedError(
+                    f"Local provider tier refused runner bindings for node '{node_id}'"
+                ) from None
+            except AgentBindingResolutionError as exc:
+                _log.warning(
+                    "sandbox_agent.bindings_resolution_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "exc_msg": str(exc)[:_MAX_ERROR_MSG],
+                    },
+                )
+                raise SandboxBindingResolutionError(
+                    f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
+                ) from exc
+
         # FAR-296 Phase 3/3b-3: egress control + resource limits. deny_all
         # and selected map to allow_internet_access=False; resource_limits
         # and the selected-mode host:port allowlist are carried as sandbox
@@ -6203,6 +6300,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # modulo-reviewbot PAT, not the system default farnalabs bot).
             # The reserved-prefix validator already prevents overriding
             # MODULO_* vars, so update() below is the sanctioned override.
+            # FAR-592 (D6): ``_runner_bindings`` was resolved BEFORE the sandbox
+            # was created (see the provision-time block above the
+            # ``AsyncSandbox.create`` loop) and merges between the profile
+            # creds and the node envs — THE NODE WINS (see _build_sandbox_envs
+            # docstring for the deliberate precedence).
             sandbox_envs: dict[str, str] = _build_sandbox_envs(
                 run_id=run_id,
                 pipeline_id=pipeline_id,
@@ -6210,6 +6312,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 input_json=_input_json,
                 sandbox_mode=sandbox_mode,
                 env_vars_extra=env_vars_extra,
+                runner_bindings=_runner_bindings,
             )
             # FAR-296 Phase 4a: wall-clock spend budget — non-tick path. A very
             # slow provisioning sequence may already have consumed the budget

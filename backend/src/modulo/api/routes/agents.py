@@ -21,6 +21,7 @@ from modulo.api.constants import (
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
 from modulo.core.secrets_backend import create_secrets_backend
@@ -35,12 +36,18 @@ from modulo.db.crud.agent import (
     rollback_prompt_version,
     update_agent,
 )
+from modulo.db.crud.agent_runner_binding import (
+    delete_binding,
+    list_bindings_for_agent,
+    replace_agent_bindings,
+)
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_AGENT_LIST = "agent.list"
+_CODE_MODEL_BACKEND_BINDING_MANAGE = "model_backend.binding.manage"
 _MSG_DATABASE_OPERATION_FAILED = "Database operation failed"
 _MSG_DATABASE_OPERATION_FAILED_PLEASE = "Database operation failed. Please try again."
 _MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE = "An unexpected error occurred. Please try again."
@@ -971,3 +978,204 @@ async def delete_agent_endpoint(
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
+
+
+# ---------------------------------------------------------------------------
+# Per-agent Model Backend runner bindings (FAR-592 / D6)
+# ---------------------------------------------------------------------------
+
+
+class BindingSpec(BaseModel):
+    model_backend_id: uuid.UUID
+    target_env_var: str = Field(min_length=1)
+    source_field: str = Field(min_length=1)
+
+
+class BindingsReplaceRequest(BaseModel):
+    """Wholesale replacement set for the agent's runner bindings."""
+
+    bindings: list[BindingSpec]
+
+
+class AgentBindingResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    agent_id: uuid.UUID
+    model_backend_id: uuid.UUID
+    target_env_var: str
+    source_field: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AgentBindingListResponse(BaseModel):
+    items: list[AgentBindingResponse]
+
+
+@router.get("/{agent_id}/bindings")
+@handle_db_errors("agents.list_bindings_endpoint")
+async def list_bindings_endpoint(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_AGENT_LIST),
+) -> AgentBindingListResponse:
+    """List the agent's runner bindings (agent.list permission)."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+            if agent is None or agent.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
+            bindings = await list_bindings_for_agent(session, agent_id)
+    except SQLAlchemyError:
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error listing agent bindings")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+        ) from None
+    return AgentBindingListResponse(items=[AgentBindingResponse.model_validate(b) for b in bindings])
+
+
+@router.put("/{agent_id}/bindings")
+@handle_db_errors("agents.replace_bindings_endpoint")
+async def replace_bindings_endpoint(
+    agent_id: uuid.UUID,
+    req: BindingsReplaceRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_MODEL_BACKEND_BINDING_MANAGE),
+) -> AgentBindingListResponse:
+    """Replace the agent's runner bindings (elevated, audit-logged).
+
+    Validates every ``target_env_var`` (valid / not reserved / unique per
+    agent) and ``source_field`` (against the referenced backend's known
+    credential fields) at SAVE time; the referenced backend must be visible to
+    the org. VALUES ARE NEVER LOGGED.
+    """
+    from modulo.db.runner_binding_constraints import BindingValidationError
+
+    specs = [
+        {
+            "_backend_id": spec.model_backend_id,
+            "_account_id": principal.account_id,
+            "target_env_var": spec.target_env_var,
+            "source_field": spec.source_field,
+        }
+        for spec in req.bindings
+    ]
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+            if agent is None or agent.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
+            # Audit diff carries env-var NAMES only — never values (values are
+            # not stored on the binding row at all; the credential stays
+            # encrypted in the referenced backend).
+            before_bindings = await list_bindings_for_agent(session, agent_id)
+            before_targets = {b.target_env_var for b in before_bindings}
+            after_targets = {spec["target_env_var"] for spec in specs}
+            created = await replace_agent_bindings(
+                session,
+                org_id=principal.organisation_id,
+                agent_id=agent_id,
+                bindings_specs=specs,
+            )
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="agent_runner_binding.updated",
+                actor_user_id=principal.account_id,
+                resource_type="agent",
+                resource_id=agent_id,
+                payload_json={
+                    "binding_count_before": len(before_targets),
+                    "binding_count_after": len(after_targets),
+                    "added": sorted(after_targets - before_targets),
+                    "removed": sorted(before_targets - after_targets),
+                    "operation": "replace",
+                },
+            )
+    except IntegrityError:
+        _log.exception("agents.replace_bindings_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except BindingValidationError as exc:
+        _log.warning("agents.replace_bindings_endpoint: invalid binding pair", extra={"error": str(exc)})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid binding: reserved or malformed target_env_var, or unknown source_field",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error replacing agent bindings")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+        ) from None
+    return AgentBindingListResponse(items=[AgentBindingResponse.model_validate(b) for b in created])
+
+
+@router.delete(
+    "/{agent_id}/bindings/{binding_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+@handle_db_errors("agents.delete_binding_endpoint")
+async def delete_binding_endpoint(
+    agent_id: uuid.UUID,
+    binding_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_MODEL_BACKEND_BINDING_MANAGE),
+) -> None:
+    """Delete one of the agent's binding rows (elevated, audit-logged)."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            agent = await get_agent(session, agent_id)
+            if agent is None or agent.organisation_id != principal.organisation_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
+            deleted = await delete_binding(session, binding_id, agent_id=agent_id)
+            if deleted:
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="agent_runner_binding.deleted",
+                    actor_user_id=principal.account_id,
+                    resource_type="agent",
+                    resource_id=agent_id,
+                    payload_json={"binding_id": str(binding_id), "operation": "delete"},
+                )
+    except SQLAlchemyError:
+        _log.exception(_MSG_DATABASE_OPERATION_FAILED)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_OPERATION_FAILED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error deleting agent binding")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+        ) from None
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Binding not found")

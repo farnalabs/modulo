@@ -3245,6 +3245,15 @@ features:
         description: Model Context Protocol tool configuration
     feat-model-backends:
         description: Model backend management and setup
+        status: covered
+        behaviours:
+            # Per-agent runner bindings (FAR-592 / D6)
+            - "[x] A per-agent runner binding injects one decrypted Model Backend credential field into the agent's runner env at provision time under a named EN var (agent_runner_bindings, org-scoped, UNIQUE per org+agent+target; RESTRICT FK blocks deleting a bound backend at the DB level while the CRUD pre-delete inventory reports 'in use by N agents')"
+            - "[x] Save-time validation: target_env_var must match [A-Za-z_][A-Za-z0-9_]*, be unique per agent, and never target a Modulo-reserved var (RESERVED_ENV_VARS + MODULO_/APP_MODULO_/GIT_ prefixes, tested constant); source_field must be a known credential field of the referenced backend's provider; the backend must be visible to the org"
+            - "[x] Provision-time resolution: a fresh short-lived ModelBackendHub per dispatch resolves ONLY referenced backends, decrypts via the secrets backend and is explicitly disposed; precedence is profile secrets < runner bindings < node env_vars_extra (the node wins); every injected var is audit-logged without values"
+            - "[x] Tier applicability: bindings inject on container/workspace tiers; the Local (host-subprocess) provider refuses at provision time (typed sandbox.tier_refused error) unless the profile's config_json sets allow_runner_env_bindings; resolution failures map to the retryable sandbox.binding_resolution code (D6 rollback trigger)"
+            - "[x] REST surface: GET/PUT/DELETE /api/v1/agents/{agent_id}/bindings bind create/update behind the model_backend.binding.manage permission with audit events (values never logged); library export carries name-based binding specs and import rebinds them by backend name"
+            - "[x] Editor UI: the pipeline editor's sandbox-agent inspector shows repeatable binding rows with inline help and a Local-tier warning; i18n keys under views.PipelineEditorView.runner_bindings_*"
     feat-notifications:
         description: Notifications, email delivery, and notification logs
         status: covered

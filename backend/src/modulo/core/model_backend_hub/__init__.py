@@ -75,6 +75,10 @@ class ModelBackendHub:
         self._backends: dict[uuid.UUID, ModelBackendBase] = {}
         self._healthy: dict[uuid.UUID, bool] = {}
         self._fallbacks: dict[uuid.UUID, list[uuid.UUID]] = {}
+        # FAR-592 (D6): decrypted credential JSON per backend id — the
+        # provision-time binding resolution reads raw credential fields
+        # (e.g. `api_key`) here. Cleared with everything else on __aexit__.
+        self._creds: dict[uuid.UUID, dict[str, Any]] = {}
 
     async def __aenter__(self) -> Self:
         return self
@@ -85,6 +89,11 @@ class ModelBackendHub:
         self._backends.clear()
         self._healthy.clear()
         self._fallbacks.clear()
+        self._creds.clear()
+
+    def creds_for(self, backend_id: uuid.UUID) -> dict[str, Any] | None:
+        """Return the decrypted credential JSON for a registered backend."""
+        return self._creds.get(backend_id)
 
     def register(self, backend_id: uuid.UUID, backend: ModelBackendBase) -> None:
         """Register a pre-built backend (e.g. StubModelBackend adapter in tests)."""
@@ -97,7 +106,10 @@ class ModelBackendHub:
         """Decrypt API keys and register backends. Call once at run start.
 
         `instances` must be `ModelBackend` ORM rows (or duck-typed equivalents with
-        `.id`, `.provider`, `.model_id`, `.default_params`).
+        `.id`, `.provider`, `.model_id`, `.default_params`). The decrypted
+        credential JSON is ALSO retained per backend id (FAR-592: the
+        provision-time binding resolution reads raw credential fields, e.g.
+        ``api_key``, via :meth:`creds_for`).
         """
         if instances is None:
             raise ValueError("instances must not be None")
@@ -143,6 +155,7 @@ class ModelBackendHub:
                     logger.warning("Secret for backend %s is not a JSON object", mb.id)
                     continue
                 creds: dict[str, Any] = raw_creds
+                self._creds[mb.id] = creds
                 backend = _build_backend(mb.provider, mb.model_id, creds, mb.default_params or {})
                 backends_to_register.append((mb.id, backend))
 
