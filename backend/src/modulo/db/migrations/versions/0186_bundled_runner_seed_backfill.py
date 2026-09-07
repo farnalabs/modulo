@@ -97,9 +97,10 @@ def upgrade() -> None:
                    'outbound',
                    'git_clone',
                    '[]'::json,
-                   'ephemeral',
-                   'active',
-                   now(), now()
+                    'ephemeral',
+                    'active',
+                    'org',
+                    now(), now()
             FROM organisations o
             WHERE NOT EXISTS (
                 SELECT 1 FROM environment_profiles ep

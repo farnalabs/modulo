@@ -376,7 +376,7 @@ async def _consume_stream(
     finally:
         if timed_out or stalled:
             try:
-                await exec_process.kill()
+                await asyncio.wait_for(exec_process.kill(), timeout=30)
             except asyncio.CancelledError:
                 raise
             except Exception:
