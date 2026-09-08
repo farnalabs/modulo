@@ -112,7 +112,7 @@
           </div>
           <div class="min-w-0 flex-1">
             <p class="truncate text-xs text-muted-foreground">
-              {{ gate.claimed_by ? $t('views.SettingsHitlReviewView.assigned_to', { user: gate.claimed_by }) : $t('views.SettingsHitlReviewView.unassigned') }}
+              {{ gate.claimed_by ? $t('views.SettingsHitlReviewView.assigned_to', { user: gate.claimed_by_name || gate.claimed_by }) : $t('views.SettingsHitlReviewView.unassigned') }}
             </p>
           </div>
           <span class="flex-shrink-0 text-xs text-muted-foreground">
@@ -162,6 +162,10 @@ interface GateItem {
   gate_id: string
   pipeline_id: string
   claimed_by: string | null
+  /** FAR-691: claimant's human-readable display name (server-resolved). */
+  claimed_by_name?: string | null
+  /** FAR-691: server-side stamp — is the claimant the caller? */
+  claimed_by_me?: boolean
   claimed_at: string | null
   expires_at: string | null
   decision: string | null
@@ -190,7 +194,11 @@ const { loading, error, data: gates, load: loadGates } = useDataFetch<GateItem[]
       claimed_by: g.claimed_by ? String(g.claimed_by) : null,
     })) }
   },
-  { initialValue: [] as GateItem[] }
+  // silentRefetch (FAR-691): the 30s auto-refresh and the filter/date-change
+  // refetches must not flip `loading` — the list branch stays mounted, so an
+  // expanded card (and its notes textarea focus) survives every refetch.
+  // The initial load still shows the spinner.
+  { initialValue: [] as GateItem[], silentRefetch: true }
 )
 
 const { load: loadPipelines, data: pipelines } = useDataFetch<PipelineItem[]>(

@@ -619,4 +619,72 @@ describe('SettingsHitlReviewView', () => {
     // The claim control is the shared HitlGateCard's `hitl-gate-claim` button.
     expect(wrapper!.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
   })
+
+  it('keeps the expanded card mounted and focused across a refetch (FAR-691 silentRefetch)', async () => {
+    // The 30s auto-refresh / filter refetches must NOT flip `loading`: the
+    // list branch stays mounted, so the expanded card's notes textarea keeps
+    // its focus (and its in-session token) instead of being unmounted mid-edit.
+    const { api } = await import('../lib/api/client')
+    let holdRefetch: ((value: unknown) => void) | null = null
+    let refetchPending = false
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/hitl/pending') {
+        if (refetchPending) {
+          return new Promise((resolve) => { holdRefetch = resolve })
+        }
+        return Promise.resolve({ data: { gates: [pendingGateRow()] }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      // attachTo: real DOM attachment so textarea.focus() actually moves
+      // document.activeElement (jsdom no-ops focus on detached trees).
+      attachTo: document.body,
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    await wrapper!.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const notes = wrapper!.find('[data-testid="hitl-gate-notes"]')
+    expect(notes.exists()).toBe(true)
+    await notes.setValue('typed notes')
+    ;(notes.element as HTMLTextAreaElement).focus()
+    expect(document.activeElement).toBe(notes.element)
+
+    // Trigger a refetch (filter change -> loadGates()) and hold it in flight.
+    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    refetchPending = true
+    wrapper!.findComponent(FilterBar).vm.$emit('update:filter', 'status', 'pending')
+    await nextTick()
+    await nextTick()
+
+    const pendingCallsDuring = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    expect(pendingCallsDuring).toBe(pendingCallsBefore + 1)
+    // silentRefetch: no spinner swap — the list branch (and the focused
+    // textarea) stay mounted while the refetch is in flight.
+    expect(wrapper!.find('.animate-spin').exists()).toBe(false)
+    const notesDuringRefetch = wrapper!.find('[data-testid="hitl-gate-notes"]')
+    expect(notesDuringRefetch.exists()).toBe(true)
+    expect(document.activeElement).toBe(notesDuringRefetch.element)
+
+    refetchPending = false
+    holdRefetch!({ data: { gates: [pendingGateRow()] }, error: undefined })
+    await flushPromises()
+    await nextTick()
+
+    const notesAfter = wrapper!.find('[data-testid="hitl-gate-notes"]')
+    expect(notesAfter.exists()).toBe(true)
+    expect((notesAfter.element as HTMLTextAreaElement).value).toBe('typed notes')
+    expect(document.activeElement).toBe(notesAfter.element)
+  })
 })

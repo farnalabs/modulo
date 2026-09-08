@@ -113,6 +113,20 @@
         </button>
       </div>
     </div>
+    <!-- FAR-691: the server reports the gate claimed by ANOTHER account and
+         this session's token was dropped as stale. Render the claimed-by-other
+         state only (the claimed metadata row above already shows the holder):
+         no approve/reject and no re-claim — the backend 409s foreign claims.
+         role="status" announces the swap from interactive controls to
+         read-only. -->
+    <div
+      v-else-if="status === 'claimed' && isForeignClaim"
+      data-testid="hitl-gate-foreign-claim"
+      role="status"
+      class="pt-2 text-sm text-muted-foreground"
+    >
+      {{ $t('hitl.gate.claimed_by_other_note') }}
+    </div>
     <!-- Token-recovery path (FAR-686): claimed but this component holds no
          token (e.g. the reviewer reloaded the page). Backend same-account
          re-claim re-issues a fresh token; a 409 means another reviewer. -->
@@ -147,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
@@ -166,6 +180,14 @@ export interface HitlGate {
   description?: string | null
   context?: Record<string, unknown> | null
   claimed_by?: string | null
+  /** FAR-691: claimant's human-readable display name (server-resolved). */
+  claimed_by_name?: string | null
+  /**
+   * FAR-691: server-side stamp — is the claimant the caller? Absent in older
+   * cached payloads, in which case the component keeps the FAR-686 behaviour
+   * (only treat the stamp as authoritative when it is explicitly false).
+   */
+  claimed_by_me?: boolean
   claimed_at?: string | null
   expires_at?: string | null
   decision?: string | null
@@ -212,6 +234,25 @@ const actioning = ref<'approve' | 'reject' | null>(null)
 const message = ref<HitlMessage | null>(null)
 let messageTimer: ReturnType<typeof setTimeout> | null = null
 
+// FAR-691: the server stamps whether the claim belongs to the caller. When it
+// reports a FOREIGN claim, any claim token this session still holds for the
+// gate is provably stale (e.g. the local claim expired and another reviewer
+// claimed): drop the token and render the claimed-by-other state — no
+// approve/reject and no re-claim (the backend 409s foreign claims by design).
+// The stamp is only authoritative when explicitly false: absent
+// `claimed_by_me` (older cached payloads) keeps the FAR-686 behaviour.
+const isForeignClaim = computed(() => props.gate.claimed_by != null && props.gate.claimed_by_me === false)
+watch(
+  isForeignClaim,
+  (foreign) => {
+    if (foreign && gateState.claimToken.value) {
+      gateState.clear()
+      claimedByYou.value = false
+    }
+  },
+  { immediate: true },
+)
+
 const status = computed(() => {
   if (props.gate.decision === 'approved') return 'approved'
   if (props.gate.decision === 'rejected') return 'rejected'
@@ -223,8 +264,10 @@ const status = computed(() => {
 })
 
 const claimedByDisplay = computed(() => {
-  if (claimedByYou.value) return t('hitl.gate.claimed_by_you')
-  return props.gate.claimed_by || ''
+  if (claimedByYou.value || props.gate.claimed_by_me === true) return t('hitl.gate.claimed_by_you')
+  // FAR-691: prefer the server-resolved display name; fall back to the raw
+  // account UUID (e.g. the account row disappeared).
+  return props.gate.claimed_by_name || props.gate.claimed_by || ''
 })
 
 const pipelineName = computed(() => props.gate.pipeline_name || '')

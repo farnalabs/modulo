@@ -11232,6 +11232,13 @@ export interface components {
             context?: {
                 [key: string]: unknown;
             } | null;
+            /** Claimed By Name */
+            claimed_by_name?: string | null;
+            /**
+             * Claimed By Me
+             * @default false
+             */
+            claimed_by_me: boolean;
         };
         /** GetOrgGuardrailsKillSwitchResponse */
         GetOrgGuardrailsKillSwitchResponse: {
