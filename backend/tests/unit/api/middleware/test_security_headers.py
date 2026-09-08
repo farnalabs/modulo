@@ -26,8 +26,13 @@ EXPECTED_CSP = (
     "script-src 'self' 'unsafe-inline'; "
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; "
+    "font-src 'self' data:; "
     "frame-src 'self'; "
-    "frame-ancestors 'none'"
+    "frame-ancestors 'none'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "upgrade-insecure-requests"
 )
 EXPECTED_HSTS = "max-age=31536000; includeSubDomains"
 EXPECTED_XFO = "DENY"
@@ -134,6 +139,24 @@ async def test_hsts_sent_in_production(app: FastAPI) -> None:
 
 
 @pytest.mark.anyio
+async def test_upgrade_insecure_requests_in_production(app: FastAPI) -> None:
+    """upgrade-insecure-requests is in CSP when debug=False (production)."""
+    resp = await _get(app)
+    csp = resp.headers["Content-Security-Policy"]
+    assert "upgrade-insecure-requests" in csp
+
+
+@pytest.mark.anyio
+async def test_csp_defense_in_depth_directives(app: FastAPI) -> None:
+    """CSP includes object-src, base-uri, and form-action for defense-in-depth."""
+    resp = await _get(app)
+    csp = resp.headers["Content-Security-Policy"]
+    assert "object-src 'none'" in csp
+    assert "base-uri 'self'" in csp
+    assert "form-action 'self'" in csp
+
+
+@pytest.mark.anyio
 async def test_debug_mode_appends_ws_to_csp_connect_src() -> None:
     settings = _make_settings(debug=True)
     with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
@@ -146,6 +169,10 @@ async def test_debug_mode_appends_ws_to_csp_connect_src() -> None:
     assert "default-src 'self'" in csp
     assert "script-src 'self' 'unsafe-inline'" in csp
     assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "base-uri 'self'" in csp
+    assert "form-action 'self'" in csp
+    assert "upgrade-insecure-requests" not in csp
 
 
 @pytest.mark.anyio
