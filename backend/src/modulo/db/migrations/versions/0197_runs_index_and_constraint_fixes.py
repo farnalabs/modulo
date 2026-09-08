@@ -1,15 +1,15 @@
 """Drop redundant ix_runs_refusal, add CHECK constraints, add idempotency unique.
 
-Revision ID: 0194_runs_index_and_constraint_fixes
-Revises: 0193_run_node_outputs_sweep_index
+Revision ID: 0197_runs_index_and_constraint_fixes
+Revises: 0194_uuid_pk_server_defaults
 Create Date: 2026-09-08
 """
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0194_runs_index_and_constraint_fixes"
-down_revision = "0193_run_node_outputs_sweep_index"
+revision = "0197_runs_index_and_constraint_fixes"
+down_revision = "0194_uuid_pk_server_defaults"
 branch_labels = None
 depends_on = None
 

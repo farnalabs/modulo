@@ -1855,7 +1855,10 @@ export default {
       "retry_request_failed": "Retry request failed:",
       "retried_deliveries_count": "{count} delivery retried | {count} deliveries retried",
       "errors_count": "{count} error | {count} errors",
-      "retried_with_errors": "{retried} with {errors}"
+      "retried_with_errors": "{retried} with {errors}",
+      "retry_all_confirm": "Retry all failed deliveries?",
+      "cancel": "Cancel",
+      "confirm": "Confirm"
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",

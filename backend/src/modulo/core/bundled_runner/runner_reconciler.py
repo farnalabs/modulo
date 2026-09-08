@@ -159,7 +159,7 @@ async def reconcile_runner_workspaces(
 
         active_run_ids, cross_ref_error = await _load_active_run_ids(async_engine)
         if cross_ref_error is not None:
-            _log.exception("runner.reconciler.sweep_aborted stage=cross_reference")
+            _log.error("runner.reconciler.sweep_aborted stage=cross_reference")
             raise ReconcilerSweepError(
                 f"Bundled Runner orphan sweep aborted on cross-reference failure: {cross_ref_error}",
                 scanned=len(listed),

@@ -1,15 +1,15 @@
 """Add batch_id and completed_at composite indexes for runs.
 
-Revision ID: 0195_runs_add_missing_indexes
-Revises: 0194_runs_index_and_constraint_fixes
+Revision ID: 0198_runs_add_missing_indexes
+Revises: 0197_runs_index_and_constraint_fixes
 Create Date: 2026-09-08
 """
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0195_runs_add_missing_indexes"
-down_revision = "0194_runs_index_and_constraint_fixes"
+revision = "0198_runs_add_missing_indexes"
+down_revision = "0197_runs_index_and_constraint_fixes"
 branch_labels = None
 depends_on = None
 

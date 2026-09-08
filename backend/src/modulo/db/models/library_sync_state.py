@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, String, Uuid, func
+from sqlalchemy import JSON, DateTime, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -25,7 +25,9 @@ SINGLETON_ID = uuid.UUID("6f6a1c1e-0b3a-4c8d-9e2f-7a5b1c2d3e4f")
 class LibrarySyncState(Base):
     __tablename__ = "library_sync_state"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=SINGLETON_ID)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=SINGLETON_ID, server_default=text("gen_random_uuid()")
+    )
     # Last-good signed manifest (as verified against the root public key).
     manifest_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     # Last-good catalog entries list ({id, type, slug, ...} dicts).

@@ -63,10 +63,11 @@ _MIGRATION_PATH = (
 # 0187_pipeline_performance_indexes, main's 0188_pipeline_run_context_defaults_default,
 # main's 0189_agent_runner_bindings and 0190_hitl_claim_context_json, main's
 # 0191_bundled_runner_seed_backfill re-parented onto 0190_hitl_claim_context_json,
-# and FAR-583's 0192_run_node_outputs re-parented onto 0191 with its
+# FAR-583's 0192_run_node_outputs re-parented onto 0191 with its
 # 0193_run_node_outputs_sweep_index (qa iteration 2, the sweep's partial index)
-# chained onto 0192.
-_CHAIN_HEAD_MIGRATION_NAME = "0196_runs_json_to_jsonb"
+# chained onto 0192, 0194_uuid_pk_server_defaults (FAR-718, from main) chained onto
+# 0193 as the chain head, and improve-database's 0197/0198/0199 chain off it.
+_CHAIN_HEAD_MIGRATION_NAME = "0199_runs_json_to_jsonb"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

@@ -803,18 +803,21 @@ def test_single_migration_head() -> None:
     # partial index) chains off 0192.
     chaining_off_0192 = [p for p in revisions if parents[p] == "0192_run_node_outputs"]
     assert [_basename(p) for p in chaining_off_0192] == ["0193_run_node_outputs_sweep_index.py"]
-    # 0194_runs_index_and_constraint_fixes (improve-database) chains off 0193.
-    chaining_off_0193 = [p for p in revisions if parents[p] == "0193_run_node_outputs_sweep_index"]
-    assert [_basename(p) for p in chaining_off_0193] == ["0194_runs_index_and_constraint_fixes.py"]
-    # 0195_runs_add_missing_indexes (improve-database) chains off 0194.
-    chaining_off_0194 = [p for p in revisions if parents[p] == "0194_runs_index_and_constraint_fixes"]
-    assert [_basename(p) for p in chaining_off_0194] == ["0195_runs_add_missing_indexes.py"]
-    # 0196_runs_json_to_jsonb (improve-database) chains off 0195 and is the single head.
-    chaining_off_0195 = [p for p in revisions if parents[p] == "0195_runs_add_missing_indexes"]
-    assert [_basename(p) for p in chaining_off_0195] == ["0196_runs_json_to_jsonb.py"]
-    # Nothing chains off 0196 -> it is the single head.
-    chaining_off_0196 = [p for p in revisions if parents[p] == "0196_runs_json_to_jsonb"]
-    assert chaining_off_0196 == []
+    # 0194_uuid_pk_server_defaults (FAR-718, from main) chains off 0193.
+    chaining_off_0193b = [p for p in revisions if parents[p] == "0193_run_node_outputs_sweep_index"]
+    assert [_basename(p) for p in chaining_off_0193b] == ["0194_uuid_pk_server_defaults.py"]
+    # 0197_runs_index_and_constraint_fixes (improve-database) chains off 0194_uuid_pk_server_defaults.
+    chaining_off_0194b = [p for p in revisions if parents[p] == "0194_uuid_pk_server_defaults"]
+    assert [_basename(p) for p in chaining_off_0194b] == ["0197_runs_index_and_constraint_fixes.py"]
+    # 0198_runs_add_missing_indexes (improve-database) chains off 0197.
+    chaining_off_0197 = [p for p in revisions if parents[p] == "0197_runs_index_and_constraint_fixes"]
+    assert [_basename(p) for p in chaining_off_0197] == ["0198_runs_add_missing_indexes.py"]
+    # 0199_runs_json_to_jsonb (improve-database) chains off 0198 and is the single head.
+    chaining_off_0198 = [p for p in revisions if parents[p] == "0198_runs_add_missing_indexes"]
+    assert [_basename(p) for p in chaining_off_0198] == ["0199_runs_json_to_jsonb.py"]
+    # Nothing chains off 0199 -> it is the single head.
+    chaining_off_0199 = [p for p in revisions if parents[p] == "0199_runs_json_to_jsonb"]
+    assert chaining_off_0199 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

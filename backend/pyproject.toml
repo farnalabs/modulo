@@ -186,6 +186,7 @@ select = [
      "PERF",     # perflint (PERF401 manual list-building loop — use comprehension/extend)
      "ISC",      # flake8-implicit-str-concat (ISC003/ISC004 inconsistent string concatenation)
      "PIE",      # flake8-pie (PIE810 single startswith/endswith tuple, PIE807 useless lambda)
+     "RSE",      # flake8-raise (RSE102 raise in except handler)
     # Defensive gate-strengthening: every rule below was verified to have zero
     # current violations (run `ruff check . --extend-select <codes> --statistics`),
     # so enabling them tightens the lint gate against future regressions without
@@ -256,7 +257,6 @@ select = [
     "RUF026",
     "RUF051",
     "TRY400",
-    "RSE102",
     "PLW0406",
     "PLR0124",
     "PLR1714",
@@ -430,7 +430,7 @@ ignore = [
 "scripts/**" = ["T20", "PERF", "ISC"]
 "scripts/gen_seed_sql.py" = ["S608"]
 "scripts/generate_remy_primer.py" = ["ASYNC240"]
-"deploy/*" = ["T20"]
+"deploy/*" = ["T20", "S108"]
 "tests/bdd/check-bdd-coverage.py" = ["N999"]
 "tests/unit/runtime_provider/*" = ["E402"]
 "tests/unit/secrets_backend/*" = ["E402"]

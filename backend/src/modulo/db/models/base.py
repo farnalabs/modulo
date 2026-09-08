@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import DateTime, ForeignKey, Uuid, func
+from sqlalchemy import DateTime, ForeignKey, Uuid, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # SQL referential action shared by every nullable FK across the model layer:
@@ -45,7 +45,15 @@ class OrgScoped(Base, TimestampMixin):
 
     __abstract__ = True
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(),
+        primary_key=True,
+        default=uuid.uuid4,
+        # Server-side safety net (FAR-718): raw-SQL INSERTs that omit the id
+        # column get a random v4 uuid instead of a NOT NULL violation. The ORM
+        # still supplies client-side ids, which win whenever present.
+        server_default=text("gen_random_uuid()"),
+    )
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),

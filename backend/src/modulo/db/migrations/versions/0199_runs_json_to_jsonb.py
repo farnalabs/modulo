@@ -1,15 +1,15 @@
 """Promote cost_breakdown and node_token_usage from JSON to JSONB.
 
-Revision ID: 0196_runs_json_to_jsonb
-Revises: 0195_runs_add_missing_indexes
+Revision ID: 0199_runs_json_to_jsonb
+Revises: 0198_runs_add_missing_indexes
 Create Date: 2026-09-08
 """
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0196_runs_json_to_jsonb"
-down_revision = "0195_runs_add_missing_indexes"
+revision = "0199_runs_json_to_jsonb"
+down_revision = "0198_runs_add_missing_indexes"
 branch_labels = None
 depends_on = None
 
