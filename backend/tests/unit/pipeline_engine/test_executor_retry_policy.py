@@ -1689,7 +1689,11 @@ def test_watchdog_stalled_code_maps_to_stall_match():
 
 def test_watchdog_codes_never_match_uncorrelated_events():
     """A watchdog kill must not match a policy that does not cover its event:
-    a stall-only policy does not retry a deadline kill, and a timeout-only
-    policy does not retry a zombie stall."""
+    a stall-only policy does not retry a deadline kill, a timeout-only
+    policy does not retry a zombie stall, and a FAILURE-only policy does not
+    retry a deadline kill (the deadline code is a timeout outcome — raw and
+    dotted spellings, qa fix 2)."""
     assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "node_deadline_exceeded") is None
     assert _retry_after_policy({"on": ["timeout"], "max_retries": 2}, "stalled", "executor_stalled") is None
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_deadline_exceeded") is None
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node.deadline_exceeded") is None

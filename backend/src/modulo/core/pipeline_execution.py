@@ -1620,16 +1620,25 @@ async def _sweep_org_stale_runs(
     # codes carry retryable=True), so a run that exhausted its TTL while
     # waiting for capacity must not be dropped on the first pass. The per-run
     # capacity-retry budget (``SAQ_CAPACITY_RETRY_BUDGET``, default 3) caps
-    # total capacity retries: ``claim_count`` counts every claim/demote
-    # capacity cycle for such a run, so it IS the per-run capacity-retry
-    # counter — no schema change. Rows within the budget stay ``pending``
-    # with their capacity marker and are re-dispatched by the EXISTING
-    # capacity-recovery machinery (the 60s ``dispatcher_reconcile`` capacity
-    # branch re-dispatches via ``dispatch_run`` when capacity frees; its
-    # claim/demote cycle grows ``claim_count`` — that growth is the budget
-    # decrement, and the re-dispatch cadence is the backoff). Once the budget
-    # is gone the TTL terminal-fail fires exactly as before (the loop-cap),
-    # so a capacity row can never be resurrected forever.
+    # total capacity retries. REAL semantics of the gate below: ``claim_count``
+    # counts ALL claims (not just capacity cycles); a run within the budget
+    # stays ``pending`` with its capacity marker and is re-dispatched by the
+    # EXISTING capacity-recovery machinery (the 60s ``dispatcher_reconcile``
+    # capacity branch re-dispatches via ``dispatch_run`` when capacity frees).
+    # The budget gate alone can never terminalize a NEVER-CLAIMED row (the
+    # dominant capacity path is dispatch-time deferral WITHOUT a claim, so
+    # claim_count stays 0 and ``0 > budget`` is false for every allowed
+    # budget) nor a budget >= SAQ_RUN_CLAIM_CAP config (claims are refused at
+    # claim_count >= the cap, so the comparison is unsatisfiable). The
+    # backstop OR-terms restore the termination guarantee: a row with no
+    # claim heartbeat at all (never claimed) or whose last claim heartbeat is
+    # itself older than the TTL terminal-fails regardless of claim_count, so
+    # the budget grace only keeps a row pending while it shows a claim
+    # heartbeat within the TTL window — a capacity row can never be
+    # resurrected forever. (The backstop age is the TTL itself, NOT a larger
+    # multiple: the pinned integration behaviour —
+    # test_org_sandbox_capacity.py terminalizes claim_count=0 rows with NULL
+    # and TTL+30min-stale heartbeats — any larger age would strand them.)
     capacity_retry_budget = int(getattr(get_settings(), "saq_capacity_retry_budget", 3))
     capacity_timeout_result = await conn.execute(
         text(
@@ -1641,7 +1650,9 @@ async def _sweep_org_stale_runs(
             "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
             "AND created_at < now() - (:ttl * interval '1 minute') "
             "AND cancellation_requested = false "
-            "AND claim_count > :capacity_retry_budget "
+            "AND (claim_count > :capacity_retry_budget "
+            "OR heartbeat_at IS NULL "
+            "OR heartbeat_at < now() - (:ttl * interval '1 minute')) "
             "RETURNING id"
         ),
         {

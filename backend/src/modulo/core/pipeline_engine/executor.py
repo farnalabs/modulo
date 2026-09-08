@@ -560,16 +560,19 @@ def _failure_event_matches(
     """``failure`` event matches a failed outcome, excluding hang deaths.
 
     A sandbox-agent HANG death terminalizes as ``node_cancelled`` + "likely
-    hung" in ``error_detail`` — re-dispatching would burn a full node timeout
+    hung" in ``error_detail`` - re-dispatching would burn a full node timeout
     with zero recovery probability, so it is excluded from ``"failure"`` retries.
     """
     if (
         "failure" not in event_set
         or final_status != "failed"
-        # Timeout is a distinct event — a "failure"-only policy must not retry
-        # a timeout outcome, and a stall is not a generic failure.
-        or code in ("node_timeout", "TimeoutError", "executor_stalled")
-        or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", "agent.stall")
+        # Timeout is a distinct event - a "failure"-only policy must not retry
+        # a timeout outcome, and a stall is not a generic failure. The
+        # absolute node-deadline watchdog code resolves to the timeout event
+        # too (map_legacy_code: node_deadline_exceeded -> node.deadline_exceeded),
+        # so both spellings are excluded the same way.
+        or code in ("node_timeout", "TimeoutError", "executor_stalled", "node_deadline_exceeded")
+        or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", "agent.stall", _ERROR_CODE_NODE_DEADLINE_EXCEEDED)
     ):
         return False
     # FAR-296 Phase 2: never-retryable script-mode terminal codes are excluded

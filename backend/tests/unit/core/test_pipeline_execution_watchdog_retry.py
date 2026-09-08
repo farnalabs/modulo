@@ -21,7 +21,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Self
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -74,13 +74,24 @@ def _watchdog_retry_session_factory() -> MagicMock:
 
 
 def _db_seams(
-    retry_policy: dict[str, Any] | None, *, trigger_type: str = "manual", graph_json: dict[str, Any] | None = None
+    retry_policy: dict[str, Any] | None,
+    *,
+    trigger_type: str = "manual",
+    graph_json: dict[str, Any] | None = None,
+    claim_count: int = 1,
 ):
-    """Patch the DB seams the shared hook's context loader resolves lazily."""
+    """Patch the DB seams the shared hook's context loader resolves lazily.
+
+    ``claim_count`` is the run row's total claim count — the pre-node hang
+    budget bound (FAR-693 fix) reads it from the already-loaded row. Default
+    1 = a single claim, so the effective attempt count IS
+    ``node_attempt_count`` and the in-execute behaviour is unchanged.
+    """
     run = MagicMock()
     run.trigger_type = trigger_type
     run.pipeline_id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
+    run.claim_count = claim_count
     pipeline = MagicMock()
     pipeline.retry_policy = retry_policy if retry_policy is not None else {}
 
@@ -118,13 +129,14 @@ async def _consult_hook(
     trigger_type: str = "manual",
     graph_json: dict[str, Any] | None = None,
     reset_rowcount: int = 1,
+    claim_count: int = 1,
 ) -> tuple[bool, WatchdogRetryOutcome, AsyncMock]:
     """Run the REAL shared hook once with only DB seams mocked."""
     executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, executor._claim_token))
     executor._fenced_pending_reset = AsyncMock(return_value=reset_rowcount)
     exec_task = asyncio.create_task(asyncio.sleep(999))
     box = WatchdogRetryOutcome()
-    seams = _db_seams(retry_policy, trigger_type=trigger_type, graph_json=graph_json)
+    seams = _db_seams(retry_policy, trigger_type=trigger_type, graph_json=graph_json, claim_count=claim_count)
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
@@ -560,7 +572,11 @@ async def test_watchdog_no_coverage_still_terminal_fails_and_returns_failed():
 
 async def test_resume_job_disables_watchdog_retry():
     """Resume jobs keep today's unconditional terminal fail: their claim
-    cannot re-claim a pending run, so the hook is never built."""
+    cannot re-claim a pending run, so the hook is never built. Runtime SAQ
+    job functions are FULLY-QUALIFIED ("modulo.core.saq_worker.resume_run",
+    dispatch.py) — this pins the endswith match against the real shape (the
+    old bare ``!= "resume_run"`` comparison never matched it and built the
+    hook for resume jobs)."""
     executor = _make_executor_mock(attempt_count=1)
     hang = asyncio.Event()
 
@@ -588,7 +604,7 @@ async def test_resume_job_disables_watchdog_retry():
             run_id=str(uuid.uuid4()),
             org_id=str(uuid.uuid4()),
             executor=executor,
-            job=MagicMock(function="resume_run"),
+            job=MagicMock(function="modulo.core.saq_worker.resume_run"),
             execute_fn=_hang,
         )
     assert result == {"status": "failed"}
@@ -598,9 +614,19 @@ async def test_resume_job_disables_watchdog_retry():
 
 
 def test_watchdog_retry_enabled_for_job():
+    """The guard matches the FULLY-QUALIFIED runtime job-function strings
+    (dispatch.py) via the saq_hooks endswith pattern, keeps the bare
+    spellings working, and fails CLOSED: job=None (resume_run's default) or
+    an unknown function disables the hook. The None expectation is an
+    INTENTIONAL pin reversal — the old ``!= "resume_run"`` comparison
+    enabled the hook when the job was absent, which would have let a resume
+    watchdog kill re-dispatch into an unreclaimable pending run."""
     assert _watchdog_retry_enabled_for_job(MagicMock(function="execute_run")) is True
-    assert _watchdog_retry_enabled_for_job(None) is True
+    assert _watchdog_retry_enabled_for_job(MagicMock(function="modulo.core.saq_worker.execute_run")) is True
+    assert _watchdog_retry_enabled_for_job(MagicMock(function="modulo.core.saq_worker.resume_run")) is False
     assert _watchdog_retry_enabled_for_job(MagicMock(function="resume_run")) is False
+    assert _watchdog_retry_enabled_for_job(None) is False
+    assert _watchdog_retry_enabled_for_job(MagicMock()) is False
 
 
 async def test_script_mode_graph_requires_lease_probe_before_redispatch():
@@ -619,6 +645,108 @@ async def test_script_mode_graph_requires_lease_probe_before_redispatch():
     executor._probe_script_lease.assert_awaited_once()
     assert dispatched is False
     assert box.requested is False
+
+
+async def test_pre_node_hang_budget_bounded_by_claim_count():
+    """FAR-693 fix: a PRE-node hang (hub init / graph compile — the exact hang
+    sites the zombie watchdog exists for, which happen BEFORE the attempt
+    increment in _prepare_and_stream) exhausts the budget too.
+
+    node_attempt_count stays 0 on every kill, but each watchdog retry consumes
+    a SAQ claim (the re-raised RunRetryPolicyError retries the job, whose
+    re-claim grows claim_count), so the effective attempt count
+    max(node_attempt_count, claim_count - 1) grows per retry cycle and the
+    run terminal-fails once it exceeds max_retries instead of churning pending
+    under the SAQ claim cap. Sequence pinned for max_retries=1: claim 1
+    (effective 0) re-dispatches, claim 2 (effective 1) re-dispatches — the
+    bounded slack of the prescribed counter — and claim 3 (effective 2)
+    terminal-fails."""
+    executor = _make_executor_mock(attempt_count=0)
+    dispatched1, box1, _sleep1 = await _consult_hook(
+        executor,
+        retry_policy={"on": ["stall"], "max_retries": 1},
+        final_status="stalled",
+        error_code="executor_stalled",
+        attempt_count=0,
+        claim_count=1,
+    )
+    assert dispatched1 is True
+    assert box1.requested is True
+
+    dispatched2, box2, _sleep2 = await _consult_hook(
+        executor,
+        retry_policy={"on": ["stall"], "max_retries": 1},
+        final_status="stalled",
+        error_code="executor_stalled",
+        attempt_count=0,
+        claim_count=2,
+    )
+    assert dispatched2 is True
+    assert box2.requested is True
+
+    dispatched3, box3, _sleep3 = await _consult_hook(
+        executor,
+        retry_policy={"on": ["stall"], "max_retries": 1},
+        final_status="stalled",
+        error_code="executor_stalled",
+        attempt_count=0,
+        claim_count=3,
+    )
+    assert dispatched3 is False
+    assert box3.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+
+
+async def test_in_execute_budget_unchanged_by_claim_count():
+    """The claim-derived budget term must stay surgical: a run that reached a
+    node (claim_count 1 — a single claim) keeps the in-execute behaviour —
+    the effective attempt count IS node_attempt_count."""
+    executor = _make_executor_mock(attempt_count=2)
+    dispatched, box, _sleep = await _consult_hook(
+        executor,
+        retry_policy={"on": ["timeout"], "max_retries": 1},
+        final_status="failed",
+        error_code="node_deadline_exceeded",
+        attempt_count=2,
+        claim_count=1,
+    )
+    assert dispatched is False
+    assert box.requested is False
+
+
+async def test_context_load_sets_rls_org_and_execution_context():
+    """Tenancy pin (qa fix 5): the retry-context loader MUST set the RLS org
+    (to the run's org) AND the execution context on its session before
+    reading — deleting either call would silently widen the read (or read
+    nothing under RLS) and no other test would notice."""
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    set_rls_org_mock = AsyncMock()
+    set_rls_ctx_mock = AsyncMock()
+    run = MagicMock()
+    run.trigger_type = "manual"
+    run.pipeline_id = uuid.uuid4()
+    run.snapshot_id = uuid.uuid4()
+    run.claim_count = 2
+    pipeline = MagicMock()
+    pipeline.retry_policy = {"on": ["timeout"], "max_retries": 1}
+    with (
+        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=run)),
+        patch("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch("modulo.db.rls.set_rls_org", set_rls_org_mock),
+        patch("modulo.db.rls.set_rls_execution_context", set_rls_ctx_mock),
+        patch(
+            "modulo.core.pipeline_engine.watchdog_retry.async_sessionmaker",
+            return_value=_watchdog_retry_session_factory(),
+        ),
+    ):
+        context = await wr._load_watchdog_retry_context(MagicMock(), run_id=run_id, org_id=org_id)
+    assert context is not None
+    set_rls_org_mock.assert_awaited_once_with(ANY, org_id)
+    set_rls_ctx_mock.assert_awaited_once_with(ANY)
+    # The claim count is read from the same row (the pre-node hang budget
+    # bound consumes it) and surfaces in the loaded context.
+    assert context[3] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -663,11 +791,9 @@ def _compile_sql(stmt: object) -> str:
     return str(stmt)
 
 
-@pytest.mark.parametrize("budget", [0, 3, 7])
-async def test_sweep_capacity_timeout_guards_on_capacity_retry_budget(budget: int):
-    """FAR-705: the capacity_timeout terminalisation only fires PAST the
-    per-run capacity-retry budget — the loop-cap that keeps the retryable
-    capacity.* class from resurrecting a run forever."""
+async def _run_sweep_capture_capacity_stmt(budget: int) -> tuple[str, dict[str, object]]:
+    """Run one stale sweep with the given capacity budget; return the compiled
+    capacity_timeout UPDATE statement + its bound params."""
     statements: list[str] = []
     params: list[dict[str, object]] = []
     engine = _sweep_engine(statements, params)
@@ -689,8 +815,57 @@ async def test_sweep_capacity_timeout_guards_on_capacity_retry_budget(budget: in
     capacity_stmts = [(s, p) for s, p in zip(statements, params, strict=True) if "capacity_timeout" in s]
     assert len(capacity_stmts) == 1
     sql, bound = capacity_stmts[0]
-    assert "AND claim_count > :capacity_retry_budget" in _compile_sql(sql)
+    return _compile_sql(sql), bound
+
+
+@pytest.mark.parametrize("budget", [0, 3, 7])
+async def test_sweep_capacity_timeout_guards_on_capacity_retry_budget(budget: int):
+    """FAR-705: the capacity_timeout terminalisation only fires PAST the
+    per-run capacity-retry budget — the loop-cap that keeps the retryable
+    capacity.* class from resurrecting a run forever — OR via the backstop
+    (never claimed / claim heartbeat itself older than the TTL)."""
+    sql, bound = await _run_sweep_capture_capacity_stmt(budget)
+    assert (
+        "AND (claim_count > :capacity_retry_budget "
+        "OR heartbeat_at IS NULL "
+        "OR heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
+    )
     assert bound["capacity_retry_budget"] == budget
+
+
+@pytest.mark.parametrize("budget", [0, 3, 20])
+async def test_sweep_capacity_backstop_restores_termination_guarantee(budget: int):
+    """FAR-705 fix: the budget gate alone can never terminalize (a) a
+    NEVER-CLAIMED row — the dominant capacity path is dispatch-time deferral
+    WITHOUT a claim, so claim_count stays 0 and ``0 > budget`` is false for
+    every allowed budget — nor (b) a budget >= SAQ_RUN_CLAIM_CAP config
+    (claims are refused at claim_count >= the cap, so the comparison is
+    unsatisfiable for budget=20). The backstop OR-terms restore the
+    termination guarantee: a row with no claim heartbeat at all, or whose
+    last claim heartbeat is itself older than the TTL, terminal-fails
+    regardless of claim_count. The backstop age is the TTL itself (NOT a
+    larger multiple) — the pinned integration behaviour
+    (test_org_sandbox_capacity.py) terminalizes claim_count=0 rows with NULL
+    and TTL+30min-stale heartbeats, which any larger age would strand."""
+    sql, bound = await _run_sweep_capture_capacity_stmt(budget)
+    assert "OR heartbeat_at IS NULL" in sql
+    assert "OR heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
+    assert "hard_cap_ttl" not in bound
+
+
+async def test_sweep_capacity_within_budget_row_stays_pending():
+    """FAR-705 fix: a within-budget row with a claim heartbeat inside the TTL
+    window matches NONE of the terminalisation disjuncts — the budget
+    disjunct is strict (a claim_count == budget row does not fire it), the
+    NULL-heartbeat disjunct requires no claim at all, and the age disjunct
+    requires the last claim heartbeat to be itself older than the TTL — so
+    it keeps the pending/re-dispatch behaviour."""
+    sql, bound = await _run_sweep_capture_capacity_stmt(3)
+    assert "claim_count > :capacity_retry_budget" in sql
+    assert "claim_count >= :capacity_retry_budget" not in sql
+    assert "heartbeat_at IS NULL" in sql
+    assert "heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
+    assert bound["capacity_retry_budget"] == 3
 
 
 def test_capacity_retry_budget_setting_default_and_override(monkeypatch: pytest.MonkeyPatch):

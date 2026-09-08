@@ -20,18 +20,27 @@ in-execute retry path uses:
    SAQ retries the job and ``claim_run_async`` re-claims the pending run —
    with the same jittered capped backoff (``_retry_backoff_seconds`` + the
    run's ``backoff_schedule``) slept BEFORE the re-raise, mirroring
-   ``_redispatch_after_policy``.
+   ``_redispatch_after_policy``. The budget counter is
+   ``max(node_attempt_count, claim_count - 1)``: node attempts alone cannot
+   bound a PRE-node hang (hub init / graph compile happen BEFORE the attempt
+   increment), but each watchdog retry consumes a SAQ claim, so the
+   claim-derived term grows one per retry cycle and bounds every hang site.
 
 There is exactly ONE mechanism: the watchdogs call the hook this module
 builds, which reuses the live executor instance's own helpers; the wrapper
 then raises the SAME ``RunRetryPolicyError`` the in-execute path raises. No
 parallel reset / re-enqueue path exists.
 
-Resume runs are EXCLUDED (hook disabled for the ``resume_run`` SAQ job
-function): ``claim_resume_run_async`` cannot re-claim a run reset to
+Resume runs are EXCLUDED (hook enabled for the ``execute_run`` SAQ job
+function ONLY): ``claim_resume_run_async`` cannot re-claim a run reset to
 ``pending`` (it claims awaiting_human/claimed/hitl_parked/stale-running
 only), so a watchdog retry there would strand the run until the durable
 sweeps recover it. Resume runs keep today's unconditional terminal fail.
+Runtime SAQ job functions are FULLY-QUALIFIED (``modulo.core.saq_worker.
+resume_run``, see ``dispatch.py``), so the check matches with the same
+``endswith`` pattern ``error_tracking.saq_hooks`` uses and fails CLOSED:
+``job=None`` (``resume_run``'s default) or an unknown function shape
+disables the hook.
 
 Fail-closed by design: any hook failure (DB error, missing executor, lost
 claim token) returns ``False`` and the watchdog terminal-fails the run
@@ -76,9 +85,13 @@ _log = logging.getLogger(__name__)
 
 WatchdogRetryHook = Callable[[str, str], Awaitable[bool]]
 
-# The resume SAQ job function name — the one path whose watchdog kills keep
-# today's unconditional terminal fail (see module docstring).
-_RESUME_JOB_FUNCTION = "resume_run"
+# Runtime SAQ job function names are FULLY-QUALIFIED ("modulo.core.saq_worker.execute_run"
+# / "...resume_run" — see dispatch.py SAQ_*_RUN_FUNCTION and the registered
+# worker functions in core/saq_worker.py). Match with the same ``endswith``
+# pattern error_tracking.saq_hooks._classify uses — a bare ``!= "resume_run"``
+# comparison never matches a fully-qualified name, which would build the hook
+# for resume jobs (where the re-claim is impossible) instead of excluding them.
+_EXECUTE_JOB_FUNCTION_SUFFIX = "execute_run"
 
 
 @dataclass
@@ -97,8 +110,16 @@ class WatchdogRetryOutcome:
 
 
 def watchdog_retry_enabled_for_job(job: Any) -> bool:
-    """Watchdog kills re-dispatch only on the execute path (not ``resume_run``)."""
-    return getattr(job, "function", None) != _RESUME_JOB_FUNCTION
+    """Watchdog kills re-dispatch only on the execute path (not ``resume_run``).
+
+    Fails CLOSED: ``job=None`` (``resume_run``'s default when it forwards the
+    kwarg it never received) or an unknown function shape disables the hook —
+    only the (fully-qualified) execute job function enables it. The resume
+    path must keep today's unconditional terminal fail, and an unrecognised
+    job shape must never be assumed retryable.
+    """
+    function_name = getattr(job, "function", None)
+    return isinstance(function_name, str) and function_name.endswith(_EXECUTE_JOB_FUNCTION_SUFFIX)
 
 
 def create_watchdog_retry_hook(
@@ -178,7 +199,7 @@ async def watchdog_retry_after_policy(
         return False
     if context is None:
         return False
-    policy, trigger_type, graph_json = context
+    policy, trigger_type, graph_json, claim_count = context
 
     # THE shared decision — the exact pure function the in-execute path uses.
     # The raw watchdog codes resolve through the shared map_legacy_code alias
@@ -200,11 +221,24 @@ async def watchdog_retry_after_policy(
     # Same bookkeeping as the in-execute path: attempt budget, superseded
     # claim, FAR-296 script-mode stale-lease probe.
     node_attempt_count, current_claim_token = await executor._read_retry_attempt_state(org_id, run_id)
+    # The budget must also bound PRE-node hangs (hub init / graph compile —
+    # the exact hang sites the zombie watchdog exists for): node_attempt_count
+    # only increments in executor._prepare_and_stream, AFTER those sites, so a
+    # run hung there reads 0 on every kill and ``0 <= budget`` always allowed
+    # the retry (bounded only by the SAQ claim cap — stranded pending churn).
+    # Each watchdog retry consumes a claim (the re-raised RunRetryPolicyError
+    # makes SAQ retry the job, whose re-claim grows claim_count), so
+    # claim_count - 1 — the number of PRIOR re-claims, read from the
+    # already-loaded run row — grows one per retry cycle and bounds hangs that
+    # never reached a node. For a run that reached a node, claim_count is 1
+    # (single claim) and the effective count IS node_attempt_count, so the
+    # in-execute path is unchanged.
+    attempt_count = max(node_attempt_count, claim_count - 1)
     superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
     script_retry_probe_ok = True
     if _graph_has_script_mode(graph_json):
         script_retry_probe_ok = await executor._probe_script_lease(run_id=run_id, org_id=org_id)
-    if not _can_retry_after_policy(node_attempt_count, retry_budget, superseded, script_retry_probe_ok):
+    if not _can_retry_after_policy(attempt_count, retry_budget, superseded, script_retry_probe_ok):
         return False
 
     # FAR-525: resolve the run-level backoff_schedule EARLY — the pure
@@ -218,7 +252,7 @@ async def watchdog_retry_after_policy(
             extra={"run_id": str(run_id), "reason": schedule_reason},
         )
     schedule_state = "absent" if not schedule_present else ("failopen" if schedule_reason else "valid")
-    effective_sleep = _retry_backoff_seconds(node_attempt_count, base=schedule_delay, multiplier=schedule_multiplier)
+    effective_sleep = _retry_backoff_seconds(attempt_count, base=schedule_delay, multiplier=schedule_multiplier)
     reset_rowcount = await executor._fenced_pending_reset(run_id=run_id, org_id=org_id)
     if not reset_rowcount:
         # Fence lost — a successor owns the run (or it just reached a terminal
@@ -234,7 +268,7 @@ async def watchdog_retry_after_policy(
         run_id,
         final_status,
         error_code,
-        node_attempt_count,
+        attempt_count,
         retry_budget,
         effective_sleep,
         schedule_state,
@@ -254,12 +288,14 @@ async def _load_watchdog_retry_context(
     *,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
+) -> tuple[dict[str, Any], str, dict[str, Any] | None, int] | None:
     """Load the retry-decision inputs for one run (RLS-scoped, one session).
 
-    Returns ``(retry_policy, trigger_type, graph_json)`` or ``None`` when the
-    run or its pipeline is missing. Mirrors ``_capture_execution_scalars``:
-    the policy defaults to ``{}`` (no retry) when absent/malformed.
+    Returns ``(retry_policy, trigger_type, graph_json, claim_count)`` or
+    ``None`` when the run or its pipeline is missing. Mirrors
+    ``_capture_execution_scalars``: the policy defaults to ``{}`` (no retry)
+    when absent/malformed, and ``claim_count`` defaults to 0 when absent or
+    not an int (the pre-node hang budget bound reads it from this row).
     """
     from modulo.db.crud.pipeline import get_pipeline
     from modulo.db.crud.run import get_run
@@ -283,4 +319,6 @@ async def _load_watchdog_retry_context(
     raw_policy = getattr(pipeline, "retry_policy", None)
     policy: dict[str, Any] = raw_policy if isinstance(raw_policy, dict) else {}
     trigger_type = str(getattr(run, "trigger_type", "") or "")
-    return policy, trigger_type, graph_json if isinstance(graph_json, dict) else None
+    raw_claim_count = getattr(run, "claim_count", None)
+    claim_count = raw_claim_count if isinstance(raw_claim_count, int) else 0
+    return policy, trigger_type, graph_json if isinstance(graph_json, dict) else None, claim_count
