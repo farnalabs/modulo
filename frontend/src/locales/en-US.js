@@ -1852,7 +1852,8 @@ export default {
       "errors_count": "{count} error | {count} errors",
       "retried_with_errors": "{retried} with {errors}",
       "retry_all_confirm": "Retry all failed deliveries?",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "confirm": "Confirm"
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",
