@@ -97,7 +97,7 @@
             <div class="flex items-start gap-1">
               <button
                 type="button"
-                class="mt-0.5 inline-flex shrink-0 items-center rounded p-0.5 text-muted-foreground hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                class="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 :aria-label="isMessageExpanded((row as any).id) ? $t('views.AdminErrorsView.collapse_message') : $t('views.AdminErrorsView.expand_message')"
                 :aria-expanded="isMessageExpanded((row as any).id)"
                 :data-testid="'admin-errors-expand-' + (row as any).id"
