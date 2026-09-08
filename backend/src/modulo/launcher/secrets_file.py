@@ -140,7 +140,9 @@ def _adopt_existing(path: Path) -> LauncherSecrets:
             last_error = exc
             time.sleep(_ADOPT_RETRY_DELAY_SECONDS)
     assert last_error is not None
-    raise last_error
+    raise SecretsFileError(
+        f"could not adopt existing secrets file after {_ADOPT_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
 
 
 def load_or_create(path: Path) -> LauncherSecrets:
