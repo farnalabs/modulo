@@ -86,13 +86,14 @@ async def test_real_lua_no_lost_token_race_under_concurrency(
     assert grants == 5
     # The real script applied PEXPIRE; the key must exist with a bounded reclaim
     # TTL — NOT a stale worker ``now`` (~1.75e9 ms -> ~20-day expiry).
-    ttl = await redis_client.pttl("itest:k")
+    ttl = await redis_client.pttl(f"{redis_prefix}k")
     expected = _expected_ttl_ms(0.0001, 5)
     assert 1 <= ttl <= expected
 
 
 async def test_real_lua_first_call_on_fresh_bucket_grants(
     redis_client: aioredis.Redis,
+    redis_prefix: str,
 ) -> None:
     """A never-seen destination starts at FULL burst and grants (not fail-closed).
 
@@ -108,15 +109,16 @@ async def test_real_lua_first_call_on_fresh_bucket_grants(
     so it cannot fail on this class of defect — only a real server can, and the
     guard had no coverage at all when it shipped.
     """
-    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=3, key_prefix="itest:")
+    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=3, key_prefix=redis_prefix)
     assert await bucket.consume("brand-new", tokens=1.0) is True
-    stored = await redis_client.hget("itest:brand-new", "tokens")
+    stored = await redis_client.hget(f"{redis_prefix}brand-new", "tokens")
     assert stored is not None  # the granting path must persist the bucket
     assert float(stored) == pytest.approx(2.0, abs=0.01)  # burst - cost, no refill at 1e-4/s
 
 
 async def test_real_lua_corrupt_stored_value_fails_closed(
     redis_client: aioredis.Redis,
+    redis_prefix: str,
 ) -> None:
     """A PRESENT-but-unparseable bucket fails closed instead of re-bursting.
 
@@ -126,8 +128,8 @@ async def test_real_lua_corrupt_stored_value_fails_closed(
     exists to prevent. Pinning both halves stops a future rewrite from trading
     one failure mode for the other.
     """
-    bucket = RedisTokenBucket(redis_client, rate=1.0, burst=5, key_prefix="itest:")
-    await redis_client.hset("itest:corrupt", mapping={"tokens": "garbage", "ts": "1"})
+    bucket = RedisTokenBucket(redis_client, rate=1.0, burst=5, key_prefix=redis_prefix)
+    await redis_client.hset(f"{redis_prefix}corrupt", mapping={"tokens": "garbage", "ts": "1"})
     with pytest.raises(SharedBudgetUnavailableError):
         await bucket.consume("corrupt", tokens=1.0)
 
@@ -170,7 +172,7 @@ async def test_real_lua_refills_over_server_wall_clock(
     # 2/s rate: ~0.6s refills a token.
     await asyncio.sleep(0.6)
     assert await bucket.consume("k", tokens=1.0) is True
-    ttl = await redis_client.pttl("itest:k")
+    ttl = await redis_client.pttl(f"{redis_prefix}k")
     expected = _expected_ttl_ms(2.0, 1)
     assert 1 <= ttl <= expected
 
