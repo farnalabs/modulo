@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.model_backend_hub import BackendDecryptError
 from modulo.core.runner_bindings import (
     AgentBindingResolutionError,
     LocalProviderBindingsRefusedError,
@@ -216,3 +217,139 @@ async def test_resolve_happy_path_injects_credentials() -> None:
             node_id="node-1",
         )
     assert resolved == {"OPENCODE_API_KEY": "topsecret"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_fail_closed_when_env_profile_unresolvable() -> None:
+    org_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    env_profile_id = uuid.uuid4()
+    binding = _binding(uuid.uuid4(), "OPENCODE_API_KEY", "api_key")
+    backend = _backend(binding.model_backend_id)
+    agent = SimpleNamespace(name="agent-x")
+    # The env-profile query resolves to None -> fail-closed refusal (FAR-592 D6 F10).
+    session_factory, _ = _make_session(
+        [
+            _make_result(rows=[binding]),
+            _make_result(rows=[backend]),
+            _make_result(scalar=agent),
+            _make_result(scalar=None),
+        ]
+    )
+    with (
+        patch("modulo.db.rls.set_rls_org"),
+        patch("modulo.db.rls.set_rls_execution_context"),
+        patch("modulo.settings.get_settings") as get_settings,
+        patch("modulo.core.secrets_backend.create_secrets_backend"),
+        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+    ):
+        get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        model_hub.return_value.__aenter__.return_value = AsyncMock()
+        with pytest.raises(LocalProviderBindingsRefusedError) as exc_info:
+            await resolve_agent_bindings(
+                session_factory=session_factory,
+                org_id=org_id,
+                agent_id=agent_id,
+                environment_profile_id=env_profile_id,
+            )
+    # The refusal must carry the fail-closed rationale (never fall open to E2B default).
+    assert "fail-closed" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_resolve_local_string_opt_in_not_honoured() -> None:
+    # A truthy STRING ("true") is NOT a JSON boolean opt-in, so the Local tier
+    # must still refuse (FAR-592 D6 F10 strict-boolean opt-in).
+    org_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    env_profile_id = uuid.uuid4()
+    binding = _binding(uuid.uuid4(), "OPENCODE_API_KEY", "api_key")
+    backend = _backend(binding.model_backend_id)
+    agent = SimpleNamespace(name="agent-x")
+    profile = SimpleNamespace(provider_type="local", config_json={"allow_runner_env_bindings": "true"})
+    session_factory, _ = _make_session(
+        [
+            _make_result(rows=[binding]),
+            _make_result(rows=[backend]),
+            _make_result(scalar=agent),
+            _make_result(scalar=profile),
+        ]
+    )
+    with (
+        patch("modulo.db.rls.set_rls_org"),
+        patch("modulo.db.rls.set_rls_execution_context"),
+        patch("modulo.settings.get_settings") as get_settings,
+        patch("modulo.core.secrets_backend.create_secrets_backend"),
+        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+    ):
+        get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        model_hub.return_value.__aenter__.return_value = AsyncMock()
+        with pytest.raises(LocalProviderBindingsRefusedError):
+            await resolve_agent_bindings(
+                session_factory=session_factory,
+                org_id=org_id,
+                agent_id=agent_id,
+                environment_profile_id=env_profile_id,
+            )
+
+
+@pytest.mark.asyncio
+async def test_resolve_hub_decrypt_error_classified_as_resolution_failure() -> None:
+    # A hub credential-decrypt failure must escape as a typed
+    # AgentBindingResolutionError (retryable), not a bare ValueError (FAR-592 D6 F4).
+    org_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    binding = _binding(uuid.uuid4(), "OPENCODE_API_KEY", "api_key")
+    backend = _backend(binding.model_backend_id)
+    agent = SimpleNamespace(name="agent-x")
+    session_factory, _ = _make_session(
+        [
+            _make_result(rows=[binding]),
+            _make_result(rows=[backend]),
+            _make_result(scalar=agent),
+        ]
+    )
+    with (
+        patch("modulo.db.rls.set_rls_org"),
+        patch("modulo.db.rls.set_rls_execution_context"),
+        patch("modulo.settings.get_settings") as get_settings,
+        patch("modulo.core.secrets_backend.create_secrets_backend"),
+        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+    ):
+        get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        hub = AsyncMock()
+        hub.creds_for = MagicMock(side_effect=BackendDecryptError("decrypt boom"))
+        model_hub.return_value.__aenter__.return_value = hub
+        with pytest.raises(AgentBindingResolutionError):
+            await resolve_agent_bindings(session_factory=session_factory, org_id=org_id, agent_id=agent_id)
+
+
+@pytest.mark.asyncio
+async def test_resolve_missing_backend_raises_typed_resolution_error() -> None:
+    # FAR-592 (D6 F3): a binding whose backend row is absent from the org's
+    # visible backends must raise the typed, non-retried resolution error in
+    # the PRE-PASS (before the hub is built) rather than a bare KeyError.
+    org_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    binding = _binding(uuid.uuid4(), "OPENCODE_API_KEY", "api_key")
+    agent = SimpleNamespace(name="agent-x")
+    # Backends query returns nothing for the referenced id -> missing in backends_by_id.
+    session_factory, _ = _make_session(
+        [
+            _make_result(rows=[binding]),
+            _make_result(rows=[]),
+            _make_result(scalar=agent),
+        ]
+    )
+    with (
+        patch("modulo.db.rls.set_rls_org"),
+        patch("modulo.db.rls.set_rls_execution_context"),
+        patch("modulo.settings.get_settings") as get_settings,
+        patch("modulo.core.secrets_backend.create_secrets_backend"),
+        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+    ):
+        get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        model_hub.return_value.__aenter__.return_value = AsyncMock()
+        with pytest.raises(AgentBindingResolutionError) as exc_info:
+            await resolve_agent_bindings(session_factory=session_factory, org_id=org_id, agent_id=agent_id)
+    assert "no longer visible to the organisation" in str(exc_info.value)
