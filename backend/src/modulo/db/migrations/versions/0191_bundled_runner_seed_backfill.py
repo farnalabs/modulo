@@ -11,12 +11,7 @@ Tiers plan, ADR 029): orgs that predate the org-creation seeding hook —
 including the dogfood org's legacy ``modulo-dev`` row — receive the Bundled
 Runner profile.
 
-1. **Per-org backfill insert** — for every organisation WITHOUT a live
-   (``deleted_at IS NULL``) ``runner_docker`` profile, one Bundled Runner
-   profile row is inserted from the shipped template constants. Account
-   ownership falls back to the org's first active admin membership, then the
-   org's ``created_by``, then any active account member.
-2. **Legacy ``modulo-dev`` re-point** — legacy seeded ``local_docker`` rows
+1. **Legacy ``modulo-dev`` re-point** — legacy seeded ``local_docker`` rows
    named ``modulo-dev`` are UPDATED IN PLACE to the shipped template values
    (``runner_docker`` + the pinned digest + hardening/network config), so a
    pipeline referencing the legacy row is re-pointed to the Bundled Runner
@@ -26,6 +21,26 @@ Runner profile.
    name / description / config_json) captured into a scratch table
    (``_migration_0191_repoint_state``) so the downgrade can revert EXACTLY
    those rows and restore their original values.
+2. **Per-org backfill insert** — for every organisation that STILL has no
+   live (``deleted_at IS NULL``) ``runner_docker`` profile after the re-point
+   (i.e. orgs without a legacy ``modulo-dev`` row), one Bundled Runner
+   profile row is inserted from the shipped template constants, with a
+   server-generated ``gen_random_uuid()`` primary key (the table's ``id``
+   column has no DB default — UUIDs are normally generated client-side by
+   SQLAlchemy). Running the re-point FIRST means the backfill's
+   ``NOT EXISTS`` guard naturally skips orgs whose ``modulo-dev`` row was
+   just re-pointed — every org ends up with exactly ONE Bundled Runner
+   profile, never a duplicate alongside a re-pointed row.
+
+Account ownership falls back to the org's first active admin membership,
+then the org's ``created_by``, then any active account member. Orgs whose
+resolved owner would be NULL (no members AND a NULL ``created_by``) are
+SKIPPED entirely: ``environment_profiles.account_id`` is NOT NULL, so
+inserting for them would violate the constraint. The orphan sentinel org
+seeded by 0172 (nil UUID, no account, no memberships, NULL ``created_by``)
+is excluded by this rule as a special case of it — and additionally by an
+explicit id exclusion, since it must never own a Bundled Runner profile
+regardless of future membership changes.
 
 Rollback (additive on upgrade / SAFE on downgrade): the inserted
 ``runner_docker`` backfill rows are LEFT IN PLACE (never deleted), per the
@@ -80,7 +95,7 @@ def upgrade() -> None:
     bind = op.get_bind()
 
     # 0. Capture the pre-migration identity of the modulo-dev rows that will be
-    #    re-pointed in step 2, so the downgrade can revert EXACTLY those rows
+    #    re-pointed in step 1, so the downgrade can revert EXACTLY those rows
     #    (by primary key) and restore their original description / config_json.
     #    Without this, the downgrade would only have the post-upgrade shape
     #    (name = template, provider_type = runner_docker, image_ref = template)
@@ -107,67 +122,14 @@ def upgrade() -> None:
         )
     )
 
-    # 1. Per-org backfill: orgs WITHOUT a live runner_docker profile get one
-    #    seeded from the shipped template (idempotent under re-runs).
-    bind.execute(
-        _sql(
-            """
-            INSERT INTO environment_profiles (
-                organisation_id, account_id, name, description, provider_type,
-                image_ref, capabilities_json, config_json, network_policy,
-                initialisation_strategy, secret_refs_json, persistence_policy,
-                status, visibility, created_at, updated_at
-            )
-            SELECT o.id,
-                   COALESCE(
-                       (SELECT om.account_id FROM org_memberships om
-                        WHERE om.organisation_id = o.id AND om.role = 'admin'
-                          AND om.deactivated_at IS NULL
-                        ORDER BY om.created_at LIMIT 1),
-                       (SELECT om.account_id FROM org_memberships om
-                        WHERE om.organisation_id = o.id AND om.deactivated_at IS NULL
-                        ORDER BY om.created_at LIMIT 1),
-                       o.created_by
-                   ),
-                   :tpl_name,
-                   'The Bundled Runner: first-party modulo-runner:opencode workspace executed '
-                   'on this deployment''s Docker engine via the filtered socket proxy. '
-                   'Persistence is locked to ephemeral.',
-                   'runner_docker',
-                   :tpl_image,
-                   '[]'::json,
-                   CAST(:tpl_config AS jsonb),
-                   'outbound',
-                   'git_clone',
-                   '[]'::json,
-                    'ephemeral',
-                     'active',
-                     'org',
-                     now(), now()
-             FROM organisations o
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM environment_profiles ep
-                 WHERE ep.organisation_id = o.id
-                   AND ep.provider_type = 'runner_docker'
-                   AND ep.deleted_at IS NULL
-             )
-             -- The orphan sentinel org (0172) has no account owner; skip it.
-             AND o.id <> :orphan_org_id
-             """
-        ),
-        {
-            "tpl_name": _TEMPLATE_NAME,
-            "tpl_image": _TEMPLATE_IMAGE_REF,
-            "tpl_config": _TEMPLATE_CONFIG_JSON,
-            "orphan_org_id": _ORPHAN_ORG_ID,
-        },
-    )
-
-    # 2. Legacy modulo-dev re-point: rows named 'modulo-dev' that still carry
+    # 1. Legacy modulo-dev re-point: rows named 'modulo-dev' that still carry
     #    provider_type 'local_docker' are updated in place to the shipped
     #    template values — references (pipelines pointing at the row id)
     #    follow automatically. Orgs that already have a live runner_docker
-    #    row keep their operator-owned digest untouched.
+    #    row keep their operator-owned digest untouched. Running this BEFORE
+    #    the backfill (step 2) is what makes the documented in-place re-point
+    #    behaviour reachable: the backfill's NOT EXISTS guard then skips the
+    #    just-re-pointed orgs instead of handing them a DUPLICATE profile.
     bind.execute(
         _sql(
             """
@@ -195,6 +157,79 @@ def upgrade() -> None:
             "tpl_name": _TEMPLATE_NAME,
             "tpl_image": _TEMPLATE_IMAGE_REF,
             "tpl_config": _TEMPLATE_CONFIG_JSON,
+        },
+    )
+
+    # 2. Per-org backfill: orgs STILL without a live runner_docker profile
+    #    (after the re-point) get one seeded from the shipped template
+    #    (idempotent under re-runs). The ``id`` column has no DB server
+    #    default (UUIDs are normally generated client-side by SQLAlchemy), so
+    #    the INSERT must supply one via ``gen_random_uuid()`` — on any DB that
+    #    contains organisations, omitting it is a NOT NULL violation (FAR-701).
+    #    The owner resolution (first active admin member, then any active
+    #    member, then org.created_by) is hoisted into a LATERAL join and
+    #    guarded with IS NOT NULL: an org whose resolved owner would be NULL
+    #    (no members AND NULL created_by) is skipped rather than violating the
+    #    NOT NULL ``account_id`` constraint. The orphan sentinel org (0172)
+    #    is excluded by that rule as a special case of it, and additionally by
+    #    an explicit id exclusion (it must never own a profile, sentinel or not).
+    bind.execute(
+        _sql(
+            """
+            INSERT INTO environment_profiles (
+                id, organisation_id, account_id, name, description, provider_type,
+                image_ref, capabilities_json, config_json, network_policy,
+                initialisation_strategy, secret_refs_json, persistence_policy,
+                status, visibility, created_at, updated_at
+            )
+            SELECT gen_random_uuid(),
+                   o.id,
+                   owner.account_id,
+                   :tpl_name,
+                   'The Bundled Runner: first-party modulo-runner:opencode workspace executed '
+                   'on this deployment''s Docker engine via the filtered socket proxy. '
+                   'Persistence is locked to ephemeral.',
+                   'runner_docker',
+                   :tpl_image,
+                   '[]'::json,
+                   CAST(:tpl_config AS jsonb),
+                   'outbound',
+                   'git_clone',
+                   '[]'::json,
+                    'ephemeral',
+                     'active',
+                     'org',
+                     now(), now()
+             FROM organisations o
+             CROSS JOIN LATERAL (
+                 SELECT COALESCE(
+                     (SELECT om.account_id FROM org_memberships om
+                      WHERE om.organisation_id = o.id AND om.role = 'admin'
+                        AND om.deactivated_at IS NULL
+                      ORDER BY om.created_at LIMIT 1),
+                     (SELECT om.account_id FROM org_memberships om
+                      WHERE om.organisation_id = o.id AND om.deactivated_at IS NULL
+                      ORDER BY om.created_at LIMIT 1),
+                     o.created_by
+                 ) AS account_id
+             ) owner
+             WHERE owner.account_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM environment_profiles ep
+                   WHERE ep.organisation_id = o.id
+                     AND ep.provider_type = 'runner_docker'
+                     AND ep.deleted_at IS NULL
+               )
+               -- The orphan sentinel org (0172) is not a tenant; belt-and-braces
+               -- exclusion on top of the NULL-owner guard above.
+               AND o.id <> :orphan_org_id
+             """
+        ),
+        {
+            "tpl_name": _TEMPLATE_NAME,
+            "tpl_image": _TEMPLATE_IMAGE_REF,
+            "tpl_config": _TEMPLATE_CONFIG_JSON,
+            "orphan_org_id": _ORPHAN_ORG_ID,
         },
     )
 
