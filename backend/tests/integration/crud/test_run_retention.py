@@ -6,11 +6,18 @@ page-level per-run estimates, the status/date filters, and org scoping. The
 estimate path is deliberately NOT mocked — the unit suite stubs it, which is
 exactly how the walk-based 503-on-prod regression shipped.
 
-Payload design note: the assertions relate the SQL aggregate totals to the
-page-level per-run Python estimates (``json_bytes`` = ``len(json.dumps(...))``).
-Single-key ASCII string payloads render byte-identically in jsonb text and
-``json.dumps`` output, so the two measurements agree exactly for the seeded
-data and the equality is a real semantic check of the aggregate SQL.
+Payload design note (documented byte-metric asymmetry, qa FAR-660): the
+page-level per-run estimates (``json_bytes`` = ``len(json.dumps(...))``) and
+the whole-set SQL aggregates (``length(cast(jsonb AS text))``) measure the
+SAME columns through DIFFERENT renderings. Python ``json.dumps``
+ensure_ascii-escapes non-ASCII to ``\\uXXXX`` and renders numbers with Python
+repr; Postgres' jsonb text rendering keeps raw unicode and re-renders numbers
+as normalized numeric text. The renderings coincide only for simple ASCII
+payloads, so equality assertions are kept to the ASCII render-equal subset;
+``test_page_estimate_and_total_use_documented_different_byte_metrics`` seeds a
+non-ASCII + exponent payload and pins the DOCUMENTED asymmetry (the page sum
+may differ from the total for such rows — the totals are the authoritative
+whole-set figure, per-run values are indicative).
 """
 
 from __future__ import annotations
@@ -149,7 +156,15 @@ async def test_candidates_shape_and_estimates(
 
     result = await list_retention_candidates(rls_session, org_id=test_org)
 
-    assert set(result) == {"runs", "total_count", "total_estimated_bytes", "terminal_total", "terminal_estimated_bytes"}
+    assert set(result) == {
+        "runs",
+        "total_count",
+        "total_estimated_bytes",
+        "terminal_total",
+        "terminal_estimated_bytes",
+        "estimate_degraded",
+    }
+    assert result["estimate_degraded"] is False
     assert result["total_count"] == 3
     assert result["terminal_total"] == 2
     assert len(result["runs"]) == 3
@@ -165,10 +180,66 @@ async def test_candidates_shape_and_estimates(
     assert est_store > est_big  # payloads + node outputs + checkpoint rows
 
     # The grouped SQL totals measure exactly the same components as the
-    # page-level per-run estimates (see the module docstring).
+    # page-level per-run estimates for this ASCII render-equal subset (see
+    # the module docstring) — a real semantic check of the aggregate SQL.
     assert result["total_estimated_bytes"] == est_bare + est_big + est_store
     assert result["terminal_estimated_bytes"] == est_bare + est_big
     assert result["terminal_estimated_bytes"] < result["total_estimated_bytes"]
+
+
+async def test_page_estimate_and_total_use_documented_different_byte_metrics(
+    rls_session: AsyncSession,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """qa Major (FAR-660): the page-level Python estimate (``json.dumps``,
+    ensure_ascii-escaped) and the whole-set SQL aggregate (jsonb text
+    rendering) are DIFFERENT documented metrics — they agree only for simple
+    ASCII payloads. A non-ASCII payload (``é`` escapes to ``\\u00e9`` in
+    ``json.dumps`` but renders raw in jsonb text) and an exponent-format
+    number (Python repr ``1e-05`` vs normalized numeric text) make the page
+    sum differ from the total. Neither metric is "wrong": the totals are the
+    authoritative whole-set figure and the per-run values are indicative —
+    this pins the documented asymmetry instead of pretending parity (the
+    equality assertions stay on the ASCII render-equal subset above)."""
+    ascii_run = _seed_run(
+        rls_session,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        run_number=1,
+        status="complete",
+        created_at=datetime(2026, 6, 1, tzinfo=UTC),
+        input_payload={"data": "a" * 100},
+    )
+    unicode_run = _seed_run(
+        rls_session,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        run_number=2,
+        status="complete",
+        created_at=datetime(2026, 6, 2, tzinfo=UTC),
+        input_payload={"accent": "é" * 10, "tiny": 1e-05},
+    )
+    await rls_session.flush()
+
+    result = await list_retention_candidates(rls_session, org_id=test_org)
+
+    assert result["estimate_degraded"] is False
+    assert result["total_count"] == 2
+    est = {item["id"]: item["estimated_bytes"] for item in result["runs"]}
+    page_sum = est[str(ascii_run.id)] + est[str(unicode_run.id)]
+    # The é escaping inflates the page (Python) metric by 5 characters per
+    # accent character while the exponent number shifts the SQL metric by at
+    # most a few characters — the page sum is strictly larger, and the two
+    # figures are NOT equal for these rows (documented asymmetry).
+    assert est[str(ascii_run.id)] > 0
+    assert est[str(unicode_run.id)] > 0
+    assert result["total_estimated_bytes"] > 0
+    assert result["total_estimated_bytes"] != page_sum
+    assert page_sum > result["total_estimated_bytes"]
 
 
 async def test_candidates_status_filter_narrows_counts_and_estimates(

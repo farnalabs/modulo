@@ -87,6 +87,7 @@ from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import META_NODE_ID
 from modulo.db.models.run_node_outputs import json_bytes as _json_bytes
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.sqlstates import sqlstate_of
 
 _log = logging.getLogger(__name__)
 
@@ -148,12 +149,34 @@ _ORG_CLAUSE = " AND organisation_id = :org"
 # FAR-660: request budget for the candidates size estimate. The estimate runs
 # as bounded SQL aggregates (one grouped scan per source table) instead of the
 # retired O(N/500 x 4)-query Python walk, but a pathological filter still has
-# to scan its matching rows once. Each scan is guarded by this monotonic
-# deadline: components that would start after it are skipped (logged,
-# contributing 0) and the response degrades to a partial approximation rather
-# than a minutes-long walk. The admin candidates route stamps the deadline at
-# handler start and threads it down; direct callers get the same default.
+# to scan its matching rows once. Each scan is bounded TWICE by this monotonic
+# deadline: it is skipped entirely when no budget remains, and while it runs a
+# transaction-local ``statement_timeout`` (see _SQL_SET_STATEMENT_TIMEOUT)
+# bounds the statement itself to the remaining budget — a started scan that
+# would detoast gigabytes of checkpoints is cancelled by Postgres instead of
+# running for minutes. Components that are skipped, fail, or time out
+# contribute 0 and the response degrades to a partial approximation (surfaced
+# as ``estimate_degraded``) rather than a 503. The admin candidates route
+# stamps the deadline at handler start and threads it down; direct callers get
+# the same default.
 ESTIMATE_DEADLINE_SECONDS = 20.0
+
+# Per-scan statement timeout (qa: a deadline checked only BEFORE a scan does
+# not bound the scan itself — one checkpoint aggregate can detoast ~7.8GB).
+# Mirrors the shared precedent (core/analytics/service.py, core/
+# cost_controller/probe.py): the timeout is a transaction-local GUC
+# (``set_config(..., true)``), so a savepoint rollback reverts it when a scan
+# times out. On the success path the scan clears the GUC back to 0 BEFORE the
+# savepoint releases — a released SET LOCAL survives to the end of the
+# enclosing transaction, and a leftover small budget would abort the cheap
+# statements that follow (the terminal count, the audit write).
+_SQL_SET_STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', :ms, true)"
+
+# Postgres SQLSTATE 57014 (query_canceled) — the statement_timeout
+# cancellation, extracted dialect-tolerantly via the shared ``sqlstate_of``
+# walker so it is caught explicitly and degrades to 0 + warning exactly like
+# the other best-effort failure paths, never surfacing as a generic failure.
+_STATEMENT_TIMEOUT_SQLSTATE = "57014"
 
 # SELECT-only Core definitions (the QUARANTINE_TABLE precedent) of the tables
 # the SQL-side estimate aggregates. The ``langgraph.*`` checkpoint tables are
@@ -207,8 +230,18 @@ _RUN_NODE_OUTPUTS_AGG = Table(
 # for the checkpoints row, octet_length(blob) for the BYTEA blob columns) so the
 # checkpoint accounting cannot drift between the page-level reader
 # (_checkpoint_detail) and the whole-set aggregates. JSON payload columns use
-# length(cast(col AS TEXT)) — a character count, the same semantics as the
-# retired Python estimator's len(json.dumps(...)) and portable to SQLite; the
+# length(cast(col AS TEXT)) — a CHARACTER count of Postgres' jsonb text
+# rendering. That is NOT byte-identical to the page-level Python estimator's
+# len(json.dumps(...)) (models.run_node_outputs.json_bytes): json.dumps
+# ensure_ascii-escapes non-ASCII to \uXXXX and renders numbers with Python
+# repr, while jsonb text keeps raw unicode and re-renders numbers as
+# normalized numeric text. The two renderings COINCIDE only for simple ASCII
+# payloads; for non-ASCII / exponent-format payloads the page-level per-run
+# estimate and the whole-set SQL aggregate measure different (both approximate)
+# character counts, so the page sum MAY differ from total_estimated_bytes.
+# That asymmetry is a documented response-contract property (qa FAR-660):
+# the totals are the authoritative whole-set figure and the per-run values are
+# indicative — the SQL aggregate is NOT claimed to equal the page sum. The
 # per-column COALESCE keeps an SQL-NULL (absent) column at 0 so a single NULL
 # never voids the row's whole contribution.
 _RUN_PAYLOAD_BYTES = (
@@ -244,6 +277,12 @@ def _run_row_bytes(run: Run, node_output_bytes: int = 0) -> int:
     *node_output_bytes* by the caller (batched via
     ``read_node_output_blob_bytes``); the legacy ``runs`` blob columns are no
     longer summed here. The remaining columns are still run-row payloads.
+
+    Metric note (qa FAR-660): this is the Python-side rendering
+    (``len(json.dumps(...))``), NOT the same rendering the whole-set SQL
+    aggregates measure (``length(cast(jsonb AS text))``) — see the
+    ``_RUN_PAYLOAD_BYTES`` comment for the documented asymmetry; the values
+    agree only for simple ASCII payloads.
     """
 
     return (
@@ -435,7 +474,16 @@ async def list_retention_candidates(
     ``time.monotonic()`` timestamp bounding those scans; ``None`` applies the
     module default (``ESTIMATE_DEADLINE_SECONDS``). The per-run
     ``estimated_bytes`` values on the page stay per-row Python estimates —
-    bounded to the page.
+    bounded to the page. Two contract notes (qa FAR-660):
+
+    * the page estimates and the whole-set totals measure the same columns
+      through DIFFERENT renderings (Python ``json.dumps`` vs Postgres jsonb
+      text) — they coincide only for simple ASCII payloads; see the
+      ``_RUN_PAYLOAD_BYTES`` comment;
+    * ``estimate_degraded`` is True when any whole-set scan was skipped past
+      the deadline, failed, or timed out — the totals are then a partial
+      approximation (every failed component contributes 0), and the caller
+      must annotate them rather than present an authoritative 0.
     """
 
     conditions = _retention_conditions(
@@ -484,7 +532,7 @@ async def list_retention_candidates(
     # replacing the two full-dataset Python walks (which hydrated every
     # matching Run with all payload columns and 503'd the endpoint on the
     # multi-GB production DB).
-    est_by_status = await _estimate_bytes_by_status(
+    est_by_status, estimate_degraded = await _estimate_bytes_by_status(
         session,
         org_id=org_id,
         date_from=date_from,
@@ -522,6 +570,7 @@ async def list_retention_candidates(
         "total_estimated_bytes": total_estimated_bytes,
         "terminal_total": terminal_total,
         "terminal_estimated_bytes": terminal_estimated_bytes,
+        "estimate_degraded": estimate_degraded,
     }
 
 
@@ -573,10 +622,14 @@ async def _run_grouped_estimate(
     label: str,
     deadline: float,
     by_status: dict[str, int],
-) -> None:
+) -> bool:
     """Execute one grouped estimate scan, accumulating per-status bytes.
 
-    Each scan is best-effort and bounded:
+    Returns True when the scan contributed its rows; False when it was
+    skipped or failed (the caller surfaces that as a degraded estimate — see
+    :func:`_estimate_bytes_by_status`).
+
+    Each scan is best-effort and bounded BOTH before and during execution:
 
     * skipped (contributing 0) when the request deadline has passed — the
       response degrades to a partial approximation rather than a minutes-long
@@ -584,21 +637,36 @@ async def _run_grouped_estimate(
     * executed inside its own SAVEPOINT so a failure (missing checkpoint
       tables on a pre-checkpointer DB, a dialect without the size functions)
       rolls back only the failed scan and contributes 0 — never a 503 for the
-      whole listing.
+      whole listing;
+    * bound DURING execution by a transaction-local ``statement_timeout`` set
+      to the remaining budget (qa: checking the deadline only before the scan
+      left a started scan unbounded — one checkpoint aggregate can detoast
+      ~7.8GB and run for minutes). The GUC is set inside the savepoint and
+      cleared before the savepoint releases, so a released value never leaks
+      into the enclosing transaction (a savepoint rollback reverts it).
     """
-    if time.monotonic() >= deadline:
+    budget_ms = int((deadline - time.monotonic()) * 1000)
+    if budget_ms <= 0:
         _log.warning("run_retention.estimate_deadline_skipped", extra={"component": label})
-        return
+        return False
     try:
         async with session.begin_nested():
+            await session.execute(text(_SQL_SET_STATEMENT_TIMEOUT), {"ms": str(budget_ms)})
             rows = (await session.execute(stmt)).all()
-    except SQLAlchemyError:
-        _log.exception("run_retention.estimate_component_unavailable", extra={"component": label})
-        return
+            await session.execute(text(_SQL_SET_STATEMENT_TIMEOUT), {"ms": "0"})
+    except SQLAlchemyError as exc:
+        if sqlstate_of(exc) == _STATEMENT_TIMEOUT_SQLSTATE:
+            # The statement itself exceeded the remaining budget — degraded,
+            # not fatal (same contract as the other best-effort paths).
+            _log.warning("run_retention.estimate_statement_timeout", extra={"component": label})
+        else:
+            _log.exception("run_retention.estimate_component_unavailable", extra={"component": label})
+        return False
     for row_status, row_bytes in rows:
         if row_status is None:
             continue
         by_status[row_status] = by_status.get(row_status, 0) + int(row_bytes or 0)
+    return True
 
 
 async def _estimate_bytes_by_status(
@@ -610,8 +678,16 @@ async def _estimate_bytes_by_status(
     pipeline_id: uuid.UUID | None = None,
     status: str | None = None,
     deadline: float | None = None,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], bool]:
     """Per-status estimated byte totals for ALL runs matching the filter set.
+
+    Returns ``(by_status, degraded)``: ``by_status`` maps each matching run
+    status to its estimated retained bytes; ``degraded`` is True when ANY
+    scan was skipped past the deadline, failed, or timed out — every such
+    component contributes 0, so ``by_status`` is then a PARTIAL
+    approximation (a lower bound), never an authoritative accounting. The
+    caller surfaces ``degraded`` as ``estimate_degraded`` on the response so
+    an operator cannot mistake a degraded 0 for "nothing reclaimable".
 
     FAR-660: replaces the retired ``_estimate_total_bytes`` Python walk (which
     hydrated every matching Run — full payload columns — twice, once for the
@@ -632,9 +708,11 @@ async def _estimate_bytes_by_status(
     ``terminal_estimated_bytes`` sums only the ``TERMINAL_STATUSES`` groups —
     no second walk. The byte sizes are on-disk approximations (text-cast
     rendering of the stored payloads), the same "estimated" contract as
-    before. Every scan is best-effort and deadline-guarded (see
-    :func:`_run_grouped_estimate`); a failed or late component contributes 0
-    and the listing still renders.
+    before. Every scan is best-effort and deadline-guarded — skipped when no
+    budget remains, and bound WHILE it runs by a transaction-local
+    ``statement_timeout`` (see :func:`_run_grouped_estimate`); a failed,
+    late, or timed-out component contributes 0 (degraded) and the listing
+    still renders.
 
     ``deadline`` is a ``time.monotonic()`` timestamp; ``None`` applies the
     module default budget (``ESTIMATE_DEADLINE_SECONDS``).
@@ -650,29 +728,25 @@ async def _estimate_bytes_by_status(
         statuses=None,
     )
     by_status: dict[str, int] = {}
-    await _run_grouped_estimate(
-        session,
-        _runs_payload_stmt(conditions),
-        label="runs_payload",
-        deadline=deadline,
-        by_status=by_status,
+    degraded = False
+    components: list[tuple[Any, str]] = [
+        (_runs_payload_stmt(conditions), "runs_payload"),
+        (_node_output_stmt(conditions), "run_node_outputs"),
+    ]
+    components.extend(
+        (_checkpoint_agg_stmt(cp_table, size_expr, conditions, org_id), f"checkpoint:{cp_table.name}")
+        for cp_table, size_expr in _CHECKPOINT_AGG_SOURCES
     )
-    await _run_grouped_estimate(
-        session,
-        _node_output_stmt(conditions),
-        label="run_node_outputs",
-        deadline=deadline,
-        by_status=by_status,
-    )
-    for cp_table, size_expr in _CHECKPOINT_AGG_SOURCES:
-        await _run_grouped_estimate(
+    for stmt, label in components:
+        contributed = await _run_grouped_estimate(
             session,
-            _checkpoint_agg_stmt(cp_table, size_expr, conditions, org_id),
-            label=f"checkpoint:{cp_table.name}",
+            stmt,
+            label=label,
             deadline=deadline,
             by_status=by_status,
         )
-    return by_status
+        degraded = degraded or not contributed
+    return by_status, degraded
 
 
 async def iter_run_export(

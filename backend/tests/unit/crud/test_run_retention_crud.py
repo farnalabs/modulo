@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql, sqlite
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from modulo.db.crud import run_retention as rr
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -153,7 +153,9 @@ class TestListRetentionCandidates:
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({"tid": 500}, {"tid": 2}))),
-            patch.object(rr, "_estimate_bytes_by_status", new=AsyncMock(return_value={"complete": 100, "failed": 23})),
+            patch.object(
+                rr, "_estimate_bytes_by_status", new=AsyncMock(return_value=({"complete": 100, "failed": 23}, False))
+            ),
             patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
@@ -163,6 +165,7 @@ class TestListRetentionCandidates:
         # every status group and the terminal figure equals it.
         assert result["total_estimated_bytes"] == 123
         assert result["terminal_estimated_bytes"] == 123
+        assert result["estimate_degraded"] is False
         assert len(result["runs"]) == 2
         # Each run's estimate = its own JSON columns + its checkpoint bytes.
         for item in result["runs"]:
@@ -188,7 +191,9 @@ class TestListRetentionCandidates:
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(rr, "_estimate_bytes_by_status", new=AsyncMock(return_value={"complete": 99, "pending": 5})),
+            patch.object(
+                rr, "_estimate_bytes_by_status", new=AsyncMock(return_value=({"complete": 99, "pending": 5}, False))
+            ),
             patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
@@ -197,6 +202,39 @@ class TestListRetentionCandidates:
         assert result["terminal_total"] == 7
         assert result["total_estimated_bytes"] == 104
         assert result["terminal_estimated_bytes"] == 99
+        assert result["estimate_degraded"] is False
+
+    async def test_estimate_degraded_true_and_totals_still_returned_when_scan_skipped_past_deadline(self) -> None:
+        """qa Major: a deadline-skip (or any failed component) must surface as
+        ``estimate_degraded=True`` — the operator must never read a degraded 0
+        as an authoritative "nothing reclaimable". The listing itself still
+        completes: the page, the counts, and the (partial) totals are
+        returned. This exercises the REAL estimator path (expired deadline →
+        every scan skipped) rather than mocking it, which is exactly how the
+        missing degraded signal would have shipped."""
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 3
+        session.execute = AsyncMock(return_value=count_result)
+
+        with (
+            patch.object(rr, "_select_run_page", new=AsyncMock(return_value=[])),
+            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
+        ):
+            result = await rr.list_retention_candidates(
+                session, org_id=_ORG, status=None, deadline=time.monotonic() - 1
+            )
+
+        assert result["estimate_degraded"] is True
+        assert result["total_count"] == 3
+        assert result["total_estimated_bytes"] == 0
+        # The mock session answers every count with the same scalar (3) — the
+        # terminal COUNT is unaffected by the degraded estimate; only the byte
+        # totals degrade.
+        assert result["terminal_total"] == 3
+        assert result["terminal_estimated_bytes"] == 0
+        assert not result["runs"]
 
     async def test_deadline_is_threaded_to_the_estimator(self) -> None:
         """The candidates listing passes its deadline through to the estimator
@@ -206,7 +244,7 @@ class TestListRetentionCandidates:
         count_result = MagicMock()
         count_result.scalar_one.return_value = 0
         session.execute = AsyncMock(return_value=count_result)
-        estimate = AsyncMock(return_value={})
+        estimate = AsyncMock(return_value=({}, False))
 
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=[])),
@@ -237,15 +275,27 @@ class _FakeEstimateRows:
 
 
 class _EstimateSession:
-    """Fake AsyncSession for the estimate pass: canned per-component rows."""
+    """Fake AsyncSession for the estimate pass: canned per-component rows.
+
+    FAR-660 qa fix: every scan now sets (and clears) a transaction-local
+    ``statement_timeout`` inside its savepoint — a ``set_config`` statement
+    runs twice per scan and returns no rows, so the fake recognises it and
+    does NOT consume a canned scan result. ``timeout_budgets`` records the
+    ``ms`` value of every set_config call in order so the tests can pin the
+    bounded-scan contract (budget → scan → reset-to-0, per scan).
+    """
 
     def __init__(self, results: list[list[tuple[str, int]]]) -> None:
         self._results = list(results)
         self.executed: list[object] = []
+        self.timeout_budgets: list[str] = []
         self.begin_nested = MagicMock(return_value=_nested_cm())
 
-    async def execute(self, stmt: object, params: object = None) -> _FakeEstimateRows:
+    async def execute(self, stmt: object, params: object = None) -> _FakeEstimateRows | MagicMock:
         self.executed.append(stmt)
+        if "set_config" in str(stmt):
+            self.timeout_budgets.append(str(dict(params or {}).get("ms")))
+            return MagicMock()
         rows = self._results.pop(0) if self._results else []
         return _FakeEstimateRows(rows)
 
@@ -312,34 +362,62 @@ class TestEstimateBytesByStatus:
                 [],
             ]
         )
-        result = await rr._estimate_bytes_by_status(session, org_id=_ORG)
+        result, degraded = await rr._estimate_bytes_by_status(session, org_id=_ORG)
 
         assert result == {"complete": 113, "failed": 12}
-        assert len(session.executed) == 5
+        assert degraded is False
+        # Five scans, each preceded by its transaction-local statement_timeout
+        # set and followed by the reset-to-0 (before the savepoint releases).
+        scans = [s for s in session.executed if "set_config" not in str(s)]
+        assert len(scans) == 5
+        assert len(session.executed) == 15
         assert session.begin_nested.call_count == 5
+
+    async def test_each_scan_is_bounded_by_a_remaining_budget_statement_timeout(self) -> None:
+        """qa Major: a STARTED scan must be bounded, not just its start — every
+        scan sets ``statement_timeout`` (inside its savepoint) to the remaining
+        monotonic budget and clears it back to 0 before the savepoint releases
+        (a released SET LOCAL survives to the end of the transaction, and a
+        leftover small budget would abort the cheap statements that follow)."""
+        session = _EstimateSession([[], [], [], [], []])
+        await rr._estimate_bytes_by_status(session, org_id=_ORG)
+
+        # Pattern per scan: set to the remaining budget, then reset to 0.
+        assert len(session.timeout_budgets) == 10
+        budgets = session.timeout_budgets[0::2]
+        resets = session.timeout_budgets[1::2]
+        assert resets == ["0"] * 5
+        for budget in budgets:
+            assert 15_000 <= int(budget) <= 20_000
 
     async def test_default_deadline_is_applied_when_none(self) -> None:
         session = _EstimateSession([])
-        await rr._estimate_bytes_by_status(session, org_id=_ORG)
+        result, degraded = await rr._estimate_bytes_by_status(session, org_id=_ORG)
         # The default budget is in the future, so every component ran.
-        assert len(session.executed) == 5
+        assert result == {}
+        assert degraded is False
+        assert len(session.executed) == 15
 
     async def test_expired_deadline_skips_every_component(self) -> None:
         session = _EstimateSession([])
-        result = await rr._estimate_bytes_by_status(session, org_id=_ORG, deadline=time.monotonic() - 1)
+        result, degraded = await rr._estimate_bytes_by_status(session, org_id=_ORG, deadline=time.monotonic() - 1)
 
         assert not result
+        assert degraded is True
         assert not session.executed
         session.begin_nested.assert_not_called()
 
     async def test_failed_component_is_skipped_without_failing_the_estimate(self) -> None:
-        """A failed scan (missing table / unsupported function) contributes 0;
-        the remaining components still run and the caller still gets a total."""
-        session = _EstimateSession([[("complete", 10)]])
+        """A failed scan (missing table / unsupported function) contributes 0,
+        the remaining components still run, and the caller still gets a total —
+        flagged degraded."""
         calls = {"n": 0}
         canned = [[("complete", 10)], None, [("complete", 100)], [], []]
+        session = _EstimateSession([])
 
-        async def flaky_execute(stmt: object, params: object = None) -> _FakeEstimateRows:
+        async def flaky_execute(stmt: object, params: object = None) -> _FakeEstimateRows | MagicMock:
+            if "set_config" in str(stmt):
+                return MagicMock()
             calls["n"] += 1
             if calls["n"] == 2:
                 raise SQLAlchemyError("no such function: length")
@@ -347,10 +425,41 @@ class TestEstimateBytesByStatus:
             return _FakeEstimateRows(rows)
 
         session.execute = flaky_execute
-        result = await rr._estimate_bytes_by_status(session, org_id=_ORG)
+        result, degraded = await rr._estimate_bytes_by_status(session, org_id=_ORG)
 
         assert result == {"complete": 110}
+        assert degraded is True
         assert calls["n"] == 5
+
+    async def test_statement_timeout_degrades_to_zero_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """qa Major: a scan cancelled by its per-scan ``statement_timeout``
+        (SQLSTATE 57014) degrades to 0 + a specific warning — never surfacing
+        as a generic component failure (or a 503)."""
+        session = _EstimateSession([])
+        calls = {"n": 0}
+
+        def timeout_error() -> DBAPIError:
+            orig = Exception("canceling statement due to statement timeout")
+            orig.sqlstate = "57014"  # type: ignore[attr-defined]
+            return DBAPIError("SELECT ...", {}, orig)
+
+        async def timing_out_execute(stmt: object, params: object = None) -> _FakeEstimateRows | MagicMock:
+            if "set_config" in str(stmt):
+                return MagicMock()
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise timeout_error()
+            return _FakeEstimateRows([])
+
+        session.execute = timing_out_execute
+        caplog.set_level("WARNING", logger="modulo.db.crud.run_retention")
+        result, degraded = await rr._estimate_bytes_by_status(session, org_id=_ORG)
+
+        assert result == {}
+        assert degraded is True
+        assert calls["n"] == 5
+        assert any("estimate_statement_timeout" in r.message for r in caplog.records)
+        assert not any("estimate_component_unavailable" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

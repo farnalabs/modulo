@@ -65,6 +65,13 @@ class CandidatesResponse(BaseModel):
     total_estimated_bytes: int
     terminal_total: int = 0
     terminal_estimated_bytes: int = 0
+    # qa (FAR-660): the whole-set byte estimate is best-effort and deadline-
+    # bounded per scan. True when any scan was skipped past the request
+    # deadline, failed, or timed out — every such component contributes 0, so
+    # the byte totals are then a PARTIAL approximation (a lower bound), never
+    # an authoritative accounting. Consumers MUST annotate this flag: a
+    # degraded "0 bytes reclaimable" must not be read as "nothing to purge".
+    estimate_degraded: bool = False
 
 
 class RetentionFilter(BaseModel):
@@ -135,6 +142,20 @@ async def candidates(
     (unbounded), so the client must derive its confirm count and reclaimable
     figure from these server-side terminal totals, never from the page-capped
     candidate list it happens to hold.
+
+    qa (FAR-660) contract notes:
+
+    * ``estimate_degraded`` is True when any whole-set estimate scan was
+      skipped past the request deadline, failed, or hit its per-scan
+      statement timeout — the byte totals are then a partial approximation
+      (a lower bound), and the UI must annotate them instead of presenting
+      "0 bytes reclaimable" as authoritative.
+    * the per-run page estimates and the whole-set totals measure the same
+      columns through different renderings (Python ``json.dumps`` vs Postgres
+      jsonb text) — they coincide only for simple ASCII payloads, so the page
+      sum may legitimately differ from ``total_estimated_bytes`` for
+      non-ASCII / exponent-format payloads. The totals are the authoritative
+      whole-set figure.
     """
 
     org_id = _resolve_org_id(principal, organisation_id)
