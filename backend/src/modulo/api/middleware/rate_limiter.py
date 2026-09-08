@@ -80,6 +80,32 @@ _RE_VARIABLE_SEGMENT = re.compile(
     r"/runs/[^/]+/hitl/[^/]+(?:/[^/]+)?",
 )
 
+# FAR-611 review fix: POST /api/v1/runs/{run_id}/manual/{gate_id}/submit is a
+# full HITL approve-capability route (it drives HITLManager.approve and resumes
+# the run) but its path carries no "/hitl/" segment, so the HITL rule never
+# matched it and it rode the 60/min runs rule with per-gate bucketing — a
+# sweep through this endpoint sidestepped the aggregate 20/min budget. It is
+# budgeted by the SAME aggregate rule, and both surfaces normalize to the SAME
+# placeholder tail so a sweep alternating /hitl/ review actions and
+# /manual/ submit exhausts ONE bucket.
+_RE_MANUAL_SUBMIT_SEGMENT = re.compile(
+    r"/runs/[^/]+/manual/[^/]+/submit",
+)
+
+# The single placeholder tail shared by BOTH budgeted HITL surfaces.
+_HITL_BUCKET_TAIL = "/runs/<run_id>/hitl/<gate_id>"
+
+
+def _is_hitl_budget_path(path: str) -> bool:
+    """Whether *path* is a HITL action under the aggregate 20/min budget.
+
+    Covers both surfaces: the /hitl/ review-action routes (substring marker —
+    the run/gate ids are variable so no static prefix can match them) and the
+    manual-output submit route (regex — same variable shape, no /hitl/
+    segment).
+    """
+    return "/hitl/" in path or _RE_MANUAL_SUBMIT_SEGMENT.search(path) is not None
+
 
 class _NoopRateLimiter:
     """No-op rate limiter used when Redis is unavailable — allows all requests."""
@@ -174,11 +200,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     # PRD §7.18: HITL review actions — 20/min per user, AGGREGATE across
     # runs, gates, and actions (FAR-611). The review endpoints live under
     # /api/v1/runs/{run_id}/hitl/{gate_id}/{action} where the run/gate ids are
-    # variable, so a static prefix cannot match them; the "/hitl/" marker is
-    # matched as a path segment by _rule_for / _should_rate_limit, and
-    # _client_key normalizes the whole variable tail (see _RE_VARIABLE_SEGMENT)
-    # so the budget cannot be dodged by rotating gates, runs, or actions. This
-    # is more restrictive than the /api/v1/runs rule (60/min) that would
+    # variable, so a static prefix cannot match them; the "/hitl/" marker and
+    # the /manual/{gate_id}/submit route (an approve-capability surface that
+    # lacks the /hitl/ segment — FAR-611 review fix) are matched as path
+    # segments by _rule_for / _should_rate_limit, and _client_key normalizes
+    # the whole variable tail (see _RE_VARIABLE_SEGMENT /
+    # _RE_MANUAL_SUBMIT_SEGMENT) so the budget cannot be dodged by rotating
+    # gates, runs, or actions — or by alternating the two surfaces. This is
+    # more restrictive than the /api/v1/runs rule (60/min) that would
     # otherwise apply to these paths.
     HITL_RULE: ClassVar[RateLimitRule] = RateLimitRule(path_prefix="/hitl/", max_requests=20, window_s=60)
 
@@ -247,13 +276,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if _matches_bypass_token(token, self._bypass_token or ""):
             return False
         path = request.url.path
-        if self.HITL_RULE.path_prefix in path:
+        if _is_hitl_budget_path(path):
             return True
         return any(path.startswith(rule.path_prefix) for rule in self.RULES)
 
     def _rule_for(self, request: Request) -> RateLimitRule:
         path = request.url.path
-        if self.HITL_RULE.path_prefix in path:
+        if _is_hitl_budget_path(path):
             return self.HITL_RULE
         for rule in self.RULES:
             if path.startswith(rule.path_prefix):
@@ -263,12 +292,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _client_key(self, request: Request) -> str:
         path = request.url.path
 
-        # Normalize HITL paths to a single placeholder tail (FAR-611): the
-        # run/gate ids and the trailing action are all variable, and bucketing
-        # per variable value would let a bulk sweep spread requests across
-        # buckets. One aggregate bucket per identity for all HITL actions.
-        if "/hitl/" in path:
-            path = _RE_VARIABLE_SEGMENT.sub("/runs/<run_id>/hitl/<gate_id>", path)
+        # Normalize budgeted HITL paths to a single placeholder tail (FAR-611):
+        # the run/gate ids and the trailing action are all variable, and
+        # bucketing per variable value would let a bulk sweep spread requests
+        # across buckets. One aggregate bucket per identity for all HITL
+        # actions — and BOTH surfaces (/hitl/ review actions and the
+        # /manual/ submit route) share the SAME placeholder so a sweep
+        # alternating them exhausts one budget (FAR-611 review fix).
+        if _is_hitl_budget_path(path):
+            path = _RE_VARIABLE_SEGMENT.sub(_HITL_BUCKET_TAIL, path)
+            path = _RE_MANUAL_SUBMIT_SEGMENT.sub(_HITL_BUCKET_TAIL, path)
 
         # 1. Auth principal set by outer middleware (MCP sub-app)
         principal = request.scope.get("auth_principal")

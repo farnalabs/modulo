@@ -459,13 +459,13 @@ Hardcoded sliding-window rules enforced by `RateLimitMiddleware` (see `backend/s
 | `/api/v1/runs` | 60 | 60s |
 | `/api/v1/triggers` | 100 | 60s |
 | `/api/v1/errors/ingest` | 10 | 60s |
-| HITL review actions (`/api/v1/runs/{run_id}/hitl/{gate_id}/{action}`, POST) | 20 per user (aggregate) | 60s |
+| HITL review actions (`/api/v1/runs/{run_id}/hitl/{gate_id}/{action}` and `/api/v1/runs/{run_id}/manual/{gate_id}/submit`, POST) | 20 per user (aggregate) | 60s |
 | `/mcp` | 200 | 60s |
 | Auth endpoints (`/api/v1/auth/`) | 10 attempts | 60s (configurable via `MODULO_AUTH_MAX_ATTEMPTS`) |
 
 Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op when Redis is unavailable. Auth rate limiter requires Redis and is disabled without it.
 
-The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, and review actions — the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule — they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
+The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, review actions, AND both surfaces — the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). The manual-output submit route (`/runs/{run_id}/manual/{gate_id}/submit` — an approve-capability HITL surface whose path has no `/hitl/` segment) shares the SAME aggregate bucket, so a sweep alternating `/hitl/` review actions and `/manual/` submits exhausts one budget. MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule — they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
 
 ## Deployment Architecture
 

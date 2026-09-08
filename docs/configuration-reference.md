@@ -221,7 +221,7 @@ Rate limits are hardcoded in `RateLimitMiddleware` (see [`backend/src/modulo/api
 | POST `/api/v1/errors/ingest` | 10 | 60s |
 | `/mcp` (all POST/PUT/PATCH) | 200 | 60s |
 | POST `/api/v1/auth/demo` | 10 | 3600s |
-| POST `/api/v1/runs/{run_id}/hitl/{gate_id}/{action}` (review actions) | 20 per user, aggregate across runs/gates/actions (FAR-611) | 60s |
+| POST `/api/v1/runs/{run_id}/hitl/{gate_id}/{action}` and POST `/api/v1/runs/{run_id}/manual/{gate_id}/submit` (review actions, both surfaces share one aggregate budget) | 20 per user, aggregate across runs/gates/actions (FAR-611) | 60s |
 
 Additionally, the `AuthRateLimitMiddleware` enforces a separate login lockout:
 

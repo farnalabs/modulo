@@ -2,8 +2,13 @@
 
 Covers: threshold crossing (6th approve across 2 pipelines alarms), the
 single-pipeline non-alarm, cooldown suppression within the hour, failure
-isolation (detection/notifier raising never fails the decision), and the
-manager wiring (approve / approve_with_modification invoke the alarm).
+isolation (detection/notifier raising never fails the decision), the
+manager wiring (approve / approve_with_modification invoke the alarm), the
+aggregate detection query covering BOTH decision surfaces (approve +
+manual delivery, FAR-611 review fix), the detection savepoint (a DB error
+on the detection SELECT never aborts the decision transaction), and the
+no-duplicate-notification contract (the alarm writes no in-app
+notification row itself — the webhook dispatch creates it).
 """
 
 import contextlib
@@ -15,6 +20,7 @@ import pytest
 
 from modulo.core.hitl_manager import HITLManager, sweep_alarm
 from modulo.core.hitl_manager.sweep_alarm import AUDIT_EVENT_TYPE, maybe_alarm_approve_sweep
+from modulo.core.notifier.event_mapper import NotificationEventMapper
 
 from .conftest import _session_decide
 from .test_hitl_manager import _GATE, _ORG, _RUN, _USER, _gate
@@ -62,12 +68,16 @@ def _broken_session() -> AsyncMock:
 
 @contextlib.contextmanager
 def _sweep_patches():
-    """Patch the alarm's outbound seams (audit, notification, webhook)."""
+    """Patch the alarm's outbound seams (audit, in-app mapper, webhook).
+
+    The in-app mapper patch asserts the NO-duplicate-notification contract:
+    the alarm must never write a notification row itself — the fire-and-
+    forget webhook dispatch (``dispatch_event``) creates it in its own
+    transaction (hitl_overdue sibling pattern, FAR-611 review fix).
+    """
     with (
         patch("modulo.core.hitl_manager.sweep_alarm.append_audit_event", new_callable=AsyncMock) as mock_audit,
-        patch(
-            "modulo.core.hitl_manager.sweep_alarm._create_in_app_notification", new_callable=AsyncMock
-        ) as mock_notify,
+        patch.object(NotificationEventMapper, "create_from_event", new_callable=AsyncMock) as mock_notify,
         patch("modulo.core.hitl_manager.sweep_alarm._schedule_sweep_webhook") as mock_webhook,
     ):
         yield mock_audit, mock_notify, mock_webhook
@@ -84,7 +94,8 @@ class TestThreshold:
         assert alarmed is True
         mock_audit.assert_awaited_once()
         assert mock_audit.await_args.kwargs["event_type"] == AUDIT_EVENT_TYPE
-        mock_notify.assert_awaited_once()
+        # The alarm itself writes NO in-app notification — dispatch_event does.
+        mock_notify.assert_not_awaited()
         mock_webhook.assert_called_once()
 
     async def test_fifth_approve_does_not_alarm(self):
@@ -131,6 +142,20 @@ class TestThreshold:
         assert payload["distinct_pipeline_count"] == 4
         assert payload["window_seconds"] == sweep_alarm.SWEEP_WINDOW_SECONDS
         assert payload["actor"] == str(_USER)
+
+    async def test_mixed_approves_and_manual_deliveries_alarm(self):
+        """A sweep of 6 MIXED approve + deliver_manual decisions across 2
+        pipelines trips the alarm — manual deliveries count as decisions
+        (FAR-611 review fix: deliver_manual resumes the run past the gate,
+        the same impact an approve has)."""
+        session = _alarm_session(6, 2)
+        with _sweep_patches() as (mock_audit, _mock_notify, mock_webhook):
+            alarmed = await maybe_alarm_approve_sweep(
+                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
+            )
+        assert alarmed is True
+        mock_audit.assert_awaited_once()
+        mock_webhook.assert_called_once()
 
 
 class TestCooldown:
@@ -200,6 +225,39 @@ class TestFailureIsolation:
         mock_notify.assert_not_awaited()
         mock_webhook.assert_not_called()
 
+    async def test_detection_db_error_rolls_back_detection_savepoint(self):
+        """A DB error on the detection SELECT must not poison the decision
+        transaction: the query runs inside its own savepoint whose rollback
+        contains the failure, the alarm stays no-throw, no cooldown is armed,
+        and the surrounding approve commits (FAR-611 review fix)."""
+        events: list[str] = []
+
+        @contextlib.asynccontextmanager
+        async def _savepoint():
+            events.append("enter")
+            try:
+                yield
+            except Exception:
+                events.append("rollback")
+                raise
+            events.append("release")
+
+        session = _broken_session()
+        session.begin_nested = MagicMock(side_effect=_savepoint)
+        with _sweep_patches():
+            alarmed = await maybe_alarm_approve_sweep(
+                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
+            )
+        assert alarmed is False
+        assert events == ["enter", "rollback"]
+        # The rolled-back detection must not arm the cooldown.
+        with _sweep_patches() as (mock_audit, _mock_notify, _mock_webhook):
+            recovered = await maybe_alarm_approve_sweep(
+                _alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
+            )
+        assert recovered is True
+        mock_audit.assert_awaited_once()
+
     async def test_notifier_failure_does_not_raise(self):
         """A raising audit append is swallowed — the decision is never affected."""
         session = _alarm_session(6, 2)
@@ -228,10 +286,11 @@ class TestFailureIsolation:
             )
         assert recovered is True
 
-    async def test_notification_db_failure_rolls_back_emission_savepoint(self):
-        """A DB error on the in-app notification insert must not poison the
+    async def test_audit_emission_failure_rolls_back_emission_savepoint(self):
+        """A DB error on the emission audit append must not poison the
         decision transaction: the emission runs inside a savepoint whose
-        rollback undoes it, the alarm stays no-throw, and no cooldown is armed."""
+        rollback undoes it, the alarm stays no-throw, and no cooldown is
+        armed."""
         events: list[str] = []
 
         @contextlib.asynccontextmanager
@@ -246,14 +305,15 @@ class TestFailureIsolation:
 
         session = _alarm_session(6, 2)
         session.begin_nested = MagicMock(side_effect=_savepoint)
-        with _sweep_patches() as (mock_audit, mock_notify, mock_webhook):
-            mock_notify.side_effect = RuntimeError("notification insert failed")
+        with _sweep_patches() as (mock_audit, _mock_notify, mock_webhook):
+            mock_audit.side_effect = RuntimeError("audit append failed")
             alarmed = await maybe_alarm_approve_sweep(
                 session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
             )
         assert alarmed is False
-        assert events == ["enter", "rollback"]
-        mock_audit.assert_awaited_once()
+        # Two savepoints: the detection (released cleanly) and the emission
+        # (rolled back by the audit failure).
+        assert events == ["enter", "release", "enter", "rollback"]
         mock_webhook.assert_not_called()
         # The rolled-back emission must not arm the cooldown.
         with _sweep_patches() as (mock_audit2, _mock_notify, _mock_webhook):
@@ -367,8 +427,35 @@ class TestDetectionQuery:
         sql = str(compiled)
         assert "audit_events" in sql
         assert "hitl_claims" in sql
-        # The decision event type is a bound parameter, not a SQL literal.
-        assert sweep_alarm._DECISION_EVENT_TYPE in str(compiled.params.values())
+        # The decision event types are bound parameters, not SQL literals.
+        param_values = list(compiled.params.values())
+        flat = [
+            item for value in param_values for item in (list(value) if isinstance(value, (list, tuple)) else [value])
+        ]
+        for event_type in sweep_alarm._DECISION_EVENT_TYPES:
+            assert event_type in flat
+
+    async def test_count_query_covers_approve_and_manual_delivery(self):
+        """Both decision surfaces are counted (FAR-611 review fix): the IN
+        clause carries ``hitl.output_delivered`` AND ``hitl.manual_delivery``
+        so a mixed approve + manual-delivery sweep trips one aggregate
+        threshold."""
+        session = _alarm_session(1, 1)
+        await sweep_alarm.count_recent_approves(
+            session,
+            org_id=_ORG,
+            actor_id=_USER,
+            window_start=datetime.now(UTC) - timedelta(seconds=60),
+        )
+        stmt = session.execute.await_args.args[0]
+        compiled = stmt.compile()
+        assert "IN" in str(compiled).upper()
+        param_values = list(compiled.params.values())
+        flat = [
+            item for value in param_values for item in (list(value) if isinstance(value, (list, tuple)) else [value])
+        ]
+        assert "hitl.output_delivered" in flat
+        assert "hitl.manual_delivery" in flat
 
     async def test_real_hitl_claim_model_is_not_required(self):
         """count_recent_approves works against a plain session mock (shape parity)."""

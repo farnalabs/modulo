@@ -111,22 +111,28 @@ may decide.
       callers that cannot know the client omit the key
       (`test_client_type_audit`)
 - [x] Approve-sweep anomaly alarm (FAR-611): when one actor's committed
-      approvals exceed 5 within 60 seconds AND span more than one pipeline,
+      decisions exceed 5 within 60 seconds AND span more than one pipeline,
       the decision path emits `hitl_approve_sweep_suspected` — an audit
-      event, an in-app admin notification, and a fire-and-forget webhook
-      dispatch (`sweep_alarm.py`, `test_sweep_alarm`). Detection keys off
-      the audit chain (the only per-actor decision record —
-      `hitl_claims.account_id` is NULLed at decision time), is failure-
-      isolated (a broken alarm never fails the human's decision — the
-      emission writes run inside a savepoint), and self-suppresses to at
-      most one alarm per (org, actor) per hour via a bounded in-process
-      marker (a multi-replica deployment may therefore emit up to one
-      alarm per replica per hour — bounded duplicates, the correct
-      envelope for an anomaly page)
+      event and a fire-and-forget webhook dispatch whose `dispatch_event`
+      also creates the in-app admin notification (hitl_overdue sibling
+      pattern — the alarm writes the notification once, never twice)
+      (`sweep_alarm.py`, `test_sweep_alarm`). Detection counts BOTH decision
+      surfaces — `hitl.output_delivered` (approve) AND `hitl.manual_delivery`
+      (a manual delivery resumes the run past the gate with caller-supplied
+      output, the same sweep signal as an approve) — and keys off the audit
+      chain (the only per-actor decision record — `hitl_claims.account_id` is
+      NULLed at decision time), is failure-isolated (a broken alarm never
+      fails the human's decision — the detection SELECT and the emission
+      write each run inside a savepoint), and self-suppresses to at most one
+      alarm per (org, actor) per hour via a bounded in-process marker (a
+      multi-replica deployment may therefore emit up to one alarm per replica
+      per hour — bounded duplicates, the correct envelope for an anomaly page)
 - [x] HITL review actions are rate limited at 20/min per identity,
-      AGGREGATE across runs, gates, and actions (FAR-611) — the bucket key
-      normalizes the whole variable path tail, so the 2026-09-05 bulk
-      sweep's per-gate bucket rotation cannot recur
+      AGGREGATE across runs, gates, actions, and both surfaces — the
+      `/hitl/` review routes AND the approve-capable
+      `/runs/{run_id}/manual/{gate_id}/submit` route share one budget
+      (FAR-611) — the bucket key normalizes the whole variable path tail,
+      so the 2026-09-05 bulk sweep's per-gate bucket rotation cannot recur
       (`test_rate_limit_hitl_review` aggregate/throttle cases,
       `test_middleware_internals`)
 

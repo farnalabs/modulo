@@ -11,6 +11,11 @@ run id, gate id (which is an arbitrary node id like
 pre-FAR-611 normalizer only stripped hex-UUID gate segments, which let the
 2026-09-05 bulk-approve sweep (22 gates / ~34 req/min) spread its requests
 across per-gate buckets and never exceed 20/min on any single one.
+
+FAR-611 review fix: the approve-capable manual-output submit route
+(POST /api/v1/runs/{run_id}/manual/{gate_id}/submit) has no /hitl/ segment in
+its path, so it used to ride the 60/min runs rule; it now shares the SAME
+aggregate bucket as the /hitl/ review actions.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -29,6 +34,7 @@ HITL_ENDPOINTS = [
     "/api/v1/runs/run-123/hitl/gate-abc/claim",
     "/api/v1/runs/run-123/hitl/gate-abc/deliver-manual",
     "/api/v1/runs/run-123/hitl/gate-abc/approve-with-modification",
+    "/api/v1/runs/run-123/manual/gate-abc/submit",
 ]
 
 # A realistic (non-hex) HITL gate id — gate ids are "hitl_gate_<source>_<target>"
@@ -252,6 +258,17 @@ class TestHitlReviewRateLimit:
             request.url.path = endpoint
             assert instance._rule_for(request).max_requests == 20
 
+    def test_rule_for_manual_submit_uses_hitl_rule(self) -> None:
+        """The manual-output submit route is a HITL approve-capability surface
+        (FAR-611 review fix): it must resolve to the 20/min HITL rule, not the
+        60/min runs rule."""
+        instance = RateLimitMiddleware(app=FastAPI(), settings=_make_settings())
+        request = MagicMock()
+        request.url.path = f"/api/v1/runs/{_SWEEP_RUN_ID}/manual/gate-abc/submit"
+        rule = instance._rule_for(request)
+        assert rule is RateLimitMiddleware.HITL_RULE
+        assert rule.max_requests == 20
+
     def test_rule_for_keeps_runs_rule_for_non_hitl(self) -> None:
         """Non-HITL runs paths must stay under the 60/min runs rule."""
         instance = RateLimitMiddleware(app=FastAPI(), settings=_make_settings())
@@ -370,3 +387,76 @@ class TestAggregateSweepThrottle:
         first_20_ok = all(code == status.HTTP_200_OK for code in statuses[:20])
         assert first_20_ok
         assert statuses[20] == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+def _make_mixed_surface_app(gate_ids: list[str], registry: RateLimiterRegistry) -> FastAPI:
+    """App exposing BOTH budgeted HITL surfaces for every gate: the /hitl/
+    approve route and the /manual/{gate}/submit route (no /hitl/ segment)."""
+    app = FastAPI()
+    for gate in gate_ids:
+        app.add_api_route(
+            f"/api/v1/runs/{_SWEEP_RUN_ID}/hitl/{gate}/approve",
+            lambda: {"status": "ok"},
+            methods=["POST"],
+            include_in_schema=False,
+        )
+        app.add_api_route(
+            f"/api/v1/runs/{_SWEEP_RUN_ID}/manual/{gate}/submit",
+            lambda: {"status": "ok"},
+            methods=["POST"],
+            include_in_schema=False,
+        )
+    app.add_middleware(
+        RateLimitMiddleware,  # type: ignore[arg-type]
+        settings=_make_settings(),
+        registry=registry,
+    )
+    return app
+
+
+class TestManualSubmitSharesHitlBudget:
+    """FAR-611 review fix: the manual-output submit route (approve-capable,
+    no /hitl/ segment) is budgeted by the SAME aggregate 20/min rule as the
+    /hitl/ review actions, and both surfaces share ONE bucket."""
+
+    def test_manual_submit_normalizes_to_hitl_bucket_key(self) -> None:
+        """The manual submit's bucket key is the /hitl/ aggregate placeholder —
+        alternating surfaces therefore drains one budget, not two."""
+        endpoint = f"/api/v1/runs/{_SWEEP_RUN_ID}/manual/gate-abc/submit"
+        app = FastAPI()
+        app.add_api_route(endpoint, lambda: {"status": "ok"}, methods=["POST"], include_in_schema=False)
+        mock_registry = MagicMock(spec=RateLimiterRegistry)
+        mock_registry.check = AsyncMock(return_value=True)
+        app.add_middleware(
+            RateLimitMiddleware,  # type: ignore[arg-type]
+            settings=_make_settings(),
+            registry=mock_registry,
+        )
+
+        with TestClient(app) as client:
+            resp = client.post(endpoint)
+
+        assert resp.status_code == status.HTTP_200_OK
+        key = mock_registry.check.await_args[0][0]
+        assert key == "ip:testclient:/api/v1/runs/<run_id>/hitl/<gate_id>"
+
+    def test_20_mixed_surface_requests_trip_the_21st(self) -> None:
+        """20 mixed /hitl/approve + /manual/submit requests across distinct
+        gates fill one bucket; the 21st (either surface) 429s. Pre-fix, the
+        manual submits rode the 60/min runs rule and the mix sailed through."""
+        gates = [f"hitl_gate_node-{i}_manual" for i in range(25)]
+        registry = RateLimiterRegistry(redis_client=_FakeRedis())
+        client = TestClient(_make_mixed_surface_app(gates, registry))
+
+        paths = []
+        for i, gate in enumerate(gates):
+            if i % 2 == 0:
+                paths.append(f"/api/v1/runs/{_SWEEP_RUN_ID}/hitl/{gate}/approve")
+            else:
+                paths.append(f"/api/v1/runs/{_SWEEP_RUN_ID}/manual/{gate}/submit")
+
+        statuses = [client.post(path).status_code for path in paths]
+
+        assert all(code == status.HTTP_200_OK for code in statuses[:20])
+        assert statuses[20] == status.HTTP_429_TOO_MANY_REQUESTS
+        assert statuses[21] == status.HTTP_429_TOO_MANY_REQUESTS
