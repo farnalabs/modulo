@@ -1946,7 +1946,7 @@ class TestRunApiKeySweepWiring:
         into the summary.
 
         Deleting the ``await revoke_run_api_key_sweep(...)`` line from
-        ``cron_helpers.dispatcher_reconcile`` must leave this test red �?" the
+        ``cron_helpers.dispatcher_reconcile`` must leave this test red — the
         sweep mock is asserted awaited once AND the folded summary keys would be
         missing from the summary dict.
         """

@@ -159,7 +159,7 @@ def _session_assert_error_matrix(
 
 
 # ---------------------------------------------------------------------------
-# GET /triggers â€” error mapping
+# GET /triggers — error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -553,7 +553,7 @@ def test_test_polling_condition_happy_path_delegates_to_engine(client: tuple[Tes
 
 
 # ---------------------------------------------------------------------------
-# POST /pipelines/{pipeline_id}/triggers â€” create
+# POST /pipelines/{pipeline_id}/triggers — create
 # ---------------------------------------------------------------------------
 
 
@@ -617,7 +617,7 @@ def test_create_trigger_manual_happy_path_returns_201(client: tuple[TestClient, 
 
 
 # ---------------------------------------------------------------------------
-# PUT /triggers/{id} â€” update
+# PUT /triggers/{id} — update
 # ---------------------------------------------------------------------------
 
 
@@ -678,7 +678,7 @@ def test_update_trigger_happy_path_returns_serialized(client: tuple[TestClient, 
 
 
 # ---------------------------------------------------------------------------
-# DELETE / POST restore â€” CRUD via modulo.db.crud.trigger
+# DELETE / POST restore — CRUD via modulo.db.crud.trigger
 # ---------------------------------------------------------------------------
 
 
@@ -813,7 +813,7 @@ def test_toggle_trigger_happy_path_flips_and_anchors(client: tuple[TestClient, A
 
 
 # ---------------------------------------------------------------------------
-# POST /triggers/{id}/test â€” manual test runs + domain error mapping
+# POST /triggers/{id}/test — manual test runs + domain error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -906,7 +906,7 @@ def test_test_trigger_org_deleted_mapping(
 
 
 # ---------------------------------------------------------------------------
-# GET /triggers/{id}/events â€” cursor pagination + filters
+# GET /triggers/{id}/events — cursor pagination + filters
 # ---------------------------------------------------------------------------
 
 
@@ -988,7 +988,7 @@ def test_list_trigger_events_single_page_has_no_cursor(client: tuple[TestClient,
 
 
 # ---------------------------------------------------------------------------
-# GET /pipelines/{id}/triggers â€” pipeline-scoped list
+# GET /pipelines/{id}/triggers — pipeline-scoped list
 # ---------------------------------------------------------------------------
 
 

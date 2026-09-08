@@ -129,7 +129,7 @@ def _assert_error_matrix(
 
 
 # ---------------------------------------------------------------------------
-# POST /auth/login â€” error matrix + no-membership 403 + happy mint
+# POST /auth/login — error matrix + no-membership 403 + happy mint
 # ---------------------------------------------------------------------------
 
 _LOGIN_BODY = {"email": "user@example.com", "password": "pw"}
@@ -192,7 +192,7 @@ def test_login_happy_path_mints_tokens_and_cookies(client: tuple[TestClient, Asy
 
 
 # ---------------------------------------------------------------------------
-# POST /auth/demo â€” stealth 404s + happy mint
+# POST /auth/demo — stealth 404s + happy mint
 # ---------------------------------------------------------------------------
 
 _DEMO_SETTINGS = {
@@ -286,7 +286,7 @@ def test_demo_login_requires_demo_settings() -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /auth/accept-invite â€” enrollment surface
+# POST /auth/accept-invite — enrollment surface
 # ---------------------------------------------------------------------------
 
 _INVITE_BODY = {"token": "inv-token", "password": _STRONG_PASSWORD}
@@ -477,7 +477,7 @@ def test_accept_invite_assert_error_matrix(client: tuple[TestClient, AsyncMock])
 
 
 # ---------------------------------------------------------------------------
-# POST /auth/refresh â€” claim-shape 401s, denials, theft, rotation, matrix
+# POST /auth/refresh — claim-shape 401s, denials, theft, rotation, matrix
 # ---------------------------------------------------------------------------
 
 _REFRESH_URL = "/api/v1/auth/refresh"
@@ -603,7 +603,7 @@ def test_refresh_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> No
 
 
 # ---------------------------------------------------------------------------
-# POST /auth/logout â€” blacklist error matrix + claim-shape skips
+# POST /auth/logout — blacklist error matrix + claim-shape skips
 # ---------------------------------------------------------------------------
 
 _LOGOUT_URL = "/api/v1/auth/logout"
@@ -684,7 +684,7 @@ def test_logout_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> Non
 
 
 # ---------------------------------------------------------------------------
-# POST /auth/ws-token â€” live-role denial surfaces
+# POST /auth/ws-token — live-role denial surfaces
 # ---------------------------------------------------------------------------
 
 
@@ -715,7 +715,7 @@ def test_ws_token_unexpected_error_maps_500(client: tuple[TestClient, AsyncMock]
 
 
 # ---------------------------------------------------------------------------
-# GET /auth/me â€” error matrix + 404 + happy
+# GET /auth/me — error matrix + 404 + happy
 # ---------------------------------------------------------------------------
 
 

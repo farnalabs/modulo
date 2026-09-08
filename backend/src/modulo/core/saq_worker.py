@@ -208,7 +208,7 @@ def _effective_db_pool_size(pool_size: int, concurrency: int) -> int:
     and the zombie watchdog's terminalize write (``fail_run_terminal``) needs a
     connection to fail a run that wedges in pre-node setup. With
     ``SAQ_WORKER_CONCURRENCY=20`` and 1 connection/run assumed (as the old
-    ``concurrency + 5`` floor did), a 30-conn pool is exhausted (20 runs Ã— 2-3
+    ``concurrency + 5`` floor did), a 30-conn pool is exhausted (20 runs x 2-3
     conns = 40-60 > 30) and ``load_and_setup`` wedges awaiting a connection —
     the run rides to the 35-min ``dispatcher_reconcile`` backstop as a nodeless
     zombie (the agent.stall symptom).

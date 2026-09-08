@@ -813,7 +813,7 @@ async def test_replace_present_false_with_config_on_new_edge_ignores_value(monke
 
 
 # ---------------------------------------------------------------------------
-# FAR-309 PR A review � service-layer guardrail-binding strip guard
+# FAR-309 PR A review — service-layer guardrail-binding strip guard
 # ---------------------------------------------------------------------------
 
 
