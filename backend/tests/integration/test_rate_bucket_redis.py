@@ -132,6 +132,32 @@ async def test_real_lua_corrupt_stored_value_fails_closed(
         await bucket.consume("corrupt", tokens=1.0)
 
 
+async def test_half_written_bucket_fails_closed_instead_of_re_bursting(
+    redis_client: aioredis.Redis,
+    redis_prefix: str,
+) -> None:
+    """A bucket missing ONE field is corrupt, not fresh — it must not re-burst.
+
+    "Both fields absent" (fresh, start full) and "one field absent" (half-written)
+    are different states. Seeding ``tokens = burst`` for a half-written bucket
+    hands a whole fresh burst to a budget that was already spent: an EXHAUSTED
+    bucket (``tokens=0``) which lost only its ``ts`` field granted ``burst``
+    tokens again, breaking the single-shared-budget guarantee in the one direction
+    this module exists to prevent. Fail closed instead.
+    """
+    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=3, key_prefix=redis_prefix)
+
+    # Exhausted bucket that lost its refill timestamp.
+    await redis_client.hset(f"{redis_prefix}nots", "tokens", "0")
+    with pytest.raises(SharedBudgetUnavailableError):
+        await bucket.consume("nots", tokens=1.0)
+
+    # ...and the mirror image: a timestamp with no token count.
+    await redis_client.hset(f"{redis_prefix}notokens", "ts", "1000")
+    with pytest.raises(SharedBudgetUnavailableError):
+        await bucket.consume("notokens", tokens=1.0)
+
+
 async def test_real_lua_refills_over_server_wall_clock(
     redis_client: aioredis.Redis,
     redis_prefix: str,
