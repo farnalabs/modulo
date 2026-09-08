@@ -174,7 +174,12 @@ class ShellConnector(ConnectorBase):
                 f"Command {base!r} is not in the allowed list: {sorted(self._allowed_commands)}",
             )
 
-    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+    async def _ensure_runtime_provider(self) -> ShellRuntimeProvider:
+        """Resolve the runtime provider from the hub when not directly configured.
+
+        Raises ValueError when no provider can be resolved; returns the live
+        provider otherwise.
+        """
         if (
             self._runtime_provider is None
             and self._runtime_provider_hub is not None
@@ -192,59 +197,55 @@ class ShellConnector(ConnectorBase):
 
         if self._runtime_provider is None:
             raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED)
+        return self._runtime_provider
+
+    async def _read_file(self, provider: ShellRuntimeProvider, provider_ref: str | None, path: str) -> ConnectorResult:
+        safe_path = shlex.quote(path)
+        result = await provider.execute_command(
+            provider_ref,
+            f"cat {safe_path}",
+            timeout_seconds=30,
+        )
+        if result["exit_code"] != 0:
+            raise ValueError(f"Failed to read file {path!r}: {(result['stderr'] or '').strip()}")
+        return ConnectorResult(records=[{"path": path, "content": result["stdout"]}])
+
+    async def _list_directory(
+        self, provider: ShellRuntimeProvider, provider_ref: str | None, dir_path: str
+    ) -> ConnectorResult:
+        safe_path = shlex.quote(dir_path)
+        result = await provider.execute_command(
+            provider_ref,
+            f"ls -1a {safe_path}",
+            timeout_seconds=30,
+        )
+        entries: list[dict[str, Any]] = []
+        for line in (result["stdout"] or "").strip().split("\n"):
+            name = line.strip()
+            if name and name not in (".", ".."):
+                resolved = f"{dir_path.rstrip('/')}/{name}"
+                entries.append({"name": name, "path": resolved})
+        return ConnectorResult(records=entries, total=len(entries))
+
+    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        provider = await self._ensure_runtime_provider()
         self._check_workspace_lease()
         provider_ref: str | None = q.filters.get("provider_ref")
 
         match q.resource:
             case "file":
                 path = q.filters["path"]
-                safe_path = shlex.quote(path)
-                result = await self._runtime_provider.execute_command(
-                    provider_ref,
-                    f"cat {safe_path}",
-                    timeout_seconds=30,
-                )
-                if result["exit_code"] != 0:
-                    raise ValueError(f"Failed to read file {path!r}: {(result['stderr'] or '').strip()}")
-                return ConnectorResult(records=[{"path": path, "content": result["stdout"]}])
+                return await self._read_file(provider, provider_ref, path)
 
             case "directory":
                 dir_path = q.filters.get("path", ".")
-                safe_path = shlex.quote(dir_path)
-                result = await self._runtime_provider.execute_command(
-                    provider_ref,
-                    f"ls -1a {safe_path}",
-                    timeout_seconds=30,
-                )
-                entries: list[dict[str, Any]] = []
-                for line in (result["stdout"] or "").strip().split("\n"):
-                    name = line.strip()
-                    if name and name not in (".", ".."):
-                        resolved = f"{dir_path.rstrip('/')}/{name}"
-                        entries.append({"name": name, "path": resolved})
-                return ConnectorResult(records=entries, total=len(entries))
+                return await self._list_directory(provider, provider_ref, dir_path)
 
             case _:
                 raise ValueError(f"Unsupported shell query resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
-        if (
-            self._runtime_provider is None
-            and self._runtime_provider_hub is not None
-            and self._environment_profile_id is not None
-        ):
-            profile = await self._resolve_profile_from_hub()
-            if profile is not None:
-                try:
-                    self._runtime_provider = self._runtime_provider_hub.resolve(profile)
-                except ProviderNotConfiguredError as exc:
-                    # Error-contract fix: the hub raises ProviderNotConfiguredError,
-                    # but this deprecated connector's fail-soft contract is a
-                    # plain ValueError surfaced as a reported node failure.
-                    raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED) from exc
-
-        if self._runtime_provider is None:
-            raise ValueError(_ERR_RUNTIME_NOT_CONFIGURED)
+        provider = await self._ensure_runtime_provider()
         self._check_workspace_lease()
         provider_ref: str | None = payload.data.get("provider_ref")
 
@@ -259,7 +260,7 @@ class ShellConnector(ConnectorBase):
                 cwd: str | None = payload.data.get("cwd")
 
                 cmd = self._build_exec_cmd(command_str, cwd, env)
-                exec_result = await self._runtime_provider.execute_command(
+                exec_result = await provider.execute_command(
                     provider_ref,
                     cmd,
                     timeout_seconds=timeout,
@@ -280,7 +281,7 @@ class ShellConnector(ConnectorBase):
                 parent = str(Path(path).parent)
                 safe_parent = shlex.quote(parent)
 
-                exec_result = await self._runtime_provider.execute_command(
+                exec_result = await provider.execute_command(
                     provider_ref,
                     f"mkdir -p {safe_parent} && echo '{encoded}' | base64 -d > {safe_path}",
                     timeout_seconds=30,
