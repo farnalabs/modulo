@@ -59,32 +59,48 @@ export function throwOnError<T>(result: { data?: T; error?: unknown }): T {
   return result.data as T
 }
 
+function truncateErrorText(str: string): string {
+  return str.length > MAX_ERROR_LENGTH ? str.slice(0, MAX_ERROR_LENGTH) + '...' : str
+}
+
+function stringifyErrorObject(obj: Record<string, unknown>, err: unknown): string {
+  try {
+    return truncateErrorText(JSON.stringify(obj))
+  } catch {
+    return String(err)
+  }
+}
+
+// FastAPI validation errors return detail as an array of {loc, msg, type}
+// entries (e.g. a Pydantic 422); surface the human-readable messages
+// instead of falling through to a raw JSON dump.
+function formatValidationDetail(detail: unknown): string | null {
+  if (!Array.isArray(detail)) return null
+  const msgs = detail
+    .filter((d): d is { msg?: string } => typeof d === 'object' && d !== null && typeof d.msg === 'string')
+    .map((d) => d.msg)
+  return msgs.length > 0 ? msgs.join('; ') : null
+}
+
+function extractErrorDetail(obj: Record<string, unknown>): string | null {
+  if (typeof obj.detail === 'string') return obj.detail
+  return formatValidationDetail(obj.detail)
+}
+
+function formatErrorObject(obj: Record<string, unknown>, err: unknown): string {
+  const detail = extractErrorDetail(obj)
+  if (detail !== null) return detail
+  if (typeof obj.message === 'string') return obj.message
+  if (typeof obj.error === 'string') return obj.error
+  if (typeof obj.title === 'string') return obj.title
+  return stringifyErrorObject(obj, err)
+}
+
 export function formatApiError(err: unknown): string {
   if (isProblemDetail(err)) return err.detail
   if (typeof err === 'string') return err
   if (!err) return 'Unknown error'
   if (err instanceof Error) return err.message
-  if (typeof err === 'object') {
-    const obj = err as Record<string, unknown>
-    if (typeof obj.detail === 'string') return obj.detail
-    // FastAPI validation errors return detail as an array of {loc, msg, type}
-    // entries (e.g. a Pydantic 422); surface the human-readable messages
-    // instead of falling through to a raw JSON dump.
-    if (Array.isArray(obj.detail)) {
-      const msgs = obj.detail
-        .filter((d): d is { msg?: string } => typeof d === 'object' && d !== null && typeof d.msg === 'string')
-        .map((d) => d.msg)
-      if (msgs.length > 0) return msgs.join('; ')
-    }
-    if (typeof obj.message === 'string') return obj.message
-    if (typeof obj.error === 'string') return obj.error
-    if (typeof obj.title === 'string') return obj.title
-    try {
-      const str = JSON.stringify(obj)
-      return str.length > MAX_ERROR_LENGTH ? str.slice(0, MAX_ERROR_LENGTH) + '...' : str
-    } catch {
-      return String(err)
-    }
-  }
+  if (typeof err === 'object') return formatErrorObject(err as Record<string, unknown>, err)
   return String(err)
 }
