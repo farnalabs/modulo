@@ -2922,6 +2922,17 @@ export interface paths {
          *     - ``approved`` / ``rejected``: the decided history.
          *     - ``all``: everything.
          *
+         *     The data-rot fence (FAR-612/FAR-604) applies ONLY to the pending-work
+         *     statuses — ``undecided``/``pending``/``claimed`` join ``runs`` and keep
+         *     only gates whose run is still in ``HITL_ACTIONABLE_RUN_STATUSES``
+         *     (``awaiting_human``/``claimed``/``hitl_parked``), exactly like
+         *     ``HITLManager.list_pending``: an undecided gate on any other run status
+         *     is orphaned data rot (e.g. rows left by the since-fixed auto-approve
+         *     bug), not pending work. History views (``approved``/``rejected``) and
+         *     the ``all`` audit view are deliberately UNFENCED: a decided gate's run
+         *     has legitimately moved past ``awaiting_human``, and the audit view must
+         *     surface data-rot rows.
+         *
          *     ``/api/v1/hitl/pending`` is deliberately UNCHANGED (API stability — other
          *     consumers depend on its undecided-only shape). The response envelope
          *     mirrors the repo's standard list convention (items/total/page/page_size,
