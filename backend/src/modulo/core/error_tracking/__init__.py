@@ -380,19 +380,8 @@ def configure_forwarders(configs: dict[str, dict[str, Any]]) -> None:
     _DEFAULT_FORWARDER_CONFIGS = configs
 
 
-async def _dispatch_forwarders(
-    org_id: Any,
-    error_group: Any,
-    error_event: Any,
-    _event_data: dict[str, Any],
-    session: Any | None = None,
-) -> None:
-    """Call all configured forwarders for the org.
-
-    Forwarder configs are looked up by org_id from the DB (or fall back to
-    a global default).  Each forwarder runs independently; a single
-    forwarder failure does not affect others.
-    """
+async def _load_per_org_configs(session: Any | None, org_id: Any) -> dict[str, dict[str, Any]]:
+    """Org-level forwarder configs from the DB (empty without a session)."""
     per_org_configs: dict[str, dict[str, Any]] = {}
     if session is not None:
         try:
@@ -410,31 +399,58 @@ async def _dispatch_forwarders(
             _log.exception("core.error_tracking")
 
             raise
+    return per_org_configs
 
+
+async def _dispatch_one_forwarder(
+    org_id: Any,
+    error_group: Any,
+    error_event: Any,
+    type_name: str,
+    fwd_config: dict[str, Any],
+) -> None:
+    """Ship one error to one forwarder (failures are isolated and logged)."""
+    forwarder = get_forwarder(type_name)
+    if forwarder is None:
+        _log.warning("dispatch_forwarders.unknown_type", extra={"type": type_name})
+        return
+
+    try:
+        await forwarder.forward(
+            org_id=org_id,
+            error_group=error_group,
+            error_event=error_event,
+            config=fwd_config,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "dispatch_forwarders.failed",
+            extra={"type": type_name, "org_id": str(org_id)},
+        )
+
+
+async def _dispatch_forwarders(
+    org_id: Any,
+    error_group: Any,
+    error_event: Any,
+    _event_data: dict[str, Any],
+    session: Any | None = None,
+) -> None:
+    """Call all configured forwarders for the org.
+
+    Forwarder configs are looked up by org_id from the DB (or fall back to
+    a global default).  Each forwarder runs independently; a single
+    forwarder failure does not affect others.
+    """
+    per_org_configs = await _load_per_org_configs(session, org_id)
     configs = per_org_configs or _DEFAULT_FORWARDER_CONFIGS
     if not configs:
         return
 
     for type_name, fwd_config in configs.items():
-        forwarder = get_forwarder(type_name)
-        if forwarder is None:
-            _log.warning("dispatch_forwarders.unknown_type", extra={"type": type_name})
-            continue
-
-        try:
-            await forwarder.forward(
-                org_id=org_id,
-                error_group=error_group,
-                error_event=error_event,
-                config=fwd_config,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception(
-                "dispatch_forwarders.failed",
-                extra={"type": type_name, "org_id": str(org_id)},
-            )
+        await _dispatch_one_forwarder(org_id, error_group, error_event, type_name, fwd_config)
 
 
 # ---------------------------------------------------------------------------
@@ -952,6 +968,95 @@ async def _missed_fire_cooldown_ok(redis_client: Any, org_id: str, trigger_id: A
         return True
 
 
+async def _missed_fire_trigger_rows(factory: Any, oid_uuid: uuid.UUID) -> list[Any]:
+    """The active cron/polling triggers for one org (RLS-scoped session)."""
+    from sqlalchemy import select
+
+    from modulo.db.models.trigger import Trigger
+    from modulo.db.rls import set_rls_org
+
+    async with factory() as session, session.begin():
+        await set_rls_org(session, oid_uuid)
+        result = await session.execute(
+            select(
+                Trigger.id,
+                Trigger.trigger_type,
+                Trigger.cron_expression,
+                Trigger.cron_timezone,
+                Trigger.config_json,
+                Trigger.last_fired_at,
+                Trigger.created_at,
+            ).where(
+                Trigger.organisation_id == oid_uuid,
+                Trigger.active.is_(True),
+                Trigger.deleted_at.is_(None),
+                # ``ongoing`` is INTENTIONALLY excluded here (FAR-158):
+                # the type self-heals — the top-up recomputes from
+                # current state every scan, so a missed tick needs no
+                # alert, and an at-target no-op is NOT a missed fire.
+                Trigger.trigger_type.in_(("cron", "polling")),
+            )
+        )
+        return list(result.all())
+
+
+def _row_missed_period(row: Any, now: datetime, grace_seconds: int) -> int | None:
+    """Pure per-row gate: the trigger's period when it counts as missed.
+
+    Filters cadences below the min period, recently-fired triggers, and
+    brand-new triggers that have not yet had their first scheduled fire.
+    Returns ``None`` when the trigger is NOT missed.
+    """
+    period = _trigger_period_seconds(
+        row.trigger_type,
+        row.cron_expression,
+        row.cron_timezone,
+        row.config_json,
+        now,
+    )
+    if period is None or period < SAQ_MISSED_FIRE_MIN_PERIOD_SECONDS:
+        return None
+    if row.last_fired_at is not None and row.last_fired_at >= now - timedelta(seconds=period + grace_seconds):
+        return None
+    if row.last_fired_at is None and (
+        row.created_at is None or row.created_at >= now - timedelta(seconds=period + grace_seconds)
+    ):
+        # A brand-new trigger that has not yet had its first scheduled
+        # fire is not "missed" — only probe it once it is old enough.
+        return None
+    return period
+
+
+async def _emit_missed_fire_alert(
+    factory: Any,
+    oid_uuid: uuid.UUID,
+    row: Any,
+    period: int,
+    *,
+    message: str,
+    fingerprint: str,
+) -> None:
+    """Persist one missed-fire error_event (source='saq') for a trigger."""
+    from modulo.db.rls import set_rls_org
+
+    async with factory() as session, session.begin():
+        await set_rls_org(session, oid_uuid)
+        await create_error_event(
+            session,
+            org_id=oid_uuid,
+            fingerprint=fingerprint,
+            level="error",
+            message=message,
+            source="saq",
+            context_json={
+                "trigger_id": str(row.id),
+                "trigger_type": row.trigger_type,
+                "period_seconds": period,
+            },
+            environment=os.environ.get("MODULO_ENV", "development"),
+        )
+
+
 async def check_missed_fire_alerts(
     aengine: Any,
     *,
@@ -975,7 +1080,6 @@ async def check_missed_fire_alerts(
     from sqlalchemy import select
 
     from modulo.db.models.organisation import Organisation
-    from modulo.db.models.trigger import Trigger
 
     emitted = 0
     now = datetime.now(UTC)
@@ -996,74 +1100,19 @@ async def check_missed_fire_alerts(
 
         from sqlalchemy.ext.asyncio import async_sessionmaker
 
-        from modulo.db.rls import set_rls_org
-
         factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
         for oid in org_ids:
             oid_uuid = uuid.UUID(str(oid))
-            async with factory() as session, session.begin():
-                await set_rls_org(session, oid_uuid)
-                result = await session.execute(
-                    select(
-                        Trigger.id,
-                        Trigger.trigger_type,
-                        Trigger.cron_expression,
-                        Trigger.cron_timezone,
-                        Trigger.config_json,
-                        Trigger.last_fired_at,
-                        Trigger.created_at,
-                    ).where(
-                        Trigger.organisation_id == oid_uuid,
-                        Trigger.active.is_(True),
-                        Trigger.deleted_at.is_(None),
-                        # ``ongoing`` is INTENTIONALLY excluded here (FAR-158):
-                        # the type self-heals — the top-up recomputes from
-                        # current state every scan, so a missed tick needs no
-                        # alert, and an at-target no-op is NOT a missed fire.
-                        Trigger.trigger_type.in_(("cron", "polling")),
-                    )
-                )
-                rows = result.all()
+            rows = await _missed_fire_trigger_rows(factory, oid_uuid)
             for row in rows:
-                period = _trigger_period_seconds(
-                    row.trigger_type,
-                    row.cron_expression,
-                    row.cron_timezone,
-                    row.config_json,
-                    now,
-                )
-                if period is None or period < SAQ_MISSED_FIRE_MIN_PERIOD_SECONDS:
-                    continue
-                if row.last_fired_at is not None and row.last_fired_at >= now - timedelta(
-                    seconds=period + grace_seconds
-                ):
-                    continue
-                if row.last_fired_at is None and (
-                    row.created_at is None or row.created_at >= now - timedelta(seconds=period + grace_seconds)
-                ):
-                    # A brand-new trigger that has not yet had its first scheduled
-                    # fire is not "missed" — only probe it once it is old enough.
+                period = _row_missed_period(row, now, grace_seconds)
+                if period is None:
                     continue
                 if not await _missed_fire_cooldown_ok(redis_client, str(oid_uuid), row.id):
                     continue
                 message = f"Trigger {row.id} ({row.trigger_type}) has not fired for >= {period}s"
                 fingerprint = ErrorIngestionService.fingerprint(message=message, source="saq")
-                async with factory() as session, session.begin():
-                    await set_rls_org(session, oid_uuid)
-                    await create_error_event(
-                        session,
-                        org_id=oid_uuid,
-                        fingerprint=fingerprint,
-                        level="error",
-                        message=message,
-                        source="saq",
-                        context_json={
-                            "trigger_id": str(row.id),
-                            "trigger_type": row.trigger_type,
-                            "period_seconds": period,
-                        },
-                        environment=os.environ.get("MODULO_ENV", "development"),
-                    )
+                await _emit_missed_fire_alert(factory, oid_uuid, row, period, message=message, fingerprint=fingerprint)
                 emitted += 1
         return emitted
     except asyncio.CancelledError:
