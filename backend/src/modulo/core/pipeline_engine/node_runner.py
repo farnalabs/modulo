@@ -307,7 +307,7 @@ _MAX_ERROR_MSG = 500
 # SandboxNodeFailedError message must survive the executor's terminal-fail
 # surface AFTER retries exhausted — `_sanitize_detail("Sandbox node failed
 # (transient) after retries exhausted: " + msg, limit=5000)` — and the
-# `runs.error_detail` String(5000) column, so every section stays small and
+# `runs.error_detail` Text column (widened from String(5000) by migration 0199), so every section stays small and
 # the COMBINED message (sections + headers + truncation markers) stays well
 # under 5000 chars. Sections are ordered by diagnostic value: the E2B log
 # tail (the only place the kill reason lives) FIRST, then the captured agent
@@ -316,7 +316,7 @@ _MAX_ERROR_MSG = 500
 # Section caps are sized so the whole message stays under the sanitizer's
 # hard cap (5000 chars) AND the executor's terminal-fail write surface
 # (`_sanitize_detail(..., limit=5000)`) and the `runs.error_detail`
-# String(5000) column, so the diagnostic is never truncated away.
+# Text column (widened from String(5000) by migration 0199), so the diagnostic is never truncated away.
 _NO_OUTPUT_LOG_TAIL = 1024
 _NO_OUTPUT_STDERR_TAIL = 1536
 _NO_OUTPUT_STDOUT_TAIL = 1024

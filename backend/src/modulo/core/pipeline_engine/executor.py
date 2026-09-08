@@ -213,14 +213,16 @@ _RETRY_BACKOFF_JITTER_FRACTION = 0.25
 _RETRY_BACKOFF_DEFAULT_MULTIPLIER = float(rc.RETRY_SCHEDULE_DEFAULT_MULTIPLIER)
 
 
-def _sanitize_detail(detail: Any, limit: int = 5000) -> str:
-    """Sanitize an error detail at a write surface, THEN truncate (FAR-163).
+def _sanitize_detail(detail: Any, limit: int | None = 5000) -> str:
+    """Sanitize an error detail at a write surface (FAR-163).
 
-    Redaction runs before truncation so a secret straddling the cut point is
-    still removed. Never raises — :func:`sanitize_error_text` coerces any input
+    Redaction runs before any truncation so a secret straddling the cut point is
+    still removed. Pass ``limit=None`` to skip the cap — ``runs.error_detail`` was
+    widened to ``Text`` by migration 0199, so error-detail writes no longer need
+    to be bounded. Never raises — :func:`sanitize_error_text` coerces any input
     via ``str()`` and is a NO-OP for clean strings.
     """
-    return sanitize_error_text(detail)[:limit]
+    return sanitize_error_text(detail, limit)
 
 
 def _traceback_detail(exc: BaseException, limit: int = 2000) -> str:
@@ -3017,7 +3019,7 @@ class PipelineExecutor:
                     resource_id=run_id,
                     payload_json={
                         "pipeline_id": str(pipeline_id),
-                        "error_detail": _sanitize_detail(error_detail, limit=5000),
+                        "error_detail": _sanitize_detail(error_detail, limit=None),
                     },
                 )
             except asyncio.CancelledError:
@@ -3487,7 +3489,7 @@ class PipelineExecutor:
             _log.info("pipeline.router_no_match", extra={"run_id": str(run_id), "detail": str(exc)})
             final_status = "router_no_match"
             error_code = "router.no_match"
-            error_detail = _sanitize_detail(str(exc), limit=5000)
+            error_detail = _sanitize_detail(str(exc), limit=None)
         except (NodeCancelledError, SandboxNodeFailedError) as exc:
             # FAR-592 (D6 F2): the Local-tier refusal is a DETERMINISTIC config
             # fault — the profile opt-in cannot change mid-run, so requeueing
@@ -3503,7 +3505,7 @@ class PipelineExecutor:
                 )
                 final_status = "failed"
                 error_code = _ERROR_CODE_SANDBOX_TIER_REFUSED
-                error_detail = _sanitize_detail(str(exc), limit=5000)
+                error_detail = _sanitize_detail(str(exc), limit=None)
                 # A tier refusal MUST also skip the pipeline retry_policy below:
                 # the "failure" event matches final_status == "failed" and would
                 # requeue the deterministic refusal despite the non-retryable
@@ -3796,7 +3798,7 @@ class PipelineExecutor:
         # diagnostic (stdout/stderr tails, the E2B log tail where the
         # kill reason lives) reaches the user. It is bounded by the
         # builder to fit the 5000-char sanitizer/column cap
-        # (runs.error_detail is String(5000)), and every detail read
+        # (runs.error_detail is Text, widened from String(5000) by migration 0199), and every detail read
         # surface (run-detail REST + MCP) presents at limit=5000; list
         # surfaces truncate to 200 by design. A 500-char write cap cut
         # the stderr + log tails entirely for large-output failures.
@@ -4782,7 +4784,7 @@ class PipelineExecutor:
         except EvalSuiteBlockedError as exc:
             final_status = "failed"
             error_code = "eval_suite_blocked"
-            error_detail = _sanitize_detail(exc, limit=5000)
+            error_detail = _sanitize_detail(exc, limit=None)
             broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": error_detail})
             _log.warning(
                 "eval.suite_blocked",
@@ -4800,7 +4802,7 @@ class PipelineExecutor:
                     resource_type="run",
                     resource_id=run_id,
                     payload_json={
-                        "error_detail": _sanitize_detail(error_detail, limit=5000),
+                        "error_detail": _sanitize_detail(error_detail, limit=None),
                         "suite_id": exc.suite_id,
                         "score": exc.score,
                     },
@@ -5303,7 +5305,7 @@ class PipelineExecutor:
                 broker,
                 "eval_failed",
                 "eval_blocked",
-                _sanitize_detail(exc, limit=5000),
+                _sanitize_detail(exc, limit=None),
                 node_token_usage,
             )
         if isinstance(exc, OutputRejectedError):
@@ -5313,7 +5315,7 @@ class PipelineExecutor:
                 broker,
                 "failed",
                 "output_rejected",
-                _sanitize_detail(exc, limit=5000),
+                _sanitize_detail(exc, limit=None),
                 node_token_usage,
             )
         if isinstance(exc, RunCancelledError):
@@ -5326,7 +5328,7 @@ class PipelineExecutor:
             # forward compensation execution, which then failed — terminalize the
             # run as COMPENSATION_FAILED (never retried; the run already left the
             # batch pipeline's normal failure path via the compensation edge).
-            scrubbed = _sanitize_detail(str(exc), limit=5000)
+            scrubbed = _sanitize_detail(str(exc), limit=None)
             _log.warning(
                 "pipeline.compensation_failed",
                 extra={
@@ -5359,7 +5361,7 @@ class PipelineExecutor:
         match wins.
         """
         if isinstance(exc, RunawayRunError):
-            error_detail = _sanitize_detail(exc, limit=5000)
+            error_detail = _sanitize_detail(exc, limit=None)
             _log.warning(
                 "runaway.terminated",
                 extra={
@@ -5371,7 +5373,7 @@ class PipelineExecutor:
             )
             return _terminal_failure(broker, "failed", "runaway", error_detail, node_token_usage)
         if isinstance(exc, TimeoutError):
-            error_detail = _sanitize_detail(exc, limit=5000)
+            error_detail = _sanitize_detail(exc, limit=None)
             _log.warning(
                 _ERROR_CODE_NODE_TIMEOUT,
                 extra={"run_id": str(run_id), "detail": error_detail},
@@ -5382,7 +5384,7 @@ class PipelineExecutor:
             # or a run no longer running. Terminal ``superseded`` failure; the
             # token-guarded finalize write is a no-op if a successor already
             # owns the run. NEVER a completed run with zero work.
-            scrubbed = _sanitize_detail(exc, limit=5000)
+            scrubbed = _sanitize_detail(exc, limit=None)
             _log.warning(
                 "pipeline.node_superseded",
                 extra={"run_id": str(run_id), "detail": scrubbed[:500]},
@@ -5398,7 +5400,7 @@ class PipelineExecutor:
             # Manual-node resume output (or agent output) failed validation
             # against output_schema_json. Domain-specific error code per §8.9 —
             # never a raw ``ValueError``.
-            scrubbed = _sanitize_detail(exc, limit=5000)
+            scrubbed = _sanitize_detail(exc, limit=None)
             _log.warning(
                 "pipeline.output_schema_validation_failed",
                 extra={"run_id": str(run_id), "detail": scrubbed[:500]},
@@ -5417,7 +5419,7 @@ class PipelineExecutor:
             # NOT retryable: a no-match is a definitive outcome, not a transient
             # infra failure. ``_stream_graph`` catches the exception BEFORE it
             # reaches execute()'s dedicated except, so the mapping lives here.
-            error_detail = _sanitize_detail(exc, limit=5000)
+            error_detail = _sanitize_detail(exc, limit=None)
             _log.info("pipeline.router_no_match", extra={"run_id": str(run_id), "detail": error_detail})
             return _terminal_failure(
                 broker,

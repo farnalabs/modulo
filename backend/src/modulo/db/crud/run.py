@@ -1164,7 +1164,7 @@ def _stamp_guardrail_blocked_run(run: Run, guardrail_block_message: str) -> None
     """
     run.status = "eval_failed"
     run.error_code = "eval_blocked"
-    run.error_detail = guardrail_block_message[:5000]
+    run.error_detail = guardrail_block_message
     run.completed_at = datetime.now(UTC)
 
 
