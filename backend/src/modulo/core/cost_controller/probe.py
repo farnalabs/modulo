@@ -292,26 +292,23 @@ async def _evaluate_trigger(
     return fired
 
 
-async def _duplicate_flood_trigger(session: AsyncSession) -> bool:
-    """The duplicate-terminal flood hard-gate input (spec §4.7).
-
-    >5 DISTINCT runs logged ``duplicate_terminal`` within 10 minutes, SKIPPED
-    while ``duplicate_terminal_suppressed_until`` (system_config, NO RLS) is in
-    the future (the post-deploy/worker-restart cooldown). The cooldown
-    suppresses the TRIGGER only — never the log or the counter; a stale
-    persisted value from a crashed worker EXPIRES by wall-clock comparison.
-    """
-    now = datetime.now(UTC)
+async def _flood_suppressed(session: AsyncSession, now: datetime) -> bool:
+    """True while ``duplicate_terminal_suppressed_until`` (system_config, NO RLS) is
+    in the future — the post-deploy/worker-restart cooldown. A stale persisted
+    value from a crashed worker EXPIRES by wall-clock comparison."""
     suppressed_raw = await read_system_config(session, "duplicate_terminal_suppressed_until")
     if suppressed_raw:
         try:
             suppressed = datetime.fromisoformat(str(suppressed_raw))
             if now < suppressed:
-                return False
+                return True
         except (ValueError, TypeError):
             pass
-    events = await read_system_config(session, "duplicate_terminal_events")
-    cutoff = now - timedelta(seconds=FLOOD_WINDOW_SECONDS)
+    return False
+
+
+def _collect_flood_distinct(events: Any, cutoff: datetime) -> set[str]:
+    """Distinct run-ids logged ``duplicate_terminal`` within the flood window."""
     distinct: set[str] = set()
     if isinstance(events, list):
         for event in events:
@@ -324,6 +321,23 @@ async def _duplicate_flood_trigger(session: AsyncSession) -> bool:
                 parsed = None
             if parsed is not None and parsed >= cutoff and event.get("run_id"):
                 distinct.add(str(event["run_id"]))
+    return distinct
+
+
+async def _duplicate_flood_trigger(session: AsyncSession) -> bool:
+    """The duplicate-terminal flood hard-gate input (spec §4.7).
+
+    >5 DISTINCT runs logged ``duplicate_terminal`` within 10 minutes, SKIPPED
+    while ``duplicate_terminal_suppressed_until`` (system_config, NO RLS) is in
+    the future (the post-deploy/worker-restart cooldown). The cooldown
+    suppresses the TRIGGER only — never the log or the counter.
+    """
+    now = datetime.now(UTC)
+    if await _flood_suppressed(session, now):
+        return False
+    events = await read_system_config(session, "duplicate_terminal_events")
+    cutoff = now - timedelta(seconds=FLOOD_WINDOW_SECONDS)
+    distinct = _collect_flood_distinct(events, cutoff)
     return len(distinct) > FLOOD_MIN_DISTINCT_RUNS
 
 
