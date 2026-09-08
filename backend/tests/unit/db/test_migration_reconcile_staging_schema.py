@@ -33,7 +33,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0191_bundled_runner_seed_backfill re-parents onto 0190_hitl_claim_context_json,
 # and FAR-583's 0192_run_node_outputs re-parents onto 0191 with its
 # 0193_run_node_outputs_sweep_index chaining onto 0192).
-_CHAIN_HEAD_MIGRATION = "0193_run_node_outputs_sweep_index"
+_CHAIN_HEAD_MIGRATION = "0196_runs_json_to_jsonb"
 
 
 def _source(name: str) -> str:

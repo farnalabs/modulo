@@ -66,7 +66,7 @@ _MIGRATION_PATH = (
 # and FAR-583's 0192_run_node_outputs re-parented onto 0191 with its
 # 0193_run_node_outputs_sweep_index (qa iteration 2, the sweep's partial index)
 # chained onto 0192.
-_CHAIN_HEAD_MIGRATION_NAME = "0193_run_node_outputs_sweep_index"
+_CHAIN_HEAD_MIGRATION_NAME = "0196_runs_json_to_jsonb"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
