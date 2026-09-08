@@ -95,3 +95,62 @@ def test_print_restore_mode_full(tmp_path, capsys):
     args = _args(tmp_path, full=True)
     mod._print_restore_mode(args)
     assert "Full restore mode" in capsys.readouterr().out
+
+
+def test_restore_from_archive_dry_run(tmp_path, monkeypatch, capsys):
+    args = _args(tmp_path, dry_run=True)
+    monkeypatch.setattr(mod, "decrypt_archive", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "extract_archive", lambda *a, **k: {})
+    monkeypatch.setattr(mod, "verify_hashes", lambda *a, **k: True)
+    monkeypatch.setattr(mod, "restore_postgres", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "restore_config", lambda *a, **k: None)
+
+    mod._restore_from_archive(args, "pass", "db-url")
+
+    out = capsys.readouterr().out
+    assert "Dry-run" in out
+    # Postgres/config restore must not run in dry-run mode.
+    assert "Restore complete" not in out
+
+
+def test_restore_from_archive_full_restores_data_and_config(tmp_path, monkeypatch, capsys):
+    args = _args(tmp_path, full=True)
+    monkeypatch.setattr(mod, "decrypt_archive", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "extract_archive", lambda *a, **k: {"a": "b"})
+    monkeypatch.setattr(mod, "verify_hashes", lambda *a, **k: True)
+    calls = []
+    monkeypatch.setattr(mod, "restore_postgres", lambda *a, **k: calls.append("pg"))
+    monkeypatch.setattr(mod, "restore_config", lambda *a, **k: calls.append("cfg"))
+
+    mod._restore_from_archive(args, "pass", "db-url")
+
+    assert "pg" in calls
+    assert "cfg" in calls
+    assert "Restore complete" in capsys.readouterr().out
+
+
+def test_restore_from_archive_corrupt_exits(tmp_path, monkeypatch):
+    args = _args(tmp_path, full=True)
+    monkeypatch.setattr(mod, "decrypt_archive", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "extract_archive", lambda *a, **k: {})
+    monkeypatch.setattr(mod, "verify_hashes", lambda *a, **k: False)
+
+    with pytest.raises(SystemExit):
+        mod._restore_from_archive(args, "pass", "db-url")
+
+
+async def test_main_resolves_passphrase_and_restores(tmp_path, monkeypatch):
+    args = _args(tmp_path, full=True)
+    monkeypatch.setattr(mod, "parse_args", lambda: args)
+    monkeypatch.setattr(mod, "_validate_restore_args", lambda a: None)
+    monkeypatch.setattr(mod, "resolve_passphrase", lambda p: "pw")
+    monkeypatch.setattr(mod, "get_db_url", lambda u: "db-url")
+    monkeypatch.setattr(mod, "_print_restore_mode", lambda a: None)
+
+    captured = {}
+    monkeypatch.setattr(mod, "_restore_from_archive", lambda a, p, u: captured.update(args=a, passphrase=p, db_url=u))
+
+    await mod.main()
+
+    assert captured["passphrase"] == "pw"
+    assert captured["db_url"] == "db-url"

@@ -67,3 +67,20 @@ async def test_query_single_by_resource_missing_id_raises(connector):
     q = ConnectorQuery(resource="story", filters={})
     with pytest.raises(ValueError, match="story_id"):
         await connector._query_single_by_resource(q, "story")
+
+
+@respx.mock
+async def test_query_single_by_resource_project(connector):
+    respx.get(f"{_BASE}/projects/42").mock(return_value=httpx.Response(200, json={"id": 42}))
+    q = ConnectorQuery(resource="project", filters={"project_id": "42"})
+    result = await connector._query_single_by_resource(q, "project")
+    assert result.records == [{"id": 42}]
+
+
+@respx.mock
+async def test_query_list_collection_epics_suspended(connector):
+    respx.get(f"{_BASE}/epics").mock(return_value=httpx.Response(200, json=[{"id": 3}]))
+    q = ConnectorQuery(resource="epics", filters={"suspended": False})
+    result = await connector._query_list_collection(q, "epics")
+    assert result.records == [{"id": 3}]
+    assert respx.calls.last.request.url.params["suspended"] == "false"

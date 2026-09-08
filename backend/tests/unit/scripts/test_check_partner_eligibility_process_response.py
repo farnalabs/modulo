@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from unittest.mock import MagicMock
 
 import check_partner_eligibility as mod
@@ -82,3 +83,38 @@ def test_process_response_429_last_attempt_raises(monkeypatch):
     with pytest.raises(GithubApiError, match="HTTP 429"):
         # attempt == _MAX_RETRIES - 1 means no further retry
         mod._process_response(resp, mod._MAX_RETRIES - 1, ())
+
+
+def test_run_gh_once_returns_completed_process(monkeypatch):
+    fake = subprocess.CompletedProcess(["gh"], 0, stdout="HTTP/1.1 200\n\n{}", stderr="")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake)
+    result = mod._run_gh_once("orgs/acme")
+    assert result.returncode == 0
+
+
+def test_run_gh_once_oserror_returns_transient(monkeypatch):
+    def _boom(*a, **k):
+        raise OSError("no gh")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    assert mod._run_gh_once("orgs/acme") is mod._TRANSIENT_GH
+
+
+def test_gh_fetch_with_retries_parses_success(monkeypatch):
+    stdout = 'HTTP/1.1 200\nx-ratelimit-remaining: 5\n\n{"login": "acme"}'
+    fake = subprocess.CompletedProcess(["gh"], 0, stdout=stdout, stderr="")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake)
+    monkeypatch.setattr(mod, "_backoff", lambda *a, **k: None)
+    result = mod._gh_fetch_with_retries("orgs/acme")
+    assert result == ({"login": "acme"}, {"x-ratelimit-remaining": "5"})
+
+
+def test_gh_fetch_with_retries_transient_falls_back_to_none(monkeypatch):
+    # gh reports a transient server error; after retries it falls back to None.
+    fake = subprocess.CompletedProcess(["gh"], 1, stdout="", stderr="503 Service Unavailable")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake)
+    monkeypatch.setattr(mod, "_backoff", lambda *a, **k: None)
+
+    # Force the transient branch so all retries are consumed.
+    monkeypatch.setattr(mod, "_gh_is_transient", lambda result: True)
+    assert mod._gh_fetch_with_retries("orgs/acme") is None
