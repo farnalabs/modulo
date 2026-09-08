@@ -1041,6 +1041,93 @@ describe('RunDetailView', () => {
     expect(section.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(false)
     expect(section.text()).toContain('PR')
     expect(section.text()).toContain('#42')
+    expect(section.findAll('.badge').length).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('renders a single PR badge linked via the run input payload repository context (FAR-726)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            ...baseDetail(),
+            work_item_refs: [{ kind: 'github_pr', ref: '206', source: 'derived' }],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: null,
+            input_payload: {
+              repository: { full_name: 'acme/widgets' },
+              pull_request: { number: 206, title: 'Fix widget flicker' },
+            },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    const prLink = section.find('[data-testid="run-detail-pr-link-0"]')
+    expect(prLink.exists()).toBe(true)
+    expect(prLink.attributes('href')).toBe('https://github.com/acme/widgets/pull/206')
+    expect(prLink.findAll('.badge').length).toBe(1)
+    expect(prLink.text()).toBe('PR #206')
+    expect(section.text()).toContain('Fix widget flicker')
+    expect(section.text()).toContain('derived')
+    wrapper.unmount()
+  })
+
+  it('does not fabricate a PR link when the ref number conflicts with the payload PR number (FAR-726)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            ...baseDetail(),
+            work_item_refs: [{ kind: 'github_pr', ref: '999', source: 'derived' }],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: null,
+            input_payload: {
+              repository: { full_name: 'acme/widgets' },
+              pull_request: { number: 206, title: 'Fix widget flicker' },
+            },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(false)
+    expect(section.text()).not.toContain('Fix widget flicker')
+    expect(section.text()).toContain('PR #999')
     wrapper.unmount()
   })
 

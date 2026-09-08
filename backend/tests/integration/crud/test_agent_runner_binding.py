@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -383,31 +384,68 @@ async def _seed_resolution_scene(
     return agent_id, backend_id, profile_id
 
 
+@pytest_asyncio.fixture(scope="module")
+async def resolution_org(db_engine: AsyncEngine) -> tuple[uuid.UUID, uuid.UUID]:
+    """Isolated committed org + admin user for the provision-time resolution tests.
+
+    ``_seed_resolution_scene`` COMMITS an agent + backend + binding + profile via
+    raw ``db_engine`` SQL. The resolution tests below pass the shared session-scoped
+    ``test_org`` to it, which leaks committed ``model_backend`` rows into the shared
+    org. ``test_model_backend.py::TestListModelBackendsTierFiltering`` runs in the
+    same xdist worker and asserts exact org-wide counts, so those leaked rows make
+    its assertions fail (observed deploy pre-deploy regression: ``assert 9 == 2``).
+
+    Give the resolution tests their own committed org so the shared ``test_org``
+    stays empty of model_backends and the tier-filtering counts stay exact.
+    """
+    org_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :n, :s, '{}'::json)"),
+            {"id": str(org_id), "n": f"Resolution-{org_id.hex[:8]}", "s": f"res-{org_id.hex[:8]}"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, "
+                "auth_provider, active) VALUES (:id, :email, :n, 'hash', 'local', true)"
+            ),
+            {"id": str(user_id), "email": f"resolution-{user_id.hex[:8]}@example.com", "n": "Resolution User"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
+            ),
+            {"mid": str(uuid.uuid4()), "aid": str(user_id), "oid": str(org_id)},
+        )
+    return org_id, user_id
+
+
 def _app_session_factory(app_engine: AsyncEngine) -> Any:
     return async_sessionmaker(app_engine, expire_on_commit=False)
 
 
 async def test_local_profile_refuses_bindings_without_opt_in(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """Local + bindings + no opt-in -> typed provision-time refusal (D7 posture)."""
     from modulo.core.runner_bindings import LocalProviderBindingsRefusedError
 
     agent_id, _backend_id, profile_id = await _seed_resolution_scene(
-        db_engine, test_org, test_user, profile_opt_in=False
+        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=False
     )
 
     with pytest.raises(LocalProviderBindingsRefusedError):
         await resolve_agent_bindings(
             session_factory=_app_session_factory(app_engine),
-            org_id=test_org,
+            org_id=resolution_org[0],
             agent_id=agent_id,
             environment_profile_id=profile_id,
         )
 
 
 async def test_string_opt_in_is_not_an_opt_in(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """FAR-592 qa F10: a TRUTHY STRING ("true") is NOT an opt-in.
 
@@ -418,7 +456,7 @@ async def test_string_opt_in_is_not_an_opt_in(
     from modulo.core.runner_bindings import LocalProviderBindingsRefusedError
 
     agent_id, _backend_id, profile_id = await _seed_resolution_scene(
-        db_engine, test_org, test_user, profile_opt_in=True
+        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
     )
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
@@ -433,14 +471,14 @@ async def test_string_opt_in_is_not_an_opt_in(
     with pytest.raises(LocalProviderBindingsRefusedError):
         await resolve_agent_bindings(
             session_factory=_app_session_factory(app_engine),
-            org_id=test_org,
+            org_id=resolution_org[0],
             agent_id=agent_id,
             environment_profile_id=profile_id,
         )
 
 
 async def test_unresolvable_profile_fails_closed(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """FAR-592 qa F10: a PROVIDED but unresolvable profile refuses (fail-closed).
 
@@ -451,27 +489,27 @@ async def test_unresolvable_profile_fails_closed(
     from modulo.core.runner_bindings import LocalProviderBindingsRefusedError
 
     agent_id, _backend_id, _real_profile_id = await _seed_resolution_scene(
-        db_engine, test_org, test_user, profile_opt_in=True
+        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
     )
 
     with pytest.raises(LocalProviderBindingsRefusedError, match="fail-closed"):
         await resolve_agent_bindings(
             session_factory=_app_session_factory(app_engine),
-            org_id=test_org,
+            org_id=resolution_org[0],
             agent_id=agent_id,
             environment_profile_id=uuid.uuid4(),
         )
 
 
 async def test_missing_backend_fails_resolution_typed(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """FAR-592 qa F3: a binding to a backend that is NOT org-visible fails
     typed in the validating PRE-PASS (never a raw dict-index KeyError)."""
     from modulo.core.runner_bindings import AgentBindingResolutionError
 
     agent_id, backend_id, _profile_id = await _seed_resolution_scene(
-        db_engine, test_org, test_user, profile_opt_in=True
+        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
     )
     # The binding row CANNOT point at a nonexistent backend (FK), so make the
     # backend row invisible to the org instead: repoint it to a scratch org.
@@ -492,7 +530,7 @@ async def test_missing_backend_fails_resolution_typed(
     with pytest.raises(AgentBindingResolutionError, match="no longer visible"):
         await resolve_agent_bindings(
             session_factory=_app_session_factory(app_engine),
-            org_id=test_org,
+            org_id=resolution_org[0],
             agent_id=agent_id,
         )
 
@@ -512,22 +550,27 @@ async def test_replace_reserved_target_returns_422(
 
 
 async def test_concurrent_replace_serialises_no_union(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """FAR-592 qa F6: concurrent replace calls serialise on the agent row lock.
 
     While a replace sits UNCOMMITTED holding the agent row lock, a second
     replace on the same agent BLOCKS (lock_timeout proves the wait) — the
     committed outcome is LAST-WRITER-WINS, never the union of both var sets.
+
+    Uses the isolated ``resolution_org`` (not the shared ``test_org``): the seed
+    is COMMITTED so the concurrent writers can operate on it, and leaking that
+    committed model_backend into ``test_org`` breaks the exact-count assertions
+    in ``test_model_backend.py::TestListModelBackendsTierFiltering``.
     """
     from modulo.db.crud.agent_runner_binding import list_bindings_for_agent
 
     factory = _app_session_factory(app_engine)
 
     async with factory() as seed, seed.begin():
-        await set_rls_org(seed, test_org)
+        await set_rls_org(seed, resolution_org[0])
         await set_rls_execution_context(seed)
-        agent, mb = await _seed_agent_and_backend(seed, test_org, test_user, "BindAgent-race")
+        agent, mb = await _seed_agent_and_backend(seed, resolution_org[0], resolution_org[1], "BindAgent-race")
         agent_id, backend_id = agent.id, mb.id
 
     # Writer A: hold the (uncommitted) replace — it owns the agent row lock.
@@ -535,13 +578,13 @@ async def test_concurrent_replace_serialises_no_union(
     # agent row is held while writer B runs.
     writer_a = factory()
     await writer_a.begin()
-    await set_rls_org(writer_a, test_org)
+    await set_rls_org(writer_a, resolution_org[0])
     await set_rls_execution_context(writer_a)
     await replace_agent_bindings(
         writer_a,
-        org_id=test_org,
+        org_id=resolution_org[0],
         agent_id=agent_id,
-        bindings_specs=[_binding_spec(backend_id, test_user, target="FIRST_VAR")],
+        bindings_specs=[_binding_spec(backend_id, resolution_org[1], target="FIRST_VAR")],
     )
 
     # Writer B: a concurrent replace must BLOCK on A's lock (bounded by
@@ -553,15 +596,15 @@ async def test_concurrent_replace_serialises_no_union(
 
     writer_b = factory()
     async with writer_b.begin():
-        await set_rls_org(writer_b, test_org)
+        await set_rls_org(writer_b, resolution_org[0])
         await set_rls_execution_context(writer_b)
         await writer_b.execute(text("SET LOCAL lock_timeout = '800ms'"))
         with pytest.raises(DBAPIError, match=r"[Ll]ock timeout"):
             await replace_agent_bindings(
                 writer_b,
-                org_id=test_org,
+                org_id=resolution_org[0],
                 agent_id=agent_id,
-                bindings_specs=[_binding_spec(backend_id, test_user, target="SECOND_VAR")],
+                bindings_specs=[_binding_spec(backend_id, resolution_org[1], target="SECOND_VAR")],
             )
 
     # Roll A's in-flight replace back, then the committed state is decided by
@@ -571,13 +614,13 @@ async def test_concurrent_replace_serialises_no_union(
     await writer_b.close()
 
     async with factory() as final, final.begin():
-        await set_rls_org(final, test_org)
+        await set_rls_org(final, resolution_org[0])
         await set_rls_execution_context(final)
         created = await replace_agent_bindings(
             final,
-            org_id=test_org,
+            org_id=resolution_org[0],
             agent_id=agent_id,
-            bindings_specs=[_binding_spec(backend_id, test_user, target="FAULT_VAR")],
+            bindings_specs=[_binding_spec(backend_id, resolution_org[1], target="FAULT_VAR")],
         )
         rows = await list_bindings_for_agent(final, agent_id)
 
@@ -586,16 +629,16 @@ async def test_concurrent_replace_serialises_no_union(
 
 
 async def test_local_profile_opt_in_resolves_decrypted_secret(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """Explicit opt-in: the runner env sees the DECRYPTED credential value."""
     agent_id, _backend_id, profile_id = await _seed_resolution_scene(
-        db_engine, test_org, test_user, profile_opt_in=True, secret_value="decrypted-stanza-key"
+        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True, secret_value="decrypted-stanza-key"
     )
 
     resolved = await resolve_agent_bindings(
         session_factory=_app_session_factory(app_engine),
-        org_id=test_org,
+        org_id=resolution_org[0],
         agent_id=agent_id,
         environment_profile_id=profile_id,
     )
@@ -603,13 +646,13 @@ async def test_local_profile_opt_in_resolves_decrypted_secret(
 
 
 async def test_unknown_source_field_fails_resolution_typed(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """A source field the stored secret does not carry -> typed resolution error."""
     from modulo.core.runner_bindings import AgentBindingResolutionError
 
     agent_id, _backend_id, profile_id = await _seed_resolution_scene(
-        db_engine, test_org, test_user, profile_opt_in=True
+        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
     )
 
     async with db_engine.connect() as conn, conn.begin():
@@ -621,14 +664,17 @@ async def test_unknown_source_field_fails_resolution_typed(
     with pytest.raises(AgentBindingResolutionError, match="root_password"):
         await resolve_agent_bindings(
             session_factory=_app_session_factory(app_engine),
-            org_id=test_org,
+            org_id=resolution_org[0],
             agent_id=agent_id,
             environment_profile_id=profile_id,
         )
 
 
 async def test_binding_export_import_round_trip(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
+    db_engine: AsyncEngine,
+    app_engine: AsyncEngine,
+    resolution_org: tuple[uuid.UUID, uuid.UUID],
+    test_user: uuid.UUID,
 ) -> None:
     """Exported agent carries NAME-BASED bindings; the import rebinds by name."""
     from cryptography.fernet import Fernet
@@ -642,20 +688,20 @@ async def test_binding_export_import_round_trip(
     from modulo.settings import get_settings
 
     agent_id, backend_id, _profile_id = await _seed_resolution_scene(
-        db_engine, test_org, test_user, profile_opt_in=True
+        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
     )
     backend_name = f"Resolve-{backend_id.hex[:6]}"
 
     # Export org A: pipeline -> agent -> binding (backend pulled into the bundle).
     factory = _app_session_factory(app_engine)
     async with factory() as session, session.begin():
-        await set_rls_org(session, test_org)
+        await set_rls_org(session, resolution_org[0])
         await set_rls_execution_context(session)
         pipeline = await create_pipeline(
             session,
-            org_id=test_org,
+            org_id=resolution_org[0],
             name=f"RT-Pipeline-{backend_id.hex[:6]}",
-            account_id=test_user,
+            account_id=resolution_org[1],
         )
         pipeline.graph_nodes_json = [{"agent_id": str(agent_id), "output_schema_id": None}]
         await session.flush()

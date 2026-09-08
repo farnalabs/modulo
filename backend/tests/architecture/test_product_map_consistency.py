@@ -300,9 +300,29 @@ def test_mapped_route_elements_cover_owning_view_testids():
     It is intentionally scoped to whole-page view components that own their
     testids end to end (no shared/imported controls), keeping the assertion
     deterministic and free of shared-component noise.
+
+    The list covers every manifest route rendered by a single whole-page view
+    component: each view's static ``data-testid`` literals must be registered
+    in the product map ``elements`` inventory, or the surface it ships stays
+    invisible to Remy's docs indexer and to ``/api/v1/manifest``.
     """
     owned_pages = {
+        "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
+        "/admin/costs/limits": "frontend/src/views/AdminSpendLimitsView.vue",
+        "/admin/errors": "frontend/src/views/AdminErrorsView.vue",
+        "/admin/feature-flags": "frontend/src/views/AdminFeatureFlagsView.vue",
         "/admin/housekeeping": "frontend/src/views/AdminHousekeepingView.vue",
+        "/admin/notification-delivery": "frontend/src/views/AdminNotificationDeliveryLogView.vue",
+        "/admin/remy": "frontend/src/views/AdminRemyView.vue",
+        "/admin/run-retention": "frontend/src/views/AdminRunRetentionView.vue",
+        "/admin/system/config": "frontend/src/views/AdminSystemConfigView.vue",
+        "/admin/users": "frontend/src/views/AdminUsersView.vue",
+        "/pipelines/:id/editor": "frontend/src/views/PipelineEditorView.vue",
+        "/runs": "frontend/src/views/RunsListView.vue",
+        "/runs/:id": "frontend/src/views/RunDetailView.vue",
+        "/settings/email": "frontend/src/views/SettingsEmailView.vue",
+        "/settings/hitl-review": "frontend/src/views/SettingsHitlReviewView.vue",
+        "/settings/mcp": "frontend/src/views/SettingsMcpView.vue",
     }
     elements = _load_elements()
     for route, view_rel in owned_pages.items():

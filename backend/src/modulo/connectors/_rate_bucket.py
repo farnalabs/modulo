@@ -152,6 +152,9 @@ if tokens == nil then
     tokens = burst
     ts = now
 end
+if ts == nil then
+    ts = now
+end
 local elapsed = now - ts
 if elapsed < 0 then elapsed = 0 end
 tokens = tokens + elapsed * rate
