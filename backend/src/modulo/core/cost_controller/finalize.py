@@ -536,6 +536,25 @@ def _fold_token_usage(node_dict: dict[str, Any], output_obj: dict[str, Any] | No
             node_dict.pop(dst, None)
 
 
+def _seed_union(
+    merged_usage: dict[str, Any],
+    merged_outputs: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Build the union's per-node entries from usage/outputs type-presence."""
+    union: dict[str, dict[str, Any]] = {}
+    if isinstance(merged_usage, dict):
+        for node_id, usage in merged_usage.items():
+            nid = str(node_id)
+            if isinstance(usage, dict):
+                union[nid] = dict(usage)
+            else:
+                union[nid] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    if isinstance(merged_outputs, dict):
+        for node_id in merged_outputs:
+            union.setdefault(str(node_id), {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+    return union
+
+
 def _enrich_union(
     merged_usage: dict[str, Any],
     merged_outputs: dict[str, Any],
@@ -569,17 +588,7 @@ def _enrich_union(
     being sandbox-by-map (provenance gate). The map completeness + a
     type-distribution ratio are logged so a systemic map-drift is observable.
     """
-    union: dict[str, dict[str, Any]] = {}
-    if isinstance(merged_usage, dict):
-        for node_id, usage in merged_usage.items():
-            nid = str(node_id)
-            if isinstance(usage, dict):
-                union[nid] = dict(usage)
-            else:
-                union[nid] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    if isinstance(merged_outputs, dict):
-        for node_id in merged_outputs:
-            union.setdefault(str(node_id), {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+    union = _seed_union(merged_usage, merged_outputs)
 
     missing_node_type: list[str] = []
     executed_types: Counter[str] = Counter()
