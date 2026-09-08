@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,6 +52,92 @@ __all__ = [
 
 _REPORT_COMPONENT_LIMIT = 500
 _REPORT_QUANT = Decimal("0.000001")
+
+# Numeric-string pattern mirroring the decimal strings the breakdown producer
+# writes (``_entry_amount`` — ``format(Decimal, "f")`` 6dp). Kept here as the
+# documentation + parity anchor; the SAME pattern is embedded TWICE in the
+# buckets SQL below (amount CASE + parse-keeps-row HAVING) — kept in sync by
+# ``test_numeric_string_regex_is_embedded_in_the_buckets_sql``.
+_NUMERIC_STRING_RE = r"^\s*[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$"
+
+# FAR-657 — the costs-overview buckets are aggregated IN POSTGRES. The retired
+# path selected (owner_team_id, total_cost_usd, cost_breakdown) for EVERY run
+# in the period and aggregated per-component in Python: full JSON transfer +
+# per-row parse, which dominated /admin/costs latency. Both statements below
+# are self-contained: each names only ``runs`` in its own FROM clause and
+# binds only ``:org_id`` / ``:since`` (no interpolation — the architecture
+# f-string rule).
+
+# Per-(owner_team_id, component) SUM over the org's scoped runs. The derived
+# table scopes + filters BEFORE the set-returning function so a NULL or
+# non-array breakdown can never reach ``jsonb_array_elements`` (the retired
+# Python path skipped such rows silently — a non-list breakdown is neither
+# legacy nor components). Marker-bearing runs (any element carrying the
+# JSON-boolean-true ``total_clamped``) are EXCLUDED wholesale, matching the
+# retired per-run marker check. The amount CASE mirrors the retired per-entry
+# parse: JSON numbers and numeric-looking strings (the producer's format) cast
+# to numeric; everything else (bool / object / malformed string) contributes 0.
+# The HAVING keeps only components with at least one parseable-or-absent
+# amount — a malformed amount DROPPED the entry in the retired path (no bucket
+# row), while a null/missing amount KEPT it as a 0 row; a plain GROUP BY would
+# have materialised a 0.000000 row for the malformed case.
+_SQL_COST_COMPONENT_BUCKETS = r"""
+SELECT
+    r.owner_team_id AS team_id,
+    elem->>'component' AS component,
+    SUM(
+        CASE
+            WHEN jsonb_typeof(elem->'amount_usd') = 'number'
+                THEN (elem->>'amount_usd')::numeric
+            WHEN jsonb_typeof(elem->'amount_usd') = 'string'
+                 AND elem->>'amount_usd' ~ '^\s*[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$'
+                THEN (elem->>'amount_usd')::numeric
+            ELSE 0
+        END
+    ) AS amount_usd
+FROM (
+    SELECT owner_team_id, cost_breakdown
+    FROM runs
+    WHERE organisation_id = :org_id
+      AND started_at IS NOT NULL
+      AND started_at >= :since
+      AND cost_breakdown IS NOT NULL
+      AND jsonb_typeof(cost_breakdown::jsonb) = 'array'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(cost_breakdown::jsonb) AS marker
+          WHERE marker->'total_clamped' = 'true'::jsonb
+      )
+) AS r
+CROSS JOIN LATERAL jsonb_array_elements(r.cost_breakdown::jsonb) AS elem
+WHERE jsonb_typeof(elem->'component') = 'string'
+  AND elem->>'component' <> ''
+GROUP BY r.owner_team_id, elem->>'component'
+HAVING SUM(
+    CASE
+        WHEN jsonb_typeof(elem->'amount_usd') = 'number' THEN 1
+        WHEN jsonb_typeof(elem->'amount_usd') = 'string'
+             AND elem->>'amount_usd' ~ '^\s*[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$' THEN 1
+        WHEN elem->'amount_usd' IS NULL THEN 1
+        WHEN jsonb_typeof(elem->'amount_usd') = 'null' THEN 1
+        ELSE 0
+    END
+) > 0
+"""
+
+# ``Σ total_cost_usd`` over scoped runs with NO component breakdown (the
+# pre-0066 "legacy" rows). A JSON-null breakdown deserializes to Python None
+# and was counted as legacy by the retired path, so ``jsonb_typeof`` 'null' is
+# included alongside SQL NULL.
+_SQL_COST_LEGACY_TOTAL = """
+SELECT COALESCE(SUM(total_cost_usd), 0) AS legacy_total
+FROM runs
+WHERE organisation_id = :org_id
+  AND started_at IS NOT NULL
+  AND started_at >= :since
+  AND total_cost_usd IS NOT NULL
+  AND (cost_breakdown IS NULL OR jsonb_typeof(cost_breakdown::jsonb) = 'null')
+"""
 
 
 def _safe_float(value: Decimal | None) -> float:
@@ -660,6 +746,16 @@ async def build_cost_report_buckets(
     year-to-date report, windows > 90 days show empty buckets — accepted and
     stated in the operator guide).
 
+    FAR-657: the per-component buckets are aggregated IN POSTGRES — a lateral
+    ``jsonb_array_elements`` expansion groups per (owner_team_id, component)
+    and SUMs the amounts in SQL (``_SQL_COST_COMPONENT_BUCKETS``). The
+    endpoint never hydrates unbounded per-run rows: the retired path selected
+    every run's full ``cost_breakdown`` JSON and parsed it row-by-row in
+    Python, which dominated the /admin/costs latency. The marker exclusion,
+    entry validation, grouping, and 6dp serialization are byte-identical to
+    the retired algorithm (pinned by the parity tests in
+    ``tests/unit/core/cost_controller/test_cost_buckets_sql_aggregation.py``).
+
     Returns:
         components_by_team: ``{str(team_id) | "__org__": [{name, amount_usd}]}``
             where ``component`` is the stable aggregation key (pre-delete and
@@ -686,47 +782,17 @@ async def build_cost_report_buckets(
 
     since = _report_since(datetime.now(UTC).date(), period)
 
-    run_result = await session.execute(
-        select(Run.owner_team_id, Run.total_cost_usd, Run.cost_breakdown).where(
-            Run.organisation_id == org_id,
-            Run.started_at.isnot(None),
-            Run.started_at >= since,
-        )
-    )
-    run_rows = run_result.all()
-
+    component_result = await session.execute(text(_SQL_COST_COMPONENT_BUCKETS), {"org_id": org_id, "since": since})
+    # GROUP BY (owner_team_id, component) guarantees row uniqueness, so each
+    # fetched row lands in exactly one bucket slot — no accumulation needed.
     team_components: dict[uuid.UUID | None, dict[str, Decimal]] = {}
-    legacy_total = Decimal(0)
-
-    for row in run_rows:
-        team_id = row.owner_team_id
-        breakdown = row.cost_breakdown
-        if breakdown is None:
-            try:
-                if row.total_cost_usd is not None:
-                    legacy_total += Decimal(str(row.total_cost_usd))
-            except (TypeError, ValueError, ArithmeticError):
-                continue
-            continue
-        if not isinstance(breakdown, list):
-            continue
-        # Marker-bearing runs (total flat-clamped to column capacity) are
-        # EXCLUDED so the reporting invariant holds exactly.
-        if any(isinstance(e, dict) and e.get("total_clamped") is True for e in breakdown):
-            continue
+    for row in component_result.all():
+        team_id: uuid.UUID | None = row.team_id
         bucket = team_components.setdefault(team_id, {})
-        for entry in breakdown:
-            if not isinstance(entry, dict):
-                continue
-            name = entry.get("component")
-            if not isinstance(name, str) or not name:
-                continue
-            try:
-                raw_amount = entry.get("amount_usd")
-                amount = Decimal(str(raw_amount)) if raw_amount is not None else Decimal(0)
-            except (TypeError, ValueError, ArithmeticError):
-                continue
-            bucket[name] = bucket.get(name, Decimal(0)) + amount
+        bucket[row.component] = Decimal(str(row.amount_usd))
+
+    legacy_result = await session.execute(text(_SQL_COST_LEGACY_TOTAL), {"org_id": org_id, "since": since})
+    legacy_total = Decimal(str(legacy_result.scalar_one()))
 
     def _serialized(
         bucket: dict[str, Decimal],
