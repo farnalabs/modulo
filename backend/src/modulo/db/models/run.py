@@ -100,14 +100,17 @@ PIPELINE_CAPACITY_STATUSES: frozenset[str] = frozenset(
 HITL_ACTIONABLE_RUN_STATUSES: frozenset[str] = frozenset({"awaiting_human", "claimed", HITL_PARKED_STATUS})
 
 # Run statuses under which a claim may atomically ACQUIRE a gate (FAR-645).
-# Mirrors ``HITLManager.claim()``'s pre-check: ``awaiting_human`` gates are
-# claimable now; ``hitl_parked`` gates stay claimable (FAR-604 D2 — park !=
-# decide, a parked run's gate remains undecided work until a decision
-# un-parks it). Deliberately distinct from ``HITL_ACTIONABLE_RUN_STATUSES``
-# (which also contains ``claimed`` for listing semantics): a claimed gate is
-# HELD by a reviewer, not re-claimable. This set is what claim()'s atomic
-# UPDATE folds into its WHERE clause via a ``runs`` EXISTS predicate so a run
-# that goes terminal between the pre-check and the write can never be claimed.
+# Single source of truth for ``HITLManager.claim()``: the claimable set is
+# ``awaiting_human`` (claimable now) and ``hitl_parked`` (stays claimable per
+# FAR-604 D2 — park != decide, a parked run's gate remains undecided work until
+# a decision un-parks it). Deliberately distinct from
+# ``HITL_ACTIONABLE_RUN_STATUSES`` (which also contains ``claimed`` for listing
+# semantics): a claimed gate is HELD by a reviewer — claim() extends this set
+# with ``claimed`` ONLY for the same-account re-claim arm (FAR-686 token
+# recovery), mirrored atomically in the UPDATE's ``runs`` EXISTS predicate.
+# claim() uses the base set in its fast-fail pre-check AND in the atomic
+# UPDATE's ``runs`` EXISTS predicate, so a run that goes terminal between the
+# pre-check and the write can never be claimed.
 HITL_CLAIMABLE_RUN_STATUSES: frozenset[str] = frozenset({AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS})
 
 # In-flight run statuses for the ``ongoing`` trigger type (FAR-158). An ongoing

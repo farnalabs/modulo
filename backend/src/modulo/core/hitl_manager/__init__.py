@@ -35,7 +35,7 @@ from typing import Any
 
 from jwt import ExpiredSignatureError
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -322,9 +322,13 @@ class HITLManager:
         run = run_result.scalar_one_or_none()
         if run is None:
             raise GateNotFoundError(run_id, gate_id)
-        allowed_statuses: tuple[str, ...] = ("awaiting_human", "hitl_parked")
+        # FAR-645: the fresh/cross-account set is single-sourced on
+        # HITL_CLAIMABLE_RUN_STATUSES -- the same set the atomic UPDATE's
+        # EXISTS predicate below enforces, so the pre-check cannot drift from
+        # the atomic guard.
+        allowed_statuses: frozenset[str] = HITL_CLAIMABLE_RUN_STATUSES
         if gate_check.account_id == claimant_id:
-            allowed_statuses = ("awaiting_human", "hitl_parked", "claimed")
+            allowed_statuses = HITL_CLAIMABLE_RUN_STATUSES | {"claimed"}
         if run.status not in allowed_statuses:
             raise RunNotAwaitingError(run_id, run.status)
         if gate_check.required_team_id is not None:
@@ -389,7 +393,16 @@ class HITLManager:
                 .where(
                     Run.id == run_id,
                     Run.organisation_id == org_id,
-                    Run.status.in_(HITL_CLAIMABLE_RUN_STATUSES),
+                    or_(
+                        # FAR-645: fresh claims require a claimable run status.
+                        Run.status.in_(HITL_CLAIMABLE_RUN_STATUSES),
+                        # FAR-686: a same-account re-claim targets a run the
+                        # claim itself flipped to "claimed" (the claim route's
+                        # update_run_status). Allowed atomically only while the
+                        # gate row is still held by this caller — the outer
+                        # account guard carries the same predicate.
+                        and_(Run.status == "claimed", HitlClaim.account_id == claimant_id),
+                    ),
                 )
                 .exists(),
             )
@@ -414,7 +427,15 @@ class HITLManager:
             # already-claimed.
             race_run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
             race_run = race_run_result.scalar_one_or_none()
-            if race_run is not None and race_run.status not in HITL_CLAIMABLE_RUN_STATUSES:
+            # "claimed" needs no RunNotAwaitingError: it is the same-account
+            # re-claim's own window status (FAR-686) or another operator's
+            # fresh claim — either way the accurate cause is the gate's
+            # account/decision state, re-read below.
+            if (
+                race_run is not None
+                and race_run.status not in HITL_CLAIMABLE_RUN_STATUSES
+                and race_run.status != "claimed"
+            ):
                 raise RunNotAwaitingError(run_id, race_run.status)
             race_gate_result = await session.execute(
                 select(HitlClaim).where(
