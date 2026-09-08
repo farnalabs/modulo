@@ -74,6 +74,7 @@ class MCPConfigurationError(Exception):
 # tool (or ``tool:action``) -> permission key in ``PERMISSIONS``
 # Secret-management permission shared by the create/delete/list secret tools.
 _SCOPE_SECRET_MANAGE = "secret.manage"  # nosec B105 — permission scope name, not a credential
+_SCOPE_CONNECTOR_LIST = "connector.list"  # nosec B105 — permission scope name, not a credential
 
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "run.trigger",
@@ -132,9 +133,9 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     # corresponding REST route (agent.list / connector.list / etc.).
     "list_agents": "agent.list",
     "get_agent": "agent.list",
-    "list_connectors": "connector.list",
-    "get_connector": "connector.list",
-    "list_connector_types": "connector.list",
+    "list_connectors": _SCOPE_CONNECTOR_LIST,
+    "get_connector": _SCOPE_CONNECTOR_LIST,
+    "list_connector_types": _SCOPE_CONNECTOR_LIST,
     "list_model_backends": "model_backend.list",
     "get_model_backend": "model_backend.list",
     "list_environment_profiles": "environment_profile.list",

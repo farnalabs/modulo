@@ -4462,7 +4462,8 @@ async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
         mid, mid_err = _parse_uuid_param(model_backend_id, "model_backend_id")
         if mid_err:
             return mid_err
-        assert mid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, handled above
+        if mid is None:
+            return {"error": "invalid_param", "detail": f"Invalid model_backend_id: {model_backend_id}"}
 
         from modulo.db.crud.model_backend import get_model_backend as db_get_model_backend
 
@@ -5338,7 +5339,8 @@ async def get_connector(connector_id: str) -> dict[str, Any]:
         cid, cid_err = _parse_uuid_param(connector_id, "connector_id")
         if cid_err:
             return cid_err
-        assert cid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, handled above
+        if cid is None:
+            return {"error": "invalid_param", "detail": f"Invalid connector_id: {connector_id}"}
 
         from modulo.db.crud.connector_instance import get_connector_instance as db_get_connector_instance
 
@@ -6142,6 +6144,20 @@ async def create_agent(
         "(no prompt templates — use get_agent for the full definition)."
     ),
 )
+def _agent_item(a: Any) -> dict[str, Any]:
+    """Build an agent summary for list_agents (no prompt template bodies)."""
+    return {
+        "id": str(a.id),
+        "name": a.name,
+        "description": a.description,
+        "is_executable": a.is_executable,
+        "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
+        "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
+        "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+    }
+
+
 @_RETRY_DB
 async def list_agents(
     cursor: str | None = None,
@@ -6161,19 +6177,7 @@ async def list_agents(
             result = await db_list_agents(s, cursor=cursor, page_size=lim)
 
         return {
-            "data": [
-                {
-                    "id": str(a.id),
-                    "name": a.name,
-                    "description": a.description,
-                    "is_executable": a.is_executable,
-                    "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
-                    "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
-                    "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
-                    "created_at": a.created_at.isoformat() if a.created_at else None,
-                }
-                for a in result.items
-            ],
+            "data": [_agent_item(a) for a in result.items],
             "total": result.total,
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
@@ -6200,7 +6204,8 @@ async def get_agent(agent_id: str) -> dict[str, Any]:
         aid, aid_err = _parse_uuid_param(agent_id, "agent_id")
         if aid_err:
             return aid_err
-        assert aid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, handled above
+        if aid is None:
+            return {"error": "invalid_param", "detail": f"Invalid agent_id: {agent_id}"}
 
         from modulo.db.crud.agent import get_agent as db_get_agent
 
