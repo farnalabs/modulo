@@ -86,7 +86,7 @@ def test_retry_states_do_not_mutate_the_caller_list() -> None:
 
 def test_retry_states_tolerate_entries_without_the_stripped_keys() -> None:
     assert prior_states_for_retry([{"attempt": 2}]) == [{"attempt": 2}]
-    assert prior_states_for_retry([]) == []
+    assert not prior_states_for_retry([])
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +177,8 @@ def test_rls_preserves_the_wrapped_method_metadata() -> None:
 
 
 def test_terminal_statuses_have_no_onward_transitions() -> None:
-    assert VALID_STATUS_TRANSITIONS["resolved"] == set()
-    assert VALID_STATUS_TRANSITIONS["dismissed"] == set()
+    assert not VALID_STATUS_TRANSITIONS["resolved"]
+    assert not VALID_STATUS_TRANSITIONS["dismissed"]
 
 
 def test_correction_terminal_statuses_are_never_reenterable_by_correction() -> None:

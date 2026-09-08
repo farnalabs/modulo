@@ -442,7 +442,7 @@ def test_connector_breaker_is_memoised_per_connector_id() -> None:
 
 
 def test_get_all_breakers_merges_both_registries() -> None:
-    assert get_all_breakers() == {}
+    assert not get_all_breakers()
 
     model = get_model_backend_breaker("gpt-4o")
     connector = get_connector_breaker("github")
