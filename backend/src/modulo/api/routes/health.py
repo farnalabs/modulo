@@ -576,7 +576,8 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     """Human-readable reconciliation counters for the readiness check detail.
 
     Surfaces the reconcile outcome counters (D1): scanned/repaired/skipped/
-    redis_errors/deduped plus the terminalizer and enqueue-failed recovery
+    redis_errors/deduped plus the claimed-but-never-dispatched recovery
+    counter (FAR-714) and the terminalizer and enqueue-failed recovery
     counters. Every counter defaults to 0 so a pre-D worker's payload renders
     without error.
     """
@@ -584,6 +585,7 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
         f"skipped={stats.get('skipped', 0)}, redis_errors={stats.get('redis_errors', 0)}, "
         f"deduped={stats.get('deduped', 0)}, nodeless_failed={stats.get('nodeless_failed', 0)}, "
+        f"claimed_but_never_dispatched={stats.get('claimed_but_never_dispatched', 0)}, "
         f"claim_cap_terminalized={stats.get('claim_cap_terminalized', 0)}, "
         f"age_terminalized={stats.get('age_terminalized', 0)}, "
         f"dispatch_failed_terminalized={stats.get('dispatch_failed_terminalized', 0)}, "
