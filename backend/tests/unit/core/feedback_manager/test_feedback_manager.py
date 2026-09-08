@@ -259,10 +259,12 @@ class TestPaginationValidation:
 
 class TestPaginateUnscopedWarning:
     async def test_warns_when_called_with_no_conditions(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, caplog: pytest.LogCaptureFixture
+        self, mock_session: AsyncMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """_paginate with empty conditions is a tenant-scoping hazard — must log a warning."""
+        """Pagination with empty conditions is a tenant-scoping hazard — must log a warning."""
         import logging
+
+        from modulo.core.feedback_manager.queries import paginate_feedback_records
 
         count_result = MagicMock()
         count_result.scalar.return_value = 0
@@ -271,7 +273,7 @@ class TestPaginateUnscopedWarning:
         mock_session.execute = AsyncMock(side_effect=[count_result, rows_result])
 
         with caplog.at_level(logging.WARNING, logger="modulo.core.feedback_manager"):
-            rows, total = await mgr._paginate([], page=1, page_size=20)
+            rows, total = await paginate_feedback_records(mock_session, [], page=1, page_size=20)
 
         assert rows == []
         assert total == 0
