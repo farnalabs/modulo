@@ -2706,9 +2706,15 @@ async def test_sandbox_script_capacity_gate_skips_unparseable_org(monkeypatch: p
 
 
 async def test_sandbox_script_capacity_check_failure_fails_open(caplog, monkeypatch: pytest.MonkeyPatch):
-    """A capacity-read failure must not block dispatch: the gate degrades to a
-    warning and the sandbox is provisioned anyway (fail-open)."""
+    """A capacity-read failure must not block dispatch: the D8 gate degrades to
+    a fail-open dispatch (``runner.capacity.gate_error``) and the sandbox is
+    provisioned anyway — the dispatch marker is still written best-effort."""
     monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
+
+    class _FakeGateSettings:
+        runner_capacity_gate_enabled = False
+        runner_capacity_lock_timeout_ms = 2000
+
     fn = make_sandbox_agent_fn(_script_node_def(), session_factory=lambda: _FakeSession())
     sandbox = _make_sandbox_mock()
     with (
@@ -2717,17 +2723,23 @@ async def test_sandbox_script_capacity_check_failure_fails_open(caplog, monkeypa
             "modulo.db.crud.run.get_sandbox_concurrency_limit",
             new=AsyncMock(side_effect=RuntimeError("capacity db down")),
         ),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+        patch("modulo.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
+        caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
     ):
-        result = await fn(_run_state())
+        result = await fn({**_run_state(), "_claim_lease": "tok"})
     assert result["output"]["status"] == "completed"
-    assert any("dispatch_capacity_check_failed" in m for m in caplog.messages)
+    assert any("runner.capacity.gate_error" in m for m in caplog.messages)
 
 
 async def test_sandbox_script_capacity_check_cancellation_reraises(monkeypatch: pytest.MonkeyPatch):
-    """A cancellation inside the dispatch capacity gate must propagate — the
-    gate is fail-open for ERRORS only, never for a cancelled dispatch."""
+    """A cancellation inside the D8 dispatch gate must propagate — the gate is
+    fail-open for ERRORS only, never for a cancelled dispatch."""
     monkeypatch.setenv("MODULO_E2B_API_KEY", "k")
+
+    class _FakeGateSettings:
+        runner_capacity_gate_enabled = False
+        runner_capacity_lock_timeout_ms = 2000
+
     fn = make_sandbox_agent_fn(_script_node_def(), session_factory=lambda: _FakeSession())
     sandbox = _make_sandbox_mock()
     with (
@@ -2736,9 +2748,10 @@ async def test_sandbox_script_capacity_check_cancellation_reraises(monkeypatch: 
             "modulo.db.crud.run.get_sandbox_concurrency_limit",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
+        patch("modulo.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
         pytest.raises(asyncio.CancelledError),
     ):
-        await fn(_run_state())
+        await fn({**_run_state(), "_claim_lease": "tok"})
 
 
 async def test_sandbox_budget_killed_on_timeout_raises_script_budget_killed():

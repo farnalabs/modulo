@@ -2672,17 +2672,29 @@ async def count_active_runner_dispatches_for_org(
     org_id: uuid.UUID,
     *,
     exclude_run_id: uuid.UUID | None = None,
+    host_resource_only: bool = False,
 ) -> int:
     """Count runs with a LIVE runner dispatch for concurrency tracking (FAR-296 Phase 4b).
 
-    Renamed from ``count_active_sandbox_leases_for_org`` (FAR-587): the count
-    was never lease-backed — it counts runs whose ``sandbox_dispatch_state``
-    is NON-NULL (a runner workspace was provisioned and not yet torn down).
+    Renamed from ``count_active_sandbox_leases_for_org`` (FAR-587); the count
+    is marker-backed — it counts runs whose ``sandbox_dispatch_state`` holds a
+    live dispatch marker.
 
-    Unlike :func:`count_active_sandbox_runs_for_org` (which counts ``running``
-    runs whose snapshot graph contains a ``sandbox_agent`` node), this counts
-    runs whose ``sandbox_dispatch_state`` is NON-NULL. This is the accurate
-    concurrency signal for sandbox/runner rate-limit purposes.
+    D8 population (FAR-594): ``running`` runs ONLY — the only status a marker
+    can legally exist on (the fenced marker UPDATE requires
+    ``status = 'running'``). ``awaiting_human``/``pending``/``claimed``/
+    ``unknown`` hold NO slot: a parked HITL run cannot starve the org, and the
+    resume path re-acquires a slot when the HITL approval re-dispatches.
+    Tombstoned markers (``cleared_at_hitl``) are excluded — the HITL-boundary
+    tombstone is capacity-neutral. The count EXCLUDES the run's own marker
+    (``exclude_run_id``) so a re-dispatch of a run still carrying a
+    fence-carrying stale marker cannot self-block.
+
+    ``host_resource_only=True`` scopes the count to the host-resource
+    providers (Docker + Local) for the absent-key Docker-tier default; the
+    provider is attributed from the marker's JSON ``"provider"`` key, with
+    legacy tier-less markers attributed to ``runner_docker`` (fail-safe — see
+    ``modulo.core.runner_capacity``).
     """
     stmt = (
         select(func.count())
@@ -2690,11 +2702,24 @@ async def count_active_runner_dispatches_for_org(
         .where(
             Run.organisation_id == org_id,
             Run.sandbox_dispatch_state.isnot(None),
-            Run.status.in_(ACTIVE_RUN_STATUSES),
+            # D8: running-only + tombstone exclusion (SQL fragment — the
+            # marker is a Text column holding our own JSON vocabulary).
+            Run.status == "running",
+            text("runs.sandbox_dispatch_state NOT LIKE '%cleared_at_hitl%'"),
         )
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Run.id != exclude_run_id)
+    if host_resource_only:
+        stmt = stmt.where(
+            text(
+                "COALESCE("
+                "CASE WHEN runs.sandbox_dispatch_state LIKE '%\"provider\"%' "
+                "THEN substring(runs.sandbox_dispatch_state from "
+                '\'"provider"[[:space:]]*:[[:space:]]*"([a-z_]+)"\') END, '
+                "'runner_docker') IN ('runner_docker', 'local')"
+            )
+        )
     result = (await session.execute(stmt)).scalar_one()
     return int(result) if result is not None else 0
 

@@ -5014,6 +5014,10 @@ def _dispatcher_summary() -> dict[str, Any]:
         "mid_graph_wedge_terminalized": 0,
         "age_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "runner_markers_scanned": 0,
+        "runner_markers_cleared": 0,
+        "runner_markers_transitioned": 0,
+        "runner_capacity_violations": 0,
         "dispatch_failed_terminalized": 0,
         "enqueue_failed_ttl_terminalized": 0,
         "enqueue_failed_redispatched": 0,
@@ -5333,6 +5337,39 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         summary["rollback_thresholds_checked"] = 0
         summary["rollback_thresholds_flagged"] = 0
         _log.warning("dispatcher_reconcile.rollback_thresholds_failed", exc_info=True)
+    try:
+        # D8 (FAR-594): the state-aware runner dispatch-marker reconciliation
+        # sweep — clears non-fence markers on terminal runs and stale (>25h)
+        # markers, transitions stale non-terminal RUNNING runs terminal,
+        # never touches script_executing fence components or reconciler-
+        # recoverable rows (parity by construction: the sweep evaluates THIS
+        # module's re-dispatch predicates), and asserts the live count ≤ cap
+        # (runner.capacity.violation — the D8 rollback signal).
+        from modulo.core.runner_capacity import reconcile_runner_dispatch_markers
+
+        marker_result = await reconcile_runner_dispatch_markers(_open_factory())
+        summary["runner_markers_scanned"] = marker_result.get("scanned", 0)
+        summary["runner_markers_cleared"] = marker_result.get("cleared", 0)
+        summary["runner_markers_transitioned"] = marker_result.get("transitioned", 0)
+        summary["runner_capacity_violations"] = marker_result.get("violations", 0)
+        if marker_result.get("cleared") or marker_result.get("violations"):
+            _log.info(
+                "dispatcher_reconcile.runner_marker_sweep",
+                extra={
+                    "scanned": marker_result.get("scanned", 0),
+                    "cleared": marker_result.get("cleared", 0),
+                    "transitioned": marker_result.get("transitioned", 0),
+                    "violations": marker_result.get("violations", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["runner_markers_scanned"] = 0
+        summary["runner_markers_cleared"] = 0
+        summary["runner_markers_transitioned"] = 0
+        summary["runner_capacity_violations"] = 0
+        _log.warning("dispatcher_reconcile.runner_marker_sweep_failed", exc_info=True)
 
 
 async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:

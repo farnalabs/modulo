@@ -1157,6 +1157,12 @@ RUNNER_WORKSPACE_RECONCILE_STATS_KEY = "saq:cron:stats:runner_workspace_reconcil
 RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS = 15 * 60
 RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS = RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS + 60
 
+# Cross-process stats key for the FAR-594 D8 runner dispatch-marker
+# reconciliation sweep (same contract as the sibling sweeps).
+RUNNER_MARKER_SWEEP_STATS_KEY = "saq:cron:stats:runner_marker_sweep"
+RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
+RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS = RUNNER_MARKER_SWEEP_STALE_SECONDS + 60
+
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
     """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
@@ -1246,7 +1252,6 @@ async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
 
 async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — FAR-604 D2 HITL park-on-expiry sweep (every 5 min).
-
     Parks runs whose open HITL gate expired unanswered past the grace window
     (``HITL_PARK_GRACE_SECONDS``, default 24h): the run leaves
     ``awaiting_human`` for the non-terminal ``hitl_parked`` status — the
@@ -1283,6 +1288,39 @@ async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
             "parked": result["parked"],
         },
         HITL_PARK_SWEEP_STATS_TTL_SECONDS,
+    )
+    return result
+
+
+async def runner_marker_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-594 D8 runner dispatch-marker reconciliation (every 5 min).
+
+    State-aware marker sweep: clears non-fence markers on genuinely terminal
+    runs and stale (>25h) non-fence markers, transitions a stale non-terminal
+    RUNNING run terminal (no zombie running-without-marker-without-workspace),
+    and NEVER clears ``script_executing`` fence components or markers of runs
+    ``dispatcher_reconcile`` considers recoverable (parity by construction —
+    the sweep evaluates the reconciler's own predicates). Breaches of the org
+    cap are logged as ``runner.capacity.violation`` (the D8 rollback signal).
+
+    The sweep is ALSO wired into ``dispatcher_reconcile`` (60s cadence via
+    ``_run_reconcile_sweeps``); this dedicated cron is the independent
+    periodic path with a liveness key so a silently dead sweep is visible to
+    /healthz/ready. The dedup advisory lock makes concurrent ticks a no-op.
+    """
+    from modulo.core.runner_capacity import reconcile_runner_dispatch_markers
+
+    result = await reconcile_runner_dispatch_markers(_make_session_factory())
+    await _persist_sweep_stats(
+        RUNNER_MARKER_SWEEP_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "scanned": result["scanned"],
+            "cleared": result["cleared"],
+            "transitioned": result["transitioned"],
+            "violations": result["violations"],
+        },
+        RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
     )
     return result
 
@@ -1621,6 +1659,7 @@ def _system_functions() -> list[Any]:
         slot_reconciliation,
         hitl_park_sweep,
         runner_workspace_reconcile,
+        runner_marker_sweep,
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
@@ -1774,6 +1813,23 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # partial counts and re-raises (retries=2 engages).
         CronJob(
             runner_workspace_reconcile,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # runner_marker_sweep: every 5 min (FAR-594 D8) — state-aware
+        # dispatch-marker reconciliation: clears non-fence markers on
+        # terminal runs and stale (>25h) markers, transitions stale
+        # non-terminal RUNNING runs terminal, and never clears
+        # script_executing fence components or reconciler-recoverable rows.
+        # unique=True so overlapping ticks cannot double-clear (the guarded
+        # UPDATEs are idempotent regardless; the sweep's dedup advisory lock
+        # is belt-and-braces).
+        CronJob(
+            runner_marker_sweep,
             cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=120,

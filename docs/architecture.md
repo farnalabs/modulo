@@ -339,6 +339,71 @@ org triggers pause). Four independent mechanisms keep that gate healthy:
   (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
   (`worker_lost`) are terminalised or re-dispatched as before.
 
+#### Runner capacity gate (FAR-594 D8)
+
+Sandbox-agent dispatches (every `sandbox_mode`, every provider tier) reserve a
+runner slot through ONE atomic transaction —
+`runner_capacity.acquire_runner_dispatch_slot` — replacing the pre-D8 racy
+check-then-act count. Transaction shape: `SET LOCAL lock_timeout`
+(`MODULO_RUNNER_CAPACITY_LOCK_TIMEOUT_MS`, default 2s) → **own-row
+claim-token-fenced lock FIRST** → per-org advisory lock (the RESERVED
+`modulo:runner-capacity:org-v1` namespace, per-org derived; never the shared
+`_uuid_to_lock_keys` keyspace) → lock-free count → decide → the fenced
+dispatch-marker UPDATE commits the reservation → the workspace provisions
+OUTSIDE the transaction. The uniform row→advisory ordering is shared with the
+resume path (`executor.resume` writes the run row before its advisory lock),
+which makes the scheme cycle-free by construction — including same-run
+dispatch+resume overlap. SQLSTATE 55P03 (lock_timeout) degrades to a RETRYABLE
+capacity denial with the distinct `runner.capacity.lock_degraded` event; 40P01
+is a separate `runner.capacity.deadlock_degraded` alarm (expected impossible
+under the uniform ordering). Every other DB error fails OPEN
+(`runner.capacity.gate_error`) and the dispatch marker is still written
+best-effort in its own transaction — a fail-open dispatch is never markerless.
+
+- **Count population (unified across all four capacity paths — dispatch gate,
+  resume gate, HITL pre-check, claim-time read):** `running` runs holding a
+  live dispatch marker only. `awaiting_human`/`pending`/`claimed`/`unknown`
+  hold no slot (a parked HITL run cannot starve the org; the resume
+  re-acquires a slot when the approval re-dispatches through the decided-gate
+  auto-resume loop). The count excludes the run's OWN marker, so a re-dispatch
+  of a run still carrying a fence-carrying stale marker cannot self-block.
+- **Tier attribution:** the gate's marker write carries `"provider"`
+  (`runner_docker` | `e2b` | `local`) + `"written_at"`. Legacy tier-less
+  markers count as Docker-tier (fail-safe) and age out via the sweep.
+- **Tier-scoped default:** with the rollout flag
+  (`MODULO_RUNNER_CAPACITY_GATE_ENABLED`) ON and the org key ABSENT, the
+  Docker-tier default 4 gates Docker+Local dispatches only (e2b carries its
+  own platform-side quota and is neither counted into that bucket nor denied
+  by it); an explicit value gates ALL runner dispatches; an explicit `null` is
+  no gate; `0` is deny-all. Flag OFF keeps the pre-D8 behaviour exactly: the
+  racy count (no advisory lock, `enforced_cap` semantics — absent key = no
+  gate) and the legacy `_uuid_to_lock_keys` keyspace on the resume path. The
+  flag is short-lived (removed at GA).
+- **HITL boundary:** at interrupt handling — before the run enters
+  `awaiting_human` — any remaining dispatch marker becomes the
+  `{"state": "cleared_at_hitl"}` tombstone: capacity-neutral (the count is
+  running-only AND excludes tombstones) while still recording the dispatch.
+- **State-aware reconciliation sweep** (wired into `dispatcher_reconcile`
+  every 60s and a dedicated 5-min `runner_marker_sweep` cron): clears non-fence
+  markers on genuinely terminal runs and markers stale beyond 25h
+  (`MODULO_RUNNER_MARKER_STALE_SECONDS`; marker `written_at`, legacy tier-less
+  fall back to `runs.updated_at`); a stale clear on a non-terminal RUNNING run
+  also transitions it terminal (`worker_lost`) so no zombie
+  running-without-marker-without-workspace state can be minted; fence-carrying
+  `script_executing` components are NEVER cleared (precedence over staleness);
+  runs `dispatcher_reconcile` considers recoverable keep their markers (the
+  sweep evaluates the reconciler's OWN re-dispatch predicates — parity by
+  construction); terminal runs carrying the rollback detector's anomaly error
+  codes keep their markers (`rollback_thresholds._count_claim_without_marker`
+  requires them). Every clear emits `runner.capacity.marker_cleared` — the
+  coordination note the D4 container reconciler consumes (the cleared run is
+  terminal or capacity-neutral, so its workspace becomes an orphan the D4
+  reconciler owns destroying). After each org's pass the live count is
+  asserted ≤ cap with `runner.capacity.violation` on breach — the D8 rollback
+  signal. The claim-time demotion (`_check_capacity`) remains an explicitly
+  ADVISORY, lock-free, population-only read (its own-row lock exists only at
+  the fenced demote write); the sweep is its named backstop.
+
 ### WebSocket event flow
 
 ```

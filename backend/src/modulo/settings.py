@@ -238,6 +238,31 @@ class Settings(BaseSettings):
     # the operator flips this flag; the destroy path re-checks run status
     # and aborts on any cross-reference failure (fail-safe).
     runner_reconciler_destroy_enabled: bool = Field(default=False, alias="RUNNER_RECONCILER_DESTROY_ENABLED")
+    # FAR-594 D8 rollout flag for the WHOLE runner capacity gate (the atomic
+    # reservation + the advisory lock are inseparable): when False every
+    # capacity path keeps the pre-D8 behaviour exactly (racy check-then-act
+    # count, ``enforced_cap`` semantics — absent key = NO gate, legacy
+    # ``_uuid_to_lock_keys`` keyspace on the resume path). When True the
+    # dispatch gate becomes the atomic transaction (own-row fence → per-org
+    # advisory lock in the reserved namespace → lock-free count), the
+    # absent-key Docker-tier default 4 activates counting Docker+Local
+    # providers only, and the resume path converges onto the same namespace
+    # and population. SHORT-LIVED: removed at GA.
+    runner_capacity_gate_enabled: bool = Field(default=False, alias="MODULO_RUNNER_CAPACITY_GATE_ENABLED")
+    # D8 degradation knob: the gate's transactional lock_timeout. A crowded
+    # per-org advisory lock degrades to a RETRYABLE capacity denial
+    # (SQLSTATE 55P03 → runner.capacity.lock_degraded) instead of hanging on
+    # deadlock_timeout.
+    runner_capacity_lock_timeout_ms: int = Field(
+        default=2000, alias="MODULO_RUNNER_CAPACITY_LOCK_TIMEOUT_MS", ge=100, le=30000
+    )
+    # D8 marker staleness threshold for the reconciliation sweep: a non-fence
+    # marker older than this (marker written_at; legacy tier-less markers fall
+    # back to runs.updated_at) is cleared, and a stale non-terminal RUNNING run
+    # is terminalised with it. Default 25h.
+    runner_marker_stale_seconds: int = Field(
+        default=90000, alias="MODULO_RUNNER_MARKER_STALE_SECONDS", ge=3600, le=604800
+    )
     # Machine deployment identity for the runner workspace-identity label
     # (reconciler scoping; hostname fallback when unset).
     runner_machine_id: str = Field(default="", alias="MODULO_RUNNER_MACHINE_ID")
