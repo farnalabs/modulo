@@ -2870,6 +2870,15 @@ elements:
         type: button
         dynamic_testid: false
     /settings/hitl-review:
+      - testid: hitl-review-column-headers
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-pipeline-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-node-name
+        type: element
+        dynamic_testid: false
       - testid: hitl-review-pipeline-select
         type: select
         dynamic_testid: false
