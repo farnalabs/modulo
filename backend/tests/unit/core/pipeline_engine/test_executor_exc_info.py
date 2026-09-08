@@ -37,6 +37,7 @@ async def test_claim_run_and_audit_append_failure() -> None:
     with (
         patch.object(ex, "update_run_status", new=AsyncMock()),
         patch.object(ex, "get_run", new=AsyncMock(return_value=MagicMock())),
+        patch.object(ex, "get_pipeline", new=AsyncMock(return_value=MagicMock(name="p"))),
         patch.object(ex, "append_audit_event", new=AsyncMock(side_effect=RuntimeError("boom"))),
         patch.object(ex, "_log") as log,
     ):

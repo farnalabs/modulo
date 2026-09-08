@@ -127,6 +127,12 @@ async def test_guardrail_override_clean_input_flips_to_pending():
     assert result.input_hash != "stale-hash-of-original-blocked-payload"
     assert result.completed_at is None
     mock_audit.assert_awaited_once()
+    audit_kwargs = mock_audit.await_args.kwargs
+    # FAR-728: the override event carries a descriptive summary; a user-driven
+    # override rides the canonical actor column, not a label key.
+    assert audit_kwargs["payload_json"]["summary"] == "Guardrail override applied (run requeued as replay)"
+    assert audit_kwargs["actor_user_id"] == _ACTOR_ID
+    assert "actor" not in audit_kwargs["payload_json"]
 
 
 @pytest.mark.asyncio

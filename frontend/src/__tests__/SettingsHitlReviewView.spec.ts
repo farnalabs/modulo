@@ -297,7 +297,7 @@ describe('SettingsHitlReviewView', () => {
 
     const badge = wrapper!.findAll('span').find((s) => s.classes().includes('badge'))
     expect(badge?.text()).toBe('claimed')
-    expect(wrapper!.text()).toContain('Assigned: reviewer@team')
+    expect(wrapper!.text()).toContain('reviewer@team')
 
     await wrapper!.find('[data-testid="hitl-review-toggle-expand"]').trigger('click')
     await nextTick()
@@ -813,5 +813,106 @@ describe('SettingsHitlReviewView', () => {
     const lastQuery = gatesCalls[gatesCalls.length - 1][1]?.params?.query
     expect(lastQuery?.page).toBe(1)
     expect(lastQuery?.status).toBe('approved')
+  })
+
+  it('renders column headers above the gate rows (FAR-727)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue(gatesResponse([pendingGateRow()]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const headers = wrapper!.find('[data-testid="hitl-review-column-headers"]')
+    expect(headers.exists()).toBe(true)
+    expect(headers.text()).toContain('Status')
+    expect(headers.text()).toContain('Pipeline')
+    expect(headers.text()).toContain('Node')
+    expect(headers.text()).toContain('Assignee')
+    expect(headers.text()).toContain('Created')
+  })
+
+  it('renders the server-resolved pipeline name even when the cached pipelines list is empty (FAR-727)', async () => {
+    // THE reported bug: rows rendered `#d6b2c25b` because the name was
+    // resolved client-side from the (paginated) /pipelines list. The
+    // endpoint's pipeline_name must win and the raw ID must never show.
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([{ ...pendingGateRow(), pipeline_name: 'PR Reviewer' }]))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const name = wrapper!.find('[data-testid="hitl-review-pipeline-name"]')
+    expect(name.text()).toBe('PR Reviewer')
+    expect(wrapper!.text()).not.toContain('#660e8400')
+  })
+
+  it('falls back to the cached pipelines-list name for legacy payloads without pipeline_name (FAR-727)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([pendingGateRow()]))
+      }
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [{ id: '660e8400-e29b-41d4-a716-446655440001', name: 'Alpha' }] },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-pipeline-name"]').text()).toBe('Alpha')
+  })
+
+  it('shows the deleted-pipeline fallback only when no name resolves at all (FAR-727)', async () => {
+    // pipeline_name absent AND the cached list has nothing: the pipeline row
+    // is gone (deleted) — the only case where an ID may render.
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([pendingGateRow()]))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-pipeline-name"]').text()).toBe('Deleted pipeline (#660e8400)')
+  })
+
+  it('renders the server-resolved gate label instead of the raw node-ID prefix (FAR-727)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue(gatesResponse([{ ...pendingGateRow(), label: 'Needs human approval' }]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const node = wrapper!.find('[data-testid="hitl-review-node-name"]')
+    expect(node.text()).toContain('Needs human approval')
+    expect(node.text()).not.toContain('#approval')
   })
 })

@@ -75,7 +75,23 @@
         :title="$t('views.SettingsHitlReviewView.empty_title')"
         :description="$t('views.SettingsHitlReviewView.empty_description')"
       />
-      <div v-else class="space-y-2">
+      <div v-else>
+      <!-- FAR-727: column labels for the gate rows below. The rows are
+           interactive cards (button + expandable detail panel), so this is a
+           flex header mirroring the row layout rather than a <table> — styled
+           to match the shared DataTable thead. -->
+      <div
+        data-testid="hitl-review-column-headers"
+        class="flex items-center gap-4 px-4 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
+      >
+        <span class="h-4 w-4 flex-shrink-0" aria-hidden="true"></span>
+        <div class="w-24 flex-shrink-0">{{ $t('views.SettingsHitlReviewView.status_label') }}</div>
+        <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.pipeline_label') }}</div>
+        <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.node_label') }}</div>
+        <div class="min-w-0 flex-1">{{ $t('views.SettingsHitlReviewView.assignee_label') }}</div>
+        <span class="w-40 flex-shrink-0 text-right">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
+      </div>
+      <div class="space-y-2">
       <div
         v-for="gate in filteredGates"
         :key="gate.gate_id + gate.run_id"
@@ -99,23 +115,29 @@
           >
             <path d="m9 18 6-6-6-6" />
           </svg>
-          <span :class="statusBadgeClass(gateStatus(gate))">
-            {{ gateStatus(gate) }}
-          </span>
-          <div class="min-w-0 flex-[2]">
-            <p class="truncate text-sm font-medium">{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></p>
+          <div class="w-24 flex-shrink-0">
+            <span :class="statusBadgeClass(gateStatus(gate))">
+              {{ gateStatus(gate) }}
+            </span>
           </div>
           <div class="min-w-0 flex-[2]">
-            <p class="truncate text-sm text-muted-foreground">
-              <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
+            <p class="truncate text-sm font-medium" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
+          </div>
+          <div class="min-w-0 flex-[2]">
+            <p class="truncate text-sm text-muted-foreground" data-testid="hitl-review-node-name">
+              <!-- FAR-727: the server-resolved gate label (the edge's human
+                   name) — the raw gate-id short ID renders only when the gate
+                   config carries no label at all. -->
+              <span v-if="gate.label">{{ gate.label }}</span>
+              <span v-else class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
             </p>
           </div>
           <div class="min-w-0 flex-1">
             <p class="truncate text-xs text-muted-foreground">
-              {{ gate.claimed_by ? $t('views.SettingsHitlReviewView.assigned_to', { user: gate.claimed_by_name || gate.claimed_by }) : $t('views.SettingsHitlReviewView.unassigned') }}
+              {{ gate.claimed_by ? (gate.claimed_by_name || gate.claimed_by) : $t('views.SettingsHitlReviewView.unassigned') }}
             </p>
           </div>
-          <span class="flex-shrink-0 text-xs text-muted-foreground">
+          <span class="w-40 flex-shrink-0 text-right text-xs text-muted-foreground">
             {{ formatDate(gate.claimed_at || gate.created_at || '') }}
           </span>
         </button>
@@ -134,6 +156,7 @@
             @decided="onGateDecided"
           />
         </div>
+      </div>
       </div>
       </div>
       <!-- FAR-692: server-side pagination over /hitl/gates. Only rendered when
@@ -179,6 +202,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -193,11 +217,16 @@ import { shortId } from '../utils/format'
 import Select from 'primevue/select'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 interface GateItem {
   run_id: string
   gate_id: string
   pipeline_id: string
+  /** FAR-727: server-resolved pipeline name (null when the pipeline row is gone). */
+  pipeline_name?: string | null
+  /** FAR-727: server-resolved human label from the snapshot's hitl_gate_config. */
+  label?: string | null
   claimed_by: string | null
   /** FAR-691: claimant's human-readable display name (server-resolved). */
   claimed_by_name?: string | null
@@ -349,6 +378,17 @@ function pipelineName(pipelineId: string): string {
   return p ? p.name : ''
 }
 
+// FAR-727: the row must never render a bare ID prefix where a name belongs.
+// The endpoint resolves `pipeline_name` server-side (join at query time), so
+// prefer it; the cached /pipelines list is a legacy-payload fallback. The
+// short ID renders only when both fail — the pipeline row is gone (deleted).
+function pipelineDisplayName(gate: GateItem): string {
+  if (gate.pipeline_name) return gate.pipeline_name
+  const cached = pipelineName(gate.pipeline_id)
+  if (cached) return cached
+  return t('views.SettingsHitlReviewView.deleted_pipeline_fallback', { id: shortId(gate.pipeline_id) })
+}
+
 function matchesPipeline(gate: GateItem): boolean {
   if (!pipelineFilter.value) return true
   return gate.pipeline_id === pipelineFilter.value
@@ -357,7 +397,7 @@ function matchesPipeline(gate: GateItem): boolean {
 function matchesSearch(gate: GateItem): boolean {
   if (!searchQuery.value) return true
   const q = searchQuery.value.toLowerCase()
-  const pName = pipelineName(gate.pipeline_id).toLowerCase()
+  const pName = pipelineDisplayName(gate).toLowerCase()
   return pName.includes(q) || gate.gate_id.toLowerCase().includes(q)
 }
 

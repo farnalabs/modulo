@@ -231,7 +231,9 @@ class TestAfterProcessTaskFailureFacts:
         assert row[0] == "failed"
         assert row[1] == "task_failure"
         assert row[2] is not None
-        assert len(row[2]) == 5000, "error_detail truncated to the 5000-codepoint column"
+        # error_detail was widened String(5000) -> Text by migration 0199 and the
+        # write site uses limit=None, so the full 7000-char payload is stored.
+        assert len(row[2]) == 7000, "error_detail preserved (Text column, no 5000 truncation)"
         assert row[3] is not None, "completed_at is terminal"
 
         async with db_session.begin():
