@@ -70,15 +70,35 @@
             {{ $t('views.AdminNotificationDeliveryLogView.reset') }}
           </button>
           <button
-            v-if="hasRetryableItems"
+            v-if="hasRetryableItems && !retryAllConfirm"
             type="button"
             :disabled="retryingAll"
             data-testid="admin-notification-log-retry-all"
             class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-40 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300"
-            @click="retryAllFailed"
+            @click="retryAllConfirm = true"
           >
-            {{ retryingAll ? $t('views.AdminNotificationDeliveryLogView.retrying_all') : $t('views.AdminNotificationDeliveryLogView.retry_all_failed') }}
+            {{ $t('views.AdminNotificationDeliveryLogView.retry_all_failed') }}
           </button>
+          <div v-if="retryAllConfirm" class="flex items-center gap-2">
+            <span class="text-sm text-muted-foreground">{{ $t('views.AdminNotificationDeliveryLogView.retry_all_confirm') }}</span>
+            <button
+              type="button"
+              :disabled="retryingAll"
+              data-testid="admin-notification-log-retry-all-confirm"
+              class="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+              @click="retryAllFailed"
+            >
+              {{ retryingAll ? $t('views.AdminNotificationDeliveryLogView.retrying_all') : $t('views.AdminNotificationDeliveryLogView.confirm') }}
+            </button>
+            <button
+              type="button"
+              data-testid="admin-notification-log-retry-all-cancel"
+              class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent"
+              @click="retryAllConfirm = false"
+            >
+              {{ $t('views.AdminNotificationDeliveryLogView.cancel') }}
+            </button>
+          </div>
         </div>
       </div>
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
@@ -306,6 +326,7 @@ const prevCursor = computed(() => {
 const expandedId = ref<string | null>(null)
 const retryingId = ref<string | null>(null)
 const retryingAll = ref(false)
+const retryAllConfirm = ref(false)
 const retrySuccessMessage = ref<string | null>(null)
 const retryMessages = ref<Record<string, { type: string; text: string }>>({})
 
@@ -436,6 +457,7 @@ async function retryAllFailed() {
     error.value = `${t('views.AdminNotificationDeliveryLogView.retry_all_request_failed')} ${formatApiError(e)}`
   } finally {
     retryingAll.value = false
+    retryAllConfirm.value = false
   }
 }
 
