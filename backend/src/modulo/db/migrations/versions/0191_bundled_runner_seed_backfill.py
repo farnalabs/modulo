@@ -18,7 +18,8 @@ Runner profile.
    (release note covers the change). Skipped when the org already carries a
    live ``runner_docker`` row (operator-pinned older digests SURVIVE). The
    rows SELECTED for re-point have their pre-migration identity (original
-   name / description / config_json) captured into a scratch table
+   name / description / config_json / image_ref / network_policy /
+    persistence_policy) captured into a scratch table
    (``_migration_0191_repoint_state``) so the downgrade can revert EXACTLY
    those rows and restore their original values.
 2. **Per-org backfill insert** — for every organisation that STILL has no
@@ -46,8 +47,9 @@ Rollback (additive on upgrade / SAFE on downgrade): the inserted
 ``runner_docker`` backfill rows are LEFT IN PLACE (never deleted), per the
 plan's failure contract. Only the re-pointed ``modulo-dev`` rows are
 reverted — by captured primary key — back to ``local_docker`` + ``modulo-dev``
-with their ORIGINAL description / config_json restored from the scratch table,
-which is then dropped. The downgrade deliberately does NOT match on
+with their ORIGINAL name / provider_type / description / config_json /
+image_ref / network_policy / persistence_policy restored from the scratch
+table, which is then dropped. The downgrade deliberately does NOT match on
 ``name = template AND provider_type = runner_docker AND image_ref = template``:
 that predicate also matches every backfilled per-org row, which would wrongly
 relabel all of them to ``local_docker``/``modulo-dev`` and leave their
@@ -105,8 +107,8 @@ def upgrade() -> None:
     bind.execute(
         _sql(
             """
-            INSERT INTO _migration_0191_repoint_state (profile_id, prev_name, prev_description, prev_config_json)
-            SELECT ep.id, ep.name, ep.description, ep.config_json
+            INSERT INTO _migration_0191_repoint_state (profile_id, prev_name, prev_description, prev_config_json, prev_image_ref, prev_network_policy, prev_persistence_policy)
+            SELECT ep.id, ep.name, ep.description, ep.config_json, ep.image_ref, ep.network_policy, ep.persistence_policy
             FROM environment_profiles ep
             WHERE ep.name = 'modulo-dev'
               AND ep.provider_type = 'local_docker'
@@ -249,6 +251,9 @@ def downgrade() -> None:
                 name = s.prev_name,
                 description = s.prev_description,
                 config_json = s.prev_config_json,
+                image_ref = s.prev_image_ref,
+                network_policy = s.prev_network_policy,
+                persistence_policy = s.prev_persistence_policy,
                 updated_at = now()
             FROM _migration_0191_repoint_state s
             WHERE ep.id = s.profile_id
@@ -272,7 +277,10 @@ def _create_repoint_state_table(bind: object) -> None:
                 profile_id uuid PRIMARY KEY,
                 prev_name text NOT NULL,
                 prev_description text,
-                prev_config_json jsonb
+                prev_config_json jsonb,
+                prev_image_ref text,
+                prev_network_policy text,
+                prev_persistence_policy text
             )
             """
         )

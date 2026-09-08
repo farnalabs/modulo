@@ -135,7 +135,12 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
         await admin_engine.dispose()
 
 
-async def _seed_populated_orgs(db_url: str, org_repoint: uuid.UUID, org_backfill: uuid.UUID) -> None:
+async def _seed_populated_orgs(
+    db_url: str,
+    org_repoint: uuid.UUID,
+    org_backfill: uuid.UUID,
+    org_nullowner: uuid.UUID,
+) -> None:
     """Seed populated org data at PREV_REV, before 0191 runs.
 
     * ``org_repoint`` — a healthy org with an active admin membership and a
@@ -144,9 +149,16 @@ async def _seed_populated_orgs(db_url: str, org_repoint: uuid.UUID, org_backfill
     * ``org_backfill`` — a healthy org with an active admin membership and NO
       profile row: exercises the per-org backfill INSERT (the path that hit
       the missing-``id`` NOT NULL violation on every populated database).
+    * ``org_nullowner`` — a NON-ORPHAN org (random UUID) with NO memberships
+      and a NULL ``created_by``: exercises the ``owner.account_id IS NOT NULL``
+      guard in the backfill's owner LATERAL. Its resolved owner is NULL, so the
+      backfill must SKIP it rather than violating the NOT NULL account_id
+      constraint (the orphan sentinel org is excluded by a different rule, so
+      this proves the NULL-owner guard independently).
 
-    The orphan sentinel org (no members, NULL created_by) is already present —
-    migration 0172 seeds it earlier in the chain and 0191 must skip it.
+    The orphan sentinel org (no members, NULL created_by, nil UUID) is already
+    present — migration 0172 seeds it earlier in the chain and 0191 must skip
+    it too.
     """
     engine = create_async_engine(db_url, poolclass=NullPool)
     try:
@@ -170,6 +182,13 @@ async def _seed_populated_orgs(db_url: str, org_repoint: uuid.UUID, org_backfill
                     ),
                     {"id": str(uuid.uuid4()), "oid": str(oid), "e": f"{slug}@example.com"},
                 )
+
+            # org_nullowner: a non-orphan org with NO memberships and a NULL
+            # created_by. It must NOT receive a backfilled profile.
+            await conn.execute(
+                text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :n, :s, '{}'::json)"),
+                {"id": str(org_nullowner), "n": "m0191-nullowner-org", "s": "m0191-nullowner-org"},
+            )
 
             # Legacy modulo-dev row for the re-point org only.
             await conn.execute(
@@ -232,7 +251,8 @@ async def test_0191_repoint_and_backfill_on_populated_database(isolated_db_url, 
 
     org_repoint = uuid.uuid4()
     org_backfill = uuid.uuid4()
-    await _seed_populated_orgs(db_url, org_repoint, org_backfill)
+    org_nullowner = uuid.uuid4()
+    await _seed_populated_orgs(db_url, org_repoint, org_backfill, org_nullowner)
 
     # The orphan sentinel org must exist at PREV_REV (seeded by 0172).
     orphan_rows = await _live_profiles(db_url, uuid.UUID(ORPHAN_ORG_ID))
@@ -257,6 +277,10 @@ async def test_0191_repoint_and_backfill_on_populated_database(isolated_db_url, 
     # --- Orphan sentinel org: NO profile at all (NULL-owner skip) ---
     orphan_rows = await _live_profiles(db_url, uuid.UUID(ORPHAN_ORG_ID))
     assert orphan_rows == [], "orphan sentinel org must not own a Bundled Runner profile"
+
+    # --- NULL-owner non-orphan org: NO profile (owner.account_id IS NOT NULL guard) ---
+    nullowner_rows = await _live_profiles(db_url, org_nullowner)
+    assert nullowner_rows == [], "non-orphan org with no members and NULL created_by must not own a profile"
 
     # --- Global NOT NULL sanity: every live profile row has an owner ---
     all_rows = await _live_profiles(db_url)

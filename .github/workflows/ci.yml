@@ -160,7 +160,11 @@ jobs:
     # gate, so a broken integration test merged to main sails through PR CI
     # and blocks every deploy (2026-08-14: PR #1266 added an assert-after-
     # delete to an integration test; 6 deploys failed before it was
-    # caught). Skips green when no backend/tests/integration/ files changed.
+    # caught). Skips green when no tests/integration/ files changed. NOTE: this
+    # job runs with working-directory: backend, so the diff pathspec must be
+    # relative to the backend CWD (tests/integration/) — NOT backend/tests/
+    # integration/, which would resolve to backend/backend/tests/integration/
+    # and silently match nothing (vacuous green).
     name: Integration tests (changed)
     runs-on: ubicloud-standard-2
     defaults:
@@ -196,7 +200,7 @@ jobs:
           else
             BASE="HEAD^"
           fi
-          CHANGED="$(git diff --name-only "$BASE" HEAD -- backend/tests/integration/ || true)"
+          CHANGED="$(git diff --name-only "$BASE" HEAD -- tests/integration/ || true)"
           # Keep only files that actually exist in the PR tree - a deleted or
           # renamed-away integration test would otherwise be fed to pytest below
           # and error "file or directory not found" (exit 4). Mirrors the

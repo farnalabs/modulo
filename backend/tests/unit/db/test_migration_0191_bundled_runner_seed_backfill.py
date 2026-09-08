@@ -51,7 +51,11 @@ def test_upgrade_captures_repoint_identity() -> None:
     # whose literal DDL lives outside the upgrade slice.
     assert f"CREATE TABLE IF NOT EXISTS {_STATE_TABLE}" in full
     assert "_create_repoint_state_table(bind)" in code
-    assert f"INSERT INTO {_STATE_TABLE} (profile_id, prev_name, prev_description, prev_config_json)" in code
+    _expected_insert = (
+        f"INSERT INTO {_STATE_TABLE} (profile_id, prev_name, prev_description, "
+        "prev_config_json, prev_image_ref, prev_network_policy, prev_persistence_policy)"
+    )
+    assert _expected_insert in code
     assert "'modulo-dev'" in code
     assert "'local_docker'" in code
 
@@ -59,12 +63,16 @@ def test_upgrade_captures_repoint_identity() -> None:
 def test_downgrade_reverts_only_captured_rows() -> None:
     code = _source_code().split("def downgrade", 1)[1]
     # The downgrade joins onto the scratch table by primary key and restores the
-    # original name / description / config_json.
+    # original name / description / config_json / image_ref / network_policy /
+    # persistence_policy.
     assert f"FROM {_STATE_TABLE} s" in code
     assert "WHERE ep.id = s.profile_id" in code
     assert "name = s.prev_name" in code
     assert "description = s.prev_description" in code
     assert "config_json = s.prev_config_json" in code
+    assert "image_ref = s.prev_image_ref" in code
+    assert "network_policy = s.prev_network_policy" in code
+    assert "persistence_policy = s.prev_persistence_policy" in code
     assert f"DROP TABLE IF EXISTS {_STATE_TABLE}" in code
     # It must NOT re-point on the post-upgrade shape (which also matches the
     # per-org backfill rows) — that would relabel every backfilled profile.
