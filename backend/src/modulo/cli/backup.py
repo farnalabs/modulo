@@ -23,6 +23,7 @@ import psycopg
 from cryptography.fernet import Fernet, InvalidToken
 from psycopg.rows import dict_row
 
+from modulo.cli.apply import register_apply
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -694,6 +695,11 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         click.echo("\nRestore complete.")
 
     except Exception as exc:
-        _log.exception("Restore failed")
-        click.echo(f"Restore failed: {exc}", err=True)
         raise click.ClickException(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# modulo apply (FAR-681)
+# ---------------------------------------------------------------------------
+
+register_apply(cli)
