@@ -1637,7 +1637,11 @@ async def test_record_fact_for_terminalized_run_swallows_failure(caplog):
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=SimpleNamespace(id=uuid.uuid4())),
+        patch(
+            "modulo.db.crud.run.get_run",
+            new_callable=AsyncMock,
+            return_value=SimpleNamespace(id=uuid.uuid4(), status="cancelled"),
+        ),
         patch(
             "modulo.core.analytics.record_fact_for_terminal_failed_run",
             new_callable=AsyncMock,
