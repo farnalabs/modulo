@@ -289,4 +289,10 @@ __all__ = [
     #     CI test gate and the reset is the signal tests' isolation hook) ---
     "error_code_map_conflicts",
     "_reset_unmapped_code_signal_for_tests",
+    # --- HITL manager dynamic dispatch (FAR-686). approve_with_modification is
+    #     invoked via _run_hitl_manager(mgr_method="approve_with_modification")
+    #     in api/routes/hitl.py — a string-keyed dispatch vulture cannot see a
+    #     call site for. The route, request model, and unit/integration tests all
+    #     exercise it, so it is load-bearing, not dead.
+    "approve_with_modification",
 ]

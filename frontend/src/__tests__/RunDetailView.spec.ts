@@ -1631,7 +1631,8 @@ describe('RunDetailView HITL gates', () => {
     expect(fallback.exists()).toBe(true)
     expect(fallback.text()).toContain('No description provided for this gate')
     // The gate stays claimable — the legacy briefing never breaks the flow.
-    expect(wrapper.find('[data-testid="run-detail-claim-gate"]').exists()).toBe(true)
+    // The claim control is the shared HitlGateCard's `hitl-gate-claim` button.
+    expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })
