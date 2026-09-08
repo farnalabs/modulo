@@ -877,6 +877,8 @@ jobs:
           PR_NUMS=$(git log main..merge-queue --oneline 2>/dev/null | grep -oP 'PR #\K\d+' | tac || true)
           [ -z "$PR_NUMS" ] && { echo "No PRs merged this cycle - nothing to self-report."; exit 0; }
 
+          # Ref contract: kind "pr" + bare number — webhook-minted journeys are keyed
+          # (org, "pr", "<number>") and the canonical journey key is uuid5(org:kind:ref), so kind "github_pr" would never match (the leading "#" was already stripped by canonicalisation and was never the issue).
           REFS="[]"
           for NUM in $PR_NUMS; do
             REFS=$(echo "$REFS" | jq -c --arg ref "${NUM}" '. + [{"kind": "pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
@@ -893,12 +895,29 @@ jobs:
             exit 0
           fi
 
-          curl -sS -f --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
+          # Capture status + body: a 200 with {"accepted":0,"unmatched":1} must
+          # NOT read as success — that masking is the exact FAR-666 failure mode.
+          # Keep -sS (stderr stays visible: connection/TLS errors reach the log);
+          # drop -f so we can branch on the real HTTP status code.
+          HTTP_CODE=$(curl -sS -o "${RUNNER_TEMP}/self-report-body.json" -w '%{http_code}' --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
-            -d "$PAYLOAD" 2>/dev/null \
-            && echo "Self-report delivered to Modulo." \
-            || echo "::warning::Modulo self-report POST failed - merged PRs recorded in log only (fail-open)."
+            -d "$PAYLOAD") || HTTP_CODE="000"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::warning::Modulo self-report POST failed (HTTP $HTTP_CODE): $(cat "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 'no body') - merged PRs recorded in log only (fail-open)."
+            exit 0
+          fi
+
+          ACCEPTED=$(jq -r '.accepted // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          UNMATCHED=$(jq -r '.unmatched // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          REJECTED=$(jq -r '.rejected // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          REF_COUNT=$(echo "$PAYLOAD" | jq '.work_item_refs | length' 2>/dev/null || echo 0)
+          if [ "$UNMATCHED" -gt 0 ] || { [ "$ACCEPTED" -eq 0 ] && [ "$REF_COUNT" -gt 0 ]; }; then
+            echo "::warning::Modulo self-report matched no journeys (accepted=$ACCEPTED unmatched=$UNMATCHED rejected=$REJECTED) - check the ref kind/ref contract (expected kind 'pr' + bare PR number matching webhook-minted journeys)"
+            exit 0
+          fi
+          echo "Self-report delivered to Modulo (accepted=$ACCEPTED unmatched=$UNMATCHED)."
 
       - name: Close Linear tickets for merged PRs
         if: success() && steps.merge.outputs.merged_count != '0' && steps.toctou.outputs.aborted != 'true'

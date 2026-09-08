@@ -832,12 +832,12 @@ jobs:
     # stage is EXTERNAL, so it has no pipeline_id for the advancement service to
     # resolve; the endpoint uses stage_id to advance the journey into it.
     #
-    # REF CONTRACT: the work-item ref uses kind "pr" + the BARE PR number (no
-    # "#" prefix). The webhook triggers mint journeys keyed (org, "pr",
-    # "<number>") and the canonical journey key is
-    # uuid5(NAMESPACE, "{org}:{kind}:{ref}") — kind "github_pr" (or a "#123"
-    # ref) canonicalises to a different key, so confirm_reported_refs would
-    # find no journey and the report would be dropped as unmatched.
+    # REF CONTRACT: the work-item ref uses kind "pr" + the BARE PR number.
+    # Webhook triggers mint journeys keyed (org, "pr", "<number>") and the
+    # canonical journey key is uuid5(NAMESPACE, "{org}:{kind}:{ref}") — kind
+    # "github_pr" would never match, so confirm_reported_refs would find no
+    # journey and the report would be dropped as unmatched. (The leading "#"
+    # is stripped by canonicalisation — it was never the issue.)
     #
     # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a Modulo
     # outage can NEVER fail CI. The payload is always recorded in the log; the
@@ -876,9 +876,26 @@ jobs:
             exit 0
           fi
 
-          curl -sS -f --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
+          # Capture status + body: a 200 with {"accepted":0,"unmatched":1} must
+          # NOT read as success — that masking is the exact FAR-666 failure mode.
+          # Keep -sS (stderr stays visible: connection/TLS errors reach the log);
+          # drop -f so we can branch on the real HTTP status code.
+          HTTP_CODE=$(curl -sS -o "${RUNNER_TEMP}/self-report-body.json" -w '%{http_code}' --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
-            -d "$PAYLOAD" 2>/dev/null \
-            && echo "Self-report delivered to Modulo." \
-            || echo "::warning::Modulo self-report POST failed - CI stage recorded in log only (fail-open)."
+            -d "$PAYLOAD") || HTTP_CODE="000"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::warning::Modulo self-report POST failed (HTTP $HTTP_CODE): $(cat "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 'no body') - CI stage recorded in log only (fail-open)."
+            exit 0
+          fi
+
+          ACCEPTED=$(jq -r '.accepted // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          UNMATCHED=$(jq -r '.unmatched // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          REJECTED=$(jq -r '.rejected // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          REF_COUNT=$(echo "$PAYLOAD" | jq '.work_item_refs | length' 2>/dev/null || echo 0)
+          if [ "$UNMATCHED" -gt 0 ] || { [ "$ACCEPTED" -eq 0 ] && [ "$REF_COUNT" -gt 0 ]; }; then
+            echo "::warning::Modulo self-report matched no journeys (accepted=$ACCEPTED unmatched=$UNMATCHED rejected=$REJECTED) - check the ref kind/ref contract (expected kind 'pr' + bare PR number matching webhook-minted journeys)"
+            exit 0
+          fi
+          echo "Self-report delivered to Modulo (accepted=$ACCEPTED unmatched=$UNMATCHED)."
