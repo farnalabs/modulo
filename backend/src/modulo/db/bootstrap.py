@@ -115,8 +115,13 @@ def main() -> None:
     # sibling (O_CREAT|O_EXCL|O_NOFOLLOW, 0600) atomically renamed over the
     # contract path, symlinked contract paths rejected. The /tmp prefix here
     # is the deployment contract, not an unchecked temp usage.
-    _write_env_file("/tmp/database_url.env", runtime_url)  # nosec B108  # noqa: S108
-    _write_env_file("/tmp/database_admin_url.env", admin_url)  # nosec B108  # noqa: S108
+    # /tmp is the container-entrypoint contract (consumed by the shell scripts); the
+    # world-writable-dir hazard is mitigated inside _write_env_file via
+    # O_CREAT|O_EXCL|O_NOFOLLOW + 0o600 + atomic rename over the contract path +
+    # symlinked-contract-path rejection, so the credential files cannot be pre-created
+    # or symlink-hijacked by another /tmp writer. NOSONAR below suppresses S5443.
+    _write_env_file("/tmp/database_url.env", runtime_url)  # nosec B108  # noqa: S108  # NOSONAR S5443
+    _write_env_file("/tmp/database_admin_url.env", admin_url)  # nosec B108  # noqa: S108  # NOSONAR S5443
 
     # MODULO_SYSTEM_DATABASE_URL: the modulo_system role (LOGIN, BYPASSRLS) URL used
     # by system crons (metrics_dump, analytics_facts_maintenance, journey_reconcile,
@@ -141,4 +146,4 @@ def main() -> None:
         os.environ["MODULO_SYSTEM_DATABASE_URL"] = system_url
         # Short-lived container bootstrap env file, consistent with the
         # /tmp/database_url.env and /tmp/database_admin_url.env files written above.
-        _write_env_file("/tmp/system_database_url.env", system_url)  # nosec B108  # noqa: S108
+        _write_env_file("/tmp/system_database_url.env", system_url)  # nosec B108  # noqa: S108  # NOSONAR S5443
