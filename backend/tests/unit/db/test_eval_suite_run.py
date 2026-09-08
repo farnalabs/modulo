@@ -791,12 +791,15 @@ def test_single_migration_head() -> None:
     assert [_basename(p) for p in chaining_off_0189] == ["0190_hitl_claim_context_json.py"]
     # 0191_bundled_runner_seed_backfill (this PR, FAR-590 D4 Bundled Runner seed backfill,
     # renumbered from 0190 to avoid the collision with main's 0190_hitl_claim_context_json and
-    # re-parented onto 0190_hitl_claim_context_json) chains off 0190 and is the single head.
+    # re-parented onto 0190_hitl_claim_context_json) chains off 0190.
     chaining_off_0190 = [p for p in revisions if parents[p] == "0190_hitl_claim_context_json"]
     assert [_basename(p) for p in chaining_off_0190] == ["0191_bundled_runner_seed_backfill.py"]
-    # Nothing chains off 0191_bundled_runner_seed_backfill -> it is the single head.
+    # 0192_uuid_pk_server_defaults (FAR-718, this PR) chains off 0191.
     chaining_off_0191 = [p for p in revisions if parents[p] == "0191_bundled_runner_seed_backfill"]
-    assert chaining_off_0191 == []
+    assert [_basename(p) for p in chaining_off_0191] == ["0192_uuid_pk_server_defaults.py"]
+    # Nothing chains off 0192_uuid_pk_server_defaults -> it is the single head.
+    chaining_off_0192 = [p for p in revisions if parents[p] == "0192_uuid_pk_server_defaults"]
+    assert chaining_off_0192 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
