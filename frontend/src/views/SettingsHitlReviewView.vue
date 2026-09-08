@@ -14,7 +14,7 @@
       ]"
       :filter-values="{ status: statusFilter }"
       @update:search="searchQuery = $event"
-      @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadGates() } }"
+      @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; page = 1; loadGates() } }"
     >
       <template #after>
         <div class="flex flex-wrap items-center gap-2">
@@ -136,6 +136,43 @@
         </div>
       </div>
       </div>
+      <!-- FAR-692: server-side pagination over /hitl/gates. Only rendered when
+           there is more than one page; the page indicator uses role="status" so
+           a page change is announced. No shared pagination component exists in
+           components/shared/, so this minimal inline pager is view-local. -->
+      <nav
+        v-if="totalGates > PAGE_SIZE"
+        class="flex items-center justify-center gap-3 py-2"
+        :aria-label="$t('views.SettingsHitlReviewView.pagination_label')"
+      >
+        <button
+          type="button"
+          data-testid="hitl-review-prev-page"
+          class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="page <= 1"
+          :aria-label="$t('views.SettingsHitlReviewView.prev_page')"
+          @click="goToPage(page - 1)"
+        >
+          {{ $t('views.SettingsHitlReviewView.prev_page') }}
+        </button>
+        <span
+          data-testid="hitl-review-page-indicator"
+          role="status"
+          class="text-sm text-muted-foreground"
+        >
+          {{ $t('views.SettingsHitlReviewView.page_indicator', { page, total: totalPages }) }}
+        </span>
+        <button
+          type="button"
+          data-testid="hitl-review-next-page"
+          class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="page >= totalPages"
+          :aria-label="$t('views.SettingsHitlReviewView.next_page')"
+          @click="goToPage(page + 1)"
+        >
+          {{ $t('views.SettingsHitlReviewView.next_page') }}
+        </button>
+      </nav>
     </template>
   </div>
 </template>
@@ -183,18 +220,50 @@ interface PipelineItem {
   name: string
 }
 
+// FAR-692: the review page lists gates in EVERY state via GET /api/v1/hitl/gates
+// (server-side status filter + pagination). The FilterBar's empty selection maps
+// to the server's `undecided` default, preserving today's queue view.
+type ServerGateStatus = 'undecided' | 'pending' | 'claimed' | 'approved' | 'rejected' | 'all'
+
+const PAGE_SIZE = 25
+
+function serverStatusFor(filter: string): ServerGateStatus {
+  if (!filter) return 'undecided'
+  return filter as ServerGateStatus
+}
+
+// FAR-692: server-side pagination state. totalGates is stamped from each
+// /hitl/gates response; the pager renders only when it exceeds PAGE_SIZE.
+// NB: every ref the fetch closure reads (statusFilter/page/totalGates) must be
+// declared BEFORE useDataFetch — vue-query invokes the fetcher during setup.
+const page = ref(1)
+const totalGates = ref(0)
+const totalPages = computed(() => Math.max(1, Math.ceil(totalGates.value / PAGE_SIZE)))
+
+const statusFilter = ref('')
+const pipelineFilter = ref('')
+const searchQuery = ref('')
+const dateFrom = ref('')
+const dateTo = ref('')
+
 const { loading, error, data: gates, load: loadGates } = useDataFetch<GateItem[]>(
   async () => {
-    const res = await api.GET('/api/v1/hitl/pending')
-    const raw = (res.data as any)?.gates || []
-    return { data: raw.map((g: any) => ({
+    // Reads the CURRENT status/page refs on every load: filter and page
+    // changes re-invoke loadGates(), so each fetch reflects the latest state.
+    const res = await api.GET('/api/v1/hitl/gates', {
+      params: { query: { status: serverStatusFor(statusFilter.value), page: page.value, page_size: PAGE_SIZE } },
+    })
+    if (res.error) return { error: res.error }
+    const payload = (res.data as any) || {}
+    totalGates.value = payload.total ?? 0
+    return { data: ((payload.items || []) as any[]).map((g) => ({
       ...g,
       run_id: String(g.run_id),
       pipeline_id: String(g.pipeline_id),
       claimed_by: g.claimed_by ? String(g.claimed_by) : null,
     })) }
   },
-  // silentRefetch (FAR-691): the 30s auto-refresh and the filter/date-change
+  // silentRefetch (FAR-691): the 30s auto-refresh and the filter/date/page
   // refetches must not flip `loading` — the list branch stays mounted, so an
   // expanded card (and its notes textarea focus) survives every refetch.
   // The initial load still shows the spinner.
@@ -210,11 +279,11 @@ const { load: loadPipelines, data: pipelines } = useDataFetch<PipelineItem[]>(
   { immediate: false, initialValue: [] as PipelineItem[] }
 )
 
-const statusFilter = ref('')
-const pipelineFilter = ref('')
-const searchQuery = ref('')
-const dateFrom = ref('')
-const dateTo = ref('')
+function goToPage(target: number) {
+  if (target < 1 || target > totalPages.value || target === page.value) return
+  page.value = target
+  loadGates()
+}
 
 const expandedKey = ref<string | null>(null)
 // FAR-612: view-level claim-failure banner. Cards may unmount on refresh
@@ -280,11 +349,6 @@ function pipelineName(pipelineId: string): string {
   return p ? p.name : ''
 }
 
-function matchesStatus(gate: GateItem): boolean {
-  if (!statusFilter.value) return true
-  return gateStatus(gate) === statusFilter.value
-}
-
 function matchesPipeline(gate: GateItem): boolean {
   if (!pipelineFilter.value) return true
   return gate.pipeline_id === pipelineFilter.value
@@ -313,8 +377,12 @@ function matchesDate(gate: GateItem): boolean {
 }
 
 const filteredGates = computed(() => {
+  // Status is filtered SERVER-side now (FAR-692): the statusFilter param selects
+  // the gate subset on /hitl/gates. Search/pipeline/date remain client-side
+  // over the loaded page (documented limitation: search matches within the
+  // current page only).
   return gates.value.filter(gate =>
-    matchesStatus(gate) && matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
+    matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
 })
 
 // FAR-686: claim/decide logic lives inside HitlGateCard (shared with

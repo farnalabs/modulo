@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, nullslast, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -173,6 +173,25 @@ class GateResponse(BaseModel):
 
 class PendingGatesResponse(BaseModel):
     gates: list[GateResponse]
+
+
+class GateListResponse(BaseModel):
+    """Paginated org gate listing (FAR-692) — the repo's standard list envelope."""
+
+    items: list[GateResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+#: FAR-692: the ``status`` query param on GET /api/v1/hitl/gates. A Literal type
+#: (not a bare str) so FastAPI's request validation rejects unknown values with
+#: 422 for free — no hand-rolled validation in the handler.
+GateStatusFilter = Literal["undecided", "pending", "claimed", "approved", "rejected", "all"]
+
+#: page_size is clamped (not 422'd) at this ceiling — mirrors the runs-list
+#: convention of a bounded page size without failing the whole request.
+_GATE_PAGE_SIZE_MAX = 100
 
 
 async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -921,6 +940,131 @@ async def list_org_pending_gates(
             )
             for g in gates
         ]
+    )
+
+
+@router.get(
+    "/hitl/gates",
+)
+@handle_db_errors("hitl.list_org_gates")
+async def list_org_gates(
+    status_filter: GateStatusFilter = Query(default="undecided", alias="status"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("hitl.list"),
+) -> GateListResponse:
+    """Paginated org-wide gate listing including DECIDED gates (FAR-692).
+
+    The review page's status filter was a no-op for approved/rejected because
+    ``GET /api/v1/hitl/pending`` only ever returns undecided gates. This
+    endpoint lists gates in EVERY state:
+
+    - ``undecided`` (DEFAULT): ``decision IS NULL`` — pending AND claimed.
+    - ``pending``: undecided and unclaimed.
+    - ``claimed``: undecided and claimed.
+    - ``approved`` / ``rejected``: the decided history.
+    - ``all``: everything.
+
+    ``/api/v1/hitl/pending`` is deliberately UNCHANGED (API stability — other
+    consumers depend on its undecided-only shape). The response envelope
+    mirrors the repo's standard list convention (items/total/page/page_size,
+    as the runs list uses) with the existing ``GateResponse`` items.
+    """
+    if status_filter == "all":
+        decision_filters: list[Any] = []
+    elif status_filter == "undecided":
+        decision_filters = [HitlClaim.decision.is_(None)]
+    elif status_filter == "pending":
+        decision_filters = [HitlClaim.decision.is_(None), HitlClaim.account_id.is_(None)]
+    elif status_filter == "claimed":
+        decision_filters = [HitlClaim.decision.is_(None), HitlClaim.account_id.is_not(None)]
+    elif status_filter == "approved":
+        decision_filters = [HitlClaim.decision == "approved"]
+    else:  # "rejected" — Literal narrows everything else away
+        decision_filters = [HitlClaim.decision == "rejected"]
+
+    # page_size clamps at the ceiling (never 422s) — an oversized client hint
+    # still gets a usable page, matching the "don't fail the request" intent.
+    effective_page_size = min(page_size, _GATE_PAGE_SIZE_MAX)
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            count_stmt = select(func.count()).select_from(HitlClaim).where(*decision_filters)
+            total = (await session.execute(count_stmt)).scalar_one()
+
+            gates: list[HitlClaim] = []
+            if total:
+                gates_stmt = (
+                    select(HitlClaim)
+                    .where(*decision_filters)
+                    .order_by(
+                        nullslast(HitlClaim.decision_at.desc()),
+                        nullslast(HitlClaim.claimed_at.desc()),
+                        HitlClaim.id.desc(),
+                    )
+                    .offset((page - 1) * effective_page_size)
+                    .limit(effective_page_size)
+                )
+                gates = list((await session.execute(gates_stmt)).scalars())
+
+            pipeline_ids = list({g.pipeline_id for g in gates})
+            pipeline_map: dict[uuid.UUID, str] = {}
+            if pipeline_ids:
+                pipeline_rows = await session.execute(
+                    select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
+                )
+                pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
+
+            # Decided gates carry the same briefing enrichment as pending ones:
+            # descriptions (FAR-613), human labels (FAR-686 — resolved for
+            # decided gates too, keyed by (run_id, gate_id)) and claimant
+            # display names + the caller-owns-claim stamp (FAR-691), all in
+            # batched passes inside the same transaction/RLS context.
+            description_by_gate = await resolve_gate_descriptions(
+                session, gates=gates, org_id=principal.organisation_id
+            )
+            gate_label_map = await _load_gate_label_map(session, gates)
+            claimant_names = await _load_claimant_name_map(session, gates)
+    except ProgrammingError as exc:
+        logger.exception("hitl.list_org_gates")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.exception("hitl.list_org_gates")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("hitl.list_org_gates.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e
+
+    return GateListResponse(
+        items=[
+            _gate_to_response(
+                g,
+                pipeline_name=pipeline_map.get(g.pipeline_id),
+                description=description_by_gate.get((g.run_id, g.gate_id)),
+                label=gate_label_map.get((g.run_id, g.gate_id)),
+                claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
+                claimed_by_me=g.account_id == principal.account_id,
+            )
+            for g in gates
+        ],
+        total=total,
+        page=page,
+        page_size=effective_page_size,
     )
 
 
