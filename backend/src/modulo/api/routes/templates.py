@@ -23,6 +23,7 @@ from modulo.db.crud.template import (
     list_templates,
 )
 from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT = "templates.list_templates_endpoint"
@@ -188,8 +189,6 @@ async def _persist_template_edges(
     Edges whose endpoints don't map to a resolved node id are skipped. The
     flush runs inside the caller's transaction.
     """
-    from modulo.db.models.pipeline_edge import PipelineEdge
-
     persisted_edges: list[PipelineEdge] = []
 
     source_map = {n.get("id", str(i)): resolved_nodes[i]["id"] for i, n in enumerate(graph_nodes)}
