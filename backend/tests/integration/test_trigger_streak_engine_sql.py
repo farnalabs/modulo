@@ -157,9 +157,9 @@ async def _insert_run(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_id, "
                 "trigger_type, status, run_number, input_hash, langgraph_thread_id, "
-                "started_at, completed_at, run_classification) "
+                "created_at, started_at, completed_at, run_classification) "
                 "VALUES (:id, :oid, :pid, :sid, :tid, 'ongoing', :status, :run_number, :ihash, "
-                ":thread, :started, :completed, :cls)",
+                ":thread, :created, :started, :completed, :cls)",
             ),
             {
                 "id": str(run_id),
@@ -171,6 +171,7 @@ async def _insert_run(
                 "run_number": int(run_id.int % 10**9) + 1,
                 "ihash": uuid.uuid4().hex,
                 "thread": f"thread-{run_id.hex}",
+                "created": completed_at - timedelta(minutes=4),
                 "started": completed_at - timedelta(minutes=2),
                 "completed": completed_at,
                 "cls": json.dumps(

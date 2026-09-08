@@ -266,6 +266,14 @@ def test_clamp_reported_below_floor_is_absent() -> None:
     assert clamp_reported(Decimal("0.0000005")) is None
 
 
+def test_clamp_reported_rejects_exact_zero() -> None:
+    """FAR-653: ``clamp_reported`` has NO zero-token proof in scope, so an
+    exact zero stays ABSENT here — the genuine-zero report is accepted only at
+    the extraction / fold / classification layers."""
+    assert clamp_reported(Decimal(0)) is None
+    assert clamp_reported(0.0) is None
+
+
 def test_clamp_reported_in_band_unchanged() -> None:
     result = clamp_reported(Decimal("30.0"))
     assert result is not None

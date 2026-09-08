@@ -71,7 +71,10 @@ def clamp_reported(value: Decimal | float) -> tuple[Decimal, bool, bool] | None:
     Returns ``(clamped_value, was_clamped_any, out_of_band_high)`` or ``None``
     when the value is treated as ABSENT (bool / non-numeric / NaN/Inf — the
     node's self-report is skipped, it routes to estimate). A stored value below
-    the floor is also skipped. ``was_clamped_any`` is TRUE for ANY clamp
+    the floor is also skipped — which includes EXACT ZERO by design (FAR-653):
+    the genuine-zero report is accepted only at the layers where the zero-token
+    proof is in scope (extraction, fold, classification), never here.
+    ``was_clamped_any`` is TRUE for ANY clamp
     (``clamped != raw``); ``out_of_band_high`` is True iff ``raw > band``.
 
     This is NOT the flag authority on the live path — the authoritative
