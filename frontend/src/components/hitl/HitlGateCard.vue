@@ -323,66 +323,56 @@ async function claimGate() {
   }
 }
 
-async function approveGate() {
+async function decideGate(decision: 'approve' | 'reject') {
   const token = claimToken.value
   if (!token) {
     showMessage({ type: 'error', text: t('hitl.gate.no_claim_token_claim_the_gate_first') }, false)
     return
   }
-  actioning.value = 'approve'
+  actioning.value = decision
   message.value = null
+  const reason = decision === 'reject' ? notes.value || t('hitl.gate.rejected_by_reviewer') : null
+  const errorKey = decision === 'approve' ? 'hitl.gate.approve_failed' : 'hitl.gate.reject_failed'
+  const successKey =
+    decision === 'approve'
+      ? 'hitl.gate.gate_approved_pipeline_resuming'
+      : 'hitl.gate.gate_rejected_pipeline_routed_to_reject_target'
   try {
-    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/approve', {
-      params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
-      body: { claim_token: token, notes: notes.value || null },
-    })
+    const { error: err } = await api.POST(
+      decision === 'approve'
+        ? '/api/v1/runs/{run_id}/hitl/{gate_id}/approve'
+        : '/api/v1/runs/{run_id}/hitl/{gate_id}/reject',
+      {
+        params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
+        body:
+          decision === 'approve'
+            ? { claim_token: token, notes: notes.value || null }
+            : { claim_token: token, reason },
+      },
+    )
     if (err) {
-      showMessage({ type: 'error', text: `${t('hitl.gate.approve_failed')} ${formatApiError(err)}` }, false)
+      showMessage({ type: 'error', text: `${t(errorKey)} ${formatApiError(err)}` }, false)
     } else {
       // Decision done: drop the persisted token/notes for this gate so no
       // stale session state is left behind (FAR-686).
       gateState.clear()
       claimedByYou.value = false
-      const payload: HitlMessage = { type: 'success', text: t('hitl.gate.gate_approved_pipeline_resuming') }
+      const payload: HitlMessage = { type: 'success', text: t(successKey) }
       showMessage(payload)
       emit('decided', payload)
     }
   } catch (e: unknown) {
-    showMessage({ type: 'error', text: `${t('hitl.gate.approve_failed')} ${formatApiError(e)}` }, false)
+    showMessage({ type: 'error', text: `${t(errorKey)} ${formatApiError(e)}` }, false)
   } finally {
     actioning.value = null
   }
 }
 
+async function approveGate() {
+  await decideGate('approve')
+}
+
 async function rejectGate() {
-  const token = claimToken.value
-  if (!token) {
-    showMessage({ type: 'error', text: t('hitl.gate.no_claim_token_claim_the_gate_first') }, false)
-    return
-  }
-  const reason = notes.value || t('hitl.gate.rejected_by_reviewer')
-  actioning.value = 'reject'
-  message.value = null
-  try {
-    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
-      params: { path: { run_id: props.gate.run_id, gate_id: props.gate.gate_id } },
-      body: { claim_token: token, reason },
-    })
-    if (err) {
-      showMessage({ type: 'error', text: `${t('hitl.gate.reject_failed')} ${formatApiError(err)}` }, false)
-    } else {
-      // Decision done: drop the persisted token/notes for this gate so no
-      // stale session state is left behind (FAR-686).
-      gateState.clear()
-      claimedByYou.value = false
-      const payload: HitlMessage = { type: 'success', text: t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target') }
-      showMessage(payload)
-      emit('decided', payload)
-    }
-  } catch (e: unknown) {
-    showMessage({ type: 'error', text: `${t('hitl.gate.reject_failed')} ${formatApiError(e)}` }, false)
-  } finally {
-    actioning.value = null
-  }
+  await decideGate('reject')
 }
 </script>
