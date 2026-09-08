@@ -665,7 +665,7 @@ async def _maybe_watchdog_retry(
     final_status: str,
     error_code: str,
 ) -> bool:
-    """Consult the shared watchdog-retry hook (FAR-690); fail closed.
+    """Consult the shared watchdog-retry hook (FAR-690 / FAR-693); fail closed.
 
     Returns ``True`` ONLY when the hook re-dispatched the run (fenced
     pending-reset performed; the caller must NOT terminal-fail — the wrapper
@@ -693,6 +693,7 @@ async def zombie_watchdog(
     exec_task: asyncio.Task[Any],
     stall_requested: asyncio.Event | None = None,
     grace_seconds: int | None = None,
+    retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
 ) -> None:
     """Fail a claimed-but-nodeless run when no node dispatches in time.
 
@@ -712,6 +713,14 @@ async def zombie_watchdog(
     the run (``executor_stalled``). Cancelling the executor FIRST ensures a
     late-returning ``execute`` cannot overwrite the failure through
     ``finalize_cost``.
+
+    FAR-693: when *retry_hook* is wired (execute path only), the kill first
+    consults the run's retry_policy through the shared watchdog-retry
+    mechanism (``pipeline_engine.watchdog_retry``) — a ``stall``-covered
+    policy with budget remaining re-dispatches the run (fenced pending-reset
+    + ``RunRetryPolicyError`` re-raise → SAQ job retry) instead of
+    terminal-failing it. No coverage / exhausted budget / any hook failure
+    keeps today's unconditional terminal fail.
     """
     if grace_seconds is None:
         grace_seconds = int(get_settings().saq_setup_grace_seconds)
@@ -734,6 +743,8 @@ async def zombie_watchdog(
     exec_task.cancel()
     if stall_requested is not None:
         stall_requested.set()
+    if await _maybe_watchdog_retry(retry_hook, run_id, final_status="stalled", error_code=EXECUTOR_STALLED_ERROR_CODE):
+        return
     await fail_run_terminal(
         aeng,
         run_id,
@@ -1121,15 +1132,16 @@ async def run_executor_with_watchdog(
         return await execute_fn()
 
     exec_task = asyncio.create_task(_execute(), name=f"saq-exec-{rid}")
-    # FAR-690: wire the absolute node-deadline watchdog kill into the run-level
-    # retry decision. The hook reuses the live executor's own fenced-reset /
-    # attempt-state helpers and the shared ``_retry_after_policy`` decision
-    # (pipeline_engine.watchdog_retry); when it re-dispatches,
-    # ``_resolve_cancel_outcome`` re-raises ``RunRetryPolicyError`` so SAQ
-    # retries the job exactly like the in-execute retry path. Resume jobs are
-    # excluded (their claim cannot re-claim a pending run — see
-    # watchdog_retry). The hook fails CLOSED to the terminal fail, so this can
-    # never prevent a run from reaching a terminal state.
+    # FAR-690 / FAR-693: wire BOTH watchdog kills (absolute node-deadline +
+    # zombie stall) into the run-level retry decision. The hook reuses the
+    # live executor's own fenced-reset / attempt-state helpers and the shared
+    # ``_retry_after_policy`` decision (pipeline_engine.watchdog_retry); when
+    # it re-dispatches, ``_resolve_cancel_outcome`` re-raises
+    # ``RunRetryPolicyError`` so SAQ retries the job exactly like the
+    # in-execute retry path. Resume jobs are excluded (their claim cannot
+    # re-claim a pending run — see watchdog_retry). The hook fails CLOSED to
+    # the terminal fail, so this can never prevent a run from reaching a
+    # terminal state.
     watchdog_retry_hook: Callable[[str, str], Awaitable[Any]] | None = None
     watchdog_retry_outcome: Any = None
     if _watchdog_retry_enabled_for_job(job):
@@ -1146,6 +1158,7 @@ async def run_executor_with_watchdog(
             first_progress,
             exec_task=exec_task,
             stall_requested=stall_requested,
+            retry_hook=watchdog_retry_hook,
         ),
         name=f"saq-zombie-watchdog-{rid}",
     )
@@ -1275,7 +1288,7 @@ async def _await_executor_task(
     genuine worker-shutdown cancellation) and returns ``(None, None)`` so the
     caller falls back to the run row. A transient ``NodeCancelledError`` is
     re-raised so SAQ retries the job — including a watchdog-initiated
-    ``RunRetryPolicyError`` re-dispatch (FAR-690). The ``finally``
+    ``RunRetryPolicyError`` re-dispatch (FAR-690 / FAR-693). The ``finally``
     cancels and drains every helper task before the outcome is resolved.
     """
     try:
@@ -1391,7 +1404,7 @@ async def _resolve_cancel_outcome(
     path, where it can never write) no longer delays the re-raise by its full
     remaining grace.
 
-    FAR-690: when a watchdog kill consulted the run-level retry
+    FAR-690 / FAR-693: when a watchdog kill consulted the run-level retry
     policy and the hook re-dispatched the run (fenced pending-reset done),
     re-raise ``RunRetryPolicyError`` so SAQ retries the job — the SAME
     re-enqueue the in-execute retry path uses. Never double-fails: the hook
@@ -1418,7 +1431,7 @@ async def _resolve_cancel_outcome(
         )
     if stall_requested.is_set():
         _log.warning("run_executor_with_watchdog: execution cancelled by node/executor watchdog for run %s", rid)
-        # FAR-690: the watchdog hook re-dispatched the run (fenced
+        # FAR-690 / FAR-693: the watchdog hook re-dispatched the run (fenced
         # pending-reset CONFIRMED, backoff slept) — re-raise the SAME transient
         # exception the in-execute retry path raises so SAQ re-dispatches the
         # job and the pending run is re-claimed.

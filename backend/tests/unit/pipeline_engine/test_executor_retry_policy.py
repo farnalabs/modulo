@@ -23,6 +23,7 @@ from modulo.core.pipeline_engine.executor import (
     _graph_is_idempotent,
     _retry_after_policy,
     _retry_backoff_seconds,
+    _stall_event_matches,
     _timeout_event_matches,
 )
 
@@ -1671,3 +1672,24 @@ def test_watchdog_deadline_code_maps_to_timeout_match():
     assert mapped == "node.deadline_exceeded"
     assert _timeout_event_matches({"timeout"}, "node_deadline_exceeded", mapped) is True
     assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
+
+
+def test_watchdog_stalled_code_maps_to_stall_match():
+    """FAR-693 pin: ``executor_stalled`` (exactly what the zombie watchdog
+    writes) resolves through ``map_legacy_code`` to ``agent.stall`` and matches
+    the ``stall`` event — both via final_status ``stalled`` and the mapped
+    code."""
+    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+    mapped = map_legacy_code("executor_stalled")
+    assert mapped == "agent.stall"
+    assert _stall_event_matches({"stall"}, "stalled", "executor_stalled", mapped) is True
+    assert _retry_after_policy({"on": ["stall"], "max_retries": 1}, "stalled", "executor_stalled") == 1
+
+
+def test_watchdog_codes_never_match_uncorrelated_events():
+    """A watchdog kill must not match a policy that does not cover its event:
+    a stall-only policy does not retry a deadline kill, and a timeout-only
+    policy does not retry a zombie stall."""
+    assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "node_deadline_exceeded") is None
+    assert _retry_after_policy({"on": ["timeout"], "max_retries": 2}, "stalled", "executor_stalled") is None

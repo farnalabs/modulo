@@ -424,27 +424,18 @@ def _retry_after_policy(
     is excluded from ``"failure"`` retries — while TRANSIENT ``node_cancelled``
     (no hang marker) stays retryable via the existing NodeCancelledError path.
 
-    Same-shaped limitation for the FAR-369 deadline alias above: the absolute
-    node-deadline watchdog terminal-fails the run DIRECTLY (``fail_run_terminal``
-    with ``node_deadline_exceeded``) and cancels ``execute()`` — BUT (FAR-690)
-    the kill now consults this decision first through the shared
-    ``pipeline_engine.watchdog_retry`` hook: with final_status ``failed`` and
-    the raw ``node_deadline_exceeded`` code, a ``"timeout"``-covered policy
-    with budget remaining re-dispatches the run through the SAME fenced
-    pending-reset + ``RunRetryPolicyError`` re-raise the in-execute path uses;
-    no coverage or an exhausted budget keeps the unconditional terminal fail.
-    The ``"timeout"`` alias above therefore covers both the in-execute outcome
-    spellings and the raw watchdog code (both resolve through
-    ``map_legacy_code``).
-
-    Known limitation of the ``"stall"`` event: it covers the **node-idle stall**
-    path only — a node returns a stalled output dict (``stall_reason``) in
-    ``_stream_graph``, which reaches this decision. The **executor-level
-    zombie-watchdog stall** (``execute_run`` watchdog terminal-fails the run and
-    cancels ``execute()``; the ``CancelledError`` is re-raised at the top of the
-    stream block before this decision runs) is NOT retried. See
-    ``docs/troubleshooting.md`` (``executor_stalled`` row) — the zombie watchdog's
-    terminal fail is documented as "never re-dispatched".
+    Watchdog kills reach this decision too (FAR-690 / FAR-693): the FAR-369
+    absolute node-deadline watchdog consults this function — via the shared
+    ``pipeline_engine.watchdog_retry`` module — with final_status ``failed``
+    and the raw ``node_deadline_exceeded`` code before terminal-failing, and
+    the executor-level zombie-watchdog consults it with final_status
+    ``stalled`` and ``executor_stalled``. When the budget allows, both
+    re-dispatch the run through the SAME mechanism the in-execute path uses
+    (fenced pending-reset + backoff + ``RunRetryPolicyError`` re-raise → SAQ
+    job retry); with no coverage or an exhausted budget they keep the
+    unconditional terminal fail. The ``"timeout"`` / ``"stall"`` aliases above
+    therefore cover both the in-execute outcome spellings AND the raw watchdog
+    codes (both resolve through ``map_legacy_code``).
 
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
