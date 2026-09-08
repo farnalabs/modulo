@@ -120,21 +120,37 @@ _CHECKPOINT_TABLES: tuple[tuple[str, str], ...] = (
 # (:tids via an expanding bind, :org via a plain bind) — never concatenated —
 # so there is no SQL-injection surface. Pure string literals also mean the
 # bandit `# nosec B608` suppression is no longer required.
-_CHECKPOINT_SIZE_SQL: dict[str, str] = {
+#
+# Each size template is split into (head, tail) so the optional _ORG_CLAUSE can
+# be spliced into the WHERE clause. Appending it to a single-string template put
+# it AFTER `GROUP BY thread_id`, producing
+# `GROUP BY thread_id AND organisation_id = :org` — Postgres rejects that with
+# "argument of AND must be type boolean, not type text", so every org-scoped
+# size probe errored, the error aborted the enclosing transaction, and the next
+# statement in the same session died with InFailedSQLTransactionError. The org
+# filter must be a WHERE predicate, never a GROUP BY expression.
+_CHECKPOINT_SIZE_SQL: dict[str, tuple[str, str]] = {
     "checkpoints": (
-        "SELECT thread_id, COALESCE(SUM(octet_length(checkpoint::text) + "
-        "octet_length(metadata::text)), 0) AS bytes, COUNT(*) AS cnt "
-        "FROM checkpoints WHERE thread_id IN :tids GROUP BY thread_id"
+        (
+            "SELECT thread_id, COALESCE(SUM(octet_length(checkpoint::text) + "
+            "octet_length(metadata::text)), 0) AS bytes, COUNT(*) AS cnt "
+            "FROM checkpoints WHERE thread_id IN :tids"
+        ),
+        " GROUP BY thread_id",
     ),
     "checkpoint_blobs": (
-        "SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, "
-        "COUNT(*) AS cnt FROM checkpoint_blobs WHERE thread_id IN :tids "
-        "GROUP BY thread_id"
+        (
+            "SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, "
+            "COUNT(*) AS cnt FROM checkpoint_blobs WHERE thread_id IN :tids"
+        ),
+        " GROUP BY thread_id",
     ),
     "checkpoint_writes": (
-        "SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, "
-        "COUNT(*) AS cnt FROM checkpoint_writes WHERE thread_id IN :tids "
-        "GROUP BY thread_id"
+        (
+            "SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, "
+            "COUNT(*) AS cnt FROM checkpoint_writes WHERE thread_id IN :tids"
+        ),
+        " GROUP BY thread_id",
     ),
 }
 _CHECKPOINT_DELETE_SQL: dict[str, str] = {
@@ -225,13 +241,42 @@ _RUN_NODE_OUTPUTS_AGG = Table(
     Column("raw_output_markers", JSON().with_variant(JSONB(), "postgresql")),
 )
 
+
+def _json_col_bytes(col: Any) -> Any:
+    """Character count of a JSON column's text rendering, JSON ``null`` = 0.
+
+    Mirrors the page-level estimator ``models.run_node_outputs.json_bytes``,
+    which returns 0 for a ``None`` payload. Two DIFFERENT absences must both
+    count 0 here:
+
+    * SQL NULL (the column was omitted on INSERT) — handled by the COALESCE;
+    * JSON ``null`` (the column was written as an explicit Python ``None``) —
+      handled by the NULLIF.
+
+    The second case is why this helper exists. SQLAlchemy's ``JSON`` type binds
+    an explicit Python ``None`` as the JSON value ``null`` (``none_as_null`` is
+    False by default), NOT as SQL NULL, so ``cast(col AS TEXT)`` renders the
+    4-character string ``null``. The ORM loads that straight back as ``None``,
+    so the page estimator scored it 0 while this aggregate scored it 4 — the
+    whole-set totals drifted +4 bytes per absent payload column against the
+    page sum (3 runs x absent columns = the 12-byte delta that failed
+    test_candidates_shape_and_estimates). NULLIF on the rendered text collapses
+    JSON ``null`` to SQL NULL so both metrics agree, keeping the documented
+    "coincide for simple ASCII payloads" contract true.
+
+    A JSON *string* ``"null"`` renders WITH quotes (6 chars), so it is never
+    mistaken for the JSON ``null`` literal.
+    """
+    return func.coalesce(func.length(func.nullif(cast(col, Text), "null")), 0)
+
+
 # Per-table byte-size expressions, mirroring the raw _CHECKPOINT_SIZE_SQL
 # formulas exactly (octet_length(checkpoint::text) + octet_length(metadata::text)
 # for the checkpoints row, octet_length(blob) for the BYTEA blob columns) so the
 # checkpoint accounting cannot drift between the page-level reader
 # (_checkpoint_detail) and the whole-set aggregates. JSON payload columns use
-# length(cast(col AS TEXT)) — a CHARACTER count of Postgres' jsonb text
-# rendering. That is NOT byte-identical to the page-level Python estimator's
+# _json_col_bytes — a CHARACTER count of Postgres' jsonb text rendering. That is
+# NOT byte-identical to the page-level Python estimator's
 # len(json.dumps(...)) (models.run_node_outputs.json_bytes): json.dumps
 # ensure_ascii-escapes non-ASCII to \uXXXX and renders numbers with Python
 # repr, while jsonb text keeps raw unicode and re-renders numbers as
@@ -243,17 +288,16 @@ _RUN_NODE_OUTPUTS_AGG = Table(
 # the totals are the authoritative whole-set figure and the per-run values are
 # indicative — the SQL aggregate is NOT claimed to equal the page sum. The
 # per-column COALESCE keeps an SQL-NULL (absent) column at 0 so a single NULL
-# never voids the row's whole contribution.
+# never voids the row's whole contribution, and the NULLIF keeps an explicit
+# JSON null at 0 to match the Python estimator (see _json_col_bytes).
 _RUN_PAYLOAD_BYTES = (
-    func.coalesce(func.length(cast(Run.cost_breakdown, Text)), 0)
-    + func.coalesce(func.length(cast(Run.input_payload, Text)), 0)
-    + func.coalesce(func.length(cast(Run.run_classification, Text)), 0)
+    _json_col_bytes(Run.cost_breakdown) + _json_col_bytes(Run.input_payload) + _json_col_bytes(Run.run_classification)
 )
 
 _NODE_OUTPUT_BYTES = (
-    func.coalesce(func.length(cast(_RUN_NODE_OUTPUTS_AGG.c["outputs_json"], Text)), 0)
-    + func.coalesce(func.length(cast(_RUN_NODE_OUTPUTS_AGG.c["node_telemetry_json"], Text)), 0)
-    + func.coalesce(func.length(cast(_RUN_NODE_OUTPUTS_AGG.c["raw_output_markers"], Text)), 0)
+    _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["outputs_json"])
+    + _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["node_telemetry_json"])
+    + _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["raw_output_markers"])
 )
 
 # (table, size expression) pairs for the three checkpoint aggregates.
@@ -382,6 +426,16 @@ async def _checkpoint_detail(
     skipped (returns 0) rather than failing the whole listing. ``org_id`` is
     applied when given; the thread_id itself already encodes the org, so a
     cross-org system-admin delete stays correct without it.
+
+    Each probe runs inside its OWN ``session.begin_nested()`` SAVEPOINT, mirroring
+    :func:`_run_grouped_estimate`. Without one, "skipped rather than failing the
+    whole listing" was not actually true: a failed statement aborts the enclosing
+    Postgres transaction, so swallowing the error left the session poisoned and
+    the NEXT caller statement died with InFailedSQLTransactionError. The savepoint
+    rollback is what makes this contract real. Failures are logged with
+    ``_log.exception`` — a bare warning hid a malformed-SQL bug here (the org
+    clause landing in GROUP BY, see _CHECKPOINT_SIZE_SQL) behind a benign
+    "table missing" message.
     """
 
     if not thread_ids:
@@ -394,21 +448,24 @@ async def _checkpoint_detail(
         org_clause = _ORG_CLAUSE
         params["org"] = str(org_id)
     for table, _ in _CHECKPOINT_TABLES:
-        base_sql = _CHECKPOINT_SIZE_SQL.get(table)
-        if base_sql is None:
+        parts = _CHECKPOINT_SIZE_SQL.get(table)
+        if parts is None:
             # Not in the hard-coded allowlist — never interpolate an unknown
             # table name into SQL; skip this table for the size estimate.
             _log.warning("run_retention.checkpoint_size_unavailable", extra={"table": table})
             continue
+        head, tail = parts
         try:
-            stmt = text(base_sql + org_clause).bindparams(bindparam("tids", expanding=True))
-            result = await session.execute(stmt, params)
+            stmt = text(head + org_clause + tail).bindparams(bindparam("tids", expanding=True))
+            async with session.begin_nested():
+                rows = (await session.execute(stmt, params)).all()
         except Exception:
             # The `langgraph.*` tables may not exist yet (pre-checkpointer) or
             # the dialect may not support octet_length — treat as zero bytes.
-            _log.warning("run_retention.checkpoint_size_unavailable", extra={"table": table})
+            # The savepoint rollback keeps the enclosing transaction usable.
+            _log.exception("run_retention.checkpoint_size_unavailable", extra={"table": table})
             continue
-        for row in result:
+        for row in rows:
             bytes_by_thread[row[0]] = bytes_by_thread.get(row[0], 0) + int(row[1] or 0)
             count_by_thread[row[0]] = count_by_thread.get(row[0], 0) + int(row[2] or 0)
     return bytes_by_thread, count_by_thread
