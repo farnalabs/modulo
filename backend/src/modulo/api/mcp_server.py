@@ -1413,6 +1413,7 @@ def _tool_db_shell(
     integrity_detail: str | None,
     fallback: str,
     handle_http_exception: bool = False,
+    db_errors_to_fallback: bool = False,
 ) -> Callable[
     [Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]],
     Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
@@ -1431,9 +1432,15 @@ def _tool_db_shell(
     - ``IntegrityError`` → ``conflict`` with ``integrity_detail`` formatted
       with ``orig``; when ``integrity_detail`` is None the ``SQLAlchemyError``
       behaviour (log + ``database_unavailable``), which is what shells
-      without an IntegrityError clause did.
+      without an IntegrityError clause did. When ``db_errors_to_fallback``
+      is True the clause is skipped entirely and the exception falls through
+      to the generic ``Exception`` behaviour, reproducing shells (e.g.
+      ``get_trigger``) that had no IntegrityError clause at all.
     - ``ProgrammingError`` → ``migration_required``.
-    - ``SQLAlchemyError`` → ``database_unavailable``.
+    - ``SQLAlchemyError`` → ``database_unavailable``; when
+      ``db_errors_to_fallback`` is True the clause is skipped entirely and
+      the exception falls through to the generic ``Exception`` behaviour,
+      reproducing shells that had no SQLAlchemyError clause.
     - ``Exception`` → log + ``_tool_error(fallback)``.
     """
 
@@ -1452,6 +1459,9 @@ def _tool_db_shell(
                 _log.exception(log_constant)
                 return _tool_error(fallback)
             except IntegrityError as exc:
+                if db_errors_to_fallback:
+                    _log.exception(log_constant)
+                    return _tool_error(fallback)
                 if integrity_detail is None:
                     _log.exception(log_constant)
                     return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
@@ -1461,6 +1471,9 @@ def _tool_db_shell(
                 _log.exception(log_constant)
                 return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
             except SQLAlchemyError:
+                if db_errors_to_fallback:
+                    _log.exception(log_constant)
+                    return _tool_error(fallback)
                 _log.exception(log_constant)
                 return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
             except Exception:
@@ -4855,6 +4868,7 @@ async def _get_trigger_impl(trigger_id: str) -> dict[str, Any]:
     log_constant="get_trigger failed",
     integrity_detail=None,
     fallback="Failed to get trigger",
+    db_errors_to_fallback=True,
 )
 async def get_trigger(trigger_id: str) -> dict[str, Any]:
     return await _get_trigger_impl(trigger_id)
