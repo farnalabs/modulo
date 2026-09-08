@@ -168,7 +168,7 @@ async def test_delete_binding_present() -> None:
     result = MagicMock()
     result.scalar_one_or_none.return_value = row
     session.execute.return_value = result
-    assert await delete_binding(session, _BINDING_ID) is True
+    assert await delete_binding(session, binding_id=_BINDING_ID, agent_id=_AGENT_ID) is True
     session.delete.assert_called_once_with(row)
 
 
@@ -177,7 +177,7 @@ async def test_delete_binding_absent() -> None:
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
     session.execute.return_value = result
-    assert await delete_binding(session, _BINDING_ID) is False
+    assert await delete_binding(session, binding_id=_BINDING_ID, agent_id=_AGENT_ID) is False
 
 
 async def test_count_bindings_for_backend() -> None:

@@ -20,6 +20,12 @@ from modulo.db.runner_binding_constraints import BindingValidationError, validat
 _log = logging.getLogger(__name__)
 
 
+async def get_binding(session: AsyncSession, binding_id: uuid.UUID) -> AgentRunnerBinding | None:
+    """Fetch a single binding row by id (None when it does not exist)."""
+    result = await session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == binding_id))
+    return result.scalar_one_or_none()
+
+
 async def list_bindings_for_agent(session: AsyncSession, agent_id: uuid.UUID) -> list[AgentRunnerBinding]:
     result = await session.execute(
         select(AgentRunnerBinding)
