@@ -790,7 +790,11 @@ export default {
       "claim_failed_already_decided": "This gate already has a final decision and can no longer be claimed.",
       "claim_failed_run_not_awaiting": "This run is no longer waiting for a human decision ({reason}).",
       "dismiss": "Dismiss",
-      "claimed_by_other": "Claimed by {user} at {time}. Waiting for their decision."
+      "claimed_by_other": "Claimed by {user} at {time}. Waiting for their decision.",
+      "pagination_label": "Gate history pagination",
+      "prev_page": "Previous",
+      "next_page": "Next",
+      "page_indicator": "Page {page} of {total}"
     },
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
