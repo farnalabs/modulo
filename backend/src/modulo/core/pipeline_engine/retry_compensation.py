@@ -616,22 +616,11 @@ def validate_compensation_target_exists(edges: list[dict[str, Any]], nodes: list
             )
 
 
-def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
-    """Return every compensation-edge cycle in the graph (empty = acyclic).
+def _compensation_adjacency(edges: list[dict[str, Any]], node_ids: set[str]) -> dict[str, list[str]]:
+    """Build the compensation adjacency (``source -> on_failure_target``), only edges with a real target node.
 
-    The compensation relation is ``source -> on_failure_target`` for each edge
-    carrying an ``on_failure_target``. A cycle among these edges means the
-    compensation path can loop infinitely (a compensation node's failure routes
-    back to an upstream compensation), which the design FORBIDS at compile time.
-    Nested / composite sub-pipelines are validated at their own boundary; this
-    detects cycles in the current graph's compensation edges.
+    Uses an insertion-ordered dict so results are deterministic.
     """
-    nodes = graph_json.get("nodes", []) if isinstance(graph_json, dict) else []
-    edges = graph_json.get("edges", []) if isinstance(graph_json, dict) else []
-    node_ids = {_string_or_default(n.get("id")) for n in nodes if isinstance(n, dict)}
-
-    # Build the compensation adjacency (only edges whose on_failure_target is a
-    # real node). Use an insertion-ordered dict so results are deterministic.
     adj: dict[str, list[str]] = {}
     for edge in edges:
         if not isinstance(edge, dict):
@@ -640,14 +629,18 @@ def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
         target = edge.get("on_failure_target")
         if target in (None, "") or _string_or_default(target) not in node_ids:
             continue
-        target = _string_or_default(target)
-        adj.setdefault(source, []).append(target)
+        adj.setdefault(source, []).append(_string_or_default(target))
+    return adj
 
-    # DFS with an explicit "in current stack" marker. Iterative to avoid recursion
-    # depth issues on wide graphs (there is no recursion limit concern here, but
-    # iterative is simpler to keep deterministic order).
+
+def _collect_compensation_cycles(node_ids: set[str], adj: dict[str, list[str]]) -> list[list[str]]:
+    """DFS over the compensation adjacency, collecting every cycle (possibly duplicated, rotation-variant).
+
+    Iterative-order DFS with an explicit "in current stack" marker (state:
+    0=unvisited, 1=in-stack, 2=done).
+    """
     cycles: list[list[str]] = []
-    state: dict[str, int] = {}  # 0=unvisited, 1=in-stack, 2=done
+    state: dict[str, int] = {}
 
     def _dfs(start: str, stack: list[str]) -> bool:
         # Returns True if a cycle was found rooted through ``start``.
@@ -668,9 +661,11 @@ def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
     for node in node_ids:
         if state.get(node, 0) == 0:
             _dfs(node, [])
+    return cycles
 
-    # De-duplicate cycles (rotation-invariant) and cap the count to keep the
-    # error message bounded.
+
+def _dedupe_compensation_cycles(cycles: list[list[str]]) -> list[list[str]]:
+    """De-duplicate cycles (rotation-invariant) so the error message stays bounded."""
     seen: set[str] = set()
     unique: list[list[str]] = []
     for cycle in cycles:
@@ -683,6 +678,26 @@ def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
         seen.add(key)
         unique.append(list(normalized))
     return unique
+
+
+def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
+    """Return every compensation-edge cycle in the graph (empty = acyclic).
+
+    The compensation relation is ``source -> on_failure_target`` for each edge
+    carrying an ``on_failure_target``. A cycle among these edges means the
+    compensation path can loop infinitely (a compensation node's failure routes
+    back to an upstream compensation), which the design FORBIDS at compile time.
+    Nested / composite sub-pipelines are validated at their own boundary; this
+    detects cycles in the current graph's compensation edges.
+    """
+    nodes = graph_json.get("nodes", []) if isinstance(graph_json, dict) else []
+    edges = graph_json.get("edges", []) if isinstance(graph_json, dict) else []
+    node_ids = {_string_or_default(n.get("id")) for n in nodes if isinstance(n, dict)}
+    adj = _compensation_adjacency(edges, node_ids)
+    cycles = _collect_compensation_cycles(node_ids, adj)
+    # De-duplicate cycles (rotation-invariant) and cap the count to keep the
+    # error message bounded.
+    return _dedupe_compensation_cycles(cycles)
 
 
 def validate_compensation_acyclic(graph_json: dict[str, Any], result: Any) -> None:
