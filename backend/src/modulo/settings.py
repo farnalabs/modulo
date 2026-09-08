@@ -1,9 +1,13 @@
 import logging
+from collections.abc import Callable
 from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+from modulo.db.url_utils import fix_database_url
 
 _log = logging.getLogger(__name__)
 
@@ -14,6 +18,66 @@ _POSTGRES_ASYNC_PREFIX = "postgresql+asyncpg://"
 _MIN_BREAK_GLASS_SECRET_LEN = 24
 # Known placeholder values that operators paste from docs without changing.
 _BLOCKED_SECRET_KEYS = frozenset({"changeme", "secret", "your-secret-key", "development", "test", "insecure"})
+
+# The module's public surface. The launcher-integration trio (pin_env_file /
+# pinned_env_file / set_first_boot_guard) is consumed by the slice-2 native
+# entry (FAR-671) — listing it here keeps the intended API explicit and marks
+# it used for the vulture dead-code gate.
+__all__ = [
+    "Settings",
+    "break_glass_boot_findings",
+    "get_settings",
+    "pin_env_file",
+    "pinned_env_file",
+    "set_first_boot_guard",
+    "validate_break_glass_boot",
+]
+
+# ---------------------------------------------------------------------------
+# Native-launcher integration (FAR-671 / ADR 031 Decision 2)
+# ---------------------------------------------------------------------------
+# When running as the native single-install launcher, Settings must NOT read a
+# CWD-relative ".env" (a stray file in the launch directory would silently
+# override the operator's pinned config). The launcher pins the env_file to an
+# explicit path BEFORE the first Settings construction; Docker/container boots
+# leave the pin unset and keep the historical CWD ".env" behaviour.
+_pinned_env_file: str | Path | None = None
+# The first-boot ambient-env refusal hook (installed by the launcher). When
+# set, it is invoked from a model validator during every Settings
+# construction and raises (failing boot) when ambient DATABASE_URL/REDIS_URL
+# exist while the data dir has no state.json yet. Unset by default —
+# container/Docker boots and tests are unaffected.
+_first_boot_guard: Callable[[], None] | None = None
+
+
+def pin_env_file(path: str | Path) -> None:
+    """Pin the Settings env_file to an explicit config path (native launcher).
+
+    Must be called before the first Settings construction — ``get_settings``
+    is lru_cached and pydantic-settings resolves ``_env_file`` at construction
+    time. Passing ``None`` here would silently restore the CWD ".env" read;
+    unpinning is therefore not supported through this function (the process
+    would have to restart).
+    """
+    global _pinned_env_file
+    _pinned_env_file = path
+
+
+def pinned_env_file() -> str | Path | None:
+    """Return the currently pinned env_file path (None = default CWD ".env")."""
+    return _pinned_env_file
+
+
+def set_first_boot_guard(guard: Callable[[], None] | None) -> None:
+    """Install (or clear, with None) the first-boot ambient-env refusal hook.
+
+    The launcher installs ``modulo.launcher.env_safety.make_first_boot_guard
+    (data_dir)`` before constructing Settings; the hook runs at validation
+    time and raises ``AmbientEnvironmentError`` when ambient service URLs are
+    present on an un-bootstrapped data dir (ADR 031 Decision 2).
+    """
+    global _first_boot_guard
+    _first_boot_guard = guard
 
 
 class Settings(BaseSettings):
@@ -628,20 +692,36 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _fix_database_url(self) -> "Settings":
+        """Delegate to the shared boot URL contract (modulo.db.url_utils).
+
+        One implementation serves the container bootstrap and the Settings
+        validator (FAR-671). The unified semantics strip EVERY sslmode
+        parameter (the safer superset of the two historical variants —
+        documented in url_utils); the legacy asyncmy driver prefix is still
+        rewritten, with the historical warning. The actual SSL posture is set
+        via connect_args in get_or_create_engine() (dependencies.py); that
+        module MUST always set ssl=False for Postgres to match this.
+        """
         url = self.database_url
-        if url.startswith("postgres://"):
-            url = _POSTGRES_ASYNC_PREFIX + url[len("postgres://") :]
         if url.startswith("mysql+asyncmy://"):
-            url = "mysql+aiomysql://" + url[len("mysql+asyncmy://") :]
             _log.warning("settings.legacy_asyncmy_url_replaced")
-        # asyncpg doesn't understand sslmode in URLs — strip it so it doesn't
-        # cause a URL parsing error. The actual SSL mode is set via
-        # connect_args["ssl"] in get_or_create_engine() (dependencies.py); that
-        # module MUST always set ssl=False for Postgres to match this.
-        url = url.replace("?sslmode=disable", "").replace("&sslmode=disable", "")
-        if url != self.database_url:
-            self.database_url = url
+        fixed = fix_database_url(url)
+        if fixed != url:
+            self.database_url = fixed
             _log.info("settings.database_url_fixed")
+        return self
+
+    @model_validator(mode="after")
+    def _run_first_boot_guard(self) -> "Settings":
+        """Run the launcher-installed first-boot refusal hook, when present.
+
+        No-op unless the native launcher installed a guard via
+        ``set_first_boot_guard`` — container boots and tests are unaffected.
+        A raise here fails Settings construction (and therefore boot).
+        """
+        guard = _first_boot_guard
+        if guard is not None:
+            guard()
         return self
 
     @model_validator(mode="after")
@@ -815,6 +895,8 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings(_fresh: bool = False) -> Settings:
+    if _pinned_env_file is not None:
+        return Settings(_env_file=_pinned_env_file)
     return Settings()
 
 
