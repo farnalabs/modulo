@@ -160,6 +160,7 @@ elseif not tokens_present or not ts_present then
 elseif tokens == nil or ts == nil then
     return -1
 end
+end
 local elapsed = now - ts
 if elapsed < 0 then elapsed = 0 end
 tokens = tokens + elapsed * rate
