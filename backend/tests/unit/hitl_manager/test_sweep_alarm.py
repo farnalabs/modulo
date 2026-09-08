@@ -29,18 +29,34 @@ def _clean_alarm_state():
     sweep_alarm.reset_alarm_state()
 
 
+def _stub_begin_nested(session: AsyncMock) -> None:
+    """Mirror the real AsyncSession.begin_nested() shape on a mock.
+
+    The real method is synchronous and returns the async context manager
+    directly; a plain AsyncMock's call returns an unawaited coroutine, which
+    breaks ``async with session.begin_nested():``. Same stub as conftest's
+    ``_session_decide``.
+    """
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=None)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=cm)
+
+
 def _alarm_session(count: int, distinct_pipelines: int) -> AsyncMock:
     """Session whose execute serves the detection aggregate: .one() -> (count, distinct)."""
     session = AsyncMock()
     result = MagicMock()
     result.one.return_value = (count, distinct_pipelines)
     session.execute = AsyncMock(return_value=result)
+    _stub_begin_nested(session)
     return session
 
 
 def _broken_session() -> AsyncMock:
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=RuntimeError("detection db down"))
+    _stub_begin_nested(session)
     return session
 
 
@@ -211,6 +227,41 @@ class TestFailureIsolation:
                 _alarm_session(8, 3), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0
             )
         assert recovered is True
+
+    async def test_notification_db_failure_rolls_back_emission_savepoint(self):
+        """A DB error on the in-app notification insert must not poison the
+        decision transaction: the emission runs inside a savepoint whose
+        rollback undoes it, the alarm stays no-throw, and no cooldown is armed."""
+        events: list[str] = []
+
+        @contextlib.asynccontextmanager
+        async def _savepoint():
+            events.append("enter")
+            try:
+                yield
+            except Exception:
+                events.append("rollback")
+                raise
+            events.append("release")
+
+        session = _alarm_session(6, 2)
+        session.begin_nested = MagicMock(side_effect=_savepoint)
+        with _sweep_patches() as (mock_audit, mock_notify, mock_webhook):
+            mock_notify.side_effect = RuntimeError("notification insert failed")
+            alarmed = await maybe_alarm_approve_sweep(
+                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
+            )
+        assert alarmed is False
+        assert events == ["enter", "rollback"]
+        mock_audit.assert_awaited_once()
+        mock_webhook.assert_not_called()
+        # The rolled-back emission must not arm the cooldown.
+        with _sweep_patches() as (mock_audit2, _mock_notify, _mock_webhook):
+            recovered = await maybe_alarm_approve_sweep(
+                _alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
+            )
+        assert recovered is True
+        mock_audit2.assert_awaited_once()
 
     async def test_detection_failure_does_not_arm_cooldown(self):
         """A failed detection must not suppress the NEXT real crossing."""

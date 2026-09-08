@@ -117,8 +117,12 @@ may decide.
       dispatch (`sweep_alarm.py`, `test_sweep_alarm`). Detection keys off
       the audit chain (the only per-actor decision record —
       `hitl_claims.account_id` is NULLed at decision time), is failure-
-      isolated (a broken alarm never fails the human's decision), and
-      self-suppresses to at most one alarm per (org, actor) per hour
+      isolated (a broken alarm never fails the human's decision — the
+      emission writes run inside a savepoint), and self-suppresses to at
+      most one alarm per (org, actor) per hour via a bounded in-process
+      marker (a multi-replica deployment may therefore emit up to one
+      alarm per replica per hour — bounded duplicates, the correct
+      envelope for an anomaly page)
 - [x] HITL review actions are rate limited at 20/min per identity,
       AGGREGATE across runs, gates, and actions (FAR-611) — the bucket key
       normalizes the whole variable path tail, so the 2026-09-05 bulk

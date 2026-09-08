@@ -38,7 +38,10 @@ grow unbounded.
 
 Failure isolation: :func:`maybe_alarm_approve_sweep` is no-throw by
 contract (only ``asyncio.CancelledError`` propagates) — a broken alarm
-must never fail the human's decision. Callers (``HITLManager.approve`` /
+must never fail the human's decision. The emission writes (audit event +
+in-app notification) run inside a SAVEPOINT so a DB error on either rolls
+back only the emission, leaving the surrounding decision transaction
+healthy. Callers (``HITLManager.approve`` /
 ``approve_with_modification``) invoke it right after the decision's
 audit events are committed to the session, so the just-made decision is
 visible to the detection query within the same transaction.
@@ -266,16 +269,26 @@ async def maybe_alarm_approve_sweep(
         # audit/notification failure must never suppress the next real
         # crossing for an hour. Concurrent decisions may then double-emit —
         # two alarms on a real sweep beats zero alarms on a transient blip.
-        await append_audit_event(
-            session,
-            org_id=org_id,
-            event_type=AUDIT_EVENT_TYPE,
-            actor_user_id=actor_id,
-            resource_type=_RESOURCE_TYPE,
-            resource_id=gate.id,
-            payload_json=payload,
-        )
-        await _create_in_app_notification(session, org_id, payload)
+        #
+        # The emission writes run inside a SAVEPOINT: ``append_audit_event``
+        # savepoints each attempt internally, but the in-app notification
+        # insert (``create_notification``) does not — without this outer
+        # savepoint a DB error there would abort the surrounding decision
+        # transaction and fail the human's approve at commit. On failure the
+        # savepoint rolls back both writes and the decision transaction stays
+        # healthy; the cooldown marker (below) is not stamped, so the next
+        # real crossing re-emits.
+        async with session.begin_nested():
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=AUDIT_EVENT_TYPE,
+                actor_user_id=actor_id,
+                resource_type=_RESOURCE_TYPE,
+                resource_id=gate.id,
+                payload_json=payload,
+            )
+            await _create_in_app_notification(session, org_id, payload)
         _mark_alarmed(key, at)
         _schedule_sweep_webhook(org_id, payload)
         _log.warning(
