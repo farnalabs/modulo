@@ -7,8 +7,9 @@ bypasses ``finalize_cost``: the SAQ task_failure hook (``saq_hooks``), the
 stale-run sweep terminalizers (``never_dispatched`` / ``capacity_timeout`` /
 ``worker_lost`` in ``pipeline_execution``), the ``dispatcher_reconcile``
 terminalizers (``executor_superseded`` / ``claim_cap_exhausted`` /
-``dispatch_failed``) and ``fail_run_terminal`` (``executor_stalled`` /
-``executor_heartbeat_lost`` / ``executor_failed`` / ``executor_setup_failed``).
+``dispatch_failed`` / ``hitl_gate_expired``) and ``fail_run_terminal``
+(``executor_stalled`` / ``executor_heartbeat_lost`` / ``executor_failed`` /
+``executor_setup_failed``).
 Each compensating write runs in its OWN separate session AFTER the run is
 marked failed, so a facts failure can never roll back the terminal transition.
 ``record_fact_for_terminal_failed_run`` is the shared fail-open entry point for

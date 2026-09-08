@@ -60,6 +60,7 @@ from modulo.db.models.run import (
     ACTIVE_RUN_STATUSES,
     AWAITING_HUMAN_STATUS,
     ONGOING_ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
     Run,
 )
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
@@ -4690,6 +4691,11 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
     context, re-selects the Run ORM (a pre-write entity would record
     ``status='running'`` with a NULL ``completed_at``), and records the daily
     fact via the shared ``record_fact_for_terminal_failed_run`` wrapper.
+    Phantom-fact guard: the terminalized ids are collected BEFORE the org
+    transaction commits — if that transaction later rolled back, the run is
+    NOT terminal and the fact would be a lie. The re-selected run's status is
+    re-checked against ``TERMINAL_STATUSES`` and any non-terminal run is
+    skipped (logged), for every terminalizer, not just the FAR-648 one.
     None-guarded and fail-open: a facts-write failure is logged and swallowed —
     it must never fail the reconcile tick or roll back the already-committed
     terminal write.
@@ -4703,6 +4709,16 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
             run = await get_run(session, run_id)
             if run is None:
                 _log.warning("cron_helpers.terminalized_facts_run_missing run=%s", run_id)
+                return
+            if run.status not in TERMINAL_STATUSES:
+                # The org transaction holding the terminalizer UPDATE rolled
+                # back after the id was collected — the run is not terminal,
+                # so recording a compensating fact would be a phantom fact.
+                _log.warning(
+                    "cron_helpers.terminalized_facts_run_not_terminal run=%s status=%s",
+                    run_id,
+                    run.status,
+                )
                 return
             await record_fact_for_terminal_failed_run(session, run)
     except asyncio.CancelledError:
@@ -5172,6 +5188,8 @@ async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
             record_stall_reason("executor_superseded", summary["mid_graph_wedge_terminalized"])
         if summary["dispatch_failed_terminalized"]:
             record_stall_reason("dispatch_failed", summary["dispatch_failed_terminalized"])
+        if summary["hitl_gate_expired_terminalized"]:
+            record_stall_reason("hitl_gate_expired", summary["hitl_gate_expired_terminalized"])
     except asyncio.CancelledError:
         raise
     except Exception:

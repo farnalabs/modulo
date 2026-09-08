@@ -1415,3 +1415,42 @@ async def test_cancellation_requested_run_spared_by_gate_expiry_terminalizer(
 
     status, _code = await _run_state(db_engine, org_id, run)
     assert status == "awaiting_human"
+
+
+async def test_gate_expiry_terminalizer_is_org_scoped(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """Cross-org isolation: reconciling org B must never terminalize org A's
+    identical zombie. Both orgs hold an awaiting_human run with an
+    expired-unclaimed gate; the sweep runs for org B ONLY — its run goes
+    ``cancelled``/``hitl_gate_expired`` while org A's stays ``awaiting_human``
+    untouched. Pins the ``hc.organisation_id = runs.organisation_id``
+    correlation and the org-scoped UPDATE (the RLS org context alone would
+    hide org A's rows, but the correlation is what keeps the SQL correct
+    under any future bypass)."""
+    from modulo.core.cron_helpers import _terminalize_expired_hitl_gates
+
+    org_a, user_a = await _seed_org_account(db_engine, "HitlCrossOrgA", cap=None)
+    pipe_a = await _seed_pipeline(db_engine, org_a, "PipeHitlCrossA", user_a)
+    snap_a = await _seed_snapshot(db_engine, org_a, pipe_a, _SANDBOX_GRAPH)
+    run_a = await _seed_run(db_engine, org_a, pipe_a, snap_a, status="awaiting_human")
+    await _seed_hitl_claim(db_engine, org_a, run_a, pipe_a, "gate-1", expires_at=datetime.now(UTC) - timedelta(hours=2))
+
+    org_b, user_b = await _seed_org_account(db_engine, "HitlCrossOrgB", cap=None)
+    pipe_b = await _seed_pipeline(db_engine, org_b, "PipeHitlCrossB", user_b)
+    snap_b = await _seed_snapshot(db_engine, org_b, pipe_b, _SANDBOX_GRAPH)
+    run_b = await _seed_run(db_engine, org_b, pipe_b, snap_b, status="awaiting_human")
+    await _seed_hitl_claim(db_engine, org_b, run_b, pipe_b, "gate-1", expires_at=datetime.now(UTC) - timedelta(hours=2))
+
+    count = await _terminalize_count(app_engine, org_b, _terminalize_expired_hitl_gates, grace_seconds=3600)
+    assert count == 1
+
+    status_b, code_b = await _run_state(db_engine, org_b, run_b)
+    assert status_b == "cancelled"
+    assert code_b == "hitl_gate_expired"
+
+    status_a, code_a = await _run_state(db_engine, org_a, run_a)
+    assert status_a == "awaiting_human"
+    assert code_a is None
