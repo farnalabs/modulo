@@ -2122,3 +2122,137 @@ async def test_materialize_leaves_unmapped_graph_node_refs_untouched(monkeypatch
             "connector_binding": {"instance_id": "unmapped-conn"},
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# prove-the-fix: _apply_agent_bindings resolution chain (FAR-592 qa F9)
+# ---------------------------------------------------------------------------
+
+
+def _make_model_backend(mb_id: uuid.UUID, provider: str = "openai", name: str = "mb") -> MagicMock:
+    mb = MagicMock(name=f"ModelBackend:{mb_id}")
+    mb.id = mb_id
+    mb.provider = provider
+    mb.name = name
+    mb.organisation_id = _ORG_ID
+    return mb
+
+
+def _make_ctx(overrides_model_backends: dict[str, str], rows: list[MagicMock]):
+    """Build a duck-typed _ImportContext whose session.execute returns `rows`."""
+    execute_result = MagicMock(name="ExecuteResult")
+    execute_result.scalars.return_value = rows
+    session = MagicMock(name="Session")
+    session.execute = AsyncMock(return_value=execute_result)
+    return SimpleNamespace(
+        session=session,
+        org_id=_ORG_ID,
+        created_by=_ACCOUNT_ID,
+        warnings=[],
+        owner_team_id=None,
+        overrides=SimpleNamespace(model_backends=dict(overrides_model_backends)),
+    )
+
+
+def _binding(name: str, *, stamped_id: str | None = None) -> dict[str, Any]:
+    b: dict[str, Any] = {
+        "model_backend_name": name,
+        "target_env_var": "openai_api_key",  # lowercase -> canonicalised to OPENAI_API_KEY
+        "source_field": "api_key",
+    }
+    if stamped_id is not None:
+        b["_resolved_model_backend_id"] = stamped_id
+    return b
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["override", "stamped", "name"],
+)
+@pytest.mark.asyncio
+async def test_apply_agent_bindings_resolution_chain(case: str):
+    """Prove override -> stamped id -> name resolution, the batched
+    org_backends_by_id lookup, and that the canonical validator pair persists."""
+    export_uuid = uuid.uuid4()
+    override_uuid = uuid.uuid4()
+    stamped_uuid = uuid.uuid4()
+    name_uuid = uuid.uuid4()
+
+    override_backend = _make_model_backend(override_uuid, provider="openai")
+    stamped_backend = _make_model_backend(stamped_uuid, provider="openai")
+    name_backend = _make_model_backend(name_uuid, provider="openai")
+
+    # What the batched RLS query should "return" depends on which ids we resolve.
+    if case == "override":
+        overrides = {str(export_uuid): str(override_uuid)}
+        rows = [override_backend]
+        backends_by_name: dict[str, MagicMock] = {}
+        expected_id = override_uuid
+    elif case == "stamped":
+        overrides = {}
+        rows = [stamped_backend]
+        backends_by_name = {}
+        expected_id = stamped_uuid
+    else:  # name
+        overrides = {}
+        rows = []  # name fallback never hits the id query
+        backends_by_name = {"mb-export": name_backend}
+        expected_id = name_uuid
+
+    ctx = _make_ctx(overrides, rows)
+    agent = SimpleNamespace(name="agent-x", id=uuid.uuid4())
+
+    ad = {
+        "model_backend_bindings": [_binding("mb-export", stamped_id=str(stamped_uuid) if case == "stamped" else None)]
+    }
+
+    with pytest.MonkeyPatch().context() as mp:
+        replace_mock = AsyncMock(return_value=None)
+        mp.setattr(mod, "replace_agent_bindings", replace_mock)
+
+        await mod._apply_agent_bindings(
+            ctx,
+            agent,
+            ad,
+            backends_by_name,
+            ctx.warnings,
+            bundle_model_backends=[{"name": "mb-export", "id": str(export_uuid)}],
+        )
+
+    assert replace_mock.await_count == 1
+    call = replace_mock.await_args
+    assert call.kwargs["org_id"] == _ORG_ID
+    assert call.kwargs["agent_id"] == agent.id
+    specs = call.kwargs["bindings_specs"]
+    assert len(specs) == 1
+    spec = specs[0]
+    # The chosen backend id (override / stamped / name) is persisted.
+    assert spec["_backend_id"] == expected_id
+    assert spec["_account_id"] == _ACCOUNT_ID
+    # The CANONICAL validator pair persists (lowercase target canonicalised).
+    assert spec["target_env_var"] == "OPENAI_API_KEY"
+    assert spec["source_field"] == "api_key"
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_bindings_unresolvable_omitted():
+    """A binding that resolves nothing is OMITTED with a warning and no persist."""
+    ctx = _make_ctx({}, rows=[])  # no org rows -> _id_backend finds nothing
+    agent = SimpleNamespace(name="agent-y", id=uuid.uuid4())
+    ad = {"model_backend_bindings": [_binding("mb-export")]}  # no override, no stamp, no name
+
+    with pytest.MonkeyPatch().context() as mp:
+        replace_mock = AsyncMock(return_value=None)
+        mp.setattr(mod, "replace_agent_bindings", replace_mock)
+
+        await mod._apply_agent_bindings(
+            ctx,
+            agent,
+            ad,
+            {},
+            ctx.warnings,
+            bundle_model_backends=[{"name": "mb-export", "id": str(uuid.uuid4())}],
+        )
+
+    assert replace_mock.await_count == 0
+    assert any("did not resolve" in w for w in ctx.warnings)
