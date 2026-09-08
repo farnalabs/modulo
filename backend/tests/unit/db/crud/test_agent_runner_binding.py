@@ -19,7 +19,6 @@ from modulo.db.crud.agent_runner_binding import (
     delete_all_bindings_for_agent,
     delete_binding,
     delete_org_binding_rows,
-    get_binding,
     list_bindings_for_agent,
     replace_agent_bindings,
 )
@@ -62,15 +61,6 @@ def _binding_row() -> MagicMock:
     b.source_field = "api_key"
     b.account_id = _ACCOUNT_ID
     return b
-
-
-async def test_get_binding_returns_row() -> None:
-    session = AsyncMock()
-    row = _binding_row()
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = row
-    session.execute.return_value = result
-    assert await get_binding(session, _BINDING_ID) is row
 
 
 async def test_list_bindings_for_agent_orders_asc() -> None:
