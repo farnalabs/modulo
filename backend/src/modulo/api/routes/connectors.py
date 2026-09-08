@@ -41,6 +41,7 @@ from modulo.db.crud.connector_instance import (
     list_connector_instances,
     update_connector_instance,
 )
+from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
@@ -447,84 +448,94 @@ async def list_connectors_endpoint(
     )
 
 
-@router.post(
-    "",
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
-)
-@handle_db_errors(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
-async def create_connector_endpoint(
-    req: ConnectorCreate,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("connector.create"),
-    settings: Settings = Depends(get_settings),
-) -> ConnectorResponse:
-    if req.connector_type_id == "github":
-        temp = GitHubConnector(token=req.credentials)
-        try:
-            missing = await temp.verify_scopes()
-        except (HTTPStatusError, RequestError, ValueError):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="Cannot verify GitHub token — API call failed",
-            ) from None
-        if missing:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=_github_missing_scope_detail(req.credentials, missing),
-            )
-
-    if req.connector_type_id == "rest":
-        # FAR-466: a REST connector's credentials are ALWAYS a JSON object.
-        # Validate the credential against the connector's auth contract HERE at
-        # the create boundary so a direct POST cannot save a broken credential
-        # (e.g. `{"auth_mode":"bearer"}` with no token) that the connector will
-        # reject at run time. This mirrors the PATCH overlay validation.
-        try:
-            rest_creds = json.loads(req.credentials)
-        except (ValueError, TypeError):
-            rest_creds = None
-        if not isinstance(rest_creds, dict):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
-            )
-        try:
-            RestConnector.validate_credentials(rest_creds)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Invalid REST credentials: {exc}",
-            ) from None
-        # FAR-532: also validate the config contract at the create boundary —
-        # an invalid on_unknown would otherwise be saved and brick every bound
-        # node at run time (RestConnector.__init__ raises).
-        try:
-            _validate_rest_config(req.config_json)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Invalid REST config: {exc}",
-            ) from None
-
-    ciphertext = _encrypt(req.credentials, settings.fernet_key)
+async def _verify_github_credentials(credentials: str) -> None:
+    """Verify a GitHub token's scopes at the create boundary (422 on failure)."""
+    temp = GitHubConnector(token=credentials)
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            ci = await create_connector_instance(
-                session,
-                org_id=principal.organisation_id,
-                name=req.name,
-                connector_type_id=req.connector_type_id,
-                account_id=principal.account_id,
-                credentials_ciphertext=ciphertext,
-                config_json=req.config_json,
-                allowed_operations=req.allowed_operations,
-                visibility=req.visibility,
-                owner_team_id=req.owner_team_id,
-                tier=req.tier,
-            )
+        missing = await temp.verify_scopes()
+    except (HTTPStatusError, RequestError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Cannot verify GitHub token — API call failed",
+        ) from None
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=_github_missing_scope_detail(credentials, missing),
+        )
+
+
+def _validate_rest_connector_payload(req: ConnectorCreate) -> None:
+    """Validate a REST connector's credential and config contracts (FAR-466/532).
+
+    A REST connector's credentials are ALWAYS a JSON object. Validate the
+    credential against the connector's auth contract HERE at the create
+    boundary so a direct POST cannot save a broken credential (e.g.
+    ``{"auth_mode":"bearer"}`` with no token) that the connector will reject at
+    run time. This mirrors the PATCH overlay validation.
+    """
+    try:
+        rest_creds = json.loads(req.credentials)
+    except (ValueError, TypeError):
+        rest_creds = None
+    if not isinstance(rest_creds, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid REST credentials: REST connector credentials must be a JSON object.",
+        )
+    try:
+        RestConnector.validate_credentials(rest_creds)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid REST credentials: {exc}",
+        ) from None
+    # FAR-532: also validate the config contract at the create boundary —
+    # an invalid on_unknown would otherwise be saved and brick every bound
+    # node at run time (RestConnector.__init__ raises).
+    try:
+        _validate_rest_config(req.config_json)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid REST config: {exc}",
+        ) from None
+
+
+async def _create_connector_tx(
+    session: AsyncSession,
+    req: ConnectorCreate,
+    principal: TenantPrincipal,
+    ciphertext: bytes,
+) -> ConnectorInstance:
+    """Create the connector instance in one transaction with RLS context."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        return await create_connector_instance(
+            session,
+            org_id=principal.organisation_id,
+            name=req.name,
+            connector_type_id=req.connector_type_id,
+            account_id=principal.account_id,
+            credentials_ciphertext=ciphertext,
+            config_json=req.config_json,
+            allowed_operations=req.allowed_operations,
+            visibility=req.visibility,
+            owner_team_id=req.owner_team_id,
+            tier=req.tier,
+        )
+
+
+async def _create_connector(
+    session: AsyncSession,
+    req: ConnectorCreate,
+    principal: TenantPrincipal,
+    ciphertext: bytes,
+) -> ConnectorInstance:
+    """Create the connector, mapping DB errors to the route's HTTP error contract."""
+    try:
+        return await _create_connector_tx(session, req, principal, ciphertext)
     except IntegrityError:
         logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
@@ -554,6 +565,28 @@ async def create_connector_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating connector.",
         ) from None
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
+@handle_db_errors(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
+async def create_connector_endpoint(
+    req: ConnectorCreate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("connector.create"),
+    settings: Settings = Depends(get_settings),
+) -> ConnectorResponse:
+    if req.connector_type_id == "github":
+        await _verify_github_credentials(req.credentials)
+
+    if req.connector_type_id == "rest":
+        _validate_rest_connector_payload(req)
+
+    ciphertext = _encrypt(req.credentials, settings.fernet_key)
+    ci = await _create_connector(session, req, principal, ciphertext)
     return _to_response(ci)
 
 
