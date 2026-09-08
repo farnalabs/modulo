@@ -31,7 +31,7 @@ def test_default_values_picks_non_null_defaults():
 
 
 def test_default_values_empty():
-    assert mod._default_values([]) == {}
+    assert not mod._default_values([])
 
 
 def test_print_template_details(capsys):

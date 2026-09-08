@@ -43,7 +43,7 @@ async def test_query_list_collection_projects_suspended(connector):
     respx.get(f"{_BASE}/projects").mock(return_value=httpx.Response(200, json=[]))
     q = ConnectorQuery(resource="projects", filters={"suspended": True})
     result = await connector._query_list_collection(q, "projects")
-    assert result.records == []
+    assert not result.records
     assert respx.calls.last.request.url.params["suspended"] == "true"
 
 

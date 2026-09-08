@@ -83,5 +83,5 @@ async def test_list_directory_nonzero_exit_returns_empty():
     }
     c = _connector(provider)
     result = await c._list_directory(provider, "ref1", "/tmp/dir")
-    assert result.records == []
+    assert not result.records
     assert result.total == 0

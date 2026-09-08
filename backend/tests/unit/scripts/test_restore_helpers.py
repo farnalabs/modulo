@@ -63,14 +63,14 @@ def test_validate_dry_run_ok(tmp_path):
     f = tmp_path / "backup.tar.gz.enc"
     f.write_bytes(b"x")
     args = _args(tmp_path, dry_run=True)
-    mod._validate_restore_args(args)  # no exit
+    assert mod._validate_restore_args(args) is None  # no exit
 
 
 def test_validate_full_ok(tmp_path):
     f = tmp_path / "backup.tar.gz.enc"
     f.write_bytes(b"x")
     args = _args(tmp_path, full=True)
-    mod._validate_restore_args(args)  # no exit
+    assert mod._validate_restore_args(args) is None  # no exit
 
 
 def test_print_restore_mode_dry_run(tmp_path, capsys):
