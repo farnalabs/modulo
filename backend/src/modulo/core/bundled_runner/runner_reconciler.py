@@ -125,6 +125,75 @@ class _DockerWorkspaceSource:
                 self._client = None
 
 
+async def _reconcile_single_container(
+    async_engine: Any,
+    source: _DockerWorkspaceSource,
+    container: _LabelledContainer,
+    *,
+    active_run_ids: set[str],
+    log_only: bool,
+    grace_seconds: int,
+    max_lifetime_seconds: int,
+) -> bool:
+    """Decide + act on ONE labelled workspace container.
+
+    Returns True when the container was destroyed. The 24h max-lifetime
+    backstop (kill path per D1) runs FIRST — a labelled workspace container
+    may never outlive one day, regardless of run state (sandbox_timeout caps
+    at 3300s). Skip order: active run -> no created marker (cannot establish
+    a grace age, so never a destroy candidate) -> still inside the grace
+    window -> log-only soak -> the destroy-path re-check (run still active
+    => suspected false positive).
+    """
+    if container.created_age_s > max_lifetime_seconds:
+        _log.warning(
+            "runner.workspace.reclaimed_max_lifetime container=%s run=%s age=%ss",
+            container.id,
+            container.run_id,
+            int(container.created_age_s),
+        )
+        if not log_only:
+            await source.destroy_by_container_id(container.id)
+            return True
+        return False
+    if container.run_id in active_run_ids:
+        return False
+    if container.created_age_s <= 0.0:
+        # No creation marker on the label set: cannot establish a
+        # grace age, so the container is never a destroy candidate.
+        _log.info(
+            "runner.reconciler.no_created_marker container=%s run=%s",
+            container.id,
+            container.run_id,
+        )
+        return False
+    if container.created_age_s < grace_seconds:
+        return False
+    if log_only:
+        _log.info(
+            "runner.reconciler.orphan_detected (log-only soak) container=%s run=%s age=%ss",
+            container.id,
+            container.run_id,
+            int(container.created_age_s),
+        )
+        return False
+    status_active = await _run_is_active(async_engine, container.run_id)
+    if status_active:
+        _log.warning(
+            "runner.reconciler.suspected_false_positive container=%s run=%s",
+            container.id,
+            container.run_id,
+        )
+        return False
+    await source.destroy_by_container_id(container.id)
+    _log.warning(
+        "runner.reconciler.orphan_destroyed container=%s run=%s",
+        container.id,
+        container.run_id,
+    )
+    return True
+
+
 async def reconcile_runner_workspaces(
     async_engine: Any,
     *,
@@ -168,57 +237,16 @@ async def reconcile_runner_workspaces(
 
         for container in listed:
             scanned += 1
-            # 24h max-lifetime backstop FIRST (kill path per D1): a labelled
-            # workspace container may never outlive one day, regardless of
-            # run state — an active run cannot legitimately hold a workspace
-            # anywhere near this long (sandbox_timeout caps at 3300s).
-            if container.created_age_s > max_lifetime_seconds:
-                _log.warning(
-                    "runner.workspace.reclaimed_max_lifetime container=%s run=%s age=%ss",
-                    container.id,
-                    container.run_id,
-                    int(container.created_age_s),
-                )
-                if not log_only:
-                    await source.destroy_by_container_id(container.id)
-                    orphans_destroyed += 1
-                continue
-            if container.run_id in active_run_ids:
-                continue
-            if container.created_age_s <= 0.0:
-                # No creation marker on the label set: cannot establish a
-                # grace age, so the container is never a destroy candidate.
-                _log.info(
-                    "runner.reconciler.no_created_marker container=%s run=%s",
-                    container.id,
-                    container.run_id,
-                )
-                continue
-            if container.created_age_s < grace_seconds:
-                continue
-            if log_only:
-                _log.info(
-                    "runner.reconciler.orphan_detected (log-only soak) container=%s run=%s age=%ss",
-                    container.id,
-                    container.run_id,
-                    int(container.created_age_s),
-                )
-                continue
-            status_active = await _run_is_active(async_engine, container.run_id)
-            if status_active:
-                _log.warning(
-                    "runner.reconciler.suspected_false_positive container=%s run=%s",
-                    container.id,
-                    container.run_id,
-                )
-                continue
-            await source.destroy_by_container_id(container.id)
-            orphans_destroyed += 1
-            _log.warning(
-                "runner.reconciler.orphan_destroyed container=%s run=%s",
-                container.id,
-                container.run_id,
-            )
+            if await _reconcile_single_container(
+                async_engine,
+                source,
+                container,
+                active_run_ids=active_run_ids,
+                log_only=log_only,
+                grace_seconds=grace_seconds,
+                max_lifetime_seconds=max_lifetime_seconds,
+            ):
+                orphans_destroyed += 1
     finally:
         await source.close()
     _log.info(

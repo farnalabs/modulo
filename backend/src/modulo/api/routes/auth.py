@@ -66,6 +66,7 @@ from modulo.db.crud.token_family import (
     create_family,
 )
 from modulo.db.models.account import Account
+from modulo.db.models.invitation import Invitation
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.token_family import TokenFamily
@@ -621,6 +622,95 @@ async def _audit_invite_consumed_fail_open(
         _log.warning("auth.accept_invite.audit_failed", exc_info=True)
 
 
+async def _resolve_invite_account(
+    session: AsyncSession,
+    invitation: Invitation,
+    pw_hash: str,
+    limiter: AuthRateLimiter | None,
+    ip: str,
+) -> tuple[Account, bool]:
+    """Account-resolution rules (a)-(d) for invitation enrollment (FAR-461).
+
+    Returns ``(account, existing_account)``. Branch (b) is a denial path:
+    SSO/SCIM accounts must never gain a local password — the rate-limit
+    failure is recorded and 409 raised, exactly as before the extraction.
+    """
+    account = await get_account_by_email(session, invitation.email)
+    existing_account = False
+
+    if account is None:
+        # (a) brand-new member
+        account = await create_account(
+            session,
+            email=invitation.email,
+            display_name=invitation.display_name,
+            password_hash=pw_hash,
+            auth_provider="local",
+        )
+    elif account.auth_provider != "local":
+        # (b) SSO/SCIM accounts must never gain a local password
+        if limiter is not None:
+            await limiter.record_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_INVITE_NOT_LOCAL_ACCOUNT,
+        )
+    elif account.password_hash is None:
+        # (c) adopt the locally-created-but-passwordless account
+        account.password_hash = pw_hash
+    else:
+        # (d) leave an existing local password untouched — the UI
+        # tells them to sign in with their existing credentials.
+        existing_account = True
+    return account, existing_account
+
+
+async def _ensure_invite_membership(session: AsyncSession, account: Account, invitation: Invitation) -> None:
+    """Membership ensure for invitation enrollment: create, or reactivate a tombstone.
+
+    A tombstoned membership (per-org deactivation, gh-1794/FAR-533) is not a
+    live membership: acceptance REACTIVATES it with the invitation's role
+    instead of skipping — otherwise the token is consumed while the holder
+    gains no access. The row is kept (history), aligned with the tombstone
+    design.
+    """
+    membership = await get_membership_by_account_and_org(
+        session,
+        account.id,
+        invitation.organisation_id,
+    )
+    if membership is None:
+        await create_membership(
+            session,
+            account_id=account.id,
+            org_id=invitation.organisation_id,
+            role=invitation.org_role,
+        )
+    elif membership.deactivated_at is not None:
+        await reactivate_membership(session, membership, invitation.org_role)
+
+
+async def _record_invite_rate_limit_success(limiter: AuthRateLimiter | None, ip: str, invitation_id: uuid.UUID) -> None:
+    """Record a successful enrollment on the limiter — fail-open.
+
+    Committed: mirror login's success path so a few denied attempts on
+    stale tokens never leak into login lockout on this IP. The enrollment
+    already succeeded and the token is consumed — a limiter outage must not
+    turn it into a 500 (a retry would then fail with a misleading 400).
+    """
+    if limiter is not None:
+        try:
+            await limiter.record_success(ip)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "auth.accept_invite.rate_limit_success_recording_failed",
+                extra={"invitation_id": str(invitation_id)},
+                exc_info=True,
+            )
+
+
 @router.post("/accept-invite")
 @handle_db_errors(_CODE_AUTH_ACCEPT_INVITE)
 async def accept_invite(
@@ -669,53 +759,9 @@ async def accept_invite(
             await set_rls_org(session, invitation.organisation_id)
 
             pw_hash = hash_password(req.password)
-            account = await get_account_by_email(session, invitation.email)
-            existing_account = False
+            account, existing_account = await _resolve_invite_account(session, invitation, pw_hash, limiter, ip)
 
-            if account is None:
-                # (a) brand-new member
-                account = await create_account(
-                    session,
-                    email=invitation.email,
-                    display_name=invitation.display_name,
-                    password_hash=pw_hash,
-                    auth_provider="local",
-                )
-            elif account.auth_provider != "local":
-                # (b) SSO/SCIM accounts must never gain a local password
-                if limiter is not None:
-                    await limiter.record_failure(ip)
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=_MSG_INVITE_NOT_LOCAL_ACCOUNT,
-                )
-            elif account.password_hash is None:
-                # (c) adopt the locally-created-but-passwordless account
-                account.password_hash = pw_hash
-            else:
-                # (d) leave an existing local password untouched — the UI
-                # tells them to sign in with their existing credentials.
-                existing_account = True
-
-            membership = await get_membership_by_account_and_org(
-                session,
-                account.id,
-                invitation.organisation_id,
-            )
-            if membership is None:
-                await create_membership(
-                    session,
-                    account_id=account.id,
-                    org_id=invitation.organisation_id,
-                    role=invitation.org_role,
-                )
-            elif membership.deactivated_at is not None:
-                # A tombstoned membership (per-org deactivation, gh-1794/FAR-533)
-                # is not a live membership: acceptance REACTIVATES it with the
-                # invitation's role instead of skipping — otherwise the token is
-                # consumed while the holder gains no access. The row is kept
-                # (history), aligned with the tombstone design.
-                await reactivate_membership(session, membership, invitation.org_role)
+            await _ensure_invite_membership(session, account, invitation)
 
             consumed = await consume_invitation(session, invitation)
             if not consumed:
@@ -727,22 +773,7 @@ async def accept_invite(
                 invitation_id=invitation.id,
             )
 
-        # Committed: mirror login's success path so a few denied attempts on
-        # stale tokens never leak into login lockout on this IP. Fail-open
-        # (same pattern as the audit helper): the enrollment already succeeded
-        # and the token is consumed — a limiter outage must not turn it into a
-        # 500 (a retry would then fail with a misleading 400).
-        if limiter is not None:
-            try:
-                await limiter.record_success(ip)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.warning(
-                    "auth.accept_invite.rate_limit_success_recording_failed",
-                    extra={"invitation_id": str(invitation.id)},
-                    exc_info=True,
-                )
+        await _record_invite_rate_limit_success(limiter, ip, invitation.id)
     except IntegrityError:
         _log.exception(_CODE_AUTH_ACCEPT_INVITE)
         raise HTTPException(
