@@ -52,6 +52,37 @@ _DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
 _DEPLOYMENT_IDENTITY_LABEL = "modulo.machine.id"
 
 
+def _route_by_channel(channel: Any, data: Any) -> tuple[bytes, bytes]:
+    """Route a (channel, data) pair: channel 1 -> stdout, anything else -> stderr."""
+    if channel == 1:
+        return (bytes(data or b""), b"")
+    return (b"", bytes(data or b""))
+
+
+def _split_two_element_frame(frame: Any) -> tuple[bytes, bytes]:
+    """Split a 2-element tuple/list exec frame into (stdout, stderr) byte payloads."""
+    first, second = frame
+    if isinstance(first, int) and not isinstance(first, bool):
+        # aiodocker Message / (fileno, data) shape.
+        return _route_by_channel(first, second)
+    # Test-double shape (stdout_bytes, stderr_bytes).
+    return (first or b"", second or b"")
+
+
+def _message_frame_channel_and_data(frame: Any) -> tuple[Any, Any]:
+    """Extract ``(channel, data)`` from an aiodocker ``Message``-shaped frame.
+
+    Older shapes carried ``channel``; aiodocker 0.27 uses ``stream``.
+    """
+    channel: Any = getattr(frame, "stream", None)
+    if channel is None:
+        channel = getattr(frame, "channel", None)
+    data: Any = getattr(frame, "data", None)
+    if data is None and isinstance(frame, (bytes, bytearray)):
+        data = bytes(frame)
+    return channel, data
+
+
 def _split_exec_frame(frame: Any) -> tuple[bytes, bytes]:
     """Split one Docker exec stream frame into (stdout, stderr) byte payloads.
 
@@ -61,28 +92,12 @@ def _split_exec_frame(frame: Any) -> tuple[bytes, bytes]:
     - the test-double shape ``(stdout_bytes, stderr_bytes)`` — a 2-tuple of
       byte-ish values (or None).
     """
-    channel: Any
-    data: Any
     if isinstance(frame, (tuple, list)) and len(frame) == 2:
-        first, second = frame
-        if isinstance(first, int) and not isinstance(first, bool):
-            # aiodocker Message / (fileno, data) shape.
-            channel, data = first, second
-        else:
-            return (first or b"", second or b"")
-    else:
-        # Older shapes carried ``channel``; aiodocker 0.27 uses ``stream``.
-        channel = getattr(frame, "stream", None)
-        if channel is None:
-            channel = getattr(frame, "channel", None)
-        data = getattr(frame, "data", None)
-    if data is None and isinstance(frame, (bytes, bytearray)):
-        data = bytes(frame)
+        return _split_two_element_frame(frame)
+    channel, data = _message_frame_channel_and_data(frame)
     # Unknown channel/shape is treated as stderr so diagnostic output is
     # never silently dropped.
-    if channel == 1:
-        return (bytes(data or b""), b"")
-    return (b"", bytes(data or b""))
+    return _route_by_channel(channel, data)
 
 
 async def _open_exec_stream(exec_instance: Any) -> Any:
