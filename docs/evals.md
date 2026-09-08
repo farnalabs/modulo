@@ -161,9 +161,7 @@ Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
   hard-delete/purge is intentionally withheld here – the "referenced by a
   SuiteRun" guard lands in Phase 3.
 
-> Note: this document is the source of truth for the eval data layer while
-> `docs/prd.md` is being revised; any PRD section describing an "eval dataset"
-> concept must match the entities and guarantees above.
+> Note: this document is the source of truth for the eval data layer.
 
 ## Tracking an eval over time (`SuiteRun`) – FAR-376 Phase 3
 
