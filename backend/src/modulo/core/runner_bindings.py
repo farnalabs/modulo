@@ -111,6 +111,99 @@ class ResolvedBinding:
     source_field: str
 
 
+async def _profile_opt_in_state(
+    session: Any,
+    org_uuid: uuid.UUID,
+    environment_profile_id: uuid.UUID | None,
+    agent_label: str,
+) -> tuple[bool, str | None]:
+    """Whether the environment profile opts the Local tier into bindings.
+
+    Returns ``(opted_in, refusal_rationale)``. FAIL CLOSED: a provided but
+    unresolvable profile cannot prove its tier is container-isolated, so it
+    refuses with an honest rationale rather than defaulting to the open
+    E2B-default path. A 'local' provider tier requires a strict boolean
+    opt-in — a truthy STRING ("true", "1") is NOT an opt-in, so a
+    misconfigured string value can never silently host a standing credential.
+    """
+    env_profile_uuid = _uuid_or_none(environment_profile_id)
+    if env_profile_uuid is None:
+        return True, None
+    profile_rows = await session.execute(
+        select(EnvironmentProfile).where(
+            EnvironmentProfile.organisation_id == org_uuid,
+            EnvironmentProfile.id == env_profile_uuid,
+        )
+    )
+    profile = profile_rows.scalar_one_or_none()
+    if profile is None:
+        return (
+            False,
+            (
+                f"Runner bindings refused (fail-closed): agent '{agent_label}' carries "
+                f"bindings but its environment profile '{env_profile_uuid}' could not "
+                "be resolved for the organisation; refusing binding injection until "
+                "the profile is fixed (or the bindings removed)."
+            ),
+        )
+    if profile.provider_type.strip().lower() == "local":
+        config = profile.config_json if isinstance(profile.config_json, dict) else {}
+        return config.get(_LOCAL_OPT_IN_KEY) is True, None
+    return True, None
+
+
+async def _resolve_binding_values(
+    secrets_backend: Any,
+    bindings: list[Any],
+    backends_by_id: dict[uuid.UUID, Any],
+) -> tuple[dict[str, str], dict[str, uuid.UUID]]:
+    """Decrypt + map each binding to its injected env value.
+
+    FAR-592 (D6 F3 fix): validating PRE-PASS — every binding must map to an
+    org-visible backend row before the hub is built (a missing row is a
+    typed, non-retried resolution failure instead of a KeyError). FAR-592
+    (D6 F4 fix): hub credential-failure shapes (decrypt errors, malformed
+    secret JSON handling, backend constructor value errors) escape typed
+    instead of crashing the dispatch as a bare ValueError. Names/ids only —
+    messages MUST NOT include credential values.
+    """
+    missing = [binding for binding in bindings if binding.model_backend_id not in backends_by_id]
+    if missing:
+        raise AgentBindingResolutionError(
+            "bound model backend is no longer visible to the organisation",
+            backend_id=missing[0].model_backend_id,
+        )
+    referenced_rows = [backends_by_id[binding.model_backend_id] for binding in bindings]
+    resolved: dict[str, str] = {}
+    resolved_backend_by_var: dict[str, uuid.UUID] = {}
+    try:
+        from modulo.core.model_backend_hub import BackendDecryptError, ModelBackendHub
+
+        async with ModelBackendHub() as hub:
+            await hub.initialise(referenced_rows, secrets_backend=secrets_backend)
+            for binding in bindings:
+                backend_row = backends_by_id[binding.model_backend_id]
+                creds = hub.creds_for(binding.model_backend_id)
+                if creds is None:
+                    raise AgentBindingResolutionError(
+                        f"credentials for model backend '{backend_row.name}' could not be "
+                        "decrypted/fetched — check the secrets backend configuration and "
+                        "the fernet key",
+                        backend_id=binding.model_backend_id,
+                    )
+                if binding.source_field not in creds:
+                    raise AgentBindingResolutionError(
+                        f"source field '{binding.source_field}' unavailable for model backend '{backend_row.name}'",
+                        backend_id=binding.model_backend_id,
+                    )
+                resolved[str(binding.target_env_var)] = str(creds[binding.source_field])
+                resolved_backend_by_var[str(binding.target_env_var)] = binding.model_backend_id
+        # Hub explicitly disposed above via the async context manager — never GC.
+    except (BackendDecryptError, KeyError, ValueError) as exc:
+        raise AgentBindingResolutionError(f"credential resolution failed for a bound model backend: {exc}") from exc
+    return resolved, resolved_backend_by_var
+
+
 async def resolve_agent_bindings(
     *,
     session_factory: Any,
@@ -142,7 +235,6 @@ async def resolve_agent_bindings(
     if session_factory is None or org_uuid is None or agent_uuid is None:
         return {}
 
-    from modulo.core.model_backend_hub import ModelBackendHub
     from modulo.core.secrets_backend import create_secrets_backend
     from modulo.db.models.agent import Agent
     from modulo.db.models.agent_runner_binding import AgentRunnerBinding
@@ -174,83 +266,15 @@ async def resolve_agent_bindings(
         agent_row = agent_rows.scalar_one_or_none()
         agent_label = agent_row.name if agent_row is not None else str(agent_uuid)
 
-        opted_in = True
-        env_profile_uuid = _uuid_or_none(environment_profile_id)
-        profile_rationale: str | None = None
-        if env_profile_uuid is not None:
-            profile_rows = await session.execute(
-                select(EnvironmentProfile).where(
-                    EnvironmentProfile.organisation_id == org_uuid,
-                    EnvironmentProfile.id == env_profile_uuid,
-                )
-            )
-            profile = profile_rows.scalar_one_or_none()
-            if profile is None:
-                # Fail CLOSED: a provided but unresolvable profile cannot
-                # prove its tier is container-isolated, so the refusal is
-                # raised with an honest rationale rather than defaulting to
-                # the open E2B-default path.
-                opted_in = False
-                profile_rationale = (
-                    f"Runner bindings refused (fail-closed): agent '{agent_label}' carries "
-                    f"bindings but its environment profile '{env_profile_uuid}' could not "
-                    "be resolved for the organisation; refusing binding injection until "
-                    "the profile is fixed (or the bindings removed)."
-                )
-            elif profile.provider_type.strip().lower() == "local":
-                config = profile.config_json if isinstance(profile.config_json, dict) else {}
-                # Strict boolean opt-in: a truthy STRING ("true", "1") is NOT an
-                # opt-in — only an explicit JSON true opts the Local tier in,
-                # so a misconfigured string value can never silently host a
-                # standing credential.
-                opted_in = config.get(_LOCAL_OPT_IN_KEY) is True
-
+        opted_in, profile_rationale = await _profile_opt_in_state(
+            session, org_uuid, environment_profile_id, agent_label
+        )
         if not opted_in:
             raise LocalProviderBindingsRefusedError(agent_label, reason=profile_rationale)
 
         settings = get_settings()
         secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-        # FAR-592 (D6 F3 fix): validating PRE-PASS — every binding must map to
-        # an org-visible backend row before the hub is built. A missing row is
-        # a typed, non-retried resolution failure instead of a KeyError.
-        missing = [binding for binding in bindings if binding.model_backend_id not in backends_by_id]
-        if missing:
-            raise AgentBindingResolutionError(
-                "bound model backend is no longer visible to the organisation",
-                backend_id=missing[0].model_backend_id,
-            )
-        referenced_rows = [backends_by_id[binding.model_backend_id] for binding in bindings]
-        resolved_backend_by_var: dict[str, uuid.UUID] = {}
-        try:
-            from modulo.core.model_backend_hub import BackendDecryptError
-
-            async with ModelBackendHub() as hub:
-                await hub.initialise(referenced_rows, secrets_backend=secrets_backend)
-                for binding in bindings:
-                    backend_row = backends_by_id[binding.model_backend_id]
-                    creds = hub.creds_for(binding.model_backend_id)
-                    if creds is None:
-                        raise AgentBindingResolutionError(
-                            f"credentials for model backend '{backend_row.name}' could not be "
-                            "decrypted/fetched — check the secrets backend configuration and "
-                            "the fernet key",
-                            backend_id=binding.model_backend_id,
-                        )
-                    if binding.source_field not in creds:
-                        raise AgentBindingResolutionError(
-                            f"source field '{binding.source_field}' unavailable for model backend '{backend_row.name}'",
-                            backend_id=binding.model_backend_id,
-                        )
-                    resolved[str(binding.target_env_var)] = str(creds[binding.source_field])
-                    resolved_backend_by_var[str(binding.target_env_var)] = binding.model_backend_id
-            # Hub explicitly disposed above via the async context manager — never GC.
-        except (BackendDecryptError, KeyError, ValueError) as exc:
-            # FAR-592 (D6 F4 fix): hub credential-failure shapes (decrypt
-            # errors, malformed secret JSON handling, backend constructor
-            # value errors) escape typed instead of crashing the dispatch as
-            # a bare ValueError. Names/ids only — message MUST NOT include
-            # credential values.
-            raise AgentBindingResolutionError(f"credential resolution failed for a bound model backend: {exc}") from exc
+        resolved, resolved_backend_by_var = await _resolve_binding_values(secrets_backend, bindings, backends_by_id)
 
     for target_env_var in resolved:
         _log.info(
