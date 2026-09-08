@@ -178,6 +178,12 @@ jobs:
       - name: Detect changed integration test files
         id: changed
         shell: bash
+        # The job sets `working-directory: backend`, which makes the
+        # `backend/tests/integration/` pathspec below resolve to
+        # `backend/backend/tests/integration/` (always empty) and silently skip
+        # every PR. Run the Detect step from the repo root so the pathspec
+        # matches the real tree (cf. PR #224 review feedback).
+        working-directory: .
         run: |
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # actions/checkout checks out the GitHub merge commit for the PR
