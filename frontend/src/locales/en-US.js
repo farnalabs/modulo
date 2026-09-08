@@ -761,6 +761,8 @@ export default {
       "empty_description": "All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet.",
       "assigned_to": "Assigned: {user}",
       "unassigned": "Unassigned",
+      "assignee_label": "Assignee",
+      "deleted_pipeline_fallback": "Deleted pipeline ({id})",
       "claim_metadata": "Claim Metadata",
       "run_id": "Run ID",
       "node_label": "Node",
@@ -790,7 +792,11 @@ export default {
       "claim_failed_already_decided": "This gate already has a final decision and can no longer be claimed.",
       "claim_failed_run_not_awaiting": "This run is no longer waiting for a human decision ({reason}).",
       "dismiss": "Dismiss",
-      "claimed_by_other": "Claimed by {user} at {time}. Waiting for their decision."
+      "claimed_by_other": "Claimed by {user} at {time}. Waiting for their decision.",
+      "pagination_label": "Gate history pagination",
+      "prev_page": "Previous",
+      "next_page": "Next",
+      "page_indicator": "Page {page} of {total}"
     },
     "AdminSystemConfigView": {
       "deploymentwide_system_configuration_system_admin_only": "Deployment-wide system configuration (system admin only)",
@@ -1851,7 +1857,10 @@ export default {
       "retry_request_failed": "Retry request failed:",
       "retried_deliveries_count": "{count} delivery retried | {count} deliveries retried",
       "errors_count": "{count} error | {count} errors",
-      "retried_with_errors": "{retried} with {errors}"
+      "retried_with_errors": "{retried} with {errors}",
+      "retry_all_confirm": "Retry all failed deliveries?",
+      "cancel": "Cancel",
+      "confirm": "Confirm"
     },
     "LibraryPipelineWizard": {
       "create_pipeline": "Create Pipeline",

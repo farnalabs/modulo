@@ -62,7 +62,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import Literal
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -319,6 +319,7 @@ def evaluate_coverage_gap(
     runs: Sequence[object],
     eval_results: Sequence[object],
     *,
+    outputs_by_run: Mapping[UUID, Any],
     eval_names: Mapping[UUID, str] | None = None,
     min_runs: int = DEFAULT_MIN_RUNS,
     divergence_threshold: float = DEFAULT_DIVERGENCE_THRESHOLD,
@@ -329,9 +330,13 @@ def evaluate_coverage_gap(
     """Evaluate the coverage-gap signal from already-loaded run/evals.
 
     Pure and side-effect-free. The caller (``compute_coverage_gap``) is
-    responsible for loading ``runs``, ``eval_results``, and ``eval_names``
-    org-scoped. Only **terminal** runs with at least one (non-guardrail) eval
-    result count as data points, so the signal is deterministic across two calls.
+    responsible for loading ``runs``, ``eval_results``, ``eval_names``, and
+    the per-run outputs (``outputs_by_run`` — keyed by run id; FAR-583
+    read-switch: the caller reassembles via the ``run_node_outputs`` repo
+    reader so this pure function never touches the legacy columns).
+    Org-scoped by the caller. Only **terminal** runs with at least one
+    (non-guardrail) eval result count as data points, so the signal is
+    deterministic across two calls.
     """
     if min_runs < 1:
         raise ValueError(f"min_runs must be >= 1, got {min_runs}")
@@ -380,7 +385,9 @@ def evaluate_coverage_gap(
         if key not in runs_by_variant:
             runs_by_variant[key] = run
 
-    variant_outputs = [getattr(run, "outputs_json", None) for run in runs_by_variant.values()]
+    # Only data-point runs (those with a non-None id, guaranteed by the
+    # data_point_run_ids membership check above) reach runs_by_variant.
+    variant_outputs = [outputs_by_run.get(cast(UUID, getattr(run, "id", None))) for run in runs_by_variant.values()]
     variant_outputs = [o for o in variant_outputs if o is not None]
     variant_divergence = compute_variant_divergence(variant_outputs)
 
@@ -473,9 +480,21 @@ async def compute_coverage_gap(
     eval_ids = {getattr(er, "eval_id", None) for er in eval_results}
     eval_names = await _load_eval_names(session, org_id=org_id, eval_ids={e for e in eval_ids if e is not None})
 
+    # FAR-583 read-switch: the per-run outputs reassemble from
+    # run_node_outputs (with the legacy fallback) in the SAME transaction,
+    # one batched repo read per run — the pure evaluator below never touches
+    # the legacy columns.
+    from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+
+    outputs_by_run = {
+        run.id: (await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=org_id)).outputs
+        for run in runs
+    }
+
     return evaluate_coverage_gap(
         runs,
         eval_results,
+        outputs_by_run=outputs_by_run,
         eval_names=eval_names,
         min_runs=min_runs,
         divergence_threshold=divergence_threshold,

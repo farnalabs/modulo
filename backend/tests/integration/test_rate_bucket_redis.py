@@ -32,6 +32,7 @@ from modulo.connectors._rate_bucket import (
     SharedBudgetUnavailableError,
 )
 
+pytestmark = pytest.mark.integration
 REDIS_URL = os.environ.get("RATE_LIMIT_REDIS_URL", "redis://localhost:6379")
 
 

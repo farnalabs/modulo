@@ -62,12 +62,16 @@ class LocalRuntimeProvider(RuntimeProvider):
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         """Create a temp directory on the host as the workspace root.
 
-        If ``spec.labels`` contains ``repo_url``, clone the repo into the
-        workspace directory. If the clone fails, the temp directory is
-        cleaned up before propagating the error.
+        If the first-class ``spec.repo_url`` field is set (FAR-595 —
+        previously smuggled through the ``labels`` dict), clone the repo
+        into the workspace directory. ``spec.repo_ref`` is not honoured on
+        this tier (the clone lands on the default branch). If the clone
+        fails, the temp directory is cleaned up before propagating the
+        error.
 
-        The spec's ``workspace_metadata`` is ignored — host-process
-        workspaces carry no provider-side metadata carrier.
+        The spec's ``labels`` (Docker env-var injection) and
+        ``workspace_metadata`` are ignored — host-process workspaces carry
+        no provider-side carriers.
         """
         try:
             workspace_dir = tempfile.mkdtemp(prefix=f"modulo-workspace-{spec.environment_profile_id}-")
@@ -78,7 +82,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         ref = str(uuid.uuid4())
 
         try:
-            repo_url = (spec.labels or {}).get("repo_url", "")
+            repo_url = spec.repo_url
             if repo_url:
                 await self._run_command(
                     ["git", "clone", repo_url, "."],

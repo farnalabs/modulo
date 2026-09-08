@@ -7,7 +7,7 @@ implements the `ConnectorBase` ABC and registers with the `ConnectorHub`.
 
 ```
 ConnectorBase (ABC)          ← modulo/connectors/base.py
-  ├── 40+ built-in connectors (filesystem, github, gitlab, jira,
+  ├── 41 built-in connectors (filesystem, github, gitlab, jira,
   │   linear, slack, shell, pagerduty, sentry, datadog, and more)
   │   including the generic REST connector (rest)
   │   see modulo/connectors/ for the full list

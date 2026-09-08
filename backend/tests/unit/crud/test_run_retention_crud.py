@@ -143,10 +143,14 @@ class TestListRetentionCandidates:
         session.execute = AsyncMock(return_value=count_result)
         runs = [_run("complete"), _run("failed")]
 
+        # FAR-583: per-run blob bytes come from the repo reader; the mock
+        # session cannot execute it, so the orchestration-level test mocks
+        # the reader (zero bytes) like _checkpoint_detail above.
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({"tid": 500}, {"tid": 2}))),
             patch.object(rr, "_estimate_total_bytes", new=AsyncMock(return_value=12345)),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
@@ -171,10 +175,14 @@ class TestListRetentionCandidates:
         session.execute = AsyncMock(side_effect=[total_result, terminal_result])
         runs = [_run("complete"), _run("failed")]
 
+        # FAR-583: per-run blob bytes come from the repo reader; the mock
+        # session cannot execute it, so the orchestration-level test mocks
+        # the reader (zero bytes) like _checkpoint_detail above.
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
             patch.object(rr, "_estimate_total_bytes", new=AsyncMock(return_value=99)),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
@@ -226,6 +234,7 @@ class TestPurgeTerminalRuns:
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {"t1": 3}))),
             patch.object(rr, "_delete_checkpoints", new=delete_checkpoints),
             patch.object(rr, "_delete_run_id_rows", new=delete_run_id_rows),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await self._purge(session)
 
@@ -237,9 +246,32 @@ class TestPurgeTerminalRuns:
         assert delete_checkpoints.call_args.args[1] == thread_ids
         assert delete_checkpoints.call_args.args[2] == _ORG
         session.flush.assert_awaited()
-        # Exactly one SAVEPOINT for the single purge batch (the sibling
-        # test_batches_at_batch_size proves one begin_nested per batch).
-        session.begin_nested.assert_called_once()
+        # One SAVEPOINT for the single purge batch (the sibling
+        # test_batches_at_batch_size proves one main savepoint per batch) —
+        # plus the best-effort quarantine delete's OWN savepoint in it.
+        assert session.begin_nested.call_count == 2
+
+    async def test_purge_deletes_quarantine_rows_for_the_batch(self) -> None:
+        """qa Major 3a: each purge batch explicitly deletes the batch's
+        ``run_node_outputs_quarantine`` rows — the table deliberately has no
+        FK, so without the explicit delete every purged run would leave a
+        permanent orphaned blob copy."""
+        session = AsyncMock()
+        session.begin_nested = MagicMock(return_value=_nested_cm())
+        runs = [_run("complete")]
+        delete_quarantine = AsyncMock()
+
+        with (
+            patch.object(rr, "_select_run_page", side_effect=[runs, []]),
+            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
+            patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
+            patch.object(rr, "_delete_quarantine_rows", new=delete_quarantine),
+            patch.object(rr, "_delete_run_id_rows", new=AsyncMock()),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
+        ):
+            await self._purge(session)
+
+        delete_quarantine.assert_awaited_once_with(session, [runs[0].id])
 
     async def test_batches_at_batch_size(self) -> None:
         """A set larger than batch_size is processed in more than one SAVEPOINT."""
@@ -261,11 +293,15 @@ class TestPurgeTerminalRuns:
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
             patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
             patch.object(rr, "_delete_run_id_rows", new=AsyncMock()),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await self._purge(session, batch_size=2)
 
         assert result["purged_runs"] == 5
-        assert session.begin_nested.call_count == 2  # two full batches: 2 runs + 3 runs
+        # Two batches x two savepoints each (qa Major 3a: the best-effort
+        # quarantine delete runs in its OWN savepoint inside every batch,
+        # beside the batch's main purge savepoint).
+        assert session.begin_nested.call_count == 4
 
     async def test_idempotent_when_no_matching_runs(self) -> None:
         """Re-running after deletion selects nothing and reports zero."""
@@ -289,6 +325,7 @@ class TestPurgeTerminalRuns:
         with (
             patch.object(rr, "_select_run_page", side_effect=fake_select),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await self._purge(session)
 
@@ -347,6 +384,37 @@ class TestDeleteRunIdRows:
         names = [getattr(getattr(s, "table", None), "name", None) for s in statements]
         assert "trigger_events" in names
         assert "notification_delivery_log" in names
+
+
+class TestDeleteQuarantineRows:
+    """qa Major 3a: the no-FK quarantine table needs an explicit delete —
+    best-effort (own savepoint) because the app role has no grant on it on
+    Postgres and a failure must never abort the run purge."""
+
+    async def test_deletes_quarantine_rows_for_the_run_ids(self) -> None:
+        session = AsyncMock()
+        session.begin_nested = MagicMock(return_value=_nested_cm())
+        run_ids = [uuid.uuid4(), uuid.uuid4()]
+        await rr._delete_quarantine_rows(session, run_ids)
+        statements = [c.args[0] for c in session.execute.call_args_list]
+        assert len(statements) == 1
+        names = [getattr(getattr(s, "table", None), "name", None) for s in statements]
+        assert names == ["run_node_outputs_quarantine"]
+
+    async def test_no_run_ids_opens_no_savepoint(self) -> None:
+        session = AsyncMock()
+        await rr._delete_quarantine_rows(session, [])
+        session.begin_nested.assert_not_called()
+        session.execute.assert_not_called()
+
+    async def test_delete_failure_is_swallowed_and_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A privilege / missing-table failure (Postgres: no app-role grant on
+        the quarantine table) must not raise into the purge batch."""
+        session = AsyncMock()
+        session.begin_nested = MagicMock(return_value=_nested_cm(enter_exc=RuntimeError("permission denied")))
+        caplog.set_level("WARNING", logger="modulo.db.crud.run_retention")
+        await rr._delete_quarantine_rows(session, [uuid.uuid4()])
+        assert any("quarantine_delete_unavailable" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -438,16 +506,30 @@ class TestEstimateHelpers:
     def test_json_bytes_measures_serialized_length(self) -> None:
         assert rr._json_bytes({"a": "bbbb"}) == len('{"a": "bbbb"}')
 
-    def test_run_row_bytes_sums_payload_columns(self) -> None:
+    def test_run_row_bytes_sums_payload_columns_and_node_output_bytes(self) -> None:
+        """FAR-583: the per-node blobs (outputs / telemetry / markers) come
+        from the run_node_outputs store, passed in as ``node_output_bytes``
+        (metadata rows already excluded by the repo reader); the remaining
+        run-row payloads are summed as before."""
+        run = _run("complete")
+        node_output_bytes = 4321
+        expected = node_output_bytes + sum(
+            rr._json_bytes(v)
+            for v in (
+                run.cost_breakdown,
+                run.input_payload,
+                run.run_classification,
+            )
+        )
+        assert rr._run_row_bytes(run, node_output_bytes) == expected
+
+    def test_run_row_bytes_defaults_to_zero_node_output_bytes(self) -> None:
         run = _run("complete")
         expected = sum(
             rr._json_bytes(v)
             for v in (
-                run.outputs_json,
-                run.node_telemetry_json,
                 run.cost_breakdown,
                 run.input_payload,
-                run.raw_output_markers,
                 run.run_classification,
             )
         )

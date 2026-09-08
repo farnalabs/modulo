@@ -196,14 +196,11 @@
         <div class="space-y-1.5">
           <div v-for="(item, idx) in run.work_item_refs" :key="`${item.kind}-${item.ref}-${idx}`" class="flex flex-wrap items-center gap-2 text-xs">
             <template v-if="isGithubWorkItem(item)">
-              <a v-if="getPrUrl(item)" :href="getPrUrl(item)!" target="_blank" rel="noopener noreferrer" :data-testid="`run-detail-pr-link-${idx}`" class="inline-flex items-center gap-1 text-primary hover:underline">
-                <span class="badge text-xs badge-context-blue">{{ githubKindLabel(item) }}</span>
-                <span class="font-medium">#{{ githubRefId(item) }}</span>
+              <a v-if="getPrUrl(item)" :href="getPrUrl(item)!" target="_blank" rel="noopener noreferrer" :data-testid="`run-detail-pr-link-${idx}`" class="inline-flex items-center transition-opacity hover:opacity-80">
+                <span class="badge text-xs badge-context-blue">{{ githubWorkItemBadgeLabel(item) }}</span>
               </a>
-              <span v-else class="inline-flex items-center gap-1">
-                <span class="badge text-xs badge-context-blue">{{ githubKindLabel(item) }}</span>
-                <span class="font-medium">#{{ githubRefId(item) }}</span>
-              </span>
+              <span v-else class="badge text-xs badge-context-blue">{{ githubWorkItemBadgeLabel(item) }}</span>
+              <span v-if="prTitle(item)" class="max-w-[24rem] truncate text-muted-foreground" :title="prTitle(item)!">{{ prTitle(item) }}</span>
             </template>
             <template v-else>
               <span class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-medium capitalize">{{ item.kind || '—' }}</span>
@@ -1025,16 +1022,59 @@ function getPrUrl(item: WorkItemRef): string | null {
   const kind = (item.kind || '').toLowerCase()
   const ref = (item.ref || '').trim()
   const hashIndex = ref.indexOf('#')
-  if (hashIndex <= 0) return null
-  const slashIndex = ref.indexOf('/')
-  if (slashIndex <= 0 || slashIndex >= hashIndex) return null
-  const owner = ref.slice(0, slashIndex)
-  const repo = ref.slice(slashIndex + 1, hashIndex)
-  const id = ref.slice(hashIndex + 1)
-  if (!owner || !repo || !id || /\s/.test(owner) || /\s/.test(repo) || repo.includes('/')) return null
-  if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
-  if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
-  return `https://github.com/${owner}/${repo}`
+  if (hashIndex > 0) {
+    const slashIndex = ref.indexOf('/')
+    if (slashIndex > 0 && slashIndex < hashIndex) {
+      const owner = ref.slice(0, slashIndex)
+      const repo = ref.slice(slashIndex + 1, hashIndex)
+      const id = ref.slice(hashIndex + 1)
+      if (owner && repo && id && !/\s/.test(owner) && !/\s/.test(repo) && !repo.includes('/')) {
+        if (kind === 'github_pr') return `https://github.com/${owner}/${repo}/pull/${id}`
+        if (kind === 'github_issue') return `https://github.com/${owner}/${repo}/issues/${id}`
+        return `https://github.com/${owner}/${repo}`
+      }
+    }
+  }
+  if (kind === 'github_pr') {
+    const ctx = prContext.value
+    const refId = githubRefId(item)
+    const refIsNumber = /^\d+$/.test(refId)
+    const ctxNumber = ctx && /^\d+$/.test(ctx.number) ? ctx.number : ''
+    if (ctx && ctx.fullName && refIsNumber && (!ctxNumber || ctxNumber === refId)) {
+      return `https://github.com/${ctx.fullName}/pull/${refId}`
+    }
+    if (ctx && ctx.fullName && !refIsNumber && ctxNumber) {
+      return `https://github.com/${ctx.fullName}/pull/${ctxNumber}`
+    }
+  }
+  return null
+}
+
+const prContext = computed<{ fullName: string; number: string; title: string | null } | null>(() => {
+  const payload = runIO.value?.input_payload as Record<string, unknown> | null | undefined
+  if (!payload || typeof payload !== 'object') return null
+  const repo = payload.repository as Record<string, unknown> | null | undefined
+  const pr = payload.pull_request as Record<string, unknown> | null | undefined
+  const fullName = typeof repo?.full_name === 'string' ? repo.full_name.trim() : ''
+  if (!fullName) return null
+  const rawNumber = pr?.number
+  const number = rawNumber == null ? '' : String(rawNumber).trim()
+  const title = typeof pr?.title === 'string' && pr.title.trim() ? pr.title.trim() : null
+  return { fullName, number, title }
+})
+
+function githubWorkItemBadgeLabel(item: WorkItemRef): string {
+  const refId = githubRefId(item)
+  return refId ? `${githubKindLabel(item)} #${refId}` : githubKindLabel(item)
+}
+
+function prTitle(item: WorkItemRef): string | null {
+  if ((item.kind || '').toLowerCase() !== 'github_pr') return null
+  const ctx = prContext.value
+  if (!ctx || !ctx.title || !ctx.number) return null
+  const refId = githubRefId(item)
+  if (refId && /^\d+$/.test(refId) && refId !== ctx.number) return null
+  return ctx.title
 }
 
 async function revealPrompt(nodeName: string) {

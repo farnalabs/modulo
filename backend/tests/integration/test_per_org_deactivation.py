@@ -142,7 +142,7 @@ async def _account_active(engine: AsyncEngine, account_id: uuid.UUID) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# HTTP client fixture â€” FastAPI app wired to the testcontainer database
+# HTTP client fixture — FastAPI app wired to the testcontainer database
 # ---------------------------------------------------------------------------
 
 
@@ -309,7 +309,7 @@ async def test_org_b_admin_cannot_clear_org_a_tombstone(
     await _call_deactivate(app_engine, admin_a, shared)
     assert await _tombstone_set(db_engine, shared, org_a) is True
 
-    # Org-B admin's reactivate is scoped to THEIR org (a no-op here) â€” the
+    # Org-B admin's reactivate is scoped to THEIR org (a no-op here) — the
     # org-A tombstone must survive untouched.
     resp = await client.post(
         f"/api/v1/admin/users/{shared}/reactivate",
@@ -343,7 +343,7 @@ async def test_operator_deactivation_remains_global(
     )
     await _create_membership(db_engine, org_id=org_b, account_id=shared, role="runner", joined_at=datetime.now(UTC))
 
-    # Operator (session_user = modulo_breakglass): the break-glass branch â€”
+    # Operator (session_user = modulo_breakglass): the break-glass branch —
     # global ban by design, no force needed (shared is not a last admin).
     await _call_deactivate(breakglass_engine, caller, shared)
 

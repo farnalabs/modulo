@@ -9,13 +9,14 @@ Covers:
   * the dependent-trigger suppression guard predicate
     (``is_guardrail_blocked_run``) against in-memory SQLite.
 
-No DB is required for the orchestrator/contract tests — the session, hub and
+No DB is required for the orchestrator/contract tests â€” the session, hub and
 audit writer are stubbed. The suppression predicate uses a real Run table.
 """
 
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any, Self, cast
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -205,7 +206,7 @@ class _FakeNested:
 
 
 class _FailingFlushSession(_FakeSession):
-    """Savepoint whose inner flush always fails — the summary write must roll
+    """Savepoint whose inner flush always fails â€” the summary write must roll
     back to the savepoint and be contained."""
 
     async def flush(self) -> None:
@@ -268,12 +269,19 @@ def audit_patch(monkeypatch: pytest.MonkeyPatch) -> Any:
 async def test_compensate_blocked_run_no_hub_writes_summary(audit_patch: Any):
     session = _FakeSession()
     run = _FakeRun()
-    summary = await compensate_blocked_run(
-        session,
-        run,
-        guardrail_block="Guardrail 'secret' blocked: matched credential pattern",
-        blocking_eval_name="secret",
-    )
+    # FAR-583: the outputs fallback reads through the run_node_outputs repo
+    # reader â€” stub it (the _FakeSession cannot serve the real query); the
+    # run carries no stored outputs.
+    with patch(
+        "modulo.db.crud.run_node_outputs.read_run_outputs_with_fallback",
+        new=AsyncMock(return_value=None),
+    ):
+        summary = await compensate_blocked_run(
+            session,
+            run,
+            guardrail_block="Guardrail 'secret' blocked: matched credential pattern",
+            blocking_eval_name="secret",
+        )
     assert summary["blocked"] is True
     assert summary["blocking_eval_name"] == "secret"
     assert not summary["executed_nodes"]
@@ -434,13 +442,20 @@ async def test_compensate_blocked_run_executed_nodes_falls_back_to_outputs(audit
     session = _FakeSession(graph=graph)
     run = _FakeRun()
     run.outputs_json = {"node_a": {"output": {"number": 5}}}
-    connector = _StubConnector(result=CompensationResult(outcome=CompensationOutcome.COMPENSATED, detail="closed"))
-    summary = await compensate_blocked_run(
-        session,
-        run,
-        guardrail_block="blocked",
-        connector_hub=_FakeHub(connector),
-    )
+    # FAR-583: the outputs fallback reads through the run_node_outputs repo
+    # reader â€” stub it with the run's reassembled outputs (the _FakeSession
+    # cannot serve the real query).
+    with patch(
+        "modulo.db.crud.run_node_outputs.read_run_outputs_with_fallback",
+        new=AsyncMock(return_value=run.outputs_json),
+    ):
+        connector = _StubConnector(result=CompensationResult(outcome=CompensationOutcome.COMPENSATED, detail="closed"))
+        summary = await compensate_blocked_run(
+            session,
+            run,
+            guardrail_block="blocked",
+            connector_hub=_FakeHub(connector),
+        )
     assert summary["executed_nodes"] == ["node_a"]
     assert summary["nodes"][0]["publish_status"] == "compensated"
 

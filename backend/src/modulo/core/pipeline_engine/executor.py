@@ -46,6 +46,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.audit_logger.labels import (
+    SYSTEM_ACTOR,
+    compose_run_started_summary,
+    resolve_run_actor,
+    short_id,
+)
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
@@ -129,6 +135,7 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     update_run_status,
 )
+from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback, read_run_markers_with_fallback
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
@@ -220,6 +227,32 @@ def _sanitize_detail(detail: Any, limit: int = 5000) -> str:
     via ``str()`` and is a NO-OP for clean strings.
     """
     return sanitize_error_text(detail)[:limit]
+
+
+async def _safe_pipeline_name(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> str | None:
+    """Best-effort pipeline name lookup for audit labelling (never raises).
+
+    A failed or missing lookup degrades the ``run_started`` summary to the
+    nameless form instead of suppressing the audit event — the event's write
+    must not depend on the label lookup succeeding.
+    """
+    try:
+        pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline.run_started_audit_name_lookup_failed",
+            extra={"run_id": str(run_id), "pipeline_id": str(pipeline_id)},
+            exc_info=True,
+        )
+        return None
+    return pipeline.name if pipeline is not None else None
 
 
 def _traceback_detail(exc: BaseException, limit: int = 2000) -> str:
@@ -1836,13 +1869,29 @@ class PipelineExecutor:
         if running_run is None:
             raise RunNotFoundError(run_id)
         try:
+            actor_user_id, actor_label = resolve_run_actor(
+                trigger_type=running_run.trigger_type,
+                trigger_id=running_run.trigger_id,
+                account_id=running_run.account_id,
+            )
+            payload: dict[str, Any] = {
+                "pipeline_id": str(pipeline_id),
+                "summary": compose_run_started_summary(
+                    await _safe_pipeline_name(session, pipeline_id, org_id, run_id),
+                    pipeline_id,
+                    running_run.trigger_type,
+                ),
+            }
+            if actor_label is not None:
+                payload["actor"] = actor_label
             await append_audit_event(
                 session,
                 org_id=org_id,
                 event_type="run_started",
+                actor_user_id=actor_user_id,
                 resource_type="run",
                 resource_id=run_id,
-                payload_json={"pipeline_id": str(pipeline_id)},
+                payload_json=payload,
             )
         except asyncio.CancelledError:
             raise
@@ -2555,6 +2604,11 @@ class PipelineExecutor:
         payload: dict[str, Any],
     ) -> None:
         """Append the ``context_write_by_non_setter`` audit event for a run."""
+        node_id = payload.get("node_id")
+        role = payload.get("role")
+        summary = f'Non-setter context write on node "{node_id}"' if node_id else "Non-setter context write"
+        if role:
+            summary += f" (role {role})"
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
@@ -2565,9 +2619,11 @@ class PipelineExecutor:
                 resource_type="run",
                 resource_id=run_id,
                 payload_json={
-                    "node_id": payload.get("node_id"),
-                    "role": payload.get("role"),
+                    "node_id": node_id,
+                    "role": role,
                     "attempted_keys": list(payload.get("attempted_keys") or []),
+                    "actor": SYSTEM_ACTOR,
+                    "summary": summary,
                 },
             )
 
@@ -3017,6 +3073,8 @@ class PipelineExecutor:
                     payload_json={
                         "pipeline_id": str(pipeline_id),
                         "error_detail": _sanitize_detail(error_detail, limit=5000),
+                        "actor": SYSTEM_ACTOR,
+                        "summary": f"Guardrail eval blocked the run (pipeline {short_id(pipeline_id)})",
                     },
                 )
             except asyncio.CancelledError:
@@ -3138,14 +3196,25 @@ class PipelineExecutor:
         including a missing row or a non-dict column — yields empty dicts so
         the downgrade falls back to scanning the live dict only. It must never
         crash finalization.
+
+        FAR-583: the blobs reassemble from ``run_node_outputs`` via the repo
+        reader (with the empty/mismatch legacy fallback) inside the SAME
+        transaction that loads the run row — one batched query, never a
+        per-node lazy load.
         """
         if self._session_factory is None:
             return {}, {}
+        outputs_json: dict[str, Any] = {}
+        telemetry_json: dict[str, Any] = {}
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
                 run = await get_run(session, run_id)
+                if run is not None:
+                    blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=org_id)
+                    outputs_json = dict(blobs.outputs) if isinstance(blobs.outputs, dict) else {}
+                    telemetry_json = dict(blobs.telemetry) if isinstance(blobs.telemetry, dict) else {}
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -3155,14 +3224,7 @@ class PipelineExecutor:
                 exc_info=True,
             )
             return {}, {}
-        if run is None:
-            return {}, {}
-        outputs_json = getattr(run, "outputs_json", None)
-        telemetry_json = getattr(run, "node_telemetry_json", None)
-        return (
-            dict(outputs_json) if isinstance(outputs_json, dict) else {},
-            dict(telemetry_json) if isinstance(telemetry_json, dict) else {},
-        )
+        return outputs_json, telemetry_json
 
     async def _finalize_run_after_stream(
         self,
@@ -3702,8 +3764,9 @@ class PipelineExecutor:
         # budget and re-sending the side effect. ORDERING INVARIANT: computed
         # AFTER superseded/stalled (above) and BEFORE any mutation —
         # final_status/error_code are first mutated only in the
-        # retries-exhausted branch below. `markers` is the ALREADY-LOADED
-        # current_run.raw_output_markers — no fresh SELECT.
+        # retries-exhausted branch below. `markers` was loaded by
+        # `_load_transient_state` (repo reader, same transaction) — no extra
+        # SELECT here.
         gate_ok = self._idempotency_gate_ok(
             exc=exc,
             run_markers=run_markers,
@@ -4195,7 +4258,13 @@ class PipelineExecutor:
             if current_run is not None:
                 node_attempt_count = int(current_run.node_attempt_count or 0)
                 current_token = current_run.claim_token
-                run_markers = current_run.raw_output_markers
+                # FAR-583 read-switch: the markers reassemble from
+                # run_node_outputs (with the empty/mismatch legacy fallback)
+                # inside this SAME transaction — one batched repo read, no
+                # per-node lazy loads. The run row here is a FRESH load in
+                # this transaction, so no in-session unsaved state is relied
+                # on.
+                run_markers = await read_run_markers_with_fallback(session, run_id=run_id, organisation_id=org_id)
                 cancellation_requested = bool(current_run.cancellation_requested)
                 idempotency_key = current_run.idempotency_key
         return node_attempt_count, current_token, run_markers, cancellation_requested, idempotency_key
@@ -4244,8 +4313,9 @@ class PipelineExecutor:
         sandbox marker write.
 
         TOCTOU note (known, documented): ``run_markers`` is the run's
-        ``raw_output_markers`` read by ``_load_transient_state`` via plain
-        ``get_run`` — NOT under ``SELECT ... FOR UPDATE``. Two executors racing
+        raw-output markers (reassembled by ``_load_transient_state`` via the
+        FAR-583 repo reader) read via plain ``get_run`` — NOT under
+        ``SELECT ... FOR UPDATE``. Two executors racing
         on the same run could both read ``delivery_done`` absent and both decide
         to suppress/retry. The marker WRITE side (``_write_raw_output_marker``)
         DOES take ``with_for_update`` on the run row before persisting, so a
@@ -4790,6 +4860,8 @@ class PipelineExecutor:
                         "error_detail": _sanitize_detail(error_detail, limit=5000),
                         "suite_id": exc.suite_id,
                         "score": exc.score,
+                        "actor": SYSTEM_ACTOR,
+                        "summary": f"Eval suite {short_id(exc.suite_id)} blocked the run (score {exc.score})",
                     },
                 )
             except asyncio.CancelledError:

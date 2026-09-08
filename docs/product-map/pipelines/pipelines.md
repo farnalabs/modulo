@@ -75,6 +75,14 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 - [x] Graph validation and run-time enforcement are unit-covered under
       `tests/unit/graph_validator` and `tests/unit/pipeline_engine`
       (`test_pipeline_execution.py`, `test_pipeline_node_conversion.py`)
+- [x] Sandbox `agent_commands` LIST items ending with a heredoc terminator are
+      rejected at save time with code `SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM`
+      — list items are joined with `commands_concatenation_string`, so a
+      terminated item would corrupt into `PY && <next>` (unterminated heredoc)
+      or a line-leading `&&` that no join fix can repair without changing
+      operator semantics (reject, never clamp — same precedent as FAR-511); a
+      scalar `agent_command` is unaffected because there is no join
+      (FAR-664, `backend/tests/unit/graph_validator/test_edges_and_sandbox_validation.py`)
 
 ## Known Gaps
 
@@ -103,6 +111,13 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 
 ## QA History
 
+- 2026-09-08: **improve-architecture (product-map walk)** — added the FAR-664
+  sandbox save-time validation behaviour to the graph layer: `agent_commands`
+  list items terminated by a heredoc terminator are rejected at save time
+  (`SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM`) while a scalar `agent_command` is
+  unaffected (`graph_validator/__init__.py`
+  `_check_sandbox_heredoc_list_item`, unit-covered in
+  `test_edges_and_sandbox_validation.py`).
 - 2026-09-08: **improve-architecture (product-map walk)** — corrected a stale coverage
   claim in Known Gaps: `run_lifecycle.feature` / `run_sequential.feature` were described
   as "exercised by the same step suite", but no step module registers them via

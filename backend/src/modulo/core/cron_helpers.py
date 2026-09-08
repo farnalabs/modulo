@@ -47,6 +47,7 @@ from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from modulo.core.run_outputs_dualwrite import DUAL_WRITE_COUNTERS
 
 # FAR-190 streak engine lives in its own module (extracted so cron_helpers can
 # stay focused on scheduling). Re-exported here for the dispatcher_reconcile
@@ -56,7 +57,13 @@ from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.trigger_streak import (
     enforce_no_delivery_streaks,
 )
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, ONGOING_ACTIVE_STATUSES, Run
+from modulo.db.models.run import (
+    ACTIVE_RUN_STATUSES,
+    AWAITING_HUMAN_STATUS,
+    ONGOING_ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
+    Run,
+)
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
 
@@ -228,6 +235,19 @@ _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure
 _MID_GRAPH_WEDGE_MAX_AGE_MINUTES = max(SAQ_RUN_TIMEOUT // 60, 120) + 15
 _EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
 
+# ---------------------------------------------------------------------------
+# FAR-648 HITL-gate-expiry terminalizer. An ``awaiting_human`` run whose open
+# gate expired UNCLAIMED and UNDECIDED past the configurable grace (settings
+# ``hitl_gate_cancel_grace_seconds``, default 60 min) is a zombie: nobody ever
+# claimed the gate, so a decision will never arrive, yet the run keeps holding
+# an org-level concurrency slot (the org gate counts human-waiting runs,
+# FAR-604 D1). It is terminalized ``cancelled`` — NOT ``failed``: the human
+# simply never answered, and classify.py buckets ``cancelled`` as
+# ``operator_or_hitl_cancelled`` (excluded from delivery streaks).
+# ---------------------------------------------------------------------------
+_HITL_GATE_EXPIRED_ERROR_CODE = "hitl_gate_expired"
+_HITL_GATE_EXPIRED_ERROR_DETAIL = "HITL gate expired unanswered; run cancelled to release its concurrency slot."
+
 # Exported reconciliation stats for /healthz/ready (PR D — hitl-health-obs).
 # The ``age_terminalized`` / ``enqueue_failed_ttl_terminalized`` keys are
 # semantic aliases of the executor-superseded (age-bound wedge) and
@@ -246,6 +266,7 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "claim_cap_terminalized": 0,
     "mid_graph_wedge_terminalized": 0,
     "age_terminalized": 0,
+    "hitl_gate_expired_terminalized": 0,
     "dispatch_failed_terminalized": 0,
     "enqueue_failed_ttl_terminalized": 0,
     "enqueue_failed_redispatched": 0,
@@ -260,7 +281,25 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "run_api_key_errors": 0,
     "rollback_thresholds_checked": 0,
     "rollback_thresholds_flagged": 0,
+    # FAR-583 run_node_outputs migration counters. The dual_write_* keys are
+    # NOT tick counters and are NOT bumped here: the app-process chokepoint
+    # orchestration (core.run_outputs_dualwrite) INCRs DEDICATED cumulative
+    # Redis keys (``saq:run_outputs:counters:<name>`` — qa M10: the old
+    # read-modify-write of this shared blob was wiped by the tick's
+    # wholesale rewrite every 60s), and the tick READS them into the summary
+    # at tick end (see _overlay_dual_write_counters). The sweep_* keys are
+    # populated by the catch-up sweep leg wired into _reconcile_org (pass 2b).
+    "outputs_sweep_healed": 0,
+    "outputs_sweep_org_failed": 0,
 }
+
+# The dual_write_* counter vocabulary is IMPORTED (qa iteration 2, rider 11):
+# one source of truth — core.run_outputs_dualwrite.DUAL_WRITE_COUNTERS —
+# drives the defaults here, the stats setter, and the tick-summary defaults
+# below; a new counter cannot be added on one side and missed on the other.
+for _dual_write_counter in DUAL_WRITE_COUNTERS:
+    _dispatcher_reconcile_stats[_dual_write_counter] = 0
+del _dual_write_counter
 
 
 def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
@@ -278,6 +317,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["claim_cap_terminalized"] = stats.get("claim_cap_terminalized", 0)
     _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
     _dispatcher_reconcile_stats["age_terminalized"] = stats.get("age_terminalized", 0)
+    _dispatcher_reconcile_stats["hitl_gate_expired_terminalized"] = stats.get("hitl_gate_expired_terminalized", 0)
     _dispatcher_reconcile_stats["dispatch_failed_terminalized"] = stats.get("dispatch_failed_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_ttl_terminalized"] = stats.get("enqueue_failed_ttl_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_redispatched"] = stats.get("enqueue_failed_redispatched", 0)
@@ -292,6 +332,18 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["run_api_key_errors"] = stats.get("run_api_key_errors", 0)
     _dispatcher_reconcile_stats["rollback_thresholds_checked"] = stats.get("rollback_thresholds_checked", 0)
     _dispatcher_reconcile_stats["rollback_thresholds_flagged"] = stats.get("rollback_thresholds_flagged", 0)
+    # qa M10: the dual_write_* values arrive pre-read from the dedicated
+    # cumulative Redis counters (the summary carries them; the tick does not
+    # own or reset them). outputs_sweep_failed is DEAD —
+    # backfill_run_node_outputs_batch never returns a ``runs_failed`` key, so
+    # the field was always 0; outputs_sweep_org_failed is the failure channel.
+    # qa iteration 2 (rider 11): the dual_write_* vocabulary loops the
+    # IMPORTED DUAL_WRITE_COUNTERS (one source of truth with the defaults
+    # above and the tick summary below).
+    for _dual_write_counter in DUAL_WRITE_COUNTERS:
+        _dispatcher_reconcile_stats[_dual_write_counter] = stats.get(_dual_write_counter, 0)
+    _dispatcher_reconcile_stats["outputs_sweep_healed"] = stats.get("outputs_sweep_healed", 0)
+    _dispatcher_reconcile_stats["outputs_sweep_org_failed"] = stats.get("outputs_sweep_org_failed", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -4565,6 +4617,81 @@ async def _terminalize_claim_cap_exhausted(
     return [run_id for (run_id,) in rows]
 
 
+async def _terminalize_expired_hitl_gates(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    grace_seconds: int,
+) -> list[uuid.UUID]:
+    """Terminalize ``awaiting_human`` runs whose HITL gate expired unanswered (FAR-648).
+
+    DB-only, org-scoped. A run parked at ``awaiting_human`` whose open gate is
+    UNCLAIMED (``hitl_claims.account_id IS NULL`` — the same predicate the
+    claim surfaces use) and UNDECIDED (``decision IS NULL``) past
+    ``expires_at + grace_seconds`` is a zombie: the F6a recovery never resumes
+    it (no committed decision — FAR-541 auto-approve guard) and nobody who
+    never claimed the gate will decide it, yet the run keeps holding an
+    org-level concurrency slot. Terminalizing ``cancelled`` with
+    ``hitl_gate_expired`` releases the slot (the terminalizer writes raw
+    UPDATEs and never runs ``finalize_cost``, so the caller records the
+    compensating daily fact — P6', FAR-162).
+
+    Multi-gate safety (mirrors ``run_admission._PARK_RUNS_SQL``): the run is
+    only terminalized when EVERY one of its undecided gates is
+    expired-unclaimed past the grace — a run with any CLAIMED or in-grace
+    undecided gate still has live human work attached and is left alone.
+
+    TOCTOU-safe by construction: there is no separate select — the single
+    guarded UPDATE re-validates the whole predicate (source status, the
+    cancel-wins guard, and the gate state) at execution time inside the org
+    transaction, so a gate claimed between the reconcile tick's read and this
+    write no longer matches and the row is skipped (rowcount 0).
+    ``cancellation_requested = false`` keeps CANCEL-WINS precedence intact:
+    a cancellation-requested run is owned by the cancel path.
+    ``expires_at``/``account_id``/``decision`` already exist on
+    ``hitl_claims`` — DB-only, no migration.
+    """
+    result = await session.execute(
+        text(
+            "UPDATE runs SET status='cancelled', error_code=:code, "
+            "error_detail=:detail, completed_at=now() "
+            "WHERE organisation_id=:oid AND status=:awaiting_status "
+            "AND cancellation_requested=false "
+            "AND EXISTS ("
+            "  SELECT 1 FROM hitl_claims hc "
+            "  WHERE hc.organisation_id = runs.organisation_id "
+            "  AND hc.run_id = runs.id "
+            "  AND hc.decision IS NULL "
+            "  AND hc.account_id IS NULL "
+            "  AND hc.expires_at < now() - (:grace_seconds * interval '1 second')) "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM hitl_claims hc2 "
+            "  WHERE hc2.organisation_id = runs.organisation_id "
+            "  AND hc2.run_id = runs.id "
+            "  AND hc2.decision IS NULL "
+            "  AND (hc2.account_id IS NOT NULL "
+            "       OR hc2.expires_at >= now() - (:grace_seconds * interval '1 second'))) "
+            "RETURNING id"
+        ),
+        {
+            "oid": str(org_id),
+            "code": _HITL_GATE_EXPIRED_ERROR_CODE,
+            "detail": _HITL_GATE_EXPIRED_ERROR_DETAIL,
+            "grace_seconds": grace_seconds,
+            "awaiting_status": AWAITING_HUMAN_STATUS,
+        },
+    )
+    rows = result.all()
+    for (run_id,) in rows:
+        _log.warning(
+            "dispatcher_reconcile: expired-HITL-gate zombie terminalized %s "
+            "(gate unclaimed + undecided past %ds grace)",
+            run_id,
+            grace_seconds,
+        )
+    return [run_id for (run_id,) in rows]
+
+
 async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
     """Terminal-fail an enqueue-failed run past the TTL backstop.
 
@@ -4595,6 +4722,11 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
     context, re-selects the Run ORM (a pre-write entity would record
     ``status='running'`` with a NULL ``completed_at``), and records the daily
     fact via the shared ``record_fact_for_terminal_failed_run`` wrapper.
+    Phantom-fact guard: the terminalized ids are collected BEFORE the org
+    transaction commits — if that transaction later rolled back, the run is
+    NOT terminal and the fact would be a lie. The re-selected run's status is
+    re-checked against ``TERMINAL_STATUSES`` and any non-terminal run is
+    skipped (logged), for every terminalizer, not just the FAR-648 one.
     None-guarded and fail-open: a facts-write failure is logged and swallowed —
     it must never fail the reconcile tick or roll back the already-committed
     terminal write.
@@ -4608,6 +4740,16 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
             run = await get_run(session, run_id)
             if run is None:
                 _log.warning("cron_helpers.terminalized_facts_run_missing run=%s", run_id)
+                return
+            if run.status not in TERMINAL_STATUSES:
+                # The org transaction holding the terminalizer UPDATE rolled
+                # back after the id was collected — the run is not terminal,
+                # so recording a compensating fact would be a phantom fact.
+                _log.warning(
+                    "cron_helpers.terminalized_facts_run_not_terminal run=%s status=%s",
+                    run_id,
+                    run.status,
+                )
                 return
             await record_fact_for_terminal_failed_run(session, run)
     except asyncio.CancelledError:
@@ -4733,6 +4875,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         selected INDEPENDENTLY of the reconcile predicates so a capped
         fresh-heartbeat run with checkpoints is still caught once its heartbeat
         goes stale, while a LIVE run on its final claim is never killed.
+      * FAR-648 gate-expiry: any ``awaiting_human`` row whose every undecided
+        gate is UNCLAIMED and past ``expires_at`` +
+        ``hitl_gate_cancel_grace_seconds`` (default 60m) is terminalized
+        ``cancelled`` (``hitl_gate_expired``) — a zombie holding an org-level
+        concurrency slot that no human will ever release.
 
     On match: verify the Redis read, RE-CHECK ``q.job()`` AFTER the decision
     and immediately before enqueue (skip if a job now exists — a concurrent
@@ -4747,10 +4894,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     only when their pipeline has free capacity.
 
     Every run terminalised this tick (``executor_superseded`` /
-    ``claim_cap_exhausted`` / ``dispatch_failed``) gets a compensating
-    ``run_daily_facts`` row (FAR-162, P6') written after the per-org
-    transactions commit — the terminalizers never run ``finalize_cost``, so
-    without this the failed runs would be invisible to analytics.
+    ``claim_cap_exhausted`` / ``dispatch_failed`` / ``hitl_gate_expired``) gets
+    a compensating ``run_daily_facts`` row (FAR-162, P6') written after the
+    per-org transactions commit — the terminalizers never run
+    ``finalize_cost``, so without this the terminalised runs would be
+    invisible to analytics.
     """
     from sqlalchemy import or_
 
@@ -4762,6 +4910,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
+    hitl_gate_cancel_grace = int(settings.hitl_gate_cancel_grace_seconds)
     factory = _open_system_factory()
     summary = _dispatcher_summary()
     # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
@@ -4781,6 +4930,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         if not org_ids:
             # Still record the run so /healthz/ready sees a fresh last_run_at
             # even in an empty-org environment (the cron keeps ticking every 60s).
+            await _overlay_dual_write_counters(redis_client, summary)
             set_dispatcher_reconcile_stats(summary)
             await write_dispatcher_reconcile_stats(redis_client, summary)
             return summary
@@ -4822,16 +4972,22 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                 enqueue_failed_redispatched,
                 summary,
                 terminalized_run_ids,
+                hitl_gate_cancel_grace,
             )
         # FAR-162 (P6') — record a daily fact for every run terminalised this
-        # tick (executor_superseded / claim_cap_exhausted / dispatch_failed):
-        # the terminalizers write raw UPDATEs and never run finalize_cost, so
-        # without this the failed runs would be invisible to the analytics
-        # failure/stall dimensions. All per-org terminalizer transactions have
-        # committed by now; each facts write opens its own RLS-scoped session.
+        # tick (executor_superseded / claim_cap_exhausted / dispatch_failed /
+        # hitl_gate_expired): the terminalizers write raw UPDATEs and never
+        # run finalize_cost, so without this the terminalised runs would be
+        # invisible to the analytics failure/stall dimensions. All per-org
+        # terminalizer transactions have committed by now; each facts write
+        # opens its own RLS-scoped session.
         for run_id, run_org_id in terminalized_run_ids:
             await _record_fact_for_terminalized_run(run_id, run_org_id)
         await _run_reconcile_sweeps(redis_client, summary)
+        # qa M10: overlay the dedicated dual-write counters into the summary
+        # BEFORE the stats persist — /healthz reads the counters' current
+        # values from the summary, and the tick never owns or resets them.
+        await _overlay_dual_write_counters(redis_client, summary)
         # Record the outcome for /healthz/ready BEFORE the client is closed:
         # the shared Redis key is what the WEB process reads (the in-process
         # dict lives only in this worker process).
@@ -4845,7 +5001,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
 
 
 def _dispatcher_summary() -> dict[str, Any]:
-    return {
+    summary: dict[str, Any] = {
         "scanned": 0,
         "repaired": 0,
         "skipped": 0,
@@ -4857,6 +5013,7 @@ def _dispatcher_summary() -> dict[str, Any]:
         "claim_cap_terminalized": 0,
         "mid_graph_wedge_terminalized": 0,
         "age_terminalized": 0,
+        "hitl_gate_expired_terminalized": 0,
         "dispatch_failed_terminalized": 0,
         "enqueue_failed_ttl_terminalized": 0,
         "enqueue_failed_redispatched": 0,
@@ -4870,7 +5027,133 @@ def _dispatcher_summary() -> dict[str, Any]:
         "run_api_key_scanned": 0,
         "run_api_key_revoked": 0,
         "run_api_key_errors": 0,
+        # FAR-583 counters. The dual_write_* keys are NOT tick counters: the
+        # app-side chokepoint orchestration INCRs dedicated cumulative Redis
+        # keys (core.run_outputs_dualwrite) and the tick READS them into these
+        # summary fields at tick end (qa M10 — _overlay_dual_write_counters):
+        # /healthz keeps showing the numbers, the tick never owns or resets
+        # them. The sweep keys ARE tick-owned (bumped per org by the sweep leg
+        # inside _reconcile_org); outputs_sweep_failed is dead (the batch
+        # helper never returned ``runs_failed``) and is gone.
+        # qa iteration 2 (rider 11): the dual_write_* defaults loop the
+        # IMPORTED DUAL_WRITE_COUNTERS (one vocabulary with the stats dict
+        # and the setter above).
+        "outputs_sweep_healed": 0,
+        "outputs_sweep_org_failed": 0,
     }
+    summary.update(dict.fromkeys(DUAL_WRITE_COUNTERS, 0))
+    return summary
+
+
+# Per-org, per-tick cap on runs the FAR-583 catch-up sweep backfills. Bounds
+# the sweep's write volume so a drained backlog cannot starve the tick's
+# terminalizers: with the drain loop below, a backlog of N unhealed runs is
+# consumed at 500 runs per org per tick, and a steady-state org (every run
+# healed) selects zero rows because the helper's NOT-EXISTS trigger legs keep
+# healed runs out of the selection. 500 mirrors the repo helper's default cap.
+_OUTPUTS_SWEEP_TICK_CAP = 500
+
+
+async def _overlay_dual_write_counters(redis_client: AsyncRedis, summary: dict[str, Any]) -> None:
+    """READ the dedicated dual-write counters into the tick's summary (qa M10).
+
+    The app-side chokepoint orchestration INCRs cumulative keys the tick never
+    touches; the tick copies their CURRENT values into the summary's
+    outputs_dual_write_* fields so /healthz keeps showing them. Best-effort:
+    a Redis failure leaves the summary's zero defaults (the counters reappear
+    on the next healthy tick) — never fails the tick.
+    """
+    from modulo.core.run_outputs_dualwrite import read_dual_write_counters
+
+    try:
+        counters = await read_dual_write_counters(redis_client)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.dual_write_counter_read_failed", exc_info=True)
+        return
+    summary.update(counters)
+
+
+async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any]) -> None:
+    """FAR-583 catch-up sweep for ONE org (own session/transaction).
+
+    Drains the org's un-healed TERMINAL runs into ``run_node_outputs`` by
+    calling the repo module's batched backfill helper in a drain loop. The
+    selection is TRIGGER-driven, not cursor-driven (qa iteration 2 — reworded
+    to match the repo helper): the batch helper's SQL-side NOT-EXISTS trigger
+    legs pick every run still lacking its new-table representation, with NO
+    high-water filtering of the completed_at range — *high_water* /
+    ``new_high_water`` are carried only as a NO-PROGRESS SAFETY BREAK (the
+    drain loop stops when the mark cannot advance, which would otherwise
+    re-select the same rows forever) plus observability. Each iteration
+    backfills up to *remaining* runs until either the trigger selection is
+    exhausted (a not-full batch) or the per-tick cap is consumed.
+
+    Isolation contract (design §CATCH-UP SWEEP): the sweep runs in its OWN
+    session/transaction — never the outer reconcile transaction — so a sweep
+    failure cannot roll back that tick's terminalizers. Per-org error
+    isolation: a failing org bumps ``outputs_sweep_org_failed`` and the
+    remaining orgs continue. Best-effort: a failure never raises past this
+    helper (cancellation excepted).
+    """
+    from modulo.db.crud.run_node_outputs import backfill_run_node_outputs_batch
+
+    factory = _open_system_factory()
+    healed = 0
+    skipped_healed = 0
+    skipped_ghost = 0
+    quarantined = 0
+    high_water: datetime | None = None
+    remaining = _OUTPUTS_SWEEP_TICK_CAP
+    try:
+        while remaining > 0:
+            requested = remaining
+            async with factory() as session, session.begin():
+                await _set_rls_org(session, org_id)
+                result = await backfill_run_node_outputs_batch(
+                    session,
+                    organisation_id=org_id,
+                    high_water_mark=high_water,
+                    cap=remaining,
+                )
+            selected = int(result["runs_selected"])
+            healed += int(result["runs_backfilled"])
+            skipped_healed += int(result.get("runs_skipped_healed", 0))
+            skipped_ghost += int(result.get("runs_skipped_ghost", 0))
+            quarantined += int(result.get("runs_quarantined", 0))
+            new_high_water = result["new_high_water"]
+            remaining -= selected
+            # Drain loop safety: stop when the backlog is exhausted (a
+            # not-full batch means nothing further to select) or the mark
+            # cannot advance (no completed_at in the batch — the loop would
+            # re-select the same rows forever).
+            if selected == 0 or selected < requested:
+                break
+            if new_high_water is None or new_high_water == high_water:
+                break
+            high_water = new_high_water
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["outputs_sweep_org_failed"] += 1
+        _log.exception("dispatcher_reconcile.outputs_sweep_org_failed (org %s)", org_id)
+        return
+    if healed or quarantined or skipped_ghost:
+        # qa M10b: outputs_sweep_failed is GONE — backfill_run_node_outputs_batch
+        # never returned a ``runs_failed`` key, so the counter was always 0;
+        # per-org failures are counted on outputs_sweep_org_failed above.
+        summary["outputs_sweep_healed"] += healed
+        _log.info(
+            "dispatcher_reconcile.outputs_sweep",
+            extra={
+                "org_id": str(org_id),
+                "healed": healed,
+                "skipped_healed": skipped_healed,
+                "skipped_ghost": skipped_ghost,
+                "quarantined": quarantined,
+            },
+        )
 
 
 async def _reconcile_org(
@@ -4887,6 +5170,7 @@ async def _reconcile_org(
     enqueue_failed_redispatched: int,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    hitl_gate_cancel_grace_seconds: int,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop)."""
     from modulo.db.models.pipeline import Pipeline
@@ -4912,6 +5196,16 @@ async def _reconcile_org(
             )
             summary["claim_cap_terminalized"] += len(capped)
             terminalized_run_ids.extend((run_id, org_id) for run_id in capped)
+            # FAR-648: expired-HITL-gate terminalizer — an awaiting_human run
+            # whose every undecided gate is unclaimed and past
+            # expires_at + grace is a zombie holding an org slot; terminalize
+            # it cancelled BEFORE the row select so it is excluded from the
+            # re-dispatch scan.
+            expired_gates = await _terminalize_expired_hitl_gates(
+                session, org_id, grace_seconds=hitl_gate_cancel_grace_seconds
+            )
+            summary["hitl_gate_expired_terminalized"] += len(expired_gates)
+            terminalized_run_ids.extend((run_id, org_id) for run_id in expired_gates)
             rows = (
                 await session.execute(
                     select(
@@ -4959,6 +5253,12 @@ async def _reconcile_org(
                 summary,
                 terminalized_run_ids,
             )
+
+    # FAR-583 catch-up sweep: runs AFTER the reconcile transaction committed
+    # (its own session/tx — a sweep failure must not roll back this tick's
+    # terminalizers) and is per-org failure-isolated: one org failing bumps
+    # outputs_sweep_org_failed while the remaining orgs continue.
+    await _run_outputs_sweep_for_org(org_id, summary)
     return enqueue_failed_redispatched
 
 
@@ -5056,6 +5356,8 @@ async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
             record_stall_reason("executor_superseded", summary["mid_graph_wedge_terminalized"])
         if summary["dispatch_failed_terminalized"]:
             record_stall_reason("dispatch_failed", summary["dispatch_failed_terminalized"])
+        if summary["hitl_gate_expired_terminalized"]:
+            record_stall_reason("hitl_gate_expired", summary["hitl_gate_expired_terminalized"])
     except asyncio.CancelledError:
         raise
     except Exception:

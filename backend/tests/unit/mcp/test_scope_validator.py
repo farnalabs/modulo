@@ -427,6 +427,16 @@ class TestConstants:
             "list_trigger_events",
             "query_analytics",
             "query_analytics_concurrency",
+            # FAR-695: build-time entity read/list tools.
+            "list_agents",
+            "get_agent",
+            "list_connectors",
+            "get_connector",
+            "list_connector_types",
+            "list_model_backends",
+            "get_model_backend",
+            "list_environment_profiles",
+            "list_parameter_schemas",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 

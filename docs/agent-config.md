@@ -63,7 +63,7 @@ Runs on-save (via the REST API's `PATCH /{pipeline_id}/graph` endpoint) and pre-
 | `SANDBOX_TIMEOUT_BOUNDS` | Warning | `timeout_seconds` outside recommended 60-604800s range |
 | `SANDBOX_TIMEOUT_INVALID` | Warning | `timeout_seconds` is not a valid integer |
 | `SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP` | Error | `timeout_seconds` exceeds the E2B 1-hour sandbox cap; use `<= 3300` for provisioning headroom (FAR-511) |
-| `SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM` | Error | an `agent_commands` list item ends with a heredoc terminator; list items are joined with the concatenation operator and the terminator would be corrupted — use a single `agent_command` or base64-embed the script body (FAR-664) |
+| `SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM` | Error | an `agent_commands` list item ends with a heredoc terminator; list items are joined with the concatenation operator and the terminator would be corrupted – use a single `agent_command` or base64-embed the script body (FAR-664) |
 | `SANDBOX_STALL_TIMEOUT_INVALID` | Warning | `stall_timeout_seconds` is not a positive number |
 | `SANDBOX_STALL_TIMEOUT_GT_TIMEOUT` | Warning | `stall_timeout_seconds` exceeds `timeout_seconds` |
 | `SANDBOX_STDOUT_DELTA_INVALID` | Warning | `stdout_percentage_delta` is outside (0, 1] or not a valid number |

@@ -68,7 +68,9 @@ class DeletedDefault(Base, TimestampMixin):
         CheckConstraint("signal <> ''", name="ck_deleted_defaults_signal_nonempty"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),

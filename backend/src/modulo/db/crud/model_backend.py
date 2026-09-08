@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
+from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.agent import Agent
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
@@ -66,10 +67,32 @@ async def list_model_backends(
     org_id: uuid.UUID,
     page: int = 1,
     page_size: int = 20,
+    cursor: str | None = None,
     excluded_tiers: list[str] | None = None,
 ) -> PageResult[ModelBackend]:
     if excluded_tiers is None:
         excluded_tiers = ["in_dev"]
+    base = select(ModelBackend).where(ModelBackend.organisation_id == org_id)
+    if excluded_tiers:
+        base = base.where(~ModelBackend.tier.in_(excluded_tiers))
+    if cursor is not None:
+        paginator = CursorPaginator()
+        cp = await paginator.paginate(
+            session,
+            base,
+            cursor=cursor,
+            limit=page_size,
+            model=ModelBackend,
+            compute_total=True,
+        )
+        return PageResult(
+            items=cp.items,
+            total=cp.total or 0,
+            page=page,
+            page_size=page_size,
+            next_cursor=cp.next_cursor,
+            has_more=cp.has_more,
+        )
     offset = (page - 1) * page_size
     try:
         total_query = select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id == org_id)

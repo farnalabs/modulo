@@ -5,7 +5,8 @@ from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,6 +28,7 @@ from modulo.core.pipeline_engine.recovery import (
     GuardrailOverrideRequiredError,
 )
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -36,6 +38,10 @@ _PIPELINE_ID = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
 _SNAPSHOT_ID = uuid.uuid4()
 _THREAD_ID = str(uuid.uuid4())
+
+# qa M15: the autouse ``_stub_gate_fired`` fixture swaps the module attribute;
+# tests that exercise the REAL single-transaction loader capture it at import.
+_REAL_DO_GET_RUN_WITH_GATE = runs_module._do_get_run_with_gate
 
 
 async def test_run_input_uses_legacy_target_when_new_target_is_null():
@@ -131,6 +137,58 @@ def _make_snapshot() -> MagicMock:
         "edges": [],
     }
     return snapshot
+
+
+@pytest.fixture(autouse=True)
+def _stub_gate_fired(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-583: the detail endpoint's gate-fired flag derives inside
+    ``_do_get_run_with_gate``'s single transaction (qa M15 — the removed
+    second-txn helper is gone) and its markers leg reads through the
+    run_node_outputs repo reader — neither can run against the mocked session.
+    The stub re-derives from the run the test patched into ``_do_get_run``,
+    with the markers stub serving the run's raw_output_markers exactly as the
+    real reader reassembles them."""
+    import modulo.api.routes.runs as runs_module
+
+    async def _detail(factory: Any, principal: Any, run_id: Any) -> tuple[Any, bool]:
+        run = await runs_module._do_get_run(factory, principal, run_id)
+        return run, await runs_module._run_gate_fired(None, run)
+
+    async def _markers(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        run = getattr(runs_module._do_get_run, "return_value", None)
+        markers = getattr(run, "raw_output_markers", None) if run is not None else None
+        return markers if isinstance(markers, dict) else None
+
+    monkeypatch.setattr(runs_module, "_do_get_run_with_gate", _detail)
+    monkeypatch.setattr(runs_module, "read_run_markers_with_fallback", _markers)
+
+    # The io/diff endpoints reassemble the blobs through the repo reader too
+    # (FAR-583); the mocked session cannot serve the real queries, so the stub
+    # reassembles from the run the test patched into get_run (return_value
+    # style) or from the side_effect list in call order (diff style).
+    blob_state = {"calls": 0}
+
+    def _current_run(run_id: Any) -> Any:
+        get_run_mock = runs_module.get_run
+        ret = getattr(get_run_mock, "return_value", None)
+        if ret is not None and isinstance(getattr(ret, "outputs_json", None), dict):
+            return ret
+        se = getattr(get_run_mock, "side_effect", None)
+        if isinstance(se, list):
+            for candidate in se:
+                if getattr(candidate, "id", None) == run_id:
+                    return candidate
+        return None
+
+    async def _blobs(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+
+        run = _current_run(run_id)
+        blob_state["calls"] += 1
+        outputs = run.outputs_json if run is not None and isinstance(run.outputs_json, dict) else {}
+        telemetry = run.node_telemetry_json if run is not None and isinstance(run.node_telemetry_json, dict) else {}
+        return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
+
+    monkeypatch.setattr(runs_module, "read_run_blobs_with_fallback", _blobs)
 
 
 def _make_mock_session() -> AsyncMock:
@@ -674,6 +732,62 @@ def test_run_response_gate_fired_false_for_plain_complete(client: TestClient) ->
     body = resp.json()
     assert body["gate_fired"] is False
     assert body["run_classification"]["reason"] == "no_work"
+
+
+async def test_run_detail_with_gate_derives_flag_in_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """qa M15: the run row AND the gate-fired flag derive in ONE transaction.
+
+    The removed second-txn helper re-opened a session and re-SELECTed the run
+    per GET /runs/{id} (a TOCTOU window vs terminalize + an extra read); the
+    loader now derives the flag from the SAME open transaction — pinned here
+    by (a) the helper's absence, (b) the gate derivation receiving the SAME
+    session the loader opened, and (c) exactly ONE run SELECT in the loader.
+    """
+    import modulo.api.routes.runs as runs_module
+
+    # Helper removal pin: the single-transaction loader replaced it.
+    with pytest.raises(AttributeError):
+        runs_module._do_get_run_gate_fired  # noqa: B018 — the AttributeError IS the assertion
+
+    run = _make_run(status="complete", error_code="harness.idempotency_gate")
+    gate_calls: list[tuple[Any, Any]] = []
+
+    async def _gate_fired(session: Any, row: Any) -> bool:
+        gate_calls.append((session, row))
+        return True
+
+    executed: list[Any] = []
+
+    class _Result:
+        def scalar_one_or_none(self) -> Any:
+            return run
+
+    class _Session:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *args: object) -> bool:
+            return False
+
+        def begin(self) -> Self:
+            return self
+
+        async def execute(self, stmt: Any, *args: object, **kwargs: object) -> _Result:
+            executed.append(stmt)
+            return _Result()
+
+    session = _Session()
+    principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="owner")
+    monkeypatch.setattr(runs_module, "set_rls_org", AsyncMock())
+    monkeypatch.setattr(runs_module, "set_rls_user_context", AsyncMock())
+    monkeypatch.setattr(runs_module, "_run_gate_fired", _gate_fired)
+
+    loaded, gate = await _REAL_DO_GET_RUN_WITH_GATE(lambda: session, principal, _RUN_ID)
+
+    assert loaded is run
+    assert gate is True
+    assert gate_calls == [(session, run)], "the flag must derive on the SAME open transaction/session"
+    assert len(executed) == 1, "one run SELECT — the loader must not re-SELECT the run"
 
 
 def test_run_response_populates_guardrail_summary(client: TestClient) -> None:
@@ -1499,6 +1613,18 @@ def test_diff_node_output_success(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs.get_run") as mock_get_run,
         patch("modulo.api.routes.runs.set_rls_org"),
+        # FAR-583: the diff endpoint reassembles both runs' blobs through
+        # the repo reader — stub the two reads in call order (the mocked
+        # session cannot serve the real queries).
+        patch(
+            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            new=AsyncMock(
+                side_effect=[
+                    RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
+                    RunBlobs(outputs=run_b.outputs_json, telemetry=run_b.node_telemetry_json, markers=None),
+                ]
+            ),
+        ),
     ):
         mock_get_run.side_effect = [run_a, run_b]
         resp = client.post(
@@ -1539,6 +1665,18 @@ def test_diff_node_output_identical(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs.get_run") as mock_get_run,
         patch("modulo.api.routes.runs.set_rls_org"),
+        # FAR-583: the diff endpoint reassembles both runs' blobs through
+        # the repo reader — stub the two reads in call order (the mocked
+        # session cannot serve the real queries).
+        patch(
+            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            new=AsyncMock(
+                side_effect=[
+                    RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
+                    RunBlobs(outputs=run_b.outputs_json, telemetry=run_b.node_telemetry_json, markers=None),
+                ]
+            ),
+        ),
     ):
         mock_get_run.side_effect = [run_a, run_b]
         resp = client.post(
@@ -1597,6 +1735,18 @@ def test_diff_node_output_node_not_found(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs.get_run") as mock_get_run,
         patch("modulo.api.routes.runs.set_rls_org"),
+        # FAR-583: the diff endpoint reassembles both runs' blobs through
+        # the repo reader — stub the two reads in call order (the mocked
+        # session cannot serve the real queries).
+        patch(
+            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            new=AsyncMock(
+                side_effect=[
+                    RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
+                    RunBlobs(outputs=run_b.outputs_json, telemetry=run_b.node_telemetry_json, markers=None),
+                ]
+            ),
+        ),
     ):
         mock_get_run.side_effect = [run_a, run_b]
         resp = client.post(

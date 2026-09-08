@@ -653,10 +653,10 @@ async def classify_and_persist_run(
     """Best-effort classification hook for a terminal write — NEVER raises.
 
     Computes the verdict from the run row's EXISTING terminalization facts
-    (status, error_code, outputs_json, node_telemetry_json,
-    raw_output_markers, work_intact) and persists it atomically in the
-    caller's transaction. The pure classify computation runs OFF the event
-    loop (``asyncio.to_thread``) so a fat-output run cannot stall the whole
+    (status, error_code, the reassembled outputs/telemetry/markers blobs,
+    work_intact) and persists it atomically in the caller's transaction. The
+    pure classify computation runs OFF the event loop
+    (``asyncio.to_thread``) so a fat-output run cannot stall the whole
     loop inside a terminalization transaction. On ANY classifier failure an
     ``unclassified`` marker is written instead — the record is NEVER skipped,
     so the FAR-190 walk stays fail-closed (a missing record breaks the walk;
@@ -668,13 +668,24 @@ async def classify_and_persist_run(
     if run.status not in TERMINAL_STATUSES:
         return False
     try:
+        # FAR-583 read-switch: the blobs reassemble from run_node_outputs via
+        # the repo reader (with the empty/mismatch legacy fallback) inside the
+        # caller's SAME transaction — the dual-write leg has already mirrored
+        # this terminalization's outputs/telemetry, and every caller reads
+        # flushed/committed state (update_run_status flushes before this hook;
+        # the fenced / work-intact / reconcile paths re-read with
+        # populate_existing or FOR UPDATE), so no in-session unsaved state is
+        # relied on. ONE batched repo query — never per-node lazy loads.
+        from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+
+        blobs = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
         result = await asyncio.to_thread(
             classify_run,
             run.status,
             run.error_code,
-            outputs_json=run.outputs_json,
-            telemetry_json=run.node_telemetry_json,
-            raw_output_markers=run.raw_output_markers,
+            outputs_json=blobs.outputs,
+            telemetry_json=blobs.telemetry,
+            raw_output_markers=blobs.markers,
             work_intact=run.work_intact,
         )
     except asyncio.CancelledError:

@@ -140,6 +140,36 @@ async def test_create_workspace_with_env_labels(
     assert "MY_VAR=value" in config["Env"]
 
 
+async def test_create_workspace_repo_fields_are_ignored_no_clone(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """FAR-595 contract: Docker maps spec.labels -> container Env and has no
+    clone semantics — first-class spec.repo_url/spec.repo_ref are ignored
+    (code sync is the bundled runner image's job), and repo-ish labels keys
+    are injected as plain env vars exactly like any other label.
+    """
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        labels={"REPO_URL": "https://github.com/user/repo.git"},
+        repo_url="https://github.com/user/repo.git",
+        repo_ref="develop",
+    )
+    await provider.create_workspace(spec)
+
+    config = mock_docker_client.containers.create.call_args[1]["config"]
+    # labels still map to Env (env-var injection semantics)
+    assert "REPO_URL=https://github.com/user/repo.git" in config["Env"]
+    # first-class repo fields never leak into the container config
+    for entry in config["Env"]:
+        assert "git clone" not in entry
+        assert entry != "develop"
+    # and no exec/clone command was ever issued at provision time
+    mock_docker_client.containers.create.assert_called_once()
+    assert config["Cmd"] == ["sleep", "infinity"]
+
+
 async def test_create_workspace_default_image(
     provider: DockerRuntimeProvider,
     mock_docker_client: MagicMock,

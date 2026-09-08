@@ -9,7 +9,10 @@
 import json
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from modulo.api.mcp_server import get_run_output, get_run_status
 
@@ -42,6 +45,24 @@ _TELEMETRY_KEYS = (
     "error_type",
     "error_message",
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-583: the blob reads go through the run_node_outputs repo reader —
+    the mocked session cannot serve the real repo queries, so the stub
+    reassembles from whatever the (per-test mocked) ``get_run`` returns,
+    exactly as the real reader serves the reassembled legacy shapes."""
+    import modulo.api.mcp_server as mcp_module
+    from modulo.db.crud.run_node_outputs import RunBlobs
+
+    async def _stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        run = getattr(mcp_module.get_run, "return_value", None)
+        outputs = run.outputs_json if run is not None and isinstance(run.outputs_json, dict) else {}
+        telemetry = run.node_telemetry_json if run is not None and isinstance(run.node_telemetry_json, dict) else {}
+        return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
+
+    monkeypatch.setattr(mcp_module, "read_run_blobs_with_fallback", _stub)
 
 
 def _make_session_context(session: AsyncMock) -> AsyncMock:

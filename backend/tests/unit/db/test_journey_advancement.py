@@ -55,6 +55,7 @@ from modulo.db.models.base import Base
 from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.run import Run
+from modulo.db.models.run_node_outputs import RunNodeOutput
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -74,7 +75,10 @@ _T3 = datetime(2026, 1, 4, 0, 0, 0)
 
 _TABLES: list[Table] = cast(
     list[Table],
-    [Journey.__table__, LifecycleMapStage.__table__, Run.__table__],
+    # RunNodeOutput: the terminal-write dual-write chokepoint (FAR-583) touches
+    # run_node_outputs on every finalize — the in-memory SQLite schema must
+    # carry the table or the dual-write leg fails with "no such table".
+    [Journey.__table__, LifecycleMapStage.__table__, Run.__table__, RunNodeOutput.__table__],
 )
 
 

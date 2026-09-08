@@ -14,7 +14,7 @@
       ]"
       :filter-values="{ status: statusFilter }"
       @update:search="searchQuery = $event"
-      @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadGates() } }"
+      @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; page = 1; loadGates() } }"
     >
       <template #after>
         <div class="flex flex-wrap items-center gap-2">
@@ -75,7 +75,23 @@
         :title="$t('views.SettingsHitlReviewView.empty_title')"
         :description="$t('views.SettingsHitlReviewView.empty_description')"
       />
-      <div v-else class="space-y-2">
+      <div v-else>
+      <!-- FAR-727: column labels for the gate rows below. The rows are
+           interactive cards (button + expandable detail panel), so this is a
+           flex header mirroring the row layout rather than a <table> — styled
+           to match the shared DataTable thead. -->
+      <div
+        data-testid="hitl-review-column-headers"
+        class="flex items-center gap-4 px-4 pb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
+      >
+        <span class="h-4 w-4 flex-shrink-0" aria-hidden="true"></span>
+        <div class="w-24 flex-shrink-0">{{ $t('views.SettingsHitlReviewView.status_label') }}</div>
+        <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.pipeline_label') }}</div>
+        <div class="min-w-0 flex-[2]">{{ $t('views.SettingsHitlReviewView.node_label') }}</div>
+        <div class="min-w-0 flex-1">{{ $t('views.SettingsHitlReviewView.assignee_label') }}</div>
+        <span class="w-40 flex-shrink-0 text-right">{{ $t('views.SettingsHitlReviewView.created_label') }}</span>
+      </div>
+      <div class="space-y-2">
       <div
         v-for="gate in filteredGates"
         :key="gate.gate_id + gate.run_id"
@@ -99,23 +115,29 @@
           >
             <path d="m9 18 6-6-6-6" />
           </svg>
-          <span :class="statusBadgeClass(gateStatus(gate))">
-            {{ gateStatus(gate) }}
-          </span>
-          <div class="min-w-0 flex-[2]">
-            <p class="truncate text-sm font-medium">{{ pipelineName(gate.pipeline_id) }}<span v-if="!pipelineName(gate.pipeline_id)" class="font-mono text-xs">{{ shortId(gate.pipeline_id) }}</span></p>
+          <div class="w-24 flex-shrink-0">
+            <span :class="statusBadgeClass(gateStatus(gate))">
+              {{ gateStatus(gate) }}
+            </span>
           </div>
           <div class="min-w-0 flex-[2]">
-            <p class="truncate text-sm text-muted-foreground">
-              <span class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
+            <p class="truncate text-sm font-medium" data-testid="hitl-review-pipeline-name">{{ pipelineDisplayName(gate) }}</p>
+          </div>
+          <div class="min-w-0 flex-[2]">
+            <p class="truncate text-sm text-muted-foreground" data-testid="hitl-review-node-name">
+              <!-- FAR-727: the server-resolved gate label (the edge's human
+                   name) — the raw gate-id short ID renders only when the gate
+                   config carries no label at all. -->
+              <span v-if="gate.label">{{ gate.label }}</span>
+              <span v-else class="font-mono text-xs">{{ shortId(gate.gate_id) }}</span>
             </p>
           </div>
           <div class="min-w-0 flex-1">
             <p class="truncate text-xs text-muted-foreground">
-              {{ gate.claimed_by ? $t('views.SettingsHitlReviewView.assigned_to', { user: gate.claimed_by_name || gate.claimed_by }) : $t('views.SettingsHitlReviewView.unassigned') }}
+              {{ gate.claimed_by ? (gate.claimed_by_name || gate.claimed_by) : $t('views.SettingsHitlReviewView.unassigned') }}
             </p>
           </div>
-          <span class="flex-shrink-0 text-xs text-muted-foreground">
+          <span class="w-40 flex-shrink-0 text-right text-xs text-muted-foreground">
             {{ formatDate(gate.claimed_at || gate.created_at || '') }}
           </span>
         </button>
@@ -136,12 +158,51 @@
         </div>
       </div>
       </div>
+      </div>
+      <!-- FAR-692: server-side pagination over /hitl/gates. Only rendered when
+           there is more than one page; the page indicator uses role="status" so
+           a page change is announced. No shared pagination component exists in
+           components/shared/, so this minimal inline pager is view-local. -->
+      <nav
+        v-if="totalGates > PAGE_SIZE"
+        class="flex items-center justify-center gap-3 py-2"
+        :aria-label="$t('views.SettingsHitlReviewView.pagination_label')"
+      >
+        <button
+          type="button"
+          data-testid="hitl-review-prev-page"
+          class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="page <= 1"
+          :aria-label="$t('views.SettingsHitlReviewView.prev_page')"
+          @click="goToPage(page - 1)"
+        >
+          {{ $t('views.SettingsHitlReviewView.prev_page') }}
+        </button>
+        <span
+          data-testid="hitl-review-page-indicator"
+          role="status"
+          class="text-sm text-muted-foreground"
+        >
+          {{ $t('views.SettingsHitlReviewView.page_indicator', { page, total: totalPages }) }}
+        </span>
+        <button
+          type="button"
+          data-testid="hitl-review-next-page"
+          class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="page >= totalPages"
+          :aria-label="$t('views.SettingsHitlReviewView.next_page')"
+          @click="goToPage(page + 1)"
+        >
+          {{ $t('views.SettingsHitlReviewView.next_page') }}
+        </button>
+      </nav>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { api } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -156,11 +217,16 @@ import { shortId } from '../utils/format'
 import Select from 'primevue/select'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 interface GateItem {
   run_id: string
   gate_id: string
   pipeline_id: string
+  /** FAR-727: server-resolved pipeline name (null when the pipeline row is gone). */
+  pipeline_name?: string | null
+  /** FAR-727: server-resolved human label from the snapshot's hitl_gate_config. */
+  label?: string | null
   claimed_by: string | null
   /** FAR-691: claimant's human-readable display name (server-resolved). */
   claimed_by_name?: string | null
@@ -183,18 +249,50 @@ interface PipelineItem {
   name: string
 }
 
+// FAR-692: the review page lists gates in EVERY state via GET /api/v1/hitl/gates
+// (server-side status filter + pagination). The FilterBar's empty selection maps
+// to the server's `undecided` default, preserving today's queue view.
+type ServerGateStatus = 'undecided' | 'pending' | 'claimed' | 'approved' | 'rejected' | 'all'
+
+const PAGE_SIZE = 25
+
+function serverStatusFor(filter: string): ServerGateStatus {
+  if (!filter) return 'undecided'
+  return filter as ServerGateStatus
+}
+
+// FAR-692: server-side pagination state. totalGates is stamped from each
+// /hitl/gates response; the pager renders only when it exceeds PAGE_SIZE.
+// NB: every ref the fetch closure reads (statusFilter/page/totalGates) must be
+// declared BEFORE useDataFetch — vue-query invokes the fetcher during setup.
+const page = ref(1)
+const totalGates = ref(0)
+const totalPages = computed(() => Math.max(1, Math.ceil(totalGates.value / PAGE_SIZE)))
+
+const statusFilter = ref('')
+const pipelineFilter = ref('')
+const searchQuery = ref('')
+const dateFrom = ref('')
+const dateTo = ref('')
+
 const { loading, error, data: gates, load: loadGates } = useDataFetch<GateItem[]>(
   async () => {
-    const res = await api.GET('/api/v1/hitl/pending')
-    const raw = (res.data as any)?.gates || []
-    return { data: raw.map((g: any) => ({
+    // Reads the CURRENT status/page refs on every load: filter and page
+    // changes re-invoke loadGates(), so each fetch reflects the latest state.
+    const res = await api.GET('/api/v1/hitl/gates', {
+      params: { query: { status: serverStatusFor(statusFilter.value), page: page.value, page_size: PAGE_SIZE } },
+    })
+    if (res.error) return { error: res.error }
+    const payload = (res.data as any) || {}
+    totalGates.value = payload.total ?? 0
+    return { data: ((payload.items || []) as any[]).map((g) => ({
       ...g,
       run_id: String(g.run_id),
       pipeline_id: String(g.pipeline_id),
       claimed_by: g.claimed_by ? String(g.claimed_by) : null,
     })) }
   },
-  // silentRefetch (FAR-691): the 30s auto-refresh and the filter/date-change
+  // silentRefetch (FAR-691): the 30s auto-refresh and the filter/date/page
   // refetches must not flip `loading` — the list branch stays mounted, so an
   // expanded card (and its notes textarea focus) survives every refetch.
   // The initial load still shows the spinner.
@@ -210,11 +308,11 @@ const { load: loadPipelines, data: pipelines } = useDataFetch<PipelineItem[]>(
   { immediate: false, initialValue: [] as PipelineItem[] }
 )
 
-const statusFilter = ref('')
-const pipelineFilter = ref('')
-const searchQuery = ref('')
-const dateFrom = ref('')
-const dateTo = ref('')
+function goToPage(target: number) {
+  if (target < 1 || target > totalPages.value || target === page.value) return
+  page.value = target
+  loadGates()
+}
 
 const expandedKey = ref<string | null>(null)
 // FAR-612: view-level claim-failure banner. Cards may unmount on refresh
@@ -280,9 +378,15 @@ function pipelineName(pipelineId: string): string {
   return p ? p.name : ''
 }
 
-function matchesStatus(gate: GateItem): boolean {
-  if (!statusFilter.value) return true
-  return gateStatus(gate) === statusFilter.value
+// FAR-727: the row must never render a bare ID prefix where a name belongs.
+// The endpoint resolves `pipeline_name` server-side (join at query time), so
+// prefer it; the cached /pipelines list is a legacy-payload fallback. The
+// short ID renders only when both fail — the pipeline row is gone (deleted).
+function pipelineDisplayName(gate: GateItem): string {
+  if (gate.pipeline_name) return gate.pipeline_name
+  const cached = pipelineName(gate.pipeline_id)
+  if (cached) return cached
+  return t('views.SettingsHitlReviewView.deleted_pipeline_fallback', { id: shortId(gate.pipeline_id) })
 }
 
 function matchesPipeline(gate: GateItem): boolean {
@@ -293,7 +397,7 @@ function matchesPipeline(gate: GateItem): boolean {
 function matchesSearch(gate: GateItem): boolean {
   if (!searchQuery.value) return true
   const q = searchQuery.value.toLowerCase()
-  const pName = pipelineName(gate.pipeline_id).toLowerCase()
+  const pName = pipelineDisplayName(gate).toLowerCase()
   return pName.includes(q) || gate.gate_id.toLowerCase().includes(q)
 }
 
@@ -313,8 +417,12 @@ function matchesDate(gate: GateItem): boolean {
 }
 
 const filteredGates = computed(() => {
+  // Status is filtered SERVER-side now (FAR-692): the statusFilter param selects
+  // the gate subset on /hitl/gates. Search/pipeline/date remain client-side
+  // over the loaded page (documented limitation: search matches within the
+  // current page only).
   return gates.value.filter(gate =>
-    matchesStatus(gate) && matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
+    matchesPipeline(gate) && matchesSearch(gate) && matchesDate(gate))
 })
 
 // FAR-686: claim/decide logic lives inside HitlGateCard (shared with

@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -81,12 +82,19 @@ def _make_session(begin_exc: Exception | None = None) -> AsyncMock:
     return session
 
 
-def _result(scalar_one_or_none: object = None, scalar: object = None, rows: list | None = None) -> MagicMock:
+def _result(
+    scalar_one_or_none: object = None,
+    scalar: object = None,
+    rows: list | None = None,
+    first: object | None = None,
+) -> MagicMock:
     r = MagicMock()
     r.scalar_one_or_none = MagicMock(return_value=scalar_one_or_none)
     r.scalar = MagicMock(return_value=scalar)
     r.scalars.return_value.all = MagicMock(return_value=rows if rows is not None else [])
     r.all = MagicMock(return_value=rows if rows is not None else [])
+    if first is not None:
+        r.first = MagicMock(return_value=first)
     return r
 
 
@@ -509,11 +517,23 @@ def test_create_eval_from_run_returns_definition_with_sample(client: tuple[TestC
     run.outputs_json = {node_id.hex: "sample output"}
     run.node_telemetry_json = None
     pipeline = MagicMock()
+    # FAR-583 read-switch: the blobs reassemble through the repo reader, which
+    # issues its own SELECTs against this session. `session.info` binds the
+    # RLS org so read_rls_org short-circuits without consuming a queue slot;
+    # the empty run_node_outputs row set falls back to the legacy runs row.
+    session.info = {"org_id": _ORG_ID}
+    legacy_row = SimpleNamespace(
+        outputs_json={node_id.hex: "sample output"},
+        node_telemetry_json=None,
+        raw_output_markers=None,
+    )
     _queue_execute(
         session,
         [
             _result(scalar_one_or_none=run),  # run lookup
             _result(scalar_one_or_none=pipeline),  # pipeline lookup
+            _result(rows=[]),  # run_node_outputs rows (empty -> legacy fallback)
+            _result(first=legacy_row),  # legacy runs blob columns
         ],
     )
 

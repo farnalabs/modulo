@@ -10,7 +10,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Adds security-related HTTP response headers to every response.
 
     Headers set:
-    - Content-Security-Policy
+    - Content-Security-Policy (defense-in-depth with upgrade-insecure-requests,
+      base-uri, form-action, and object-src restrictions)
     - Strict-Transport-Security (only when not debug)
     - X-Frame-Options
     - X-Content-Type-Options
@@ -27,14 +28,22 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             csp_connect += " ws: wss:"
         if settings.modulo_monitor_domains:
             csp_connect += " " + settings.modulo_monitor_domains
-        self._csp = (
-            f"default-src 'self'; connect-src {csp_connect}; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; "
-            "frame-src 'self'; "
-            "frame-ancestors 'none'"
-        )
+        csp_directives = [
+            "default-src 'self'",
+            f"connect-src {csp_connect}",
+            "script-src 'self' 'unsafe-inline'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data:",
+            "font-src 'self' data:",
+            "frame-src 'self'",
+            "frame-ancestors 'none'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+        ]
+        if not self._debug:
+            csp_directives.append("upgrade-insecure-requests")
+        self._csp = "; ".join(csp_directives)
         self._hsts = "max-age=31536000; includeSubDomains"
         self._xfo = "DENY"
         self._cto = "nosniff"

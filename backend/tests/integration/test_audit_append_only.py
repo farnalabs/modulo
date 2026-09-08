@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from modulo.core.audit_logger.append_only import register_append_only_guard
 from modulo.db.models.audit_event import AuditEvent
 
+pytestmark = pytest.mark.integration
+
 
 class TestAuditAppendOnlyDbTrigger:
     """Tests that the Postgres trigger prevents UPDATE/DELETE at the DB level."""

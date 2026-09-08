@@ -22,6 +22,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.runtime_provider import ProviderNotConfiguredError
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.db.crud.base import PageResult
+from modulo.db.models.environment_profile import PROVIDER_TYPES
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -213,12 +214,14 @@ class TestCreateProfile:
         assert resp.status_code == 422
         assert "provider_type" in resp.text
 
-    @pytest.mark.parametrize("provider_type", ["local_docker", "e2b", "local", "runner_docker"])
+    @pytest.mark.parametrize("provider_type", sorted(PROVIDER_TYPES))
     def test_create_profile_validates_only_the_vocabulary(self, provider_type: str, client: TestClient) -> None:
         """Every CHECK-vocabulary value passes the boundary validation.
 
         The boundary pattern (routes) must accept exactly the model CHECK
-        vocabulary — otherwise a valid DB type would be un-reachable via the API.
+        vocabulary — otherwise a valid DB type would be un-reachable via the
+        API. Parametrized from the PROVIDER_TYPES constant (FAR-595) so a
+        new vocabulary member is exercised here automatically.
         """
         fake = _fake_profile(provider_type=provider_type)
         with (

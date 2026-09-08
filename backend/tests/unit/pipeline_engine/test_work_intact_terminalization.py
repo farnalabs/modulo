@@ -1,10 +1,10 @@
 """Unit tests for FAR-152 work_intact terminalization + migration 0087.
 
 work_intact is computed AT TERMINALIZATION from completed-node artifacts + the
-full DAG ran (��15.3) �?" never from the async evidence probe. It restores the
+full DAG ran (§15.3) — never from the async evidence probe. It restores the
 false-failure banner for harness-crash incidents #1/#3, and is suppressed
 (False) for A1-elevated runs (a run that self-reported failure is not
-complete, ��15.4). Also covers the reconciliation chain's run_evidence table +
+complete, §15.4). Also covers the reconciliation chain's run_evidence table +
 runs.work_intact surface (0110_schema_pipeline_runtime) and the executor's
 post-commit evidence-probe wiring.
 """

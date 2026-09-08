@@ -87,5 +87,5 @@ def validate_password_strength(password: str) -> None:
         raise ValueError(
             f"Password too weak: {entropy:.1f} entropy bits "
             f"(minimum {_MIN_ENTROPY_BITS}). Use a longer password "
-            f"with a mix of character types."
+            "with a mix of character types."
         )
