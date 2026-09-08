@@ -52,6 +52,7 @@ __all__ = [
     "EVENT_GUARDRAIL_ENFORCEMENT_GAP",
     "EVENT_GUARDRAIL_KILL_SWITCH",
     "EVENT_GUARDRAIL_UNEXPECTED_SKIP",
+    "EVENT_HITL_APPROVE_SWEEP",
     "EVENT_HITL_AWAITING",
     "EVENT_HITL_OVERDUE",
     "EVENT_RUN_FAILED",
@@ -124,6 +125,10 @@ EVENT_BUDGET_EXCEEDED = "budget_exceeded"
 EVENT_CIRCUIT_BREAKER_TRIPPED = "circuit_breaker_tripped"
 EVENT_CLAIM_EXPIRED = "claim_expired"
 EVENT_HITL_OVERDUE = "hitl_overdue"
+# FAR-611 — one actor approved HITL gates across multiple pipelines within the
+# sweep window (bulk-approve anomaly, e.g. the 2026-09-05 22-gate/80-second
+# sweep). Emitted at most once per actor per hour by the sweep alarm.
+EVENT_HITL_APPROVE_SWEEP = "hitl_approve_sweep_suspected"
 EVENT_EVAL_REGRESSION = "eval_regression"
 EVENT_EVAL_BLOCKED = "eval_blocked"
 EVENT_FEEDBACK_PENDING = "feedback_pending"

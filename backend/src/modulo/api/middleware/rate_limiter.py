@@ -66,11 +66,18 @@ _log = logging.getLogger(__name__)
 
 _redis_clients: set[Any] = set()
 
-# Pattern to strip variable UUID segments from HITL paths to prevent
-# per-segment bucket rotation (FAR-1304).
+# FAR-611: HITL paths are /api/v1/runs/{run_id}/hitl/{gate_id}/{action}.
+# The run id is a UUID, but the gate id is an arbitrary node id (gate ids look
+# like "hitl_gate_<source>_<target>") and the trailing segment is the review
+# action (claim / approve / reject / deliver-manual / approve-with-modification).
+# The pre-FAR-611 normalizer only stripped hex-UUID gate segments, so real gate
+# ids kept the raw gate id AND action in the bucket key: one bucket per gate per
+# action. A bulk approve sweep spread its requests across those buckets and never
+# exceeded 20/min on any single one. The tail is now normalized as a whole, so
+# the 20/min HITL budget is AGGREGATE per identity across runs, gates, and
+# actions (PRD §7.18: 20 HITL review actions per minute per user).
 _RE_VARIABLE_SEGMENT = re.compile(
-    r"/runs/[0-9a-f-]+/hitl/[0-9a-f-]+",
-    re.IGNORECASE,
+    r"/runs/[^/]+/hitl/[^/]+(?:/[^/]+)?",
 )
 
 
@@ -164,11 +171,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # the same HTTP path.
     ]
 
-    # PRD §7.18: HITL review actions — 20/min per user. The review endpoints
-    # live under /api/v1/runs/{run_id}/hitl/{gate_id}/ where the run/gate ids
-    # are variable, so a static prefix cannot match them; the "/hitl/" marker
-    # is matched as a path segment by _rule_for / _should_rate_limit. This is
-    # more restrictive than the /api/v1/runs rule (60/min) that would
+    # PRD §7.18: HITL review actions — 20/min per user, AGGREGATE across
+    # runs, gates, and actions (FAR-611). The review endpoints live under
+    # /api/v1/runs/{run_id}/hitl/{gate_id}/{action} where the run/gate ids are
+    # variable, so a static prefix cannot match them; the "/hitl/" marker is
+    # matched as a path segment by _rule_for / _should_rate_limit, and
+    # _client_key normalizes the whole variable tail (see _RE_VARIABLE_SEGMENT)
+    # so the budget cannot be dodged by rotating gates, runs, or actions. This
+    # is more restrictive than the /api/v1/runs rule (60/min) that would
     # otherwise apply to these paths.
     HITL_RULE: ClassVar[RateLimitRule] = RateLimitRule(path_prefix="/hitl/", max_requests=20, window_s=60)
 
@@ -253,8 +263,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _client_key(self, request: Request) -> str:
         path = request.url.path
 
-        # Normalize HITL paths to strip variable run/gate UUIDs, preventing
-        # per-segment bucket rotation on variable-path endpoints.
+        # Normalize HITL paths to a single placeholder tail (FAR-611): the
+        # run/gate ids and the trailing action are all variable, and bucketing
+        # per variable value would let a bulk sweep spread requests across
+        # buckets. One aggregate bucket per identity for all HITL actions.
         if "/hitl/" in path:
             path = _RE_VARIABLE_SEGMENT.sub("/runs/<run_id>/hitl/<gate_id>", path)
 

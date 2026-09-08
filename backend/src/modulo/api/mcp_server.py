@@ -3969,9 +3969,19 @@ async def _dispatch_hitl_action(
     dispatcher reconcile is the resume path, and it scopes its reconstruction
     by this stamp. HITLManager._decide would stamp the persisted payload
     anyway; these explicit stamps document the writer contract per call.
+
+    FAR-611: every action records ``client_type="mcp"`` on its audit event (the
+    sweep was previously attributable only by inference), and the approve path
+    passes ``actor_id=key_id`` like its claim/deliver_manual/reject siblings —
+    the MCP approve decision was previously written with no actor at all, which
+    left MCP-side sweeps invisible to per-actor detection (the FAR-611
+    approve-sweep alarm keys off the audited actor).
     """
+    client_type = "mcp"
     if action == "claim":
-        gate = await mgr.claim(s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=key_id)
+        gate = await mgr.claim(
+            s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=key_id, client_type=client_type
+        )
         return {
             "status": "claimed",
             "claim_token": gate.claim_token,
@@ -3985,7 +3995,9 @@ async def _dispatch_hitl_action(
             gate_id=gate_id,
             org_id=org_id,
             claim_token=claim_token or "",
+            actor_id=key_id,
             decision_payload={"action": "approved", "gate_id": gate_id},
+            client_type=client_type,
         )
         return {"status": "approved", "gate_id": gate_id}
     if action == "deliver_manual":
@@ -3999,6 +4011,7 @@ async def _dispatch_hitl_action(
             output=output or {},
             actor_id=key_id,
             decision_payload={"action": "deliver_manual", "gate_id": gate_id, "output": output or {}},
+            client_type=client_type,
         )
         return {"status": "delivered_manual", "gate_id": gate_id}
     # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
@@ -4014,6 +4027,7 @@ async def _dispatch_hitl_action(
         actor_id=key_id,
         reason=reason,
         decision_payload=reject_payload,
+        client_type=client_type,
     )
     return {"status": "rejected", "gate_id": gate_id}
 

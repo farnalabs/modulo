@@ -225,6 +225,17 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
         )
 
 
+def _client_type(principal: TenantPrincipal) -> str:
+    """The caller's credential kind for HITL audit enrichment (FAR-611).
+
+    JWTs carry no client-type claim (no amr / token-type marker), so the
+    principal's ``via_api_key`` credential-kind marker (FAR-610) is the only
+    reliable signal: ``"api_key"`` for mk_ principals, ``"browser"`` for JWT
+    logins. MCP callers pass ``"mcp"`` directly in ``mcp_server.py``.
+    """
+    return "api_key" if principal.via_api_key else "browser"
+
+
 async def _enforce_human_only_gate(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -329,6 +340,7 @@ async def claim_gate(
                     org_id=principal.organisation_id,
                     claimant_id=principal.account_id,
                     expiry_minutes=req.expiry_minutes,
+                    client_type=_client_type(principal),
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -505,6 +517,7 @@ async def approve_gate(
         mgr_method="approve",
         claim_token=req.claim_token,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     try:
@@ -573,6 +586,7 @@ async def approve_gate_with_modification(
         claim_token=req.claim_token,
         modified_output=req.modified_output,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     try:
@@ -628,6 +642,7 @@ async def reject_gate(
         mgr_method="reject",
         claim_token=req.claim_token,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     # Resume the graph with rejection data so the gate router picks the
@@ -695,6 +710,7 @@ async def deliver_manual_output(
         claim_token=req.claim_token,
         output=req.output,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     try:
@@ -750,6 +766,7 @@ async def submit_manual_output(
         mgr_method="approve",
         claim_token=req.claim_token,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     try:

@@ -7,6 +7,7 @@ code:
   - backend/src/modulo/core/hitl_manager/__init__.py
   - backend/src/modulo/core/hitl_manager/expiry_job.py
   - backend/src/modulo/core/hitl_manager/overdue_warning.py
+  - backend/src/modulo/core/hitl_manager/sweep_alarm.py
   - backend/src/modulo/core/run_context/autonomy.py
   - backend/src/modulo/db/models/hitl_claim.py
   - frontend/src/views/SettingsHitlReviewView.vue
@@ -15,6 +16,8 @@ unit-tests:
   - backend/tests/unit/hitl_manager/test_output_delivery_audit.py
   - backend/tests/unit/hitl_manager/test_overdue_warning.py
   - backend/tests/unit/hitl_manager/test_claim_expiry_job.py
+  - backend/tests/unit/hitl_manager/test_sweep_alarm.py
+  - backend/tests/unit/hitl_manager/test_client_type_audit.py
   - backend/tests/unit/core/hitl_manager/test_hitl_jwt.py
   - backend/tests/unit/api/test_hitl_resilience.py
   - backend/tests/unit/api/test_rate_limit_hitl_review.py
@@ -100,6 +103,28 @@ may decide.
       (`hitl.claim`/`hitl.approve`/`hitl.reject`/`hitl.deliver_manual`/
       `hitl.list`) — a caller without the grant gets 403
       (`test_rate_limit_hitl_review`, `test_hitl_resilience`)
+- [x] Audit events carry the caller's client type when known (FAR-611):
+      `hitl_claimed` / `hitl.output_delivered` / `hitl.output_modified` /
+      `hitl.output_rejected` / `hitl.manual_delivery` gain `client_type`
+      (`"browser"` for JWT logins via the principal's `via_api_key` marker,
+      `"api_key"` for mk_ keys, `"mcp"` for the MCP surface); internal
+      callers that cannot know the client omit the key
+      (`test_client_type_audit`)
+- [x] Approve-sweep anomaly alarm (FAR-611): when one actor's committed
+      approvals exceed 5 within 60 seconds AND span more than one pipeline,
+      the decision path emits `hitl_approve_sweep_suspected` — an audit
+      event, an in-app admin notification, and a fire-and-forget webhook
+      dispatch (`sweep_alarm.py`, `test_sweep_alarm`). Detection keys off
+      the audit chain (the only per-actor decision record —
+      `hitl_claims.account_id` is NULLed at decision time), is failure-
+      isolated (a broken alarm never fails the human's decision), and
+      self-suppresses to at most one alarm per (org, actor) per hour
+- [x] HITL review actions are rate limited at 20/min per identity,
+      AGGREGATE across runs, gates, and actions (FAR-611) — the bucket key
+      normalizes the whole variable path tail, so the 2026-09-05 bulk
+      sweep's per-gate bucket rotation cannot recur
+      (`test_rate_limit_hitl_review` aggregate/throttle cases,
+      `test_middleware_internals`)
 
 ## Known Gaps
 
