@@ -7,7 +7,6 @@ idempotency, and outcome persistence.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -17,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.feedback_manager.exceptions import (
     ConcurrentModificationError,
-    FeedbackRecordNotFoundError,
     InvalidTransitionError,
 )
 from modulo.core.feedback_manager.status import CORRECTION_TERMINAL_STATUSES
@@ -104,6 +102,8 @@ async def claim_correction_slot(
     from modulo.core.guardrails.correction import (
         EVENT_CORRECTION_CAP_BLOCKED,
         CorrectionCapExceededError,
+    )
+    from modulo.core.guardrails.correction import (
         claim_correction_slot as _claim_slot,
     )
 
@@ -277,9 +277,7 @@ async def update_status_fenced(
         )
     ).scalar_one_or_none()
     if updated is None:
-        raise ConcurrentModificationError(
-            f"FeedbackRecord {record_id} status changed concurrently. {failure_message}"
-        )
+        raise ConcurrentModificationError(f"FeedbackRecord {record_id} status changed concurrently. {failure_message}")
     return updated
 
 
@@ -338,9 +336,7 @@ async def persist_correction_outcome(
         failure_message="Expected 'correcting', failed to persist an escalated correction outcome.",
     )
     violation_event = (
-        EVENT_CORRECTION_VIOLATED
-        if verdict == CorrectionVerdict.CORRECTION_VIOLATED
-        else EVENT_CORRECTION_ESCALATED
+        EVENT_CORRECTION_VIOLATED if verdict == CorrectionVerdict.CORRECTION_VIOLATED else EVENT_CORRECTION_ESCALATED
     )
     await append_audit_event(
         session,

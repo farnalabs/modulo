@@ -12,11 +12,11 @@ Usage::
 """
 
 from modulo.core.watchdog.worker_liveness import (
-    run_worker_liveness_watchdog,
     WATCHDOG_HEARTBEAT_TTL_SECONDS,
+    run_worker_liveness_watchdog,
 )
 
 __all__ = [
-    "run_worker_liveness_watchdog",
     "WATCHDOG_HEARTBEAT_TTL_SECONDS",
+    "run_worker_liveness_watchdog",
 ]

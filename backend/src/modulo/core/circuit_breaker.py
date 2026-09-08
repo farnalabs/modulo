@@ -10,13 +10,13 @@ States:
 
 Usage::
 
-    from modulo.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+    from modulo.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
     breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=30)
 
     try:
         result = await breaker.call(some_async_function, arg1, arg2)
-    except CircuitBreakerOpen:
+    except CircuitBreakerOpenError:
         # Service is circuit-broken, handle degradation
         pass
 """
@@ -43,16 +43,13 @@ class CircuitState(enum.Enum):
     HALF_OPEN = "half_open"
 
 
-class CircuitBreakerOpen(Exception):
+class CircuitBreakerOpenError(Exception):
     """Raised when a call is rejected because the circuit breaker is open."""
 
     def __init__(self, name: str, remaining_seconds: float) -> None:
         self.name = name
         self.remaining_seconds = remaining_seconds
-        super().__init__(
-            f"Circuit breaker '{name}' is open. "
-            f"Retry in {remaining_seconds:.1f}s."
-        )
+        super().__init__(f"Circuit breaker '{name}' is open. Retry in {remaining_seconds:.1f}s.")
 
 
 class CircuitBreaker:
@@ -131,9 +128,7 @@ class CircuitBreaker:
         self._success_count = 0
         self._last_failure_time = time.monotonic()
 
-        if self._state == CircuitState.HALF_OPEN:
-            self._set_state(CircuitState.OPEN)
-        elif self._failure_count >= self.failure_threshold:
+        if self._state == CircuitState.HALF_OPEN or self._failure_count >= self.failure_threshold:
             self._set_state(CircuitState.OPEN)
 
     async def call(self, func: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
@@ -148,14 +143,14 @@ class CircuitBreaker:
             The result of the callable.
 
         Raises:
-            CircuitBreakerOpen: When the circuit is open.
+            CircuitBreakerOpenError: When the circuit is open.
             Any exception raised by the callable (when circuit is closed/half-open).
         """
         current_state = self.state  # May auto-transition OPEN -> HALF_OPEN
 
         if current_state == CircuitState.OPEN:
             remaining = self.recovery_timeout - (time.monotonic() - self._last_failure_time)
-            raise CircuitBreakerOpen(self.name, max(0.0, remaining))
+            raise CircuitBreakerOpenError(self.name, max(0.0, remaining))
 
         try:
             result = await func(*args, **kwargs)

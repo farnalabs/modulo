@@ -13,19 +13,19 @@ Usage::
 """
 
 from modulo.core.runtime_config.store import (
-    ConfigEntry,
-    KNOWN_KEYS,
-    HOT_RELOADABLE_KEYS,
     DEFAULT_VALUES,
+    HOT_RELOADABLE_KEYS,
+    KNOWN_KEYS,
+    ConfigEntry,
     RuntimeConfigStore,
     get_runtime_config_store,
 )
 
 __all__ = [
-    "ConfigEntry",
-    "KNOWN_KEYS",
-    "HOT_RELOADABLE_KEYS",
     "DEFAULT_VALUES",
+    "HOT_RELOADABLE_KEYS",
+    "KNOWN_KEYS",
+    "ConfigEntry",
     "RuntimeConfigStore",
     "get_runtime_config_store",
 ]

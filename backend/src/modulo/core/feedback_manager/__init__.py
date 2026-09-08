@@ -11,6 +11,20 @@ Sub-modules:
     single_node_correction: Single-node correction mechanics (FAR-210)
 """
 
+__all__ = [
+    "CORRECTION_TERMINAL_STATUSES",
+    "VALID_STATUS_TRANSITIONS",
+    "ConcurrentModificationError",
+    "FeedbackManager",
+    "FeedbackManagerError",
+    "FeedbackRecordNotFoundError",
+    "FeedbackRecordRunNotFoundError",
+    "InvalidTransitionError",
+    "ValidationError",
+    "dispatch_reject_correction",
+    "paginate_feedback_records",
+]
+
 import asyncio
 import json
 import logging
@@ -23,14 +37,9 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalEngine
-from modulo.core.node_output_split import node_return
-from modulo.db.crud.run import create_run, get_run
-from modulo.db.models.feedback_record import FeedbackRecord
-from modulo.db.models.run import Run
-from modulo.utils.uuid import coerce_uuid
 
 # Re-export from sub-modules for backward compatibility
-from modulo.core.feedback_manager.exceptions import (  # noqa: F401
+from modulo.core.feedback_manager.exceptions import (
     ConcurrentModificationError,
     FeedbackManagerError,
     FeedbackRecordNotFoundError,
@@ -38,38 +47,70 @@ from modulo.core.feedback_manager.exceptions import (  # noqa: F401
     InvalidTransitionError,
     ValidationError,
 )
+from modulo.core.feedback_manager.queries import (
+    build_org_scoped_conditions as _build_org_scoped_conditions,
+)
+from modulo.core.feedback_manager.queries import (
+    enrich_with_pipeline_names as _enrich_with_pipeline_names,
+)
+from modulo.core.feedback_manager.queries import (  # noqa: F401
+    get_feedback_record_for_node as _get_feedback_record_for_node,
+)
+from modulo.core.feedback_manager.queries import (
+    get_or_create_feedback_record as _get_or_create_feedback_record,
+)
+from modulo.core.feedback_manager.queries import (
+    paginate_feedback_records,
+)
+from modulo.core.feedback_manager.queries import (
+    paginated_response as _paginated_response,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    CorrectionRunContext as _CorrectionRunContext,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    apply_correction_violated_check as _apply_correction_violated_check,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    budget_exhausted_outcome as _budget_exhausted_outcome,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    claim_correction_slot as _claim_correction_slot,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    persist_correction_outcome as _persist_correction_outcome,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    resume_correction_from_state as _resume_correction_from_state,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    run_correction_attempts as _run_correction_attempts,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    update_status_fenced as _update_status_fenced,
+)
+from modulo.core.feedback_manager.single_node_correction import (
+    validate_correction_eligibility as _validate_correction_eligibility,
+)
 from modulo.core.feedback_manager.status import (  # noqa: F401
-    VALID_STATUS_TRANSITIONS,
-    CORRECTION_TERMINAL_STATUSES,
     _AI_HANDLER_TYPES,
     _DEFAULT_PAGE_SIZE,
     _MAX_PAGE_SIZE,
     _POST_CORRECTION_EVAL_NAME,
     _VALID_FEEDBACK_HANDLER_TYPES,
-    handler_type_label as _handler_type_label,
-    prior_states_for_retry as _prior_states_for_retry,
-    guardrail_correction_config as _guardrail_correction_config,
+    CORRECTION_TERMINAL_STATUSES,
+    VALID_STATUS_TRANSITIONS,
+)
+from modulo.core.feedback_manager.status import (
     correction_guardrail_from as _correction_guardrail_from,
 )
-from modulo.core.feedback_manager.queries import (  # noqa: F401
-    get_feedback_record_for_node as _get_feedback_record_for_node,
-    get_or_create_feedback_record as _get_or_create_feedback_record,
-    enrich_with_pipeline_names as _enrich_with_pipeline_names,
-    paginate_feedback_records,
-    build_org_scoped_conditions as _build_org_scoped_conditions,
-    paginated_response as _paginated_response,
+from modulo.core.feedback_manager.status import (
+    handler_type_label as _handler_type_label,
 )
-from modulo.core.feedback_manager.single_node_correction import (  # noqa: F401
-    CorrectionRunContext as _CorrectionRunContext,
-    validate_correction_eligibility as _validate_correction_eligibility,
-    resume_correction_from_state as _resume_correction_from_state,
-    claim_correction_slot as _claim_correction_slot,
-    run_correction_attempts as _run_correction_attempts,
-    budget_exhausted_outcome as _budget_exhausted_outcome,
-    apply_correction_violated_check as _apply_correction_violated_check,
-    update_status_fenced as _update_status_fenced,
-    persist_correction_outcome as _persist_correction_outcome,
-)
+from modulo.core.node_output_split import node_return
+from modulo.db.crud.run import create_run, get_run
+from modulo.db.models.feedback_record import FeedbackRecord
+from modulo.utils.uuid import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -529,7 +570,6 @@ class FeedbackManager:
         """FAR-210 T2b: run the single-node correction path."""
         from modulo.core.guardrails.correction import (
             CorrectionOutcome,
-            CorrectionVerdict,
             build_idempotency_key,
             redact_payload,
         )

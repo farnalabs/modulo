@@ -295,4 +295,17 @@ __all__ = [
     #     call site for. The route, request model, and unit/integration tests all
     #     exercise it, so it is load-bearing, not dead.
     "approve_with_modification",
+    # --- FAR-210 circuit breaker (modulo.core.circuit_breaker). New public API
+    #     surface for the feedback-manager correction path: the breaker guards
+    #     LLM-judge / connector calls. The class methods (call/is_available/
+    #     get_stats) and the per-backend/connector factory functions are the
+    #     intended call surface; call-site wiring lands in the correction
+    #     integration follow-up, so vulture (which scans src/ only) cannot see
+    #     their use yet. Kept here rather than deleted so the API is stable.
+    "call",
+    "is_available",
+    "get_stats",
+    "get_model_backend_breaker",
+    "get_connector_breaker",
+    "get_all_breakers",
 ]
