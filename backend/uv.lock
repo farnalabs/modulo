@@ -1293,7 +1293,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "docker", specifier = ">=7.0.0,<8.0.0" },
-    { name = "e2b", specifier = ">=0.15.0" },
+    { name = "e2b", specifier = ">=2.0.0" },
     { name = "factory-boy", marker = "extra == 'dev'", specifier = ">=3.3.3" },
     { name = "fastapi", specifier = ">=0.116.2" },
     { name = "httpx", specifier = ">=0.28.1" },

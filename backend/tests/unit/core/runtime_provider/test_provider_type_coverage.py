@@ -6,6 +6,11 @@ provider or documented unconfigured behaviour (the env var whose presence
 registers it, surfaced through ``ProviderNotConfiguredError``). This pins the
 wider vocabulary so a future CHECK value cannot silently ship without a
 provider mapping.
+
+The vocabulary itself has a single source of truth — ``PROVIDER_TYPES`` in
+``modulo.db.models.environment_profile`` (FAR-595). This module derives its
+expectation from that constant and asserts the CHECK text stays in parity
+with it (CHECK <-> constant <-> scanner).
 """
 
 import re
@@ -17,9 +22,13 @@ from modulo.core.runtime_provider import (
     build_hub,
     env_var_for_provider_type,
 )
-from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
 
-_EXPECTED_VOCABULARY = {"local_docker", "e2b", "local", "runner_docker"}
+# Derived from the model constant (FAR-595): the scanner expectation is no
+# longer an independent hardcoded list. New vocabulary members must be added
+# to PROVIDER_TYPES — which also feeds this parametrization and the env-var
+# mapping test below, so an unmapped member fails here loudly.
+_EXPECTED_VOCABULARY = set(PROVIDER_TYPES)
 
 
 def _check_values() -> set[str]:
@@ -30,8 +39,16 @@ def _check_values() -> set[str]:
     return set(re.findall(r"'([a-z0-9_]+)'", sqltext))
 
 
-def test_check_vocabulary_is_exactly_the_known_set() -> None:
+def test_check_constraint_matches_provider_types_constant() -> None:
+    """Parity: the model CHECK vocabulary is exactly PROVIDER_TYPES (FAR-595)."""
     assert _check_values() == _EXPECTED_VOCABULARY
+    assert set(PROVIDER_TYPES) == _EXPECTED_VOCABULARY
+
+
+def test_provider_types_constant_is_non_empty_frozenset_of_lowercase_ids() -> None:
+    assert isinstance(PROVIDER_TYPES, frozenset)
+    assert PROVIDER_TYPES
+    assert all(value == value.strip().lower() and value for value in PROVIDER_TYPES)
 
 
 @pytest.mark.parametrize("provider_type", sorted(_EXPECTED_VOCABULARY - {"local"}))

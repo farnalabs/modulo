@@ -61,9 +61,11 @@ class E2BRuntimeProvider(RuntimeProvider):
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         """Provision an E2B sandbox and optionally clone a repo.
 
-        The template ID is taken from ``spec.image_ref``. If the spec's
-        ``labels`` dict contains ``repo_url`` the repository is cloned into
-        ``/home/user/repo`` and optionally checked out to ``repo_ref``.
+        The template ID is taken from ``spec.image_ref``. If the first-class
+        ``spec.repo_url`` field is set (FAR-595 — previously smuggled through
+        the ``labels`` dict) the repository is cloned into ``/home/user/repo``
+        and optionally checked out to ``spec.repo_ref``. ``spec.labels`` is
+        env-var injection on Docker and is ignored by this provider.
 
         The spec's provider-neutral ``workspace_metadata`` maps to the E2B
         sandbox ``metadata`` (the SDK's tag-like carrier) when non-empty.
@@ -92,10 +94,10 @@ class E2BRuntimeProvider(RuntimeProvider):
             _log.exception("Failed to create E2B sandbox with template %s", template_id)
             raise RuntimeError(f"Failed to create E2B sandbox with template {template_id!r}: {exc}") from exc
 
-        repo_url = (spec.labels or {}).get("repo_url", "")
+        repo_url = spec.repo_url
         if repo_url:
             try:
-                await self._clone_repo(sandbox, repo_url, spec.labels or {})
+                await self._clone_repo(sandbox, repo_url, spec.repo_ref)
             except asyncio.CancelledError:
                 await self._kill_sandbox_best_effort(sandbox, "cancellation cleanup")
                 raise
@@ -219,12 +221,11 @@ class E2BRuntimeProvider(RuntimeProvider):
                 context,
             )
 
-    async def _clone_repo(self, sandbox: Any, repo_url: str, labels: dict[str, str]) -> None:
+    async def _clone_repo(self, sandbox: Any, repo_url: str, repo_ref: str) -> None:
         """Clone a git repository inside the sandbox.
 
         Raises RuntimeError if the clone or checkout fails.
         """
-        repo_ref = labels.get("repo_ref", "")
         cmds = [f"git clone {shlex.quote(repo_url)} /home/user/repo"]
         if repo_ref:
             cmds.append(f"cd /home/user/repo && git checkout {shlex.quote(repo_ref)}")

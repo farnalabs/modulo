@@ -243,7 +243,7 @@ class TestLocalRuntimeProvider:
     async def test_create_workspace_clones_repo(
         self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        spec.labels = {"repo_url": "https://github.com/acme/app"}
+        spec.repo_url = "https://github.com/acme/app"
         clone_calls: list[tuple[list[str], str]] = []
 
         async def _fake_run(command: list[str], cwd: str, cmd_timeout: int | None) -> ExecResult:
@@ -261,7 +261,7 @@ class TestLocalRuntimeProvider:
     async def test_create_workspace_clone_failure_cleans_up(
         self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        spec.labels = {"repo_url": "https://github.com/acme/app"}
+        spec.repo_url = "https://github.com/acme/app"
         rmtree = MagicMock()
         monkeypatch.setattr("modulo.core.runtime_provider.local.shutil.rmtree", rmtree)
 
@@ -275,6 +275,31 @@ class TestLocalRuntimeProvider:
 
         assert not provider._workspaces
         rmtree.assert_called_once()
+
+    async def test_create_workspace_labels_never_trigger_clone(
+        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-595 contract: clone inputs are first-class spec fields only.
+
+        A consumer setting ``labels`` for env-injection-style use on a local
+        profile must NOT silently trigger a repo clone — ``labels`` is
+        ignored by this provider (env-var injection is a Docker-only
+        semantics).
+        """
+        spec.labels = {"repo_url": "https://github.com/acme/app"}
+        clone_calls: list[tuple[list[str], str]] = []
+
+        async def _spy_run(command: list[str], cwd: str, cmd_timeout: int | None) -> ExecResult:
+            clone_calls.append((command, cwd))
+            return ExecResult(exit_code=0, stdout="", stderr="")
+
+        monkeypatch.setattr(provider, "_run_command", _spy_run)
+
+        ref = await provider.create_workspace(spec)
+
+        assert ref in provider._workspaces
+        assert not clone_calls
+        await provider.destroy_workspace(ref)
 
     async def test_destroy_workspace_logs_cleanup_failure(
         self,
