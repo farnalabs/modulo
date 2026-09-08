@@ -115,6 +115,11 @@ async def _open_exec_stream(exec_instance: Any) -> Any:
     return started
 
 
+def _stream_error_message(exc: Exception) -> str:
+    """Format an engine/proxy stream failure for ``ExecProcess.error`` (D4)."""
+    return f"{type(exc).__name__}: {str(exc)[:200]}"
+
+
 class DockerRuntimeProvider(RuntimeProvider):
     """RuntimeProvider backed by ephemeral Docker containers.
 
@@ -403,6 +408,75 @@ class DockerRuntimeProvider(RuntimeProvider):
         exit_code = int(raw_exit) if raw_exit is not None else -1
         return b"".join(stdout_chunks), b"".join(stderr_chunks), exit_code
 
+    @staticmethod
+    def _decoded_frame_chunks(frame: Any) -> list[tuple[str, str]]:
+        """Decode one exec frame into ("stdout"|"stderr", text) chunks."""
+        out, err = _split_exec_frame(frame)
+        chunks: list[tuple[str, str]] = []
+        if out:
+            chunks.append(("stdout", out.decode("utf-8", errors="replace")))
+        if err:
+            chunks.append(("stderr", err.decode("utf-8", errors="replace")))
+        return chunks
+
+    async def _read_stream_frames(
+        self,
+        stream: Any,
+        process: ExecProcess,
+    ) -> AsyncIterator[tuple[str, str]]:
+        """Read exec frames until the stream ends, yielding decoded chunks.
+
+        An engine/proxy death mid-exec sets ``process.error`` (a stream
+        ERROR, never a silent end with a fabricated success code) and ends
+        the stream.
+        """
+        while True:
+            try:
+                frame = await stream.read_out()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                process.error = _stream_error_message(exc)
+                return
+            if frame is None:
+                return
+            for chunk in self._decoded_frame_chunks(frame):
+                yield chunk
+
+    async def _inspect_exit_code(self, exec_instance: Any, process: ExecProcess) -> int | None:
+        """Inspect the exec after a healthy stream end and extract its exit code.
+
+        The engine/proxy can also die between the stream end and the inspect
+        (e.g. an engine kill right at completion) — the same stream-ERROR
+        contract applies. A container/engine kill mid-exec can report
+        ExitCode=None — the exec has NO inspectable exit code, which the
+        dispatch layer classifies as retryable (never a fabricated success).
+        """
+        try:
+            info = await exec_instance.inspect()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            process.error = _stream_error_message(exc)
+            return None
+        raw_exit = info.get("ExitCode")
+        return int(raw_exit) if raw_exit is not None else None
+
+    async def _close_stream(self, stream: Any) -> None:
+        """Close the exec output stream best-effort.
+
+        aiodocker 0.27's Stream.close() is sync; older shapes may return an
+        awaitable — accept both.
+        """
+        try:
+            closed = stream.close()
+            if inspect.isawaitable(closed):
+                await closed
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info("workspace exec stream close failed (best-effort)", exc_info=True)
+
     async def exec_command_stream(
         self,
         provider_ref: str,
@@ -432,38 +506,12 @@ class DockerRuntimeProvider(RuntimeProvider):
         async def _chunks() -> AsyncIterator[ExecStreamChunk]:
             exit_code: int | None = None
             try:
-                while True:
-                    try:
-                        frame = await stream.read_out()
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        # Engine/proxy death mid-exec: a stream ERROR, never
-                        # a silent end with a fabricated success code.
-                        process.error = f"{type(exc).__name__}: {str(exc)[:200]}"
-                        return
-                    if frame is None:
-                        break
-                    out, err = _split_exec_frame(frame)
-                    if out:
-                        yield ExecStreamChunk(stream="stdout", data=out.decode("utf-8", errors="replace"))
-                    if err:
-                        yield ExecStreamChunk(stream="stderr", data=err.decode("utf-8", errors="replace"))
-                try:
-                    info = await exec_instance.inspect()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    # The engine/proxy can also die between the stream end and
-                    # the inspect (e.g. an engine kill right at completion) —
-                    # the same stream-ERROR contract applies.
-                    process.error = f"{type(exc).__name__}: {str(exc)[:200]}"
-                    return
-                raw_exit = info.get("ExitCode")
-                # A container/engine kill mid-exec can report ExitCode=None —
-                # the exec has NO inspectable exit code, which the dispatch
-                # layer classifies as retryable (never a fabricated success).
-                exit_code = int(raw_exit) if raw_exit is not None else None
+                async for stream_name, data in self._read_stream_frames(stream, process):
+                    yield ExecStreamChunk(stream=stream_name, data=data)
+                # Only a healthy stream end inspects the exec; a stream
+                # ERROR must never be followed by an exit-code fabrication.
+                if process.error is None:
+                    exit_code = await self._inspect_exit_code(exec_instance, process)
             finally:
                 process.exit_code = exit_code
                 process.done.set()
@@ -471,16 +519,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         process.chunks = _chunks()
 
         async def _kill() -> None:
-            try:
-                # aiodocker 0.27's Stream.close() is sync; older shapes may
-                # return an awaitable — accept both.
-                closed = stream.close()
-                if inspect.isawaitable(closed):
-                    await closed
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.info("workspace exec stream close failed (best-effort)", exc_info=True)
+            await self._close_stream(stream)
 
         process._kill = _kill
         return process
