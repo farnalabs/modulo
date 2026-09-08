@@ -91,8 +91,8 @@ routes:
         breadcrumb: Notifications
         parent: /
         product_map: [feat-notifications]
-        sidebar_group:
-        sidebar_order:
+        sidebar_group: monitor
+        sidebar_order: 0
         type: page
         <<: *community
         deprecated: false
@@ -672,11 +672,12 @@ routes:
 
     /admin/notification-delivery:
         name: admin-notification-delivery
-        breadcrumb: Notification Log
+        breadcrumb: Webhook Notifications
         parent: /
         product_map: [feat-notifications]
         sidebar_group: monitor
         sidebar_order: 3
+        feature_flag: webhook_notification_log
         type: list_page
         <<: *team
         deprecated: false
@@ -3621,7 +3622,8 @@ features:
             - "[x] GET /api/v1/admin/notifications/deliveries is the cursor-paginated org-wide delivery log (filter by status / event_type / endpoint_id / from / to), and POST /deliveries/retry-all-failed re-dispatches every failed + dead-lettered delivery"
             - "[x] Admin webhook management lives under /api/v1/admin/notifications (list/create/get/update) with the same secret-handling and break-glass deny rules as the user surface"
             - "[x] Email delivery: GET/PUT /api/v1/admin/org/{org_id}/email-settings (feature email_config; org.email.view / org.email.manage) configures SMTP with a clear_password flag and smtp_timeout, and a POST test endpoint verifies the configuration"
-            - "[x] Frontend surfaces: team-tier notification centre (/notifications) with preferences, review-later and dismiss actions; team-tier email settings (/settings/email); admin delivery-log UI (/admin/notification-delivery) with status/event-type/date filters, a retry control, retry-all and an empty state"
+            - "[x] Frontend surfaces: team-tier notification centre (/notifications, listed in the sidebar MONITOR group above Error Dashboard) with preferences, review-later and dismiss actions; team-tier email settings (/settings/email); admin webhook delivery-log UI (/admin/notification-delivery, titled 'Webhook Notifications') with status/event-type/date filters, a retry control, retry-all and an empty state"
+            - "[x] The webhook delivery-log UI is feature-flagged OFF by default: the webhook_notification_log flag (community tier, DEFAULT_OFF_FLAGS — default OFF on every tier, enabled per-org via feature_overrides) gates the /admin/notification-delivery manifest route; with the flag disabled the sidebar item is hidden (navigation.ts requiredFeatureFlag filter) and the router guard redirects the route to the dashboard (FAR-656)"
         deferrals:
             - A realtime/push transport is not part of the notifier — webhook (+ HMAC) and in-app notification are the only delivery channels; email settings exist but the notifier does not fan out to SMTP subscribers
             - Dead-letter retry is manual-and-bulk only (retry-all-failed); there is no per-endpoint dead-letter replay of retained payloads in the API surface
