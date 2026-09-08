@@ -653,15 +653,24 @@ class TestGetCostReport:
 class TestBuildCostReportBuckets:
     """org_run_count is surfaced from org-level ledger rows (team_id IS NULL).
 
-    ``build_cost_report_buckets`` executes three queries in order: the runs
-    aggregation, the ledger annotations, then the org-level run-count sum.
+    ``build_cost_report_buckets`` executes four queries in order (FAR-657):
+    the SQL component-bucket aggregation, the legacy-total SUM, the ledger
+    annotations, then the org-level run-count sum.
     """
+
+    @staticmethod
+    def _empty_sql_aggregates() -> list[MagicMock]:
+        """Side-effect mocks for a fixture with no runs and no ledger rows."""
+        return [
+            MagicMock(all=MagicMock(return_value=[])),  # component buckets
+            MagicMock(scalar_one=MagicMock(return_value=Decimal(0))),  # legacy total
+            MagicMock(all=MagicMock(return_value=[])),  # annotations
+        ]
 
     async def test_org_run_count_zero_when_no_ledger_rows(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(
             side_effect=[
-                MagicMock(all=MagicMock(return_value=[])),  # runs
-                MagicMock(all=MagicMock(return_value=[])),  # annotations
+                *self._empty_sql_aggregates(),
                 MagicMock(scalar_one_or_none=MagicMock(return_value=None)),  # org run count
             ]
         )
@@ -678,8 +687,7 @@ class TestBuildCostReportBuckets:
     async def test_org_run_count_sums_org_level_ledger_rows(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(
             side_effect=[
-                MagicMock(all=MagicMock(return_value=[])),  # runs
-                MagicMock(all=MagicMock(return_value=[])),  # annotations
+                *self._empty_sql_aggregates(),
                 MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(42))),  # org run count
             ]
         )
@@ -691,15 +699,14 @@ class TestBuildCostReportBuckets:
     async def test_org_run_count_query_filters_org_level_rows(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(
             side_effect=[
-                MagicMock(all=MagicMock(return_value=[])),
-                MagicMock(all=MagicMock(return_value=[])),
+                *self._empty_sql_aggregates(),
                 MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(7))),
             ]
         )
 
         await build_cost_report_buckets(mock_session, org_id=_ORG_ID, period="month")
 
-        q = mock_session.execute.call_args_list[2].args[0]
+        q = mock_session.execute.call_args_list[3].args[0]
         compiled = q.compile()
         assert "team_id IS NULL" in str(compiled)
         assert "org_daily_run_counts" in str(compiled)

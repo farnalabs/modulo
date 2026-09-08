@@ -15,6 +15,7 @@ from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown
 from modulo.core.cost_controller.breakdown.params import (
     CostComponentConfig,
     RunCostTelemetry,
+    build_telemetry,
     compute_run_warnings,
     compute_run_warnings_count,
 )
@@ -104,6 +105,34 @@ def test_compute_run_warnings_empty_for_normal_report() -> None:
     )
     breakdown, _total = build_cost_breakdown(tele, [_self_reported_comp()])
     assert not compute_run_warnings(breakdown)
+
+
+def test_genuine_zero_report_renders_zero_without_warning() -> None:
+    """FAR-653: a PROVEN genuine-zero self-report (classification records the
+    report key with amount 0) renders a $0.000000 REAL line with NO
+    missing_self_report flag and NO run warning — the phantom-warning class
+    for a legitimately-$0.00 run is gone."""
+    comps = [_self_reported_comp()]
+    entries = {
+        "node1": {
+            "sandbox_by_map": True,
+            "model_cost_usd": 0.0,
+            "model_cost_raw_usd": 0.0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 0,
+            "reported_total_tokens": 0,
+        }
+    }
+    tele, _per_node_cost = build_telemetry(entries, comps)
+    breakdown, total = build_cost_breakdown(tele, comps)
+    entry = breakdown[0]
+    assert entry["source"] == "self_reported"
+    assert entry["missing_self_report"] is False
+    assert "missing_self_report_reason" not in entry
+    assert entry["amount_usd"] == "0.000000"
+    assert total == Decimal(0)
+    assert not compute_run_warnings(breakdown)
+    assert compute_run_warnings_count(breakdown) == 0
 
 
 def test_compute_run_warnings_handles_non_list() -> None:
