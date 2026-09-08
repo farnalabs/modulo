@@ -72,6 +72,44 @@ def collect_backups(backup_dir: str) -> list[BackupFile]:
     return sorted(backups, key=lambda b: b.date, reverse=True)
 
 
+def _classify_one(
+    b: BackupFile,
+    counts: list[int],
+    seen_weeks: set[tuple[int, int]],
+    seen_months: set[tuple[int, int]],
+    *,
+    keep_daily: int,
+    keep_weekly: int,
+    keep_monthly: int,
+) -> str | None:
+    """Decide the retention bucket for one backup, updating the running state.
+
+    ``counts`` is ``[daily_count, weekly_count, monthly_count]`` and is mutated
+    in place; the seen-week/seen-month sets gain an entry when a backup fills
+    that bucket. Returns the bucket name, or ``None`` when the backup should
+    be pruned.
+    """
+    year, month, day = b.date.year, b.date.month, b.date.day
+    iso_year, iso_week, iso_weekday = b.date.isocalendar()
+    is_sunday = iso_weekday == 7
+    is_first = day == 1
+
+    reason = None
+    if counts[2] < keep_monthly and is_first and (year, month) not in seen_months:
+        seen_months.add((year, month))
+        reason = "monthly"
+        counts[2] += 1
+    if reason is None and counts[1] < keep_weekly and is_sunday and (iso_year, iso_week) not in seen_weeks:
+        seen_weeks.add((iso_year, iso_week))
+        reason = "weekly"
+        counts[1] += 1
+    if reason is None and counts[0] < keep_daily:
+        reason = "daily"
+        counts[0] += 1
+
+    return reason
+
+
 def classify_backups(
     backups: list[BackupFile],
     *,
@@ -88,31 +126,20 @@ def classify_backups(
     for org_backups in by_org.values():
         sorted_backups = sorted(org_backups, key=lambda x: x.date, reverse=True)
 
-        daily_count = 0
-        weekly_count = 0
-        monthly_count = 0
+        counts = [0, 0, 0]  # daily, weekly, monthly
         seen_weeks: set[tuple[int, int]] = set()
         seen_months: set[tuple[int, int]] = set()
 
         for b in sorted_backups:
-            year, month, day = b.date.year, b.date.month, b.date.day
-            iso_year, iso_week, iso_weekday = b.date.isocalendar()
-            is_sunday = iso_weekday == 7
-            is_first = day == 1
-
-            reason = None
-            if monthly_count < keep_monthly and is_first and (year, month) not in seen_months:
-                seen_months.add((year, month))
-                reason = "monthly"
-                monthly_count += 1
-            if reason is None and weekly_count < keep_weekly and is_sunday and (iso_year, iso_week) not in seen_weeks:
-                seen_weeks.add((iso_year, iso_week))
-                reason = "weekly"
-                weekly_count += 1
-            if reason is None and daily_count < keep_daily:
-                reason = "daily"
-                daily_count += 1
-
+            reason = _classify_one(
+                b,
+                counts,
+                seen_weeks,
+                seen_months,
+                keep_daily=keep_daily,
+                keep_weekly=keep_weekly,
+                keep_monthly=keep_monthly,
+            )
             if reason:
                 keep.add(b.path)
 
