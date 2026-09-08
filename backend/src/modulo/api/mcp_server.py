@@ -15,6 +15,7 @@ Org context validated per-event for streaming (SSE) connections.
 
 import asyncio
 import contextvars
+import functools
 import json
 import logging
 import re
@@ -28,7 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, ParamSpec, cast
 from urllib.parse import quote, urlencode
 
 from jwt import InvalidTokenError as JWTError
@@ -157,6 +158,9 @@ from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_ACTIONABLE_RUN_STAT
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
+
+if TYPE_CHECKING:
+    from modulo.db.models.eval_definition import EvalDefinition
 
 _log = logging.getLogger(__name__)
 
@@ -1398,6 +1402,74 @@ def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[st
         return uuid.UUID(value), None
     except ValueError:
         return None, {"error": "invalid_id", "field": field, "detail": f"Invalid UUID format: {value}"}
+
+
+_TOOL_SHELL_P = ParamSpec("_TOOL_SHELL_P")
+
+
+def _tool_db_shell(
+    *,
+    log_constant: str,
+    integrity_detail: str | None,
+    fallback: str,
+    handle_http_exception: bool = False,
+) -> Callable[
+    [Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]],
+    Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
+]:
+    """Wrap an async MCP tool body in the shared DB/tool exception ladder.
+
+    Every clause reproduces the verbatim per-tool ``try/except`` shells it
+    replaces, keyed by params so the remaining tools can adopt it without
+    hardcoding:
+
+    - ``MCPAuthorizationError`` → ``insufficient_scope`` (all shells).
+    - ``StarletteHTTPException`` → ``validation_failed`` when
+      ``handle_http_exception`` is True; otherwise the generic ``Exception``
+      behaviour (log + ``fallback``), which is what shells without the clause
+      did.
+    - ``IntegrityError`` → ``conflict`` with ``integrity_detail`` formatted
+      with ``orig``; when ``integrity_detail`` is None the ``SQLAlchemyError``
+      behaviour (log + ``database_unavailable``), which is what shells
+      without an IntegrityError clause did.
+    - ``ProgrammingError`` → ``migration_required``.
+    - ``SQLAlchemyError`` → ``database_unavailable``.
+    - ``Exception`` → log + ``_tool_error(fallback)``.
+    """
+
+    def decorator(
+        fn: Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
+    ) -> Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]:
+        @functools.wraps(fn)
+        async def wrapper(*args: _TOOL_SHELL_P.args, **kwargs: _TOOL_SHELL_P.kwargs) -> dict[str, Any]:
+            try:
+                return await fn(*args, **kwargs)
+            except MCPAuthorizationError as exc:
+                return {"error": "insufficient_scope", "detail": str(exc)}
+            except StarletteHTTPException as exc:
+                if handle_http_exception:
+                    return {"error": "validation_failed", "detail": str(exc.detail)}
+                _log.exception(log_constant)
+                return _tool_error(fallback)
+            except IntegrityError as exc:
+                if integrity_detail is None:
+                    _log.exception(log_constant)
+                    return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+                _log.exception(log_constant)
+                return {"error": "conflict", "detail": integrity_detail.format(orig=exc.orig)}
+            except ProgrammingError:
+                _log.exception(log_constant)
+                return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+            except SQLAlchemyError:
+                _log.exception(log_constant)
+                return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+            except Exception:
+                _log.exception(log_constant)
+                return _tool_error(fallback)
+
+        return wrapper
+
+    return decorator
 
 
 def _serialize_edges(edges: list[Any]) -> list[dict[str, Any]]:
@@ -2984,6 +3056,24 @@ def _parse_eval_ref_ids(
     return primary, node, None
 
 
+async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> "EvalDefinition | None":
+    """Load an org-scoped EvalDefinition row; None when the row does not exist.
+
+    Shared by the update and delete impls; the model import stays lazy per
+    this module's convention.
+    """
+    from modulo.db.models.eval_definition import EvalDefinition
+
+    return (
+        await s.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eid,
+                EvalDefinition.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
 def _assert_create_eval_definition_params(
     name: str,
     eval_type: str,
@@ -3082,6 +3172,12 @@ async def _create_eval_definition_impl(
     "Requires an admin caller; non-admins receive an insufficient_scope error.",
 )
 @_RETRY_DB
+@_tool_db_shell(
+    log_constant=_MSG_EVAL_DEF_CREATE_FAILED,
+    integrity_detail="Eval definition references a resource that does not exist: {orig}",
+    fallback="Failed to create eval definition",
+    handle_http_exception=True,
+)
 async def create_eval_definition(
     pipeline_id: str,
     node_id: str | None = None,
@@ -3092,36 +3188,16 @@ async def create_eval_definition(
     pass_threshold: float | None = None,
     suite_id: str | None = None,
 ) -> dict[str, Any]:
-    try:
-        return await _create_eval_definition_impl(
-            pipeline_id,
-            node_id,
-            name,
-            eval_type,
-            config_json,
-            failure_behaviour,
-            pass_threshold,
-            suite_id,
-        )
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
-    except StarletteHTTPException as exc:
-        return {"error": "validation_failed", "detail": str(exc.detail)}
-    except IntegrityError as exc:
-        _log.exception(_MSG_EVAL_DEF_CREATE_FAILED)
-        return {
-            "error": "conflict",
-            "detail": f"Eval definition references a resource that does not exist: {exc.orig}",
-        }
-    except ProgrammingError:
-        _log.exception(_MSG_EVAL_DEF_CREATE_FAILED)
-        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
-        _log.exception(_MSG_EVAL_DEF_CREATE_FAILED)
-        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
-        _log.exception(_MSG_EVAL_DEF_CREATE_FAILED)
-        return _tool_error("Failed to create eval definition")
+    return await _create_eval_definition_impl(
+        pipeline_id,
+        node_id,
+        name,
+        eval_type,
+        config_json,
+        failure_behaviour,
+        pass_threshold,
+        suite_id,
+    )
 
 
 def _assert_update_eval_definition_params(
@@ -3177,9 +3253,9 @@ def _collect_eval_definition_updates(
 
 
 def _eval_def_guardrail_validation_error(
-    eval_type: Any,
-    failure_behaviour: Any,
-    config_json: dict[str, Any],
+    eval_type: str,
+    failure_behaviour: str | None,
+    config_json: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     """Run the REST guardrail validator; returns a validation_failed dict or None."""
     from modulo.api.routes.evals import _validate_guardrail_request
@@ -3242,17 +3318,8 @@ async def _update_eval_definition_impl(
         suite_id=suite_id,
     )
 
-    from modulo.db.models.eval_definition import EvalDefinition
-
     async with _session(org_id) as s:
-        eval_def = (
-            await s.execute(
-                select(EvalDefinition).where(
-                    EvalDefinition.id == eid,
-                    EvalDefinition.organisation_id == org_id,
-                )
-            )
-        ).scalar_one_or_none()
+        eval_def = await _load_eval_def(s, org_id, eid)
         if eval_def is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
@@ -3282,6 +3349,12 @@ async def _update_eval_definition_impl(
     "this tool - the REST PUT route must be used to unset them.",
 )
 @_RETRY_DB
+@_tool_db_shell(
+    log_constant=_MSG_EVAL_DEF_UPDATE_FAILED,
+    integrity_detail="Update would violate a constraint. Check referenced pipeline/suite: {orig}",
+    fallback="Failed to update eval definition",
+    handle_http_exception=True,
+)
 async def update_eval_definition(
     eval_id: str,
     node_id: str | None = None,
@@ -3292,36 +3365,16 @@ async def update_eval_definition(
     pass_threshold: float | None = None,
     suite_id: str | None = None,
 ) -> dict[str, Any]:
-    try:
-        return await _update_eval_definition_impl(
-            eval_id,
-            node_id,
-            name,
-            eval_type,
-            config_json,
-            failure_behaviour,
-            pass_threshold,
-            suite_id,
-        )
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
-    except StarletteHTTPException as exc:
-        return {"error": "validation_failed", "detail": str(exc.detail)}
-    except IntegrityError as exc:
-        _log.exception(_MSG_EVAL_DEF_UPDATE_FAILED)
-        return {
-            "error": "conflict",
-            "detail": f"Update would violate a constraint. Check referenced pipeline/suite: {exc.orig}",
-        }
-    except ProgrammingError:
-        _log.exception(_MSG_EVAL_DEF_UPDATE_FAILED)
-        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
-        _log.exception(_MSG_EVAL_DEF_UPDATE_FAILED)
-        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
-        _log.exception(_MSG_EVAL_DEF_UPDATE_FAILED)
-        return _tool_error("Failed to update eval definition")
+    return await _update_eval_definition_impl(
+        eval_id,
+        node_id,
+        name,
+        eval_type,
+        config_json,
+        failure_behaviour,
+        pass_threshold,
+        suite_id,
+    )
 
 
 async def _audit_eval_def_delete(
@@ -3360,27 +3413,19 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
     _check_agent_tool_scope("delete_eval_definition")
 
     from modulo.api.routes.evals import _MSG_EVAL_DEFINITION_NOT_FOUND
-    from modulo.db.models.eval_definition import EvalDefinition
 
     _assert_admin_scope("delete")
 
     org_id = _ctx_org_id_val()
     account_id = _ctx_user_id_val()
 
-    eid, _, eid_err = _parse_eval_ref_ids(eval_id, "eval_id", None)
+    eid, eid_err = _parse_uuid_param(eval_id, "eval_id")
     if eid_err is not None:
         return eid_err
     assert eid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
     async with _session(org_id) as s:
-        eval_def = (
-            await s.execute(
-                select(EvalDefinition).where(
-                    EvalDefinition.id == eid,
-                    EvalDefinition.organisation_id == org_id,
-                )
-            )
-        ).scalar_one_or_none()
+        eval_def = await _load_eval_def(s, org_id, eid)
         if eval_def is None:
             return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
@@ -3404,29 +3449,16 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
     "receive an insufficient_scope error.",
 )
 @_RETRY_DB
+@_tool_db_shell(
+    log_constant=_MSG_EVAL_DEF_DELETE_FAILED,
+    integrity_detail="Delete would violate a constraint: {orig}",
+    fallback="Failed to delete eval definition",
+)
 async def delete_eval_definition(
     eval_id: str,
     hard: bool = False,
 ) -> dict[str, Any]:
-    try:
-        return await _delete_eval_definition_impl(eval_id, hard)
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
-    except IntegrityError as exc:
-        _log.exception(_MSG_EVAL_DEF_DELETE_FAILED)
-        return {
-            "error": "conflict",
-            "detail": f"Delete would violate a constraint: {exc.orig}",
-        }
-    except ProgrammingError:
-        _log.exception(_MSG_EVAL_DEF_DELETE_FAILED)
-        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
-        _log.exception(_MSG_EVAL_DEF_DELETE_FAILED)
-        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
-        _log.exception(_MSG_EVAL_DEF_DELETE_FAILED)
-        return _tool_error("Failed to delete eval definition")
+    return await _delete_eval_definition_impl(eval_id, hard)
 
 
 @mcp.tool(description="Cancel a running pipeline run.")
@@ -4819,17 +4851,13 @@ async def _get_trigger_impl(trigger_id: str) -> dict[str, Any]:
 
 @mcp.tool(description="Get a single trigger by ID.")
 @_RETRY_DB
+@_tool_db_shell(
+    log_constant="get_trigger failed",
+    integrity_detail=None,
+    fallback="Failed to get trigger",
+)
 async def get_trigger(trigger_id: str) -> dict[str, Any]:
-    try:
-        return await _get_trigger_impl(trigger_id)
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
-    except ProgrammingError:
-        _log.exception("get_trigger failed")
-        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
-        _log.exception("get_trigger failed")
-        return _tool_error("Failed to get trigger")
+    return await _get_trigger_impl(trigger_id)
 
 
 def _validate_trigger_update_inputs(
