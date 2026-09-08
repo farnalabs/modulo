@@ -135,7 +135,7 @@ def _is_router_decorator(dec: ast.expr) -> bool:
 #: credentials for declarative apply (e.g. FAR-681 model-backends create/patch)
 #: use the any-credential variant below. Both implement the same account-based
 #: break-glass mint deny, so the oracle must recognise either as the marker.
-MINT_MARKER_NAMES = frozenset({"deny_break_glass_mint", "_deny_break_glass_mint_any_credential"})
+MINT_MARKER_NAMES = frozenset({"deny_break_glass_mint", "deny_break_glass_mint_any_credential"})
 
 
 def _mentions_marker(node: ast.expr | None) -> bool:

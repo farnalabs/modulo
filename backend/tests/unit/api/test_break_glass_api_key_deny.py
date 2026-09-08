@@ -13,13 +13,20 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_current_tenant_user_optional, get_db_session, get_plan_context
+from modulo.api.dependencies import (
+    _get_engine,
+    deny_break_glass_mint_any_credential,
+    get_current_tenant_user_optional,
+    get_db_session,
+    get_plan_context,
+)
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
+from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
 from modulo.settings import Settings, get_settings
 
@@ -289,3 +296,110 @@ async def test_optional_path_folds_to_none_when_account_unreadable() -> None:
         session=_make_session(None, raise_on_get=True),
     )
     assert principal is None
+
+
+# ---------------------------------------------------------------------------
+# Any-credential (mk_ API key) break-glass deny on model-backends (FAR-681)
+# ---------------------------------------------------------------------------
+
+
+def _make_tenant_principal(is_break_glass: bool = False) -> TenantPrincipal:
+    return TenantPrincipal(
+        username="breakglass-user" if is_break_glass else "testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="operator",
+        is_system_admin=False,
+    )
+
+
+def _configure_any_cred_auth(app_under_test: object, *, session: AsyncMock, principal: TenantPrincipal) -> None:
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    async def override_principal() -> TenantPrincipal:
+        return principal
+
+    app_under_test.dependency_overrides[get_db_session] = override_session
+    app_under_test.dependency_overrides[get_current_tenant_user_or_api_key] = override_principal
+
+
+def _create_body() -> dict[str, object]:
+    return {
+        "name": "bg",
+        "display_name": "bg",
+        "provider": "openai",
+        "model_id": "gpt-4o",
+        "api_key": "sk-test",
+    }
+
+
+def test_break_glass_api_key_cannot_create_model_backend(client: TestClient) -> None:
+    """A break-glass ``mk_`` key is denied (403) on POST /model-backends."""
+    _configure_any_cred_auth(
+        app,
+        session=_make_session(_make_account(is_break_glass=True, live=True)),
+        principal=_make_tenant_principal(is_break_glass=True),
+    )
+    resp = client.post("/api/v1/model-backends", json=_create_body())
+    assert resp.status_code == 403
+    assert "Break-glass accounts" in resp.json()["detail"]
+
+
+def test_break_glass_api_key_cannot_patch_model_backend(client: TestClient) -> None:
+    """A break-glass ``mk_`` key is denied (403) on PATCH /model-backends/{id}."""
+    _configure_any_cred_auth(
+        app,
+        session=_make_session(_make_account(is_break_glass=True, live=True)),
+        principal=_make_tenant_principal(is_break_glass=True),
+    )
+    resp = client.patch(f"/api/v1/model-backends/{_KEY_ID}", json={"display_name": "x"})
+    assert resp.status_code == 403
+    assert "Break-glass accounts" in resp.json()["detail"]
+
+
+def test_break_glass_api_key_create_denied_even_when_denied_not_live(client: TestClient) -> None:
+    """A denied (not-live) break-glass ``mk_`` key is also denied on create."""
+    _configure_any_cred_auth(
+        app,
+        session=_make_session(_make_account(is_break_glass=True, live=False)),
+        principal=_make_tenant_principal(is_break_glass=True),
+    )
+    resp = client.post("/api/v1/model-backends", json=_create_body())
+    assert resp.status_code == 403
+
+
+def test_model_backend_create_deny_requires_dependency(client: TestClient) -> None:
+    """Without the deny dependency the break-glass ``mk_`` request is NOT denied.
+
+    This pins the behaviour to the dependency: the 403 above is produced by
+    ``deny_break_glass_mint_any_credential``, not by the org-role gate (the
+    break-glass principal carries an ``operator`` role that would otherwise
+    pass ``model_backend.create``).
+    """
+
+    async def _noop(
+        principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+        session: AsyncMock = Depends(get_db_session),
+    ) -> TenantPrincipal:
+        return principal
+
+    app.dependency_overrides[deny_break_glass_mint_any_credential] = _noop
+    _configure_any_cred_auth(
+        app,
+        session=_make_session(_make_account(is_break_glass=True, live=True)),
+        principal=_make_tenant_principal(is_break_glass=True),
+    )
+    resp = client.post("/api/v1/model-backends", json=_create_body())
+    assert resp.status_code != 403
+
+
+def test_model_backend_deny_folds_to_503_on_db_error(client: TestClient) -> None:
+    """A DB read failure in the deny dependency folds to 503 (fail-closed)."""
+    _configure_any_cred_auth(
+        app,
+        session=_make_session(None, raise_on_get=True),
+        principal=_make_tenant_principal(is_break_glass=True),
+    )
+    resp = client.post("/api/v1/model-backends", json=_create_body())
+    assert resp.status_code == 503

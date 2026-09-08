@@ -22,20 +22,19 @@ from modulo.api.constants import MSG_NOT_FOUND, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     deny_break_glass_mint,
+    deny_break_glass_mint_any_credential,
     get_db_session,
     require_in_dev_operator,
     require_permission,
     require_permission_any_credential,
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.model_backend_hub import _build_backend
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import create_secrets_backend
-from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
 from modulo.db.crud.model_backend import (
     create_model_backend,
     delete_model_backend,
@@ -45,7 +44,6 @@ from modulo.db.crud.model_backend import (
     list_pipeline_references_for_backend,
     update_model_backend,
 )
-from modulo.db.models.account import Account
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -343,60 +341,6 @@ def _to_response(mb: Any) -> ModelBackendResponse:
     )
 
 
-async def _deny_break_glass_mint_any_credential(
-    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
-    session: AsyncSession = Depends(get_db_session),
-) -> TenantPrincipal:
-    """deny_break_glass_mint that also accepts API-key (``mk_``) credentials.
-
-    The stock dependency resolves ``get_current_user`` (JWT-only), so an
-    ``Authorization: Bearer mk_...`` credential 401s before the permission
-    check ever runs, making create/patch incompatible with the documented
-    CI/CD credential (declarative apply, FAR-681). The break-glass mint deny
-    is ACCOUNT-based (plan v17): for an API-key principal the deny rule is
-    applied to the KEY'S OWNING account - a key minted for a break-glass
-    account must not mint credentials either. The deny decisions reuse the
-    same shared ``db.crud.break_glass_deny`` predicates; JWT principals get
-    behaviour identical to the stock dependency.
-    """
-    now = datetime.now(UTC)
-    try:
-        async with session.begin():
-            account = await session.get(Account, principal.account_id)
-    except SQLAlchemyError:
-        logger.exception("permission.break_glass_mint_read_failed")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
-        ) from None
-    if account is None:
-        return principal
-    if account.is_break_glass is True:
-        is_break_glass_account = is_break_glass_denied(
-            is_break_glass=account.is_break_glass,
-            break_glass_expires_at=account.break_glass_expires_at,
-            break_glass_deactivated_at=account.break_glass_deactivated_at,
-            active=account.active,
-            now=now,
-        ) or is_break_glass_live(
-            is_break_glass=account.is_break_glass,
-            break_glass_expires_at=account.break_glass_expires_at,
-            break_glass_deactivated_at=account.break_glass_deactivated_at,
-            active=account.active,
-            now=now,
-        )
-        if is_break_glass_account:
-            logger.warning(
-                "permission.break_glass_mint_denied",
-                extra={"account_id": str(principal.account_id), "username": principal.username},
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Break-glass accounts cannot create or modify secrets/credentials",
-            )
-    return principal
-
-
 @router.get("", responses={401: {"description": "Unauthorized"}})
 @handle_db_errors(_CODE_MODEL_BACKENDS_LIST_MODEL)
 async def list_model_backends_endpoint(
@@ -574,7 +518,7 @@ def _validate_provider(provider: str) -> None:
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(_deny_break_glass_mint_any_credential)],
+    dependencies=[Depends(deny_break_glass_mint_any_credential)],
 )
 @handle_db_errors(_CODE_MODEL_BACKENDS_CREATE_MODEL)
 async def create_model_backend_endpoint(
@@ -797,7 +741,7 @@ async def list_pipeline_references_endpoint(
     )
 
 
-@router.patch("/{backend_id}", dependencies=[Depends(_deny_break_glass_mint_any_credential)])
+@router.patch("/{backend_id}", dependencies=[Depends(deny_break_glass_mint_any_credential)])
 @handle_db_errors(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
