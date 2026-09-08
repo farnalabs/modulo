@@ -491,6 +491,67 @@ def test_list_org_pending_gates_resolves_gate_labels(
     assert gates[1]["pipeline_name"] == "Reviewer Pipeline"
 
 
+def test_list_org_pending_gates_resolves_claimant_names(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-691: the org endpoint batch-resolves claimant display names from
+    the accounts table (one select for all gates) and stamps claimed_by_me
+    from the principal. A gate whose account row is missing degrades to
+    claimed_by_name=None (the frontend falls back to the raw UUID), and an
+    empty display_name falls back to the account email."""
+    http, session = client
+    other_id = uuid.uuid4()
+    ghost_id = uuid.uuid4()
+    mine = _org_gate()
+    mine.account_id = _USER_ID
+    theirs = _org_gate()
+    theirs.run_id = uuid.uuid4()
+    theirs.gate_id = "gate-2"
+    theirs.account_id = other_id
+    ghost = _org_gate()
+    ghost.run_id = uuid.uuid4()
+    ghost.gate_id = "gate-3"
+    ghost.account_id = ghost_id
+
+    def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        result = MagicMock()
+        text = str(stmt)
+        if "accounts" in text:
+            result.all.return_value = [
+                (_USER_ID, "Alice Reviewer", "alice@test"),
+                (other_id, "", "bob@test"),
+            ]
+        elif "pipelines" in text:
+            result.all.return_value = [(mine.pipeline_id, "Reviewer Pipeline")]
+        else:
+            # runs / snapshots / RLS plumbing — benign empty result
+            result.all.return_value = []
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    with (
+        patch(
+            "modulo.api.routes.hitl.HITLManager.list_pending",
+            new=AsyncMock(return_value=[mine, theirs, ghost]),
+        ),
+        patch("modulo.api.routes.hitl.resolve_gate_descriptions", new=AsyncMock(return_value={})),
+    ):
+        resp = http.get("/api/v1/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gates = resp.json()["gates"]
+    assert len(gates) == 3
+    own = next(g for g in gates if g["gate_id"] == "gate-1")
+    foreign = next(g for g in gates if g["gate_id"] == "gate-2")
+    ghost_gate = next(g for g in gates if g["gate_id"] == "gate-3")
+    assert own["claimed_by_me"] is True
+    assert own["claimed_by_name"] == "Alice Reviewer"
+    assert foreign["claimed_by_me"] is False
+    assert foreign["claimed_by_name"] == "bob@test"
+    assert ghost_gate["claimed_by_name"] is None
+    assert ghost_gate["claimed_by_me"] is False
+
+
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (RuntimeError("kaboom"), 500)])
 def test_list_org_pending_gates_error_mapping(
     client: tuple[TestClient, AsyncMock], exc: Exception, expected: int
@@ -598,6 +659,56 @@ def test_list_org_pending_gates_carries_description_and_context(client: tuple[Te
     assert gate_payload["pipeline_name"] == "Reviewer Pipeline"
     assert gate_payload["description"] == "Org-level briefing."
     assert gate_payload["context"] == {"trigger": "node", "reason": "two failures"}
+
+
+def test_list_run_pending_gates_resolves_claimant_names(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-691: the run-level endpoint batch-resolves claimant display names
+    from the accounts table and stamps claimed_by_me from the principal —
+    same contract as the org endpoint."""
+    http, session = client
+    other_id = uuid.uuid4()
+    mine = _briefed_gate("hitl_gate_src-1_tgt-2", context=None)
+    mine.account_id = _USER_ID
+    theirs = _briefed_gate("hitl_gate_src-3_tgt-4", context=None)
+    theirs.account_id = other_id
+    run = MagicMock()
+    run.snapshot_id = _SNAPSHOT_ID
+    claims_result = MagicMock()
+    claims_result.scalars.return_value = [mine, theirs]
+    accounts_result = MagicMock()
+    accounts_result.all.return_value = [
+        (_USER_ID, "Alice Reviewer", "alice@test"),
+        (other_id, "", "bob@test"),
+    ]
+    snapshot = MagicMock()
+    snapshot.graph_json = {}
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one_or_none.return_value = snapshot
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        text = str(stmt)
+        if "hitl_claims" in text:
+            return claims_result
+        if "accounts" in text:
+            return accounts_result
+        return snapshot_result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gates = resp.json()["gates"]
+    assert len(gates) == 2
+    own = next(g for g in gates if g["gate_id"] == "hitl_gate_src-1_tgt-2")
+    foreign = next(g for g in gates if g["gate_id"] == "hitl_gate_src-3_tgt-4")
+    assert own["claimed_by_me"] is True
+    assert own["claimed_by_name"] == "Alice Reviewer"
+    assert foreign["claimed_by_me"] is False
+    assert foreign["claimed_by_name"] == "bob@test"
 
 
 def test_pending_gate_without_context_or_description_renders_null_fields(client: tuple[TestClient, AsyncMock]) -> None:

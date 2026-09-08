@@ -239,4 +239,105 @@ describe('HitlGateCard', () => {
     expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
   })
+
+  it('prefers the server-resolved claimant display name over the raw UUID (FAR-691)', () => {
+    wrapper = mount(HitlGateCard, {
+      props: {
+        gate: gate({ claimed_by: '999e8400-e29b-41d4-a716-446655440009', claimed_by_name: 'Alice Reviewer' }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    expect(wrapper.text()).toContain('Alice Reviewer')
+    expect(wrapper.text()).not.toContain('999e8400-e29b-41d4-a716-446655440009')
+  })
+
+  it('drops a stale token when the server reports a foreign claim (FAR-691)', async () => {
+    // The local claim expired and another reviewer claimed: the server now
+    // reports claimed_by with claimed_by_me=false. The session token is
+    // provably stale — it is dropped, approve/reject disappear, and the
+    // claimed-by-other state renders with no re-claim affordance.
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-stale', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+    const { useHitlGateState } = await import('../composables/useHitlGateState')
+    const mountOptions = (gateProps: HitlGate) => ({
+      props: { gate: gateProps },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    wrapper = mount(HitlGateCard, mountOptions(gate()))
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    wrapper = null
+
+    wrapper = mount(
+      HitlGateCard,
+      mountOptions(gate({ claimed_by: '999e8400-e29b-41d4-a716-446655440009', claimed_by_me: false })),
+    )
+
+    const state = useHitlGateState(gate().run_id, 'approval-gate-1')
+    expect(state.claimToken.value).toBeNull()
+    expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
+    const foreignNote = wrapper.find('[data-testid="hitl-gate-foreign-claim"]')
+    expect(foreignNote.exists()).toBe(true)
+    expect(foreignNote.attributes('role')).toBe('status')
+    // The claimed metadata row still shows the holder.
+    expect(wrapper.text()).toContain('999e8400-e29b-41d4-a716-446655440009')
+  })
+
+  it('keeps approve/reject when the server stamps the claim as the caller\u2019s own (FAR-691)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-mine', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+    const mountOptions = (gateProps: HitlGate) => ({
+      props: { gate: gateProps },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    wrapper = mount(HitlGateCard, mountOptions(gate()))
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    wrapper = null
+
+    // Remount as a post-claim refetch would: the server stamps claimed_by_me=true.
+    wrapper = mount(HitlGateCard, mountOptions(gate({ claimed_by: 'reviewer@team', claimed_by_me: true })))
+    expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-claim-token"]').text()).toContain('tok-mine')
+    const spanTexts = wrapper.findAll('span').map((s) => s.text())
+    expect(spanTexts).toContain('You')
+  })
+
+  it('keeps FAR-686 behaviour when claimed_by is set but claimed_by_me is absent (FAR-691)', async () => {
+    // Older cached payloads carry no claimed_by_me stamp: a restored token
+    // must survive (today's behaviour), not be dropped as foreign.
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-absent', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+    const mountOptions = (gateProps: HitlGate) => ({
+      props: { gate: gateProps },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    wrapper = mount(HitlGateCard, mountOptions(gate()))
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    wrapper = null
+
+    wrapper = mount(HitlGateCard, mountOptions(gate({ claimed_by: 'reviewer@team' })))
+    expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-claim-token"]').text()).toContain('tok-absent')
+  })
 })

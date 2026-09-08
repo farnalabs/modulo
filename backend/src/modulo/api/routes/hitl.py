@@ -60,6 +60,7 @@ from modulo.db.crud.hitl_gate_config import (
     snapshot_gate_config_map,
 )
 from modulo.db.crud.run import get_run, transition_run
+from modulo.db.models.account import Account
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -160,6 +161,14 @@ class GateResponse(BaseModel):
     #: (condition, trigger, source node, bounded artifacts, reason,
     #: pipeline_name). None for legacy gates.
     context: dict[str, Any] | None = None
+    #: FAR-691: the claimant's human-readable display name (batched accounts
+    #: lookup). None when the account row is missing — the frontend falls
+    #: back to the raw account UUID.
+    claimed_by_name: str | None = None
+    #: FAR-691: whether the claimant is the caller, stamped server-side from
+    #: the principal (the server knows the caller; no client auth state).
+    #: Drives the frontend's stale-token drop for foreign-claimed gates.
+    claimed_by_me: bool = False
 
 
 class PendingGatesResponse(BaseModel):
@@ -786,6 +795,10 @@ async def list_run_pending_gates(
                 if snapshot is not None and isinstance(snapshot.graph_json, dict):
                     gate_label_map = _build_gate_label_map(snapshot.graph_json)
                     gate_description_map = _build_gate_description_map(snapshot.graph_json)
+
+            # FAR-691: batched claimant display names + the caller-owns-claim
+            # stamp, resolved inside the same transaction/RLS context.
+            claimant_names = await _load_claimant_name_map(session, gates)
     except ProgrammingError as exc:
         logger.exception("hitl.list_run_pending_gates")
         raise HTTPException(
@@ -814,6 +827,8 @@ async def list_run_pending_gates(
                 pipeline_name=pipeline_name,
                 label=gate_label_map.get(g.gate_id),
                 description=gate_description_map.get(g.gate_id),
+                claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
+                claimed_by_me=g.account_id == principal.account_id,
             )
             for g in gates
         ]
@@ -864,6 +879,9 @@ async def list_org_pending_gates(
             # shared gate card shows a readable name (frontend falls back to
             # shortId when a label is missing).
             gate_label_map = await _load_gate_label_map(session, gates)
+            # FAR-691: batched claimant display names + the caller-owns-claim
+            # stamp, resolved inside the same transaction/RLS context.
+            claimant_names = await _load_claimant_name_map(session, gates)
     except ProgrammingError as exc:
         logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(
@@ -898,6 +916,8 @@ async def list_org_pending_gates(
                 pipeline_name=pipeline_map.get(g.pipeline_id),
                 description=description_by_gate.get((g.run_id, g.gate_id)),
                 label=gate_label_map.get((g.run_id, g.gate_id)),
+                claimed_by_name=claimant_names.get(g.account_id) if g.account_id is not None else None,
+                claimed_by_me=g.account_id == principal.account_id,
             )
             for g in gates
         ]
@@ -1016,6 +1036,8 @@ def _gate_to_response(
     pipeline_name: str | None = None,
     label: str | None = None,
     description: str | None = None,
+    claimed_by_name: str | None = None,
+    claimed_by_me: bool = False,
 ) -> GateResponse:
     return GateResponse(
         run_id=g.run_id,
@@ -1030,4 +1052,29 @@ def _gate_to_response(
         label=label,
         description=description,
         context=g.context_json if isinstance(g.context_json, dict) else None,
+        claimed_by_name=claimed_by_name,
+        claimed_by_me=claimed_by_me,
     )
+
+
+async def _load_claimant_name_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[uuid.UUID, str]:
+    """Batched ``account_id -> display name`` resolution for the pending endpoints.
+
+    FAR-691: the review page renders "Claimed by <name>" instead of a raw
+    account UUID. Collects the claimant account ids from the pending gates
+    and resolves them with ONE select on the accounts table — the same
+    batched pattern as :func:`_load_gate_label_map`. The best human-readable
+    field wins (``display_name``, falling back to ``email`` when the display
+    name is empty); a missing account row simply leaves that gate without a
+    name (the frontend falls back to the raw UUID). All lookups happen
+    inside the caller's transaction/RLS context.
+    """
+    account_ids = list({g.account_id for g in gates if g.account_id is not None})
+    if not account_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(Account.id, Account.display_name, Account.email).where(Account.id.in_(account_ids))
+        )
+    ).all()
+    return {row[0]: row[1] or row[2] for row in rows}

@@ -13,6 +13,7 @@ export default {
       "decided_label": "Decided",
       "decision_label": "Decision",
       "claimed_by_label": "Claimed by",
+      "claimed_by_other_note": "This gate is claimed by another reviewer. It becomes claimable again when their claim expires.",
       "team_label": "Team",
       "claim": "Claim Gate",
       "claiming": "Claiming...",
