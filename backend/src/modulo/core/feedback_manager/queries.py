@@ -74,10 +74,14 @@ async def get_or_create_feedback_record(
 
 async def enrich_with_pipeline_names(
     session: AsyncSession,
-    org_id: UUID,
     rows: list[FeedbackRecord],
 ) -> dict[str, str]:
-    """Map run_ids to pipeline names for the given feedback records."""
+    """Map run_ids to pipeline names for the given feedback records.
+
+    Tenant scoping comes from the RLS tenant-filter listener on the session
+    (``db.rls._inject_tenant_filter``), so no explicit org predicate is needed
+    here — the caller's org context is already bound to the session.
+    """
     run_ids = list({r.run_id for r in rows if r.run_id})
     if not run_ids:
         return {}

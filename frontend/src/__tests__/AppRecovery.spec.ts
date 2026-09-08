@@ -44,6 +44,15 @@ const clientState = vi.hoisted(() => {
 // no stored token" reload states.
 const demoState = vi.hoisted(() => ({ isDemo: false, demoEnded: false }))
 
+// Drives the typed `api.GET('/api/v1/auth/me')` call App makes to populate
+// error-tracker user context when the login response carries no `user` field.
+const meState = vi.hoisted(() => ({
+  response: { data: undefined, error: undefined } as {
+    data?: Record<string, unknown>
+    error?: unknown
+  },
+}))
+
 vi.mock('vue-router', () => ({
   useRoute: () => routeRef,
   useRouter: () => mockRouter,
@@ -52,6 +61,7 @@ vi.mock('vue-router', () => ({
 }))
 
 vi.mock('@/lib/api/client', () => ({
+  api: { GET: vi.fn(async () => meState.response) },
   getAccessToken: vi.fn(() => clientState.getToken()),
   setAccessToken: vi.fn((t: string) => clientState.setToken(t)),
   setRefreshToken: vi.fn(),
@@ -69,8 +79,12 @@ vi.mock('@/lib/api/client', () => ({
   wasDemoSessionEnded: vi.fn(() => demoState.demoEnded),
 }))
 
+const trackerState = vi.hoisted(() => ({
+  tracker: null as { setUser: (user: unknown) => void } | null,
+}))
+
 vi.mock('@/lib/error-tracking', () => ({
-  getErrorTracker: vi.fn(() => null),
+  getErrorTracker: vi.fn(() => trackerState.tracker),
 }))
 
 vi.mock('@/config/runtime', () => ({
@@ -100,6 +114,8 @@ beforeEach(() => {
   clientState.setHandler(null)
   demoState.isDemo = false
   demoState.demoEnded = false
+  meState.response = { data: undefined, error: undefined }
+  trackerState.tracker = null
   mockRouter.push.mockClear()
 })
 
@@ -279,5 +295,63 @@ describe('App demo reload guard (FAR-535)', () => {
     deferredLogin.resolve({ ok: true, json: async () => ({ access_token: 'fresh-token', refresh_token: 'fresh-refresh', user: { id: '1', email: 'demo@modulo', name: 'Demo' } }) })
     await flushPromises()
     expect(mockRouter.push).toHaveBeenCalledWith('/')
+  })
+})
+
+describe('App auto-login error-tracker user context (/me fallback)', () => {
+  // LoginResponse carries no `user` field, so this fallback is the live path
+  // for every auto-login. It must map the MeResponse wire contract
+  // (display_name / org_role) onto UserInfo (name / role) — reading `name`
+  // straight off the payload silently produced `name: undefined`.
+  it('maps display_name to name and org_role to role from /me', async () => {
+    const setUser = vi.fn()
+    trackerState.tracker = { setUser }
+    meState.response = {
+      data: {
+        id: 'acc-1',
+        email: 'demo@modulo',
+        display_name: 'Demo User',
+        org_role: 'admin',
+        active: true,
+        created_at: '2026-01-01T00:00:00Z',
+      },
+      error: undefined,
+    }
+    const deferredLogin = deferred<{ ok: boolean; json: () => Promise<Record<string, unknown>> }>()
+    mockLoginFetch(deferredLogin)
+
+    shallowMount(App)
+    await flushPromises()
+    // No `user` field in the login response -> the /me fallback runs.
+    deferredLogin.resolve({
+      ok: true,
+      json: async () => ({ access_token: 'fresh-token', refresh_token: 'fresh-refresh' }),
+    })
+    await flushPromises()
+
+    expect(setUser).toHaveBeenCalledWith({
+      id: 'acc-1',
+      email: 'demo@modulo',
+      name: 'Demo User',
+      role: 'admin',
+    })
+  })
+
+  it('leaves user context unset when /me returns no data', async () => {
+    const setUser = vi.fn()
+    trackerState.tracker = { setUser }
+    meState.response = { data: undefined, error: { detail: 'nope' } }
+    const deferredLogin = deferred<{ ok: boolean; json: () => Promise<Record<string, unknown>> }>()
+    mockLoginFetch(deferredLogin)
+
+    shallowMount(App)
+    await flushPromises()
+    deferredLogin.resolve({
+      ok: true,
+      json: async () => ({ access_token: 'fresh-token', refresh_token: 'fresh-refresh' }),
+    })
+    await flushPromises()
+
+    expect(setUser).not.toHaveBeenCalled()
   })
 })

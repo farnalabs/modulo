@@ -819,7 +819,7 @@ class FeedbackManager:
             conditions.append(FeedbackRecord.created_at <= date_to)
 
         rows, total = await paginate_feedback_records(self._session, conditions, page, page_size, include_total)
-        pipeline_map = await _enrich_with_pipeline_names(self._session, self._org_id, rows)
+        pipeline_map = await _enrich_with_pipeline_names(self._session, rows)
 
         return _paginated_response(rows, total, page, page_size, extra={"pipeline_map": pipeline_map})
 

@@ -1,6 +1,5 @@
 """Feedback status transitions and constants."""
 
-from collections.abc import Callable
 from typing import Any
 
 _VALID_FEEDBACK_HANDLER_TYPES = frozenset(
@@ -94,14 +93,3 @@ def correction_guardrail_from(
         if block is not None:
             return guardrail, block
     return None, None
-
-
-def rls(method: Callable[..., Any]) -> Callable[..., Any]:
-    """Decorator for RLS-scoped methods (no-op wrapper for now)."""
-    import functools
-
-    @functools.wraps(method)
-    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-        return await method(self, *args, **kwargs)
-
-    return wrapper

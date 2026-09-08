@@ -2,8 +2,7 @@
 
 These are the pure helpers extracted out of the monolithic
 ``feedback_manager`` module: the taint-scrubbing handler-type label, the
-retry prior-state stripper, the embedded-correction config readers and the
-RLS decorator wrapper.
+retry prior-state stripper and the embedded-correction config readers.
 """
 
 from typing import Any
@@ -17,7 +16,6 @@ from modulo.core.feedback_manager.status import (
     guardrail_correction_config,
     handler_type_label,
     prior_states_for_retry,
-    rls,
 )
 
 
@@ -135,40 +133,6 @@ def test_first_guardrail_declaring_a_correction_block_wins() -> None:
 )
 def test_no_correction_block_returns_a_none_pair(guardrails: list[Any]) -> None:
     assert correction_guardrail_from(guardrails) == (None, None)
-
-
-# ---------------------------------------------------------------------------
-# rls decorator
-# ---------------------------------------------------------------------------
-
-
-async def test_rls_passes_through_args_kwargs_and_result() -> None:
-    class Service:
-        @rls
-        async def fetch(self, a: int, *, b: int) -> int:
-            return a * b
-
-    assert await Service().fetch(3, b=4) == 12
-
-
-async def test_rls_propagates_exceptions_unchanged() -> None:
-    class Service:
-        @rls
-        async def fetch(self) -> None:
-            raise ValueError("boom")
-
-    with pytest.raises(ValueError, match="boom"):
-        await Service().fetch()
-
-
-def test_rls_preserves_the_wrapped_method_metadata() -> None:
-    class Service:
-        @rls
-        async def fetch(self) -> None:
-            """Original docstring."""
-
-    assert Service.fetch.__name__ == "fetch"
-    assert Service.fetch.__doc__ == "Original docstring."
 
 
 # ---------------------------------------------------------------------------
