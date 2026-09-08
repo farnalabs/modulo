@@ -19,6 +19,26 @@ def test_workspace_spec_defaults() -> None:
     assert spec.persistence_policy == "ephemeral"
     assert not spec.labels
     assert not spec.workspace_metadata
+    assert not spec.repo_url
+    assert not spec.repo_ref
+
+
+def test_workspace_spec_repo_fields_are_first_class() -> None:
+    """FAR-595: clone inputs are first-class WorkspaceSpec fields.
+
+    They were previously smuggled through the ``labels`` dict, which
+    collided with Docker's labels-as-Env semantics.
+    """
+    import uuid
+
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        repo_url="https://github.com/acme/app",
+        repo_ref="develop",
+    )
+    assert spec.repo_url == "https://github.com/acme/app"
+    assert spec.repo_ref == "develop"
 
 
 def test_exec_result_fields() -> None:

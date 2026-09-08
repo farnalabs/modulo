@@ -1,10 +1,23 @@
 import uuid
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
+
+# Single source of truth for the provider_type vocabulary (FAR-595). The
+# model CHECK below, the API request-validation pattern
+# (modulo.api.routes.environment_profiles), and the vocabulary scanner test
+# (tests/unit/core/runtime_provider/test_provider_type_coverage.py) all
+# derive from this constant — never hardcode the list elsewhere.
+PROVIDER_TYPES: Final[frozenset[str]] = frozenset({"local_docker", "e2b", "local", "runner_docker"})
+
+
+def _provider_type_check_sql() -> str:
+    """Build the CHECK SQL text from PROVIDER_TYPES (sorted for determinism)."""
+    ordered = ", ".join(f"'{value}'" for value in sorted(PROVIDER_TYPES))
+    return f"provider_type IN ({ordered})"
 
 
 class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
@@ -12,7 +25,7 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint("visibility IN ('org', 'team')", name="ck_env_profiles_visibility"),
         CheckConstraint(
-            "provider_type IN ('local_docker', 'e2b', 'local', 'runner_docker')",
+            _provider_type_check_sql(),
             name="ck_env_profiles_provider_type",
         ),
         CheckConstraint(

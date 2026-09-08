@@ -32,7 +32,7 @@ from modulo.db.crud.environment_profile import (
     soft_delete_environment_profile,
     update_environment_profile,
 )
-from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again later."
@@ -66,10 +66,13 @@ def _get_hub() -> RuntimeProviderHub:
     return build_hub(max_local_concurrency=settings.modulo_max_local_concurrency)
 
 
-_PROVIDER_TYPE_PATTERN = r"^(local_docker|e2b|local|runner_docker)$"
-_PROVIDER_TYPE_VOCABULARY = ("local_docker", "e2b", "local", "runner_docker")
+# Provider_type request validation derives from the model's PROVIDER_TYPES
+# constant (FAR-595) — the CHECK constraint, this pattern, and the vocabulary
+# scanner test all share one source of truth.
+_PROVIDER_TYPE_VOCABULARY = tuple(sorted(PROVIDER_TYPES))
+_PROVIDER_TYPE_PATTERN = "^(" + "|".join(_PROVIDER_TYPE_VOCABULARY) + ")$"
 
-_PROFILE_TYPE_HELP = "One of: local_docker, e2b, local, runner_docker (the provider_type vocabulary)."
+_PROFILE_TYPE_HELP = f"One of: {', '.join(_PROVIDER_TYPE_VOCABULARY)} (the provider_type vocabulary)."
 
 
 class ProfileCreate(BaseModel):

@@ -153,7 +153,7 @@ async def test_create_workspace_clones_repo(
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
-        labels={"repo_url": "https://github.com/user/repo.git"},
+        repo_url="https://github.com/user/repo.git",
     )
     ref = await provider.create_workspace(spec)
     assert ref == "sbx-e2b-test-001"
@@ -175,10 +175,8 @@ async def test_create_workspace_checks_out_ref(
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
-        labels={
-            "repo_url": "https://github.com/user/repo.git",
-            "repo_ref": "develop",
-        },
+        repo_url="https://github.com/user/repo.git",
+        repo_ref="develop",
     )
     ref = await provider.create_workspace(spec)
     assert ref == "sbx-e2b-test-001"
@@ -196,6 +194,28 @@ async def test_create_workspace_skips_clone_when_no_repo_url(
 ) -> None:
     provider = E2BRuntimeProvider(api_key="sk-test")
     await provider.create_workspace(workspace_spec)
+    mock_sandbox.commands.run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_labels_never_trigger_clone(
+    mock_sandbox_cls: MagicMock,
+    mock_sandbox: MagicMock,
+) -> None:
+    """FAR-595 contract: clone inputs are first-class spec fields only.
+
+    A consumer setting ``labels`` for env-injection-style use on an E2B
+    profile must NOT silently trigger a repo clone — ``labels`` is ignored
+    by this provider (env-var injection is a Docker-only semantics).
+    """
+    provider = E2BRuntimeProvider(api_key="sk-test")
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        labels={"repo_url": "https://github.com/user/repo.git", "repo_ref": "develop"},
+    )
+    ref = await provider.create_workspace(spec)
+    assert ref == "sbx-e2b-test-001"
     mock_sandbox.commands.run.assert_not_called()
 
 
@@ -544,7 +564,7 @@ async def test_create_workspace_clone_failure_propagates(
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
-        labels={"repo_url": "https://github.com/user/repo.git"},
+        repo_url="https://github.com/user/repo.git",
     )
     with pytest.raises(RuntimeError, match="Repo clone failed"):
         await provider.create_workspace(spec)
@@ -565,7 +585,7 @@ async def test_create_workspace_clone_failure_not_masked_by_kill_timeout(
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
-        labels={"repo_url": "https://github.com/user/repo.git"},
+        repo_url="https://github.com/user/repo.git",
     )
     with pytest.raises(RuntimeError, match="Repo clone failed"):
         await provider.create_workspace(spec)
@@ -583,7 +603,7 @@ async def test_create_workspace_cancellation_not_masked_by_kill_failure(
     spec = WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
-        labels={"repo_url": "https://github.com/user/repo.git"},
+        repo_url="https://github.com/user/repo.git",
     )
     with pytest.raises(asyncio.CancelledError):
         await provider.create_workspace(spec)

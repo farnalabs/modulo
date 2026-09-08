@@ -95,7 +95,9 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3.1.1",
     "psycopg-binary>=3.3.4",
     # Runtime environments
-    "e2b>=0.15.0",
+    # Floor is 2.x: E2BRuntimeProvider passes `metadata=` on AsyncSandbox.create
+    # (FAR-595), which the 0.x line does not support. Resolved lock: 2.6.1.
+    "e2b>=2.0.0",
     # Retry library — replaces hand-rolled retry-with-backoff patterns
     "tenacity>=9.0.0",
     # CLI
