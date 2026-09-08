@@ -215,6 +215,34 @@ def resolve_node_retry(node: dict[str, Any] | None, pipeline_retry_policy: Any) 
     return _policy_from_pipeline_default(pipeline_retry_policy)
 
 
+def _is_valid_retry_budget(max_retries: Any) -> bool:
+    """A run-level ``max_retries`` budget is valid: a non-bool int within the executor's 1-5 bounds."""
+    return (
+        isinstance(max_retries, int)
+        and not isinstance(max_retries, bool)
+        and 1 <= max_retries <= RETRY_MAX_ATTEMPTS_BOUND
+    )
+
+
+def _map_run_level_events(events_raw: list[Any]) -> set[str]:
+    """Map run-level event names to node-level ones (``failure``/``error`` → ``error``; others pass through)."""
+    node_events: set[str] = set()
+    for e in events_raw:
+        if e == "stall":
+            node_events.add("stall")
+        elif e == "timeout":
+            node_events.add("timeout")
+        elif e in ("failure", "error"):
+            node_events.add("error")
+    return node_events
+
+
+def _clamped_backoff_seconds(backoff: Any) -> float:
+    """Clamp a run-level ``backoff`` to ``[0, RETRY_BACKOFF_CAP_SECONDS]``; non-numeric/overflowing yields 0.0."""
+    backoff_f = safe_float(backoff) if isinstance(backoff, (int, float)) else None
+    return min(max(backoff_f, 0.0), RETRY_BACKOFF_CAP_SECONDS) if backoff_f is not None else 0.0
+
+
 def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy:
     """Translate a run-level ``retry_policy`` to a :class:`NodeRetryPolicy`.
 
@@ -237,11 +265,7 @@ def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy
     if not isinstance(pipeline_retry_policy, dict):
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     max_retries = pipeline_retry_policy.get("max_retries", 0)
-    if (
-        isinstance(max_retries, bool)
-        or not isinstance(max_retries, int)
-        or not 1 <= max_retries <= RETRY_MAX_ATTEMPTS_BOUND
-    ):
+    if not _is_valid_retry_budget(max_retries):
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     events_raw = pipeline_retry_policy.get("on")
     if events_raw is None:
@@ -250,26 +274,14 @@ def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy
         # four-event run-level list maps to.
         node_events: set[str] = set(RETRY_EVENTS)
     elif isinstance(events_raw, list):
-        node_events = set()
-        for e in events_raw:
-            if e == "stall":
-                node_events.add("stall")
-            elif e == "timeout":
-                node_events.add("timeout")
-            elif e in ("failure", "error"):
-                node_events.add("error")
+        node_events = _map_run_level_events(events_raw)
     else:
         # A malformed non-list, non-null `on` (e.g. a string) fail-closes.
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     if not node_events:
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     max_attempts = min(max_retries + 1, RETRY_MAX_ATTEMPTS_BOUND)
-    backoff = pipeline_retry_policy.get("backoff", 0.0)
-    # A huge un-representable int (e.g. 10**400, direct-DB-written) overflows
-    # float(); treat it like any other non-numeric backoff — the documented
-    # 0.0 default (the else branch below) — instead of bricking graph compile.
-    backoff_f = safe_float(backoff) if isinstance(backoff, (int, float)) else None
-    backoff_sec = min(max(backoff_f, 0.0), RETRY_BACKOFF_CAP_SECONDS) if backoff_f is not None else 0.0
+    backoff_sec = _clamped_backoff_seconds(pipeline_retry_policy.get("backoff", 0.0))
     return NodeRetryPolicy(max_attempts=max_attempts, backoff_seconds=backoff_sec, events=frozenset(node_events))
 
 
