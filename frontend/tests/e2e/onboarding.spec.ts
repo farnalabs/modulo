@@ -59,6 +59,7 @@ test.describe('Onboarding Wizard', { tag: '@regression' }, () => {
 
     await expect(page.getByText("You're all set!")).toBeVisible()
     await expect(page.getByTestId('onboarding-wizard-go-to-dashboard')).toBeVisible()
-    await expect(page.getByTestId('onboarding-wizard-previous')).toBeVisible()
+    // Footer nav (including Previous) is intentionally hidden on the terminal Done step (v-if="currentStep < 6")
+    await expect(page.getByTestId('onboarding-wizard-previous')).toHaveCount(0)
   })
 })
