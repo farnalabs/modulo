@@ -1375,6 +1375,7 @@ class TestSaqWorkerSettings:
             "stale_run_recovery",
             "slot_reconciliation",
             "hitl_park_sweep",
+            "runner_workspace_reconcile",
             "cost_probe",
             "check_missed_fire_alerts_cron",
             "journey_reconcile",

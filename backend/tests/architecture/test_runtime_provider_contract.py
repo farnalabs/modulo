@@ -40,6 +40,7 @@ _ABC_METHODS = {
     # RuntimeProvider ABC
     "create_workspace",
     "exec_command",
+    "exec_command_stream",
     "destroy_workspace",
     "get_workspace_status",
     "close",

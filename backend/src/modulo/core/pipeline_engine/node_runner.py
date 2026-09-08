@@ -5686,6 +5686,33 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     agent_id = _parse_uuid_opt(node_def.get("agent_id"))
     await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id, node_def=node_def)
 
+    # D4 dispatch adapter (FAR-590): branch on the PIPELINE-LEVEL bound
+    # profile's provider_type (the validated, same-org-enforced
+    # PipelineSnapshot.environment_profile_id — consumed at dispatch).
+    #  - runner_docker -> the Bundled Runner path (hub-resolved Docker
+    #    provider, hardened workspace, streaming exec) — both sandbox modes.
+    #  - local / legacy-inert local_docker -> dispatch-unbound: the typed
+    #    config error propagates (operator re-binds deliberately; the old
+    #    conformance-context-only binding never silently activates).
+    #  - e2b -> the legacy E2B path below, with a LOUD dispatch-time timeout
+    #    validation (GraphValidator parity, no silent clamp).
+    #  - none -> the historical E2B default route, unchanged.
+    if session_factory is not None:
+        from modulo.core.bundled_runner.runner_dispatch import (
+            resolve_sandbox_dispatch_route,
+            validate_e2b_dispatch_timeout,
+        )
+
+        _ctx = get_conformance_ctx()
+        _env_profile_id = _ctx[2] if _ctx else None
+        _route = await resolve_sandbox_dispatch_route(session_factory, state.get("_org_id"), _env_profile_id)
+        if _route.provider_type == "runner_docker":
+            from modulo.core.bundled_runner.runner_dispatch import run_bundled_runner_node
+
+            return await run_bundled_runner_node(state, config, _route)
+        if _route.provider_type == "e2b":
+            validate_e2b_dispatch_timeout(sandbox_timeout)
+
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input: Any = run_context.get("input", {})
 
