@@ -695,6 +695,8 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         click.echo("\nRestore complete.")
 
     except Exception as exc:
+        _log.exception("Restore failed")
+        click.echo(f"Restore failed: {exc}", err=True)
         raise click.ClickException(str(exc)) from exc
 
 

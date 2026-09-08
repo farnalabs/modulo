@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -70,10 +71,40 @@ def _backend_current_view(current: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_CURRENT_VIEWS: dict[str, type] = {
+_CURRENT_VIEWS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     KIND_SCHEMA: _schema_current_view,
     KIND_BACKEND: _backend_current_view,
 }
+
+
+def _version_conflict(
+    desired_view: dict[str, Any],
+    current: dict[str, Any],
+) -> str | None:
+    """Return a blocked reason when a declared version string exists with
+    different content, else None.
+
+    Schema versions are immutable via apply: a same-version-different-content
+    declaration can never converge (the executor skips existing version
+    strings), so it must be blocked at plan time instead of silently ignored.
+    """
+    declared = {v["version"]: v for v in (desired_view.get("versions") or [])}
+    if not declared:
+        return None
+    for existing in current.get("versions") or []:
+        spec = declared.get(existing.get("version"))
+        if spec is None:
+            continue
+        if (
+            spec["version_number"] != existing.get("version_number")
+            or spec["definition_json"] != existing.get("definition_json")
+            or spec["published"] != existing.get("published")
+        ):
+            return (
+                f"version {existing.get('version')} exists with different content "
+                "- schema versions are immutable via apply"
+            )
+    return None
 
 
 def plan_entity(
@@ -110,6 +141,17 @@ def plan_entity(
                     "provider mismatch: cannot change provider from "
                     f"{current_provider!r} to {desired_provider!r} via apply"
                 ),
+                desired_hash=desired_hash,
+                current_hash=canonical_hash(_CURRENT_VIEWS[kind](current)),
+            )
+    if kind == KIND_SCHEMA:
+        conflict = _version_conflict(desired_view, current)
+        if conflict is not None:
+            return Decision(
+                kind=kind,
+                name=name,
+                status="blocked",
+                reason=conflict,
                 desired_hash=desired_hash,
                 current_hash=canonical_hash(_CURRENT_VIEWS[kind](current)),
             )

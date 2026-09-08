@@ -27,8 +27,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.schema_registry import SchemaGenerationError
 from modulo.db.crud.schema import SchemaDeletionProtectedError
 from modulo.settings import Settings, get_settings
@@ -114,6 +114,11 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    # apply-moved routes (FAR-681) resolve via get_current_tenant_user_or_api_key;
+    # both stacks share the same admin principal in these endpoint tests.
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
         username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
     mock_plan = MagicMock()

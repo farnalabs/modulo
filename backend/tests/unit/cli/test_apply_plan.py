@@ -125,6 +125,97 @@ class TestPlanDecisionTable:
         assert decision.reason is not None
         assert "provider" in decision.reason
 
+    def test_changed_version_content_is_blocked(self) -> None:
+        """Same version string + different definition_json can never converge
+        (versions are immutable via apply) — block instead of 'updated'."""
+        schema_with_version = SchemaEntity.model_validate(
+            {
+                "name": "alpha",
+                "versions": [
+                    {
+                        "version": "v1",
+                        "version_number": 1,
+                        "definition_json": {"type": "object", "properties": {"changed": {"type": "string"}}},
+                    }
+                ],
+            }
+        )
+        current = {
+            "name": "alpha",
+            "description": None,
+            "abstract_name": None,
+            "versions": [
+                {
+                    "version": "v1",
+                    "version_number": 1,
+                    "definition_json": {"type": "object"},
+                    "published": False,
+                }
+            ],
+        }
+        decision = plan_entity("schema", "alpha", schema_with_version.managed_view(), current)
+        assert decision.status == "blocked"
+        assert decision.reason is not None
+        assert "version v1 exists with different content" in decision.reason
+        assert "immutable via apply" in decision.reason
+
+    def test_changed_version_number_blocks(self) -> None:
+        schema_with_version = SchemaEntity.model_validate(
+            {
+                "name": "alpha",
+                "versions": [
+                    {
+                        "version": "v1",
+                        "version_number": 2,
+                        "definition_json": {"type": "object"},
+                    }
+                ],
+            }
+        )
+        current = {
+            "name": "alpha",
+            "description": None,
+            "abstract_name": None,
+            "versions": [
+                {
+                    "version": "v1",
+                    "version_number": 1,
+                    "definition_json": {"type": "object"},
+                    "published": False,
+                }
+            ],
+        }
+        decision = plan_entity("schema", "alpha", schema_with_version.managed_view(), current)
+        assert decision.status == "blocked"
+
+    def test_new_version_string_is_still_updated(self) -> None:
+        """A NEW version string next to an identical existing one is not a conflict."""
+        schema_with_versions = SchemaEntity.model_validate(
+            {
+                "name": "alpha",
+                "versions": [
+                    {"version": "v1", "version_number": 1, "definition_json": {"type": "object"}},
+                    {"version": "v2", "version_number": 2, "definition_json": {"type": "object"}},
+                ],
+            }
+        )
+        current = {
+            "name": "alpha",
+            "description": None,
+            "abstract_name": None,
+            "versions": [
+                {
+                    "version": "v1",
+                    "version_number": 1,
+                    "definition_json": {"type": "object"},
+                    "published": False,
+                }
+            ],
+        }
+        decision = plan_entity("schema", "alpha", schema_with_versions.managed_view(), current)
+        assert decision.status == "updated"
+        assert decision.reason is None
+
     def test_matching_backend_is_unchanged(self) -> None:
         current = {
             "name": "openai",

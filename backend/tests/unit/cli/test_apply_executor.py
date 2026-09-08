@@ -7,6 +7,7 @@ API pydantic models (contract round-trip), not hand-built response fixtures.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -16,7 +17,13 @@ import respx
 
 from modulo.api.routes.model_backends import ModelBackendCreate
 from modulo.api.routes.schemas import SchemaCreate, SchemaVersionCreate
-from modulo.cli.apply.executor import API_KEY_HEADER, ApplyExecutor, resolve_secret_refs
+from modulo.cli.apply.executor import (
+    AUTH_HEADER,
+    PAGE_SIZE,
+    ApplyExecutor,
+    ApplyHttpError,
+    resolve_secret_refs,
+)
 from modulo.cli.apply.loader import parse_apply_documents
 
 CONFIG_TEXT = """
@@ -36,6 +43,8 @@ entities:
       default_params:
         temperature: 0.5
 """
+
+_BACKENDS_LIST_PARAMS = {"page": "1", "page_size": str(PAGE_SIZE), "include_in_dev": "true"}
 
 
 def _schema_item(name: str, description: str | None, schema_id: str | None = None) -> dict:
@@ -80,15 +89,25 @@ def _mock_current(
     *,
     schema_post_json: dict | None = None,
     backend_post_json: dict | None = None,
+    versions_json: list[dict] | None = None,
 ) -> dict:
     """Mock the list/create endpoints; returns {name: route} for assertions."""
     routes = {}
     routes["schemas_get"] = respx.get(
         "https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}
     ).respond(json={"items": schemas, "total": len(schemas), "page": 1, "page_size": 100})
-    routes["backends_get"] = respx.get(
-        "https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}
-    ).respond(json={"items": backends, "total": len(backends), "page": 1, "page_size": 100})
+    routes["backends_get"] = respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+        json={"items": backends, "total": len(backends), "page": 1, "page_size": 100}
+    )
+    routes["versions_get"] = respx.get(
+        re.compile(r"https://api\.test/api/v1/schemas/[^/]+/versions"),
+        params={"page": "1", "page_size": str(PAGE_SIZE)},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"items": list(versions_json or []), "total": len(versions_json or [])},
+        )
+    )
     routes["schemas_post"] = respx.post("https://api.test/api/v1/schemas").mock(
         return_value=httpx.Response(
             201,
@@ -100,6 +119,9 @@ def _mock_current(
             201,
             json=backend_post_json if backend_post_json is not None else _backend_item("applied", "applied-provider"),
         )
+    )
+    routes["health_post"] = respx.post(re.compile(r"https://api\.test/api/v1/model-backends/[^/]+/health-check")).mock(
+        return_value=httpx.Response(200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"})
     )
     return routes
 
@@ -182,7 +204,7 @@ class TestRealApply:
         patch_route = respx.patch(f"https://api.test/api/v1/schemas/{existing['id']}").mock(
             return_value=httpx.Response(200, json={**existing, "description": "Alpha schema"})
         )
-        _mock_current([existing], [])
+        _mock_current([existing], [], versions_json=existing.get("versions"))
         shortened = CONFIG_TEXT.replace("    - name: fresh\n      description: Brand new\n", "")
         config = parse_apply_documents(shortened)
         with httpx.Client() as client:
@@ -299,21 +321,464 @@ class TestContractRoundTrip:
         assert created.api_key == "resolved-secret"
         assert created.provider == "openai"
         assert created.tier == "native"
+        # default_params must survive the round-trip (the former ClassVar
+        # annotation made pydantic v2 drop the field entirely).
+        assert created.default_params == {"temperature": 0.5}
 
 
 class TestHeaders:
     @respx.mock
-    def test_api_key_header_sent(self) -> None:
-        schemas_get = respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
+    def test_bearer_authorization_header_sent(self) -> None:
+        """The server (HTTPBearer) reads ONLY Authorization: Bearer — never X-Api-Key."""
+        schemas_get = respx.get(
+            "https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}
+        ).respond(json={"items": [], "total": 0})
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
             json={"items": [], "total": 0}
         )
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "secret-key", client=client)
             executor.fetch_current(parse_apply_documents(CONFIG_TEXT))
-        assert schemas_get.calls.last.request.headers[API_KEY_HEADER.lower()] == "secret-key"
+        request = schemas_get.calls.last.request
+        assert request.headers[AUTH_HEADER.lower()] == "Bearer secret-key"
+        assert "x-api-key" not in request.headers
+
+
+GREEN_CONFIG_TEXT = """
+api_version: modulo.dev/v1
+entities:
+  schemas:
+    - name: first
+      description: First
+    - name: second
+      description: Second
+"""
+
+
+class TestPagination:
+    @respx.mock
+    def test_fetch_current_collects_all_pages(self) -> None:
+        """Two schemas that do not fit one page are both collected (no false 'created')."""
+        page1 = [_schema_item("alpha", "First page"), _schema_item("beta", "First page")]
+        page2 = [_schema_item("gamma", "Second page")]
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            json={"items": page1, "total": 3, "page": 1, "page_size": 100}
+        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "2", "page_size": "100"}).respond(
+            json={"items": page2, "total": 3, "page": 2, "page_size": 100}
+        )
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+            json={"items": [], "total": 0}
+        )
+        config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            current = executor.fetch_current(config)
+        assert sorted(current["schema"]) == ["alpha", "beta", "gamma"]
+
+    @respx.mock
+    def test_versions_fetch_passes_page_size(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SK", "v")
+        config_text = (
+            "api_version: modulo.dev/v1\n"
+            "entities:\n"
+            "  schemas:\n"
+            "    - name: alpha\n"
+            "      description: Alpha schema\n"
+            "      versions:\n"
+            "        - version: v1\n"
+            "          version_number: 1\n"
+            "          definition_json:\n"
+            "            type: object\n"
+        )
+        schema_id = str(uuid.uuid4())
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            json={"items": [_schema_item("alpha", "Alpha schema", schema_id=schema_id)], "total": 1}
+        )
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+            json={"items": [], "total": 0}
+        )
+        versions_route = respx.get(
+            f"https://api.test/api/v1/schemas/{schema_id}/versions",
+            params={"page": "1", "page_size": str(PAGE_SIZE)},
+        ).respond(json={"items": [], "total": 0})
+        config = parse_apply_documents(config_text)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            executor.fetch_current(config)
+        assert versions_route.called
+
+    @respx.mock
+    def test_backend_list_403_falls_back_to_default_listing(self) -> None:
+        """Operator-key 403 on include_in_dev degrades to the default listing."""
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            json={"items": [], "total": 0}
+        )
+        with_dev = respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+            status_code=403, json={"detail": "operator role required"}
+        )
+        without_dev = respx.get(
+            "https://api.test/api/v1/model-backends", params={"page": "1", "page_size": str(PAGE_SIZE)}
+        ).respond(json={"items": [_backend_item("openai", "openai")], "total": 1})
+        config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            current = executor.fetch_current(config)
+        assert with_dev.called
+        assert without_dev.called
+        assert sorted(current["model_backend"]) == ["openai"]
+
+    @respx.mock
+    def test_backend_list_non_403_error_propagates(self) -> None:
+        """Only 403 (in_dev disclosure) falls back; other errors propagate."""
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            json={"items": [], "total": 0}
+        )
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+            status_code=500, json={"detail": "boom"}
+        )
+        config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(ApplyHttpError) as exc_info:
+                executor.fetch_current(config)
+        assert exc_info.value.status_code == 500
+
+
+class TestRefBlocking:
+    @respx.mock
+    def test_secretref_blocked_at_plan_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SK", "resolved-secret")
+        routes = _mock_current([], [])
+        config_text = (
+            "api_version: modulo.dev/v1\n"
+            "entities:\n"
+            "  model_backends:\n"
+            "    - name: openai\n"
+            "      display_name: OpenAI\n"
+            "      provider: openai\n"
+            "      model_id: gpt-x\n"
+            "      api_key: secretref://vault/openai-key\n"
+        )
+        config = parse_apply_documents(config_text)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        blocked = [e for e in report["blocked"] if e["name"] == "openai"]
+        assert len(blocked) == 1
+        assert blocked[0]["reason"] == (
+            "secretref resolution not supported yet (server-side resolution lands in a later slice)"
+        )
+        assert not report["created"]
+        assert not report["failed"]
+        assert routes["backends_post"].call_count == 0
+
+    def test_empty_env_value_distinct_reason(self) -> None:
+        config = parse_apply_documents(CONFIG_TEXT)
+        resolved, blocked = resolve_secret_refs(config, environ={"SK": "   "})
+        assert "openai" not in resolved
+        assert len(blocked) == 1
+        assert "empty" in blocked[0][2]
+        assert "not set" not in blocked[0][2]
+
+
+class TestVersionImmutability:
+    @respx.mock
+    def test_conflicting_version_string_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SK", "v")
+        config_text = (
+            "api_version: modulo.dev/v1\n"
+            "entities:\n"
+            "  schemas:\n"
+            "    - name: alpha\n"
+            "      description: Alpha schema\n"
+            "      versions:\n"
+            "        - version: v1\n"
+            "          version_number: 1\n"
+            "          definition_json:\n"
+            "            type: object\n"
+            "            properties:\n"
+            "              changed: {}\n"
+        )
+        existing = _schema_item("alpha", "Alpha schema")
+        existing["versions"] = [
+            {
+                "version": "v1",
+                "version_number": 1,
+                "definition_json": {"type": "object"},
+                "published": False,
+            }
+        ]
+        _mock_current([existing], [], versions_json=existing.get("versions"))
+        config = parse_apply_documents(config_text)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        blocked = [e for e in report["blocked"] if e["name"] == "alpha"]
+        assert len(blocked) == 1
+        assert "version v1 exists with different content" in blocked[0]["reason"]
+        assert "immutable via apply" in blocked[0]["reason"]
+        assert not report["updated"]
+        assert not report["failed"]
+
+    @respx.mock
+    def test_identical_version_is_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SK", "v")
+        config_text = (
+            "api_version: modulo.dev/v1\n"
+            "entities:\n"
+            "  schemas:\n"
+            "    - name: alpha\n"
+            "      description: Alpha schema\n"
+            "      versions:\n"
+            "        - version: v1\n"
+            "          version_number: 1\n"
+            "          definition_json:\n"
+            "            type: object\n"
+        )
+        existing = _schema_item("alpha", "Alpha schema")
+        existing["versions"] = [
+            {
+                "version": "v1",
+                "version_number": 1,
+                "definition_json": {"type": "object"},
+                "published": False,
+            }
+        ]
+        _mock_current([existing], [], versions_json=existing.get("versions"))
+        config = parse_apply_documents(config_text)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=True)
+        unchanged = [e for e in report["unchanged"] if e["name"] == "alpha"]
+        assert len(unchanged) == 1
+        assert not report["blocked"]
+
+
+class TestFailureIsolation:
+    """Failure-injection: one entity failing must not abort the others."""
+
+    @respx.mock
+    def test_schema_400_isolates_entity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        report = _run_isolated_http_case(monkeypatch, status_code=400)
+        _assert_single_entity_failed(report, "first", kinds={"schema"})
+
+    @respx.mock
+    def test_schema_409_isolates_entity_with_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        report = _run_isolated_http_case(monkeypatch, status_code=409)
+        entry = [e for e in report["failed"] if e["name"] == "first"]
+        assert "name already exists; rerun to apply as update" in entry[0]["error"]
+
+    @respx.mock
+    def test_schema_500_isolates_entity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        report = _run_isolated_http_case(monkeypatch, status_code=500)
+        _assert_single_entity_failed(report, "first", kinds={"schema"})
+
+    @respx.mock
+    def test_connect_error_isolates_entity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """httpx.ConnectError moves exactly that entity to failed."""
+        monkeypatch.setenv("SK", "v")
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            json={"items": [], "total": 0}
+        )
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+            json={"items": [], "total": 0}
+        )
+
+        def _side_effect_factory() -> list:
+            return [
+                httpx.ConnectError("connection refused"),
+                httpx.Response(201, json=_schema_item("second", None)),
+            ]
+
+        respx.post("https://api.test/api/v1/schemas").mock(side_effect=_side_effect_factory())
+        config = parse_apply_documents(GREEN_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        _assert_single_entity_failed(report, "first")
+
+    @respx.mock
+    def test_later_entities_still_apply_after_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SK", "v")
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            json={"items": [], "total": 0}
+        )
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+            json={"items": [], "total": 0}
+        )
+        schema_post = respx.post("https://api.test/api/v1/schemas").mock(
+            side_effect=[
+                httpx.Response(500, json={"detail": "boom"}),
+                httpx.Response(201, json=_schema_item("second", None)),
+            ]
+        )
+        config = parse_apply_documents(GREEN_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        failed_names = [e["name"] for e in report["failed"]]
+        assert failed_names == ["first"]
+        created_names = [e["name"] for e in report["created"]]
+        assert created_names == ["second"]
+        assert schema_post.call_count == 2
+
+    @respx.mock
+    def test_created_schema_version_post_failure_keeps_created_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SK", "v")
+        schema_id = str(uuid.uuid4())
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            json={"items": [], "total": 0}
+        )
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+            json={"items": [], "total": 0}
+        )
+        respx.post("https://api.test/api/v1/schemas").mock(
+            return_value=httpx.Response(201, json=_schema_item("alpha", None, schema_id=schema_id))
+        )
+        respx.post(f"https://api.test/api/v1/schemas/{schema_id}/versions").mock(
+            return_value=httpx.Response(500, json={"detail": "version boom"})
+        )
+        config_text = (
+            "api_version: modulo.dev/v1\n"
+            "entities:\n"
+            "  schemas:\n"
+            "    - name: alpha\n"
+            "      description: Alpha schema\n"
+            "      versions:\n"
+            "        - version: v1\n"
+            "          version_number: 1\n"
+            "          definition_json:\n"
+            "            type: object\n"
+        )
+        config = parse_apply_documents(config_text)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        created = [e for e in report["created"] if e["kind"] == "schema" and e["name"] == "alpha"]
+        assert len(created) == 1
+        version_failures = [e for e in report["failed"] if e["kind"] == "schema_version" and e["name"] == "alpha/v1"]
+        assert len(version_failures) == 1
+
+
+def _run_isolated_http_case(monkeypatch: pytest.MonkeyPatch, status_code: int) -> dict:
+    monkeypatch.setenv("SK", "v")
+    respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+        json={"items": [], "total": 0}
+    )
+    respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
+        json={"items": [], "total": 0}
+    )
+    respx.post("https://api.test/api/v1/schemas").mock(
+        side_effect=[
+            httpx.Response(status_code, json={"detail": "injected failure"}),
+            httpx.Response(201, json=_schema_item("second", None)),
+        ]
+    )
+    config = parse_apply_documents(GREEN_CONFIG_TEXT)
+    with httpx.Client() as client:
+        executor = ApplyExecutor("https://api.test", "key", client=client)
+        report = executor.run(config, dry_run=False)
+    _assert_single_entity_failed(report, "first", kinds={"schema"})
+    return report
+
+
+def _assert_single_entity_failed(
+    report: dict,
+    name: str,
+    *,
+    kinds: set[str] | None = None,
+) -> None:
+    assert [e["name"] for e in report["created"]] == ["second"]
+    failed = report["failed"]
+    assert len(failed) == 1
+    assert failed[0]["name"] == name
+    if kinds is not None:
+        assert failed[0]["kind"] in kinds
+    assert not report["updated"]
+
+
+class TestHealthCheckSurfaced:
+    @respx.mock
+    def test_unhealthy_health_check_moves_created_backend_to_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SK", "resolved-secret")
+        routes = _mock_current([], [])
+        routes["health_post"].mock(
+            return_value=httpx.Response(
+                200,
+                json={"status": "unhealthy", "detail": "401 from provider", "checked_at": "2026-01-01T00:00:00Z"},
+            )
+        )
+        config = parse_apply_documents(CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        created_names = [e["name"] for e in report["created"]]
+        assert "openai" not in created_names
+        assert "fresh" in created_names
+        failed = [e for e in report["failed"] if e["name"] == "openai"]
+        assert len(failed) == 1
+        assert "failed health check" in failed[0]["error"]
+        assert "401 from provider" in failed[0]["error"]
+        # The backend was still created (POST sent the payload).
+        assert routes["backends_post"].call_count == 1
+
+    @respx.mock
+    def test_health_check_403_keeps_finding_out_of_failed_when_parent_write_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A health-check failure is contained per-entity, not fatal."""
+        monkeypatch.setenv("SK", "resolved-secret")
+        routes = _mock_current([], [])
+        routes["health_post"].mock(return_value=httpx.Response(500, json={"detail": "down"}))
+        config = parse_apply_documents(CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        # Health-check endpoint 500 -> entity moves to failed with the message.
+        failed_names = [e["name"] for e in report["failed"]]
+        assert "openai" in failed_names
+
+
+class TestHttpErrorSemantics:
+    @respx.mock
+    def test_3xx_treated_as_error(self) -> None:
+        """Redirect responses (follow_redirects=False) are errors, not successes."""
+        route = respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(
+            status_code=302, headers={"Location": "https://api.test/elsewhere"}
+        )
+        config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(ApplyHttpError) as exc_info:
+                executor.fetch_current(config)
+        assert route.call_count == 1
+        assert exc_info.value.status_code == 302
+
+    @respx.mock
+    def test_get_404_carries_status_and_path(self) -> None:
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(
+            status_code=404, json={"detail": "not found"}
+        )
+        config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(ApplyHttpError) as exc_info:
+                executor.fetch_current(config)
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.path == "/schemas"
+
+    @respx.mock
+    def test_invalid_json_response_raises_apply_http_error(self) -> None:
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(
+            status_code=200, content=b"not-json{"
+        )
+        config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(ApplyHttpError) as exc_info:
+                executor.fetch_current(config)
+        assert "invalid JSON" in str(exc_info.value)
 
 
 GOLDEN_CONFIG_TEXT = """

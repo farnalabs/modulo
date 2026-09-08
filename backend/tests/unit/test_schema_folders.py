@@ -28,8 +28,8 @@ get_settings.cache_clear()
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context  # noqa: E402
 from modulo.api.main import app  # noqa: E402
-from modulo.auth.dependencies import get_current_user  # noqa: E402
-from modulo.auth.jwt import AuthenticatedPrincipal  # noqa: E402
+from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user  # noqa: E402
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal  # noqa: E402
 from modulo.db.crud.folder_tree import MAX_FOLDER_DEPTH  # noqa: E402
 from modulo.db.crud.schema_folder import create_folder, update_folder  # noqa: E402
 from modulo.settings import Settings  # noqa: E402
@@ -124,6 +124,14 @@ def _install_dependency_overrides(mock_session: AsyncMock) -> None:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        org_role="admin",
+    )
+    # apply-moved routes (FAR-681) resolve via get_current_tenant_user_or_api_key;
+    # both stacks share the same admin principal in these endpoint tests.
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),

@@ -50,6 +50,14 @@ rules:
         - "**/backend/src/modulo/core/watchdog/**"
         - "**/backend/src/modulo/core/library_sync/**"
         - "**/backend/src/modulo/core/reports/**"
+        # FAR-681 apply CLI: no sync pinned-egress factory exists (ssrf.py only
+        # builds pinned ASYNC transports/pools) and the click executor is sync.
+        # The base URL is the single operator-configured MODULO_URL - the same
+        # deployment the operator's credentials already target - so no
+        # validate_outbound_url call is attached (test harnesses use
+        # unresolvable fixture URLs, which fail-close DNS validation would
+        # break). NOT accepted raw egress - documented residual only.
+        - "**/backend/src/modulo/cli/apply/**"
   - id: no-unscoped-decrypt
     patterns:
       # PURE, session-less decryption. `decode_stored_secret_scoped(...)` is a

@@ -13,15 +13,20 @@ Exit-code semantics:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 import click
+import httpx
 
+from modulo.cli.apply.executor import ApplyHttpError
 from modulo.cli.apply.loader import ApplyLoadError, load_apply_file
 from modulo.cli.apply.models import ApplyConfig
 from modulo.cli.apply.plan import has_blockers
+
+_log = logging.getLogger(__name__)
 
 _ENV_URL = "MODULO_URL"
 _ENV_API_KEY = "MODULO_API_KEY"
@@ -45,21 +50,37 @@ def run_apply(
         executor.close()
 
 
+def _http_error_message(exc: ApplyHttpError) -> str:
+    """Actionable message for executor-phase HTTP failures."""
+    if exc.status_code == 401:
+        return "API key rejected: check MODULO_API_KEY (an org API key, mk_..., with operator role is required)"
+    if exc.status_code == 404:
+        target = exc.path or str(exc)
+        return f"server does not expose endpoint {target} - is it running an older version?"
+    return str(exc)
+
+
 def render_table(report: dict[str, Any]) -> str:
     """Human-friendly plan/apply report rendering."""
     verbs = {
-        "created": ("create", ""),
-        "updated": ("update", ""),
-        "blocked": ("block", " ({reason})"),
+        "created": "create",
+        "updated": "update",
+        "blocked": "block",
     }
     lines: list[str] = []
-    for status, (verb, suffix_template) in verbs.items():
-        lines.extend(
-            f"{verb} {entry['kind']} {entry['name']!r}" + ("" if suffix_template == "" else f"({entry['reason']})")
-            for entry in report.get(status, [])
-        )
+    for status, verb in verbs.items():
+        for entry in report.get(status, []):
+            line = f"{verb} {entry['kind']} {entry['name']!r}"
+            if status == "blocked":
+                line += f" ({entry['reason']})"
+            lines.append(line)
     lines.extend(f"fail {entry['kind']} {entry['name']!r}: {entry['error']}" for entry in report.get("failed", []))
     lines.extend(f"unchanged {entry['kind']} {entry['name']!r}" for entry in report.get("unchanged", []))
+    counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
+    lines.append(
+        f"summary: {counts['created']} created, {counts['updated']} updated, "
+        f"{counts['unchanged']} unchanged, {counts['blocked']} blocked, {counts['failed']} failed"
+    )
     return "\n".join(lines)
 
 
@@ -90,10 +111,18 @@ def register_apply(group: click.Group) -> None:
         default="table",
         help="Report output format",
     )
+    @click.option(
+        "--json",
+        "json_flag",
+        is_flag=True,
+        default=False,
+        help="Alias for --output json",
+    )
     def apply_cmd(
         config_path: Path,
         dry_run: bool,
         output_format: str,
+        json_flag: bool,
     ) -> None:
         """Apply a declarative config file (schemas, model backends)."""
         try:
@@ -105,10 +134,18 @@ def register_apply(group: click.Group) -> None:
         if not base_url or not api_key:
             msg = f"{_ENV_URL} and {_ENV_API_KEY} environment variables are required"
             raise click.ClickException(msg)
-        report = run_apply(config, base_url=base_url, api_key=api_key, dry_run=dry_run)
+        try:
+            report = run_apply(config, base_url=base_url, api_key=api_key, dry_run=dry_run)
+        except ApplyHttpError as exc:
+            raise click.ClickException(_http_error_message(exc)) from None
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            raise click.ClickException(f"apply failed: {exc}") from None
+        if json_flag:
+            output_format = "json"
         if output_format == "json":
             click.echo(json.dumps(report, indent=2, sort_keys=True))
         else:
             click.echo(render_table(report))
         if not dry_run and has_blockers(report):
-            raise SystemExit(1)
+            ctx = click.get_current_context()
+            ctx.exit(1)

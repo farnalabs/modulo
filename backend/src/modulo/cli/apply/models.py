@@ -15,8 +15,26 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 API_VERSION_PREFIX = "modulo.dev/v"
 API_VERSION_SUPPORTED_MAJOR = 1
 
-ENV_REF_PATTERN = re.compile(r"^\$\{env:([A-Z_][A-Z0-9_]*)\}$")
-SECRET_REF_PATTERN = re.compile(r"^secretref://\S+$")
+# \Z (not $) so a trailing-newline variant ("${env:VAR}\n") fails to match.
+ENV_REF_PATTERN = re.compile(r"\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}\Z")
+SECRET_REF_PATTERN = re.compile(r"secretref://\S+\Z")
+
+
+def parse_api_version_major(raw: str) -> int:
+    """Return the declared major version of an ``modulo.dev/v<major>`` string.
+
+    Raises ApplyConfigError on an unparseable value (the same rule
+    ``check_api_version`` applies).
+    """
+    if not isinstance(raw, str) or not raw.startswith(API_VERSION_PREFIX):
+        msg = f"api_version must start with {API_VERSION_PREFIX!r}, got {raw!r}"
+        raise ApplyConfigError(msg)
+    major_part = raw[len(API_VERSION_PREFIX) :].split(".", maxsplit=1)[0]
+    try:
+        return int(major_part)
+    except ValueError:
+        msg = f"api_version {raw!r} is not parseable"
+        raise ApplyConfigError(msg) from None
 
 
 class ApplyConfigError(ValueError):
@@ -29,15 +47,7 @@ def check_api_version(raw: str) -> None:
     Major must match the supported major exactly (hard error). Any minor
     suffix is accepted leniently.
     """
-    if not isinstance(raw, str) or not raw.startswith(API_VERSION_PREFIX):
-        msg = f"api_version must start with {API_VERSION_PREFIX!r}, got {raw!r}"
-        raise ApplyConfigError(msg)
-    major_part = raw[len(API_VERSION_PREFIX) :].split(".", maxsplit=1)[0]
-    try:
-        declared_major = int(major_part)
-    except ValueError:
-        msg = f"api_version {raw!r} is not parseable"
-        raise ApplyConfigError(msg) from None
+    declared_major = parse_api_version_major(raw)
     if declared_major != API_VERSION_SUPPORTED_MAJOR:
         msg = (
             "api_version major mismatch: config declares modulo.dev/v"
@@ -90,9 +100,10 @@ class ModelBackendEntity(BaseModel):
     """A declarative model backend (mirrors ModelBackendCreate).
 
     ``api_key`` is write-only and MUST be a reference:
-    ``${env:VAR}`` (resolved client-side at apply time) or ``secretref://<key>``
-    (passed through unresolved to the SecretsBackend store). Inline secret
-    values are forbidden.
+    ``${env:VAR}`` (resolved client-side at apply time). ``secretref://<key>``
+    values parse here but are BLOCKED at plan time by this slice — server-side
+    resolution does not exist yet, so passing one through would store a
+    non-functional literal. Inline secret values are forbidden.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -109,10 +120,10 @@ class ModelBackendEntity(BaseModel):
     @field_validator("api_key")
     @classmethod
     def _api_key_must_be_ref(cls, value: str) -> str:
-        if not ENV_REF_PATTERN.match(value) and not SECRET_REF_PATTERN.match(value):
+        if not ENV_REF_PATTERN.fullmatch(value) and not SECRET_REF_PATTERN.fullmatch(value):
             msg = (
-                "api_key must be a reference (${env:VAR_NAME} or "
-                f"secretref://<key>), got inline value {value[:4]!r}... "
+                "api_key must be a reference (${env:VAR_NAME} — letters, digits, "
+                "underscores — or secretref://<key>); "
                 "inline secret values are forbidden"
             )
             raise ValueError(msg)
@@ -179,11 +190,14 @@ class ApplyConfig(BaseModel):
     def merge_entities(self, other: ApplyConfig) -> ApplyConfig:
         """Combine entities from another document (for multi-doc YAML).
 
-        Raises ApplyConfigError on api_version major mismatch or duplicate
-        entity names of the same kind.
+        Raises ApplyConfigError on an api_version MAJOR mismatch (minors are
+        compared leniently — "modulo.dev/v1" and "modulo.dev/v1.3" merge) or
+        duplicate entity names of the same kind.
         """
-        if self.api_version != other.api_version:
-            msg = f"api_version differs across YAML documents: {self.api_version!r} vs {other.api_version!r}"
+        self_major = parse_api_version_major(self.api_version)
+        other_major = parse_api_version_major(other.api_version)
+        if self_major != other_major:
+            msg = f"api_version major differs across YAML documents: {self.api_version!r} vs {other.api_version!r}"
             raise ApplyConfigError(msg)
         merged_entities = EntitySet(
             schemas=[*self.entities.schemas, *other.entities.schemas],

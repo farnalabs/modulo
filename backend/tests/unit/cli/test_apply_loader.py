@@ -67,6 +67,11 @@ class TestMultiDoc:
         with pytest.raises(ApplyLoadError):
             parse_apply_documents(text)
 
+    def test_between_documents_minor_suffix_merges(self) -> None:
+        text = "---\napi_version: modulo.dev/v1\nentities: {}\n---\napi_version: modulo.dev/v1.3\nentities: {}\n"
+        config = parse_apply_documents(text)
+        assert config.api_version == "modulo.dev/v1"
+
     def test_duplicate_name_across_documents_rejected(self) -> None:
         text = (
             "---\n"

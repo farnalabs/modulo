@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import click
+import httpx
 import pytest
 import respx
 from click.testing import CliRunner
@@ -120,9 +121,10 @@ class TestBlockedExitCode:
         respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
             json={"items": [], "total": 0, "page": 1, "page_size": 100}
         )
-        respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        respx.get(
+            "https://api.test/api/v1/model-backends",
+            params={"page": "1", "page_size": "100", "include_in_dev": "true"},
+        ).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         backend_post = respx.post("https://api.test/api/v1/model-backends")
         schema_post = respx.post("https://api.test/api/v1/schemas")
         group = click.Group("test")
@@ -134,3 +136,99 @@ class TestBlockedExitCode:
         assert backend_post.call_count == 0
         assert schema_post.call_count == 0
         assert "unresolved" in result.output
+
+
+class TestOutputFormats:
+    @respx.mock
+    def test_json_alias_flag(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """--json is an alias for --output json."""
+        monkeypatch.setenv("MODULO_URL", "https://api.test")
+        monkeypatch.setenv("MODULO_API_KEY", "key")
+        monkeypatch.setenv("SK", "v")
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            json={"items": [], "total": 0, "page": 1, "page_size": 100}
+        )
+        respx.get(
+            "https://api.test/api/v1/model-backends",
+            params={"page": "1", "page_size": "100", "include_in_dev": "true"},
+        ).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
+        group = click.Group("test")
+        register_apply(group)
+        path = _config_file(tmp_path)
+        result = runner.invoke(group, ["apply", "-f", str(path), "--dry-run", "--json"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.output)
+        assert parsed["dry_run"] is True
+
+    def test_empty_entities_end_to_end(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty-entities config applies cleanly with just the summary line."""
+        monkeypatch.setenv("MODULO_URL", "https://api.test")
+        monkeypatch.setenv("MODULO_API_KEY", "key")
+        group = click.Group("test")
+        register_apply(group)
+        path = tmp_path / "config.yaml"
+        path.write_text("api_version: modulo.dev/v1\nentities: {}\n", encoding="utf-8")
+        result = runner.invoke(group, ["apply", "-f", str(path)])
+        assert result.exit_code == 0, result.output
+        assert "summary:" in result.output
+        assert "0 created, 0 updated, 0 unchanged, 0 blocked, 0 failed" in result.output
+
+
+class TestExecutorPhaseErrors:
+    """Fetch/executor-phase HTTP failures surface as ClickExceptions, not tracebacks."""
+
+    @respx.mock
+    def test_401_becomes_click_exception_with_rejected_message(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MODULO_URL", "https://api.test")
+        monkeypatch.setenv("MODULO_API_KEY", "wrong-key")
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            status_code=401, json={"detail": "Not authenticated"}
+        )
+        group = click.Group("test")
+        register_apply(group)
+        path = _config_file(tmp_path)
+        result = runner.invoke(group, ["apply", "-f", str(path)])
+        assert result.exit_code == 1
+        assert "API key rejected" in result.output
+
+    @respx.mock
+    def test_404_becomes_older_version_message(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MODULO_URL", "https://api.test")
+        monkeypatch.setenv("MODULO_API_KEY", "key")
+        respx.get(
+            "https://api.test/api/v1/model-backends",
+            params={"page": "1", "page_size": "100", "include_in_dev": "true"},
+        ).respond(json={"items": [], "total": 0})
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
+            status_code=404, json={"detail": "Not Found"}
+        )
+        group = click.Group("test")
+        register_apply(group)
+        path = _config_file(tmp_path)
+        result = runner.invoke(group, ["apply", "-f", str(path)])
+        assert result.exit_code == 1
+        assert "server does not expose endpoint /schemas" in result.output
+        assert "older version" in result.output
+
+    @respx.mock
+    def test_network_error_becomes_click_exception(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MODULO_URL", "https://api.test")
+        monkeypatch.setenv("MODULO_API_KEY", "key")
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).mock(
+            side_effect=httpx.ConnectError("connection refused")
+        )
+        group = click.Group("test")
+        register_apply(group)
+        path = _config_file(tmp_path)
+        result = runner.invoke(group, ["apply", "-f", str(path)])
+        assert result.exit_code == 1
+        assert "apply failed" in result.output
+        assert "connection refused" in result.output
