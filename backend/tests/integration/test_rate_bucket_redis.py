@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from urllib.parse import urlparse
 
 import pytest
 import redis.asyncio as aioredis
@@ -41,23 +42,59 @@ def _expected_ttl_ms(rate: float, burst: int) -> int:
     return int(max(60.0, (burst / rate if rate > 0 else 60.0) * 2) * 1000)
 
 
+def _worker_redis_db() -> int:
+    """Isolate each xdist worker in its own logical Redis DB.
+
+    deploy.yml runs the integration suite with ``-n 2`` against one shared
+    Redis. The ``redis_client`` fixture flushes its database in setup and
+    teardown; without per-worker DB isolation a worker's ``flushdb`` wipes
+    another worker's in-flight keys mid-test (the cross-worker pollution the
+    per-test ``redis_prefix`` uuid does not, by itself, prevent). Map
+    ``$PYTEST_XDIST_WORKER`` (``gw0`` -> 0, ``gw1`` -> 1, ...) to a logical DB
+    so each worker only ever touches its own DB. When running without xdist the
+    variable is unset and we fall back to DB 0.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if not worker or not worker.startswith("gw"):
+        return 0
+    try:
+        return int(worker[len("gw") :])
+    except ValueError:
+        return 0
+
+
+def _redis_url_for_worker() -> str:
+    """Append the per-worker logical DB to ``REDIS_URL`` when not already set."""
+    base = REDIS_URL
+    parsed = urlparse(base)
+    if parsed.path and parsed.path != "/":
+        return base
+    return f"{base}/{_worker_redis_db()}"
+
+
 @pytest.fixture
 def redis_prefix() -> str:
-    """A per-test key prefix so concurrent xdist workers never share buckets.
+    """A per-test key prefix so concurrent tests never share buckets.
 
-    The integration suite runs with ``-n 2`` against one shared Redis. Without a
-    unique prefix, two workers (or the fixture's ``flushdb`` teardown) race on the
-    same ``itest:`` keys and the Lua script reads a half-written / wiped bucket,
-    surfacing as ``SharedBudgetUnavailableError: ... was corrupt`` instead of a
-    real bug. A uuid prefix fully isolates each test's keys.
+    The integration suite runs with ``-n 2`` against one shared Redis. Each xdist
+    worker is already isolated in its own logical DB (see ``_worker_redis_db``),
+    so this uuid prefix adds a second layer: it distinguishes keys written by
+    *different tests* within the same worker, so a leftover/raced key from another
+    test can never be read as this test's bucket. A uuid prefix fully isolates
+    each test's keys.
     """
     return f"itest-{uuid.uuid4().hex}:"
 
 
 @pytest.fixture
 async def redis_client() -> aioredis.Redis:
-    """A real Redis client; the test is skipped if Redis is unreachable."""
-    client = aioredis.from_url(REDIS_URL, decode_responses=False)
+    """A real Redis client; the test is skipped if Redis is unreachable.
+
+    Each xdist worker connects to its own logical DB (see
+    ``_redis_url_for_worker``), so this fixture's ``flushdb`` in setup and
+    teardown can no longer wipe another worker's in-flight keys mid-test.
+    """
+    client = aioredis.from_url(_redis_url_for_worker(), decode_responses=False)
     try:
         await client.ping()
     except Exception as exc:  # connectivity probe, not test logic
@@ -93,6 +130,7 @@ async def test_real_lua_no_lost_token_race_under_concurrency(
 
 async def test_real_lua_first_call_on_fresh_bucket_grants(
     redis_client: aioredis.Redis,
+    redis_prefix: str,
 ) -> None:
     """A never-seen destination starts at FULL burst and grants (not fail-closed).
 
@@ -108,15 +146,16 @@ async def test_real_lua_first_call_on_fresh_bucket_grants(
     so it cannot fail on this class of defect — only a real server can, and the
     guard had no coverage at all when it shipped.
     """
-    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=3, key_prefix="itest:")
+    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=3, key_prefix=redis_prefix)
     assert await bucket.consume("brand-new", tokens=1.0) is True
-    stored = await redis_client.hget("itest:brand-new", "tokens")
+    stored = await redis_client.hget(f"{redis_prefix}brand-new", "tokens")
     assert stored is not None  # the granting path must persist the bucket
     assert float(stored) == pytest.approx(2.0, abs=0.01)  # burst - cost, no refill at 1e-4/s
 
 
 async def test_real_lua_corrupt_stored_value_fails_closed(
     redis_client: aioredis.Redis,
+    redis_prefix: str,
 ) -> None:
     """A PRESENT-but-unparseable bucket fails closed instead of re-bursting.
 
@@ -126,8 +165,8 @@ async def test_real_lua_corrupt_stored_value_fails_closed(
     exists to prevent. Pinning both halves stops a future rewrite from trading
     one failure mode for the other.
     """
-    bucket = RedisTokenBucket(redis_client, rate=1.0, burst=5, key_prefix="itest:")
-    await redis_client.hset("itest:corrupt", mapping={"tokens": "garbage", "ts": "1"})
+    bucket = RedisTokenBucket(redis_client, rate=1.0, burst=5, key_prefix=redis_prefix)
+    await redis_client.hset(f"{redis_prefix}corrupt", mapping={"tokens": "garbage", "ts": "1"})
     with pytest.raises(SharedBudgetUnavailableError):
         await bucket.consume("corrupt", tokens=1.0)
 
