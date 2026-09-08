@@ -165,8 +165,10 @@ def _run_state(*, claim_lease: str) -> dict:
 def _assert_marker_acquire_executed(executed: list[str]) -> None:
     # The acquire is the fenced claim_count read (D5) — it runs on EVERY DB path,
     # including the denied case where the UPDATE (only fired on a matching row)
-    # is never reached.
-    assert any("claim_count FROM runs" in s and "claim_token=:tok" in s for s in executed)
+    # is never reached. The D8 capacity gate (_sandbox_acquire_dispatch_marker ->
+    # acquire_runner_dispatch_slot) embeds the same fenced SELECT (spaces around
+    # '=', so tolerate both spellings of claim_token=:tok).
+    assert any("claim_count FROM runs" in s and "claim_token" in s and ":tok" in s for s in executed)
 
 
 async def _run_fence(node_fn, create_mock) -> dict:
