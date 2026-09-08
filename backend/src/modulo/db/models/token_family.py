@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Uuid, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -12,7 +12,9 @@ from modulo.db.models.base import Base
 class TokenFamily(Base):
     __tablename__ = "token_families"
 
-    family_id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    family_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         ForeignKey("accounts.id", ondelete="CASCADE"),

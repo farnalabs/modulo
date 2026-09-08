@@ -800,12 +800,16 @@ def test_single_migration_head() -> None:
     chaining_off_0191 = [p for p in revisions if parents[p] == "0191_bundled_runner_seed_backfill"]
     assert [_basename(p) for p in chaining_off_0191] == ["0192_run_node_outputs.py"]
     # 0193_run_node_outputs_sweep_index (FAR-583 qa iteration 2, the sweep's
-    # partial index) chains off 0192 and is the single head.
+    # partial index) chains off 0192.
     chaining_off_0192 = [p for p in revisions if parents[p] == "0192_run_node_outputs"]
     assert [_basename(p) for p in chaining_off_0192] == ["0193_run_node_outputs_sweep_index.py"]
-    # Nothing chains off 0193 -> it is the single head.
+    # This PR's 0194_uuid_pk_server_defaults (FAR-718) chains off 0193 and is
+    # the single head.
     chaining_off_0193 = [p for p in revisions if parents[p] == "0193_run_node_outputs_sweep_index"]
-    assert chaining_off_0193 == []
+    assert [_basename(p) for p in chaining_off_0193] == ["0194_uuid_pk_server_defaults.py"]
+    # Nothing chains off 0194 -> it is the single head.
+    chaining_off_0194 = [p for p in revisions if parents[p] == "0194_uuid_pk_server_defaults"]
+    assert chaining_off_0194 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
