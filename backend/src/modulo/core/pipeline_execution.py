@@ -651,6 +651,39 @@ async def _record_fact_for_terminal_failed_run(aengine: AsyncEngine, run_id: str
     await record_terminal_failed_fact(aengine, run_id, org_id)
 
 
+def _watchdog_retry_enabled_for_job(job: Any) -> bool:
+    """FAR-690/FAR-693: watchdog kills re-dispatch on the execute path only."""
+    from modulo.core.pipeline_engine.watchdog_retry import watchdog_retry_enabled_for_job
+
+    return watchdog_retry_enabled_for_job(job)
+
+
+async def _maybe_watchdog_retry(
+    retry_hook: Callable[[str, str], Awaitable[Any]] | None,
+    run_id: str,
+    *,
+    final_status: str,
+    error_code: str,
+) -> bool:
+    """Consult the shared watchdog-retry hook (FAR-690); fail closed.
+
+    Returns ``True`` ONLY when the hook re-dispatched the run (fenced
+    pending-reset performed; the caller must NOT terminal-fail — the wrapper
+    re-raises ``RunRetryPolicyError`` so SAQ re-dispatches the job). Any hook
+    failure stands down to today's terminal fail: a retry decision must never
+    prevent a run from reaching a terminal state.
+    """
+    if retry_hook is None:
+        return False
+    try:
+        return bool(await retry_hook(final_status, error_code))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("pipeline_execution.watchdog_retry_hook_failed run=%s", run_id, exc_info=True)
+        return False
+
+
 async def zombie_watchdog(
     aeng: AsyncEngine,
     run_id: str,
@@ -775,6 +808,7 @@ async def _fail_overdue_node(
     exec_task: asyncio.Task[Any],
     run_done_event: asyncio.Event,
     stall_requested: asyncio.Event | None,
+    retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
 ) -> None:
     """Fail the most-overdue in-flight node that blew its deadline.
 
@@ -783,6 +817,14 @@ async def _fail_overdue_node(
     terminal-fails the run with ``node_deadline_exceeded``. Does nothing when
     the run finished or the executor finished concurrently (stands down so it
     never double-fails an already-finished run).
+
+    FAR-690: when *retry_hook* is wired (execute path only), the kill first
+    consults the run's retry_policy through the shared watchdog-retry
+    mechanism (``pipeline_engine.watchdog_retry``) — a ``timeout``-covered
+    policy with budget remaining re-dispatches the run (fenced pending-reset
+    + ``RunRetryPolicyError`` re-raise → SAQ job retry) instead of
+    terminal-failing it. No coverage / exhausted budget / any hook failure
+    keeps today's unconditional terminal fail.
     """
     exceeded = [nid for nid, (dl, _to) in node_deadlines.items() if dl <= time.monotonic()]
     exceeded.sort(key=lambda nid: node_deadlines[nid][0])
@@ -800,6 +842,10 @@ async def _fail_overdue_node(
     exec_task.cancel()
     if stall_requested is not None:
         stall_requested.set()
+    if await _maybe_watchdog_retry(
+        retry_hook, run_id, final_status="failed", error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE
+    ):
+        return
     await fail_run_terminal(
         aeng,
         run_id,
@@ -824,6 +870,7 @@ async def node_deadline_watchdog(
     run_done_event: asyncio.Event,
     node_deadlines: dict[str, tuple[float, int]],
     default_timeout: int | None = None,
+    retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
 ) -> None:
     """Fail a node that does not COMPLETE within its configured ``timeout_seconds``.
 
@@ -898,6 +945,7 @@ async def node_deadline_watchdog(
             node_completed_event=node_completed_event,
             run_done_event=run_done_event,
             node_deadlines=node_deadlines,
+            retry_hook=retry_hook,
         ):
             return
 
@@ -913,6 +961,7 @@ async def _node_deadline_step(
     node_completed_event: asyncio.Event,
     run_done_event: asyncio.Event,
     node_deadlines: dict[str, tuple[float, int]],
+    retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
 ) -> bool:
     """Advance the node-deadline watchdog by one step; ``False`` to stand down.
 
@@ -927,7 +976,16 @@ async def _node_deadline_step(
         soonest_deadline = min(dl for dl, _to in node_deadlines.values())
         remaining = soonest_deadline - time.monotonic()
         if remaining <= 0:
-            await _fail_overdue_node(aeng, run_id, org_id, node_deadlines, exec_task, run_done_event, stall_requested)
+            await _fail_overdue_node(
+                aeng,
+                run_id,
+                org_id,
+                node_deadlines,
+                exec_task,
+                run_done_event,
+                stall_requested,
+                retry_hook=retry_hook,
+            )
             return False
         # Wait until a node completes, a new node starts, the run finishes, the
         # executor is cancelled, or the soonest deadline elapses — whichever
@@ -1063,6 +1121,23 @@ async def run_executor_with_watchdog(
         return await execute_fn()
 
     exec_task = asyncio.create_task(_execute(), name=f"saq-exec-{rid}")
+    # FAR-690: wire the absolute node-deadline watchdog kill into the run-level
+    # retry decision. The hook reuses the live executor's own fenced-reset /
+    # attempt-state helpers and the shared ``_retry_after_policy`` decision
+    # (pipeline_engine.watchdog_retry); when it re-dispatches,
+    # ``_resolve_cancel_outcome`` re-raises ``RunRetryPolicyError`` so SAQ
+    # retries the job exactly like the in-execute retry path. Resume jobs are
+    # excluded (their claim cannot re-claim a pending run — see
+    # watchdog_retry). The hook fails CLOSED to the terminal fail, so this can
+    # never prevent a run from reaching a terminal state.
+    watchdog_retry_hook: Callable[[str, str], Awaitable[Any]] | None = None
+    watchdog_retry_outcome: Any = None
+    if _watchdog_retry_enabled_for_job(job):
+        from modulo.core.pipeline_engine.watchdog_retry import create_watchdog_retry_hook
+
+        watchdog_retry_hook, watchdog_retry_outcome = create_watchdog_retry_hook(
+            aeng, rid, uuid.UUID(org_id), executor, exec_task=exec_task
+        )
     watchdog_task = asyncio.create_task(
         zombie_watchdog(
             aeng,
@@ -1098,6 +1173,7 @@ async def run_executor_with_watchdog(
             run_done_event=run_done_event,
             node_deadlines=node_deadlines,
             default_timeout=default_timeout,
+            retry_hook=watchdog_retry_hook,
         ),
         name=f"saq-node-deadline-watchdog-{rid}",
     )
@@ -1145,6 +1221,7 @@ async def run_executor_with_watchdog(
         stall_requested=stall_requested,
         health_failed=health_failed,
         superseded=superseded,
+        watchdog_retry_outcome=watchdog_retry_outcome,
     )
 
     if exec_exc is not None:
@@ -1187,6 +1264,7 @@ async def _await_executor_task(
     stall_requested: asyncio.Event,
     health_failed: asyncio.Event,
     superseded: asyncio.Event,
+    watchdog_retry_outcome: Any = None,
 ) -> tuple[Exception | None, Any]:
     """Await the executor task and classify its outcome.
 
@@ -1196,8 +1274,9 @@ async def _await_executor_task(
     classified via :func:`_resolve_cancel_outcome` (which re-raises for a
     genuine worker-shutdown cancellation) and returns ``(None, None)`` so the
     caller falls back to the run row. A transient ``NodeCancelledError`` is
-    re-raised so SAQ retries the job. The ``finally`` cancels and drains every
-    helper task before the outcome is resolved.
+    re-raised so SAQ retries the job — including a watchdog-initiated
+    ``RunRetryPolicyError`` re-dispatch (FAR-690). The ``finally``
+    cancels and drains every helper task before the outcome is resolved.
     """
     try:
         result = await exec_task
@@ -1222,6 +1301,7 @@ async def _await_executor_task(
             org_id=org_id,
             claim_token=claim_token,
             rid=rid,
+            watchdog_retry_outcome=watchdog_retry_outcome,
         )
         return None, None
     except NodeCancelledError:
@@ -1295,6 +1375,7 @@ async def _resolve_cancel_outcome(
     org_id: str,
     claim_token: str | None,
     rid: uuid.UUID,
+    watchdog_retry_outcome: Any = None,
 ) -> None:
     """Classify a cancelled execution: watchdog / heartbeat / supersession.
 
@@ -1309,6 +1390,13 @@ async def _resolve_cancel_outcome(
     merely sleeping out its setup grace (the unclassified worker-shutdown
     path, where it can never write) no longer delays the re-raise by its full
     remaining grace.
+
+    FAR-690: when a watchdog kill consulted the run-level retry
+    policy and the hook re-dispatched the run (fenced pending-reset done),
+    re-raise ``RunRetryPolicyError`` so SAQ retries the job — the SAME
+    re-enqueue the in-execute retry path uses. Never double-fails: the hook
+    only sets the box after a CONFIRMED fenced reset, and the terminal-fail
+    path is skipped in that case.
     """
     if watchdog_task is not None and not watchdog_task.done():
         await _await_watchdog_bounded(
@@ -1330,6 +1418,14 @@ async def _resolve_cancel_outcome(
         )
     if stall_requested.is_set():
         _log.warning("run_executor_with_watchdog: execution cancelled by node/executor watchdog for run %s", rid)
+        # FAR-690: the watchdog hook re-dispatched the run (fenced
+        # pending-reset CONFIRMED, backoff slept) — re-raise the SAME transient
+        # exception the in-execute retry path raises so SAQ re-dispatches the
+        # job and the pending run is re-claimed.
+        if watchdog_retry_outcome is not None and watchdog_retry_outcome.requested:
+            from modulo.core.pipeline_engine.executor import RunRetryPolicyError
+
+            raise RunRetryPolicyError(watchdog_retry_outcome.final_status, watchdog_retry_outcome.retry_budget)
     elif health_failed.is_set():
         _log.error(
             "run_executor_with_watchdog: heartbeat lost for run %s — killing sandbox and failing run",

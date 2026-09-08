@@ -424,6 +424,19 @@ def _retry_after_policy(
     is excluded from ``"failure"`` retries — while TRANSIENT ``node_cancelled``
     (no hang marker) stays retryable via the existing NodeCancelledError path.
 
+    Same-shaped limitation for the FAR-369 deadline alias above: the absolute
+    node-deadline watchdog terminal-fails the run DIRECTLY (``fail_run_terminal``
+    with ``node_deadline_exceeded``) and cancels ``execute()`` — BUT (FAR-690)
+    the kill now consults this decision first through the shared
+    ``pipeline_engine.watchdog_retry`` hook: with final_status ``failed`` and
+    the raw ``node_deadline_exceeded`` code, a ``"timeout"``-covered policy
+    with budget remaining re-dispatches the run through the SAME fenced
+    pending-reset + ``RunRetryPolicyError`` re-raise the in-execute path uses;
+    no coverage or an exhausted budget keeps the unconditional terminal fail.
+    The ``"timeout"`` alias above therefore covers both the in-execute outcome
+    spellings and the raw watchdog code (both resolve through
+    ``map_legacy_code``).
+
     Known limitation of the ``"stall"`` event: it covers the **node-idle stall**
     path only — a node returns a stalled output dict (``stall_reason``) in
     ``_stream_graph``, which reaches this decision. The **executor-level
@@ -432,15 +445,6 @@ def _retry_after_policy(
     stream block before this decision runs) is NOT retried. See
     ``docs/troubleshooting.md`` (``executor_stalled`` row) — the zombie watchdog's
     terminal fail is documented as "never re-dispatched".
-
-    Same-shaped limitation for the FAR-369 deadline alias above: the absolute
-    node-deadline watchdog terminal-fails the run DIRECTLY (``fail_run_terminal``
-    with ``node_deadline_exceeded``) and cancels ``execute()``, so a watchdog
-    kill currently bypasses this decision exactly like the zombie stall. The
-    ``"timeout"`` alias still matters: any deadline outcome that DOES reach this
-    decision (raw watchdog spelling via the generic catch, dotted registry
-    spelling, or a future wiring of watchdog-killed runs into the retry
-    decision) now matches the ``"timeout"`` event instead of falling through.
 
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.

@@ -23,6 +23,7 @@ from modulo.core.pipeline_engine.executor import (
     _graph_is_idempotent,
     _retry_after_policy,
     _retry_backoff_seconds,
+    _timeout_event_matches,
 )
 
 
@@ -1649,3 +1650,24 @@ def _capture_executor_logs(level: int):
     finally:
         logger.removeHandler(handler)
         logger.setLevel(old_level)
+
+
+# ---------------------------------------------------------------------------
+# FAR-690 pin — the raw watchdog code resolves through the shared alias table
+# into the timeout event, so the watchdog-retry hook
+# (pipeline_engine.watchdog_retry) matches the same event an in-execute
+# deadline outcome would match.
+# ---------------------------------------------------------------------------
+
+
+def test_watchdog_deadline_code_maps_to_timeout_match():
+    """FAR-690 pin: the raw watchdog code ``node_deadline_exceeded`` (exactly
+    what the deadline watchdog writes) resolves through ``map_legacy_code`` to
+    ``node.deadline_exceeded`` and matches the ``timeout`` event — the chain
+    the shared watchdog-retry hook relies on."""
+    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+    mapped = map_legacy_code("node_deadline_exceeded")
+    assert mapped == "node.deadline_exceeded"
+    assert _timeout_event_matches({"timeout"}, "node_deadline_exceeded", mapped) is True
+    assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
