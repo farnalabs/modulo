@@ -120,19 +120,10 @@ async def tier_scoped_session(
             ),
             {"id": str(org_id), "name": "Tier Test Org", "slug": f"tier-{org_id.hex[:8]}"},
         )
-        # The ModelBackend.account_id is an FK to accounts.id, so the reused
-        # ``test_user`` must exist inside this isolated org too.
-        await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
-            ),
-            {
-                "id": str(test_user),
-                "email": f"tier-{test_user.hex[:8]}@test.local",
-                "name": "Tier Test User",
-            },
-        )
+        # The ModelBackend.account_id is an FK to accounts.id. The reused
+        # ``test_user`` account already exists globally (committed by the
+        # session-scoped ``test_user`` fixture), so we only attach it to this
+        # isolated org via org_memberships below rather than re-inserting it.
         await conn.execute(
             text(
                 "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
