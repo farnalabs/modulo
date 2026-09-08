@@ -23,6 +23,7 @@ from modulo.db.crud.template import (
     list_templates,
 )
 from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_TEMPLATES_LIST_TEMPLATES_ENDPOINT = "templates.list_templates_endpoint"
@@ -130,6 +131,92 @@ async def list_templates_endpoint(
         raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
 
 
+def _allocate_template_agent_ids(agent_configs: list[dict[str, Any]]) -> dict[int, uuid.UUID]:
+    """One fresh agent id per template agent config, keyed by config index."""
+    agent_ids: dict[int, uuid.UUID] = {}
+    for idx, _agent_cfg in enumerate(agent_configs):
+        agent_ids[idx] = uuid.uuid4()
+    return agent_ids
+
+
+def _resolve_template_nodes(
+    graph_nodes: list[dict[str, Any]],
+    agent_configs: list[dict[str, Any]],
+    agent_ids: dict[int, uuid.UUID],
+) -> list[dict[str, Any]]:
+    """Resolve template graph nodes to concrete node dicts.
+
+    A node with a valid ``agent_index`` becomes an agent node bound to the
+    freshly allocated agent id; anything else becomes a manual step.
+    """
+    resolved_nodes: list[dict[str, Any]] = []
+    for node in graph_nodes:
+        agent_idx = node.get("agent_index", -1)
+        resolved_id_str = str(uuid.uuid4())
+
+        if agent_idx >= 0 and agent_idx in agent_ids:
+            resolved_nodes.append(
+                {
+                    "id": resolved_id_str,
+                    "node_type": node.get("node_type", "agent"),
+                    "agent_id": str(agent_ids[agent_idx]),
+                    "label": node.get("label", agent_configs[agent_idx].get("name", "")),
+                    "position": node.get("position", {"x": 100, "y": 100}),
+                }
+            )
+        else:
+            resolved_nodes.append(
+                {
+                    "id": resolved_id_str,
+                    "node_type": node.get("node_type", "manual"),
+                    "label": node.get("label", "Manual Step"),
+                    "position": node.get("position", {"x": 100, "y": 100}),
+                }
+            )
+    return resolved_nodes
+
+
+async def _persist_template_edges(
+    session: AsyncSession,
+    edges: list[dict[str, Any]],
+    graph_nodes: list[dict[str, Any]],
+    resolved_nodes: list[dict[str, Any]],
+    pipeline_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+) -> list[Any]:
+    """Create PipelineEdge rows for the template's edges; flush and return them.
+
+    Edges whose endpoints don't map to a resolved node id are skipped. The
+    flush runs inside the caller's transaction.
+    """
+    persisted_edges: list[PipelineEdge] = []
+
+    source_map = {n.get("id", str(i)): resolved_nodes[i]["id"] for i, n in enumerate(graph_nodes)}
+
+    for edge in edges:
+        source_id = source_map.get(edge.get("source_node_id", ""))
+        target_id = source_map.get(edge.get("target_node_id", ""))
+        if source_id is None or target_id is None:
+            continue
+        pe = PipelineEdge(
+            id=uuid.uuid4(),
+            organisation_id=organisation_id,
+            pipeline_id=pipeline_id,
+            source_node_id=uuid.UUID(source_id),
+            target_node_id=uuid.UUID(target_id),
+            edge_type=edge.get("edge_type", "normal"),
+            condition_expression=edge.get("condition_expression"),
+            hitl_gate_config=edge.get("hitl_gate_config"),
+            source_port=edge.get("source_port", "out"),
+            target_port=edge.get("target_port", "in"),
+        )
+        session.add(pe)
+        persisted_edges.append(pe)
+
+    await session.flush()
+    return persisted_edges
+
+
 @router.post(
     "/pipelines/from-template/{template_id}",
     status_code=status.HTTP_201_CREATED,
@@ -156,14 +243,10 @@ async def create_pipeline_from_template_endpoint(
         graph_nodes: list[dict[str, Any]] = content.get("graph_nodes", [])
         edges: list[dict[str, Any]] = content.get("edges", [])
 
-        agent_ids: dict[int, uuid.UUID] = {}
+        agent_ids = _allocate_template_agent_ids(agent_configs)
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-
-            for idx, _agent_cfg in enumerate(agent_configs):
-                agent_id = uuid.uuid4()
-                agent_ids[idx] = agent_id
 
             pipeline = await create_pipeline(
                 session,
@@ -173,60 +256,17 @@ async def create_pipeline_from_template_endpoint(
                 description=template.description or f"Created from template: {template.name}",
             )
 
-            resolved_nodes: list[dict[str, Any]] = []
-            for node in graph_nodes:
-                agent_idx = node.get("agent_index", -1)
-                resolved_id_str = str(uuid.uuid4())
-
-                if agent_idx >= 0 and agent_idx in agent_ids:
-                    resolved_nodes.append(
-                        {
-                            "id": resolved_id_str,
-                            "node_type": node.get("node_type", "agent"),
-                            "agent_id": str(agent_ids[agent_idx]),
-                            "label": node.get("label", agent_configs[agent_idx].get("name", "")),
-                            "position": node.get("position", {"x": 100, "y": 100}),
-                        }
-                    )
-                else:
-                    resolved_nodes.append(
-                        {
-                            "id": resolved_id_str,
-                            "node_type": node.get("node_type", "manual"),
-                            "label": node.get("label", "Manual Step"),
-                            "position": node.get("position", {"x": 100, "y": 100}),
-                        }
-                    )
-
+            resolved_nodes = _resolve_template_nodes(graph_nodes, agent_configs, agent_ids)
             pipeline.graph_nodes_json = resolved_nodes
 
-            from modulo.db.models.pipeline_edge import PipelineEdge
-
-            persisted_edges: list[PipelineEdge] = []
-
-            source_map = {n.get("id", str(i)): resolved_nodes[i]["id"] for i, n in enumerate(graph_nodes)}
-
-            for edge in edges:
-                source_id = source_map.get(edge.get("source_node_id", ""))
-                target_id = source_map.get(edge.get("target_node_id", ""))
-                if source_id is None or target_id is None:
-                    continue
-                pe = PipelineEdge(
-                    id=uuid.uuid4(),
-                    organisation_id=principal.organisation_id,
-                    pipeline_id=pipeline.id,
-                    source_node_id=uuid.UUID(source_id),
-                    target_node_id=uuid.UUID(target_id),
-                    edge_type=edge.get("edge_type", "normal"),
-                    condition_expression=edge.get("condition_expression"),
-                    hitl_gate_config=edge.get("hitl_gate_config"),
-                    source_port=edge.get("source_port", "out"),
-                    target_port=edge.get("target_port", "in"),
-                )
-                session.add(pe)
-                persisted_edges.append(pe)
-
-            await session.flush()
+            persisted_edges = await _persist_template_edges(
+                session,
+                edges,
+                graph_nodes,
+                resolved_nodes,
+                pipeline.id,
+                principal.organisation_id,
+            )
 
         return FromTemplateResponse(
             pipeline_id=pipeline.id,

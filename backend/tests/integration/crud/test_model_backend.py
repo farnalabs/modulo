@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.auth.jwt import create_access_token
 from modulo.db.crud.model_backend import (
@@ -100,81 +100,127 @@ async def test_delete_model_backend_unknown_returns_false(rls_session: AsyncSess
     assert await delete_model_backend(rls_session, uuid.uuid4()) is False
 
 
+@pytest_asyncio.fixture
+async def tier_scoped_session(
+    migrated_db_url: str, db_engine: AsyncEngine, test_user: uuid.UUID
+) -> AsyncGenerator[tuple[AsyncSession, uuid.UUID], None]:
+    """Isolated org + rolled-back RLS session for exact-count tier assertions.
+
+    The shared ``test_org`` is touched by many integration tests across the
+    suite, so its model-backend count is not deterministic. Each tier-filtering
+    test gets its own fresh org (committed by the container superuser, which
+    bypasses RLS) and a rolled-back RLS session scoped to it, so the exact
+    org-wide counts asserted below can never be polluted by other tests.
+    """
+    org_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {"id": str(org_id), "name": "Tier Test Org", "slug": f"tier-{org_id.hex[:8]}"},
+        )
+        # The ModelBackend.account_id is an FK to accounts.id. The reused
+        # ``test_user`` account already exists globally (committed by the
+        # session-scoped ``test_user`` fixture), so we only attach it to this
+        # isolated org via org_memberships below rather than re-inserting it.
+        await conn.execute(
+            text(
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                "VALUES (:mid, :aid, :oid, 'admin')",
+            ),
+            {"mid": str(uuid.uuid4()), "aid": str(test_user), "oid": str(org_id)},
+        )
+    engine = create_async_engine(migrated_db_url, echo=False)
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            # Begin a transaction before set_rls_org (it guards on an active tx).
+            await session.execute(text("SELECT 1"))
+            from modulo.db.rls import set_rls_org
+
+            await set_rls_org(session, org_id)
+            yield session, org_id
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
 class TestListModelBackendsTierFiltering:
     """Server-side tier filtering for list_model_backends."""
 
     async def _create_with_tier(
         self,
-        rls_session: AsyncSession,
-        test_org: uuid.UUID,
+        session: AsyncSession,
+        org_id: uuid.UUID,
         test_user: uuid.UUID,
         tier: str,
         suffix: str,
     ) -> None:
         await create_model_backend(
-            rls_session,
+            session,
             tier=tier,
-            **_mb_kwargs(test_org, test_user, suffix=suffix),
+            **_mb_kwargs(org_id, test_user, suffix=suffix),
         )
 
     async def test_default_excludes_in_dev(
         self,
-        rls_session: AsyncSession,
-        test_org: uuid.UUID,
+        tier_scoped_session: tuple[AsyncSession, uuid.UUID],
         test_user: uuid.UUID,
     ) -> None:
-        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier-dev")
-        await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier-prev")
-        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier-nat")
-        result = await list_model_backends(rls_session, org_id=test_org)
+        session, org_id = tier_scoped_session
+        await self._create_with_tier(session, org_id, test_user, "in_dev", "-tier-dev")
+        await self._create_with_tier(session, org_id, test_user, "preview", "-tier-prev")
+        await self._create_with_tier(session, org_id, test_user, "native", "-tier-nat")
+        result = await list_model_backends(session, org_id=org_id)
         assert result.total == 2
         assert all(i.tier != "in_dev" for i in result.items)
 
     async def test_explicit_excluded_tiers_in_dev(
         self,
-        rls_session: AsyncSession,
-        test_org: uuid.UUID,
+        tier_scoped_session: tuple[AsyncSession, uuid.UUID],
         test_user: uuid.UUID,
     ) -> None:
-        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier2-dev")
-        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier2-nat")
-        result = await list_model_backends(rls_session, org_id=test_org, excluded_tiers=["in_dev"])
+        session, org_id = tier_scoped_session
+        await self._create_with_tier(session, org_id, test_user, "in_dev", "-tier2-dev")
+        await self._create_with_tier(session, org_id, test_user, "native", "-tier2-nat")
+        result = await list_model_backends(session, org_id=org_id, excluded_tiers=["in_dev"])
         assert result.total == 1
         assert result.items[0].tier == "native"
 
     async def test_excluded_tiers_none_defaults_to_in_dev(
         self,
-        rls_session: AsyncSession,
-        test_org: uuid.UUID,
+        tier_scoped_session: tuple[AsyncSession, uuid.UUID],
         test_user: uuid.UUID,
     ) -> None:
-        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier3-dev")
-        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier3-nat")
-        result = await list_model_backends(rls_session, org_id=test_org, excluded_tiers=None)
+        session, org_id = tier_scoped_session
+        await self._create_with_tier(session, org_id, test_user, "in_dev", "-tier3-dev")
+        await self._create_with_tier(session, org_id, test_user, "native", "-tier3-nat")
+        result = await list_model_backends(session, org_id=org_id, excluded_tiers=None)
         assert result.total == 1
         assert result.items[0].tier == "native"
 
     async def test_excluded_tiers_empty_skips_filter(
         self,
-        rls_session: AsyncSession,
-        test_org: uuid.UUID,
+        tier_scoped_session: tuple[AsyncSession, uuid.UUID],
         test_user: uuid.UUID,
     ) -> None:
-        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier4-dev")
-        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier4-nat")
-        result = await list_model_backends(rls_session, org_id=test_org, excluded_tiers=[])
+        session, org_id = tier_scoped_session
+        await self._create_with_tier(session, org_id, test_user, "in_dev", "-tier4-dev")
+        await self._create_with_tier(session, org_id, test_user, "native", "-tier4-nat")
+        result = await list_model_backends(session, org_id=org_id, excluded_tiers=[])
         assert result.total == 2
 
     async def test_excluded_tiers_preview(
         self,
-        rls_session: AsyncSession,
-        test_org: uuid.UUID,
+        tier_scoped_session: tuple[AsyncSession, uuid.UUID],
         test_user: uuid.UUID,
     ) -> None:
-        await self._create_with_tier(rls_session, test_org, test_user, "in_dev", "-tier5-dev")
-        await self._create_with_tier(rls_session, test_org, test_user, "preview", "-tier5-prev")
-        await self._create_with_tier(rls_session, test_org, test_user, "native", "-tier5-nat")
-        result = await list_model_backends(rls_session, org_id=test_org, excluded_tiers=["preview"])
+        session, org_id = tier_scoped_session
+        await self._create_with_tier(session, org_id, test_user, "in_dev", "-tier5-dev")
+        await self._create_with_tier(session, org_id, test_user, "preview", "-tier5-prev")
+        await self._create_with_tier(session, org_id, test_user, "native", "-tier5-nat")
+        result = await list_model_backends(session, org_id=org_id, excluded_tiers=["preview"])
         assert result.total == 2
         assert all(i.tier != "preview" for i in result.items)
         tiers = {i.tier for i in result.items}

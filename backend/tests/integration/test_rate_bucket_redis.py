@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 
 import pytest
 import redis.asyncio as aioredis
@@ -38,6 +39,19 @@ REDIS_URL = os.environ.get("RATE_LIMIT_REDIS_URL", "redis://localhost:6379")
 
 def _expected_ttl_ms(rate: float, burst: int) -> int:
     return int(max(60.0, (burst / rate if rate > 0 else 60.0) * 2) * 1000)
+
+
+@pytest.fixture
+def redis_prefix() -> str:
+    """A per-test key prefix so concurrent xdist workers never share buckets.
+
+    The integration suite runs with ``-n 2`` against one shared Redis. Without a
+    unique prefix, two workers (or the fixture's ``flushdb`` teardown) race on the
+    same ``itest:`` keys and the Lua script reads a half-written / wiped bucket,
+    surfacing as ``SharedBudgetUnavailableError: ... was corrupt`` instead of a
+    real bug. A uuid prefix fully isolates each test's keys.
+    """
+    return f"itest-{uuid.uuid4().hex}:"
 
 
 @pytest.fixture
@@ -59,6 +73,7 @@ async def redis_client() -> aioredis.Redis:
 
 async def test_real_lua_no_lost_token_race_under_concurrency(
     redis_client: aioredis.Redis,
+    redis_prefix: str,
 ) -> None:
     """Fifty concurrent consumes against the REAL Lua script grant exactly burst.
 
@@ -66,41 +81,112 @@ async def test_real_lua_no_lost_token_race_under_concurrency(
     from both spending the same token. If the Lua were broken (e.g. non-atomic),
     we would over-grant; the real script must cap at ``burst``.
     """
-    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=5, key_prefix="itest:")
+    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=5, key_prefix=redis_prefix)
     grants = sum(await asyncio.gather(*[bucket.consume("k", tokens=1.0) for _ in range(50)]))
     assert grants == 5
     # The real script applied PEXPIRE; the key must exist with a bounded reclaim
     # TTL — NOT a stale worker ``now`` (~1.75e9 ms -> ~20-day expiry).
-    ttl = await redis_client.pttl("itest:k")
+    ttl = await redis_client.pttl(f"{redis_prefix}k")
     expected = _expected_ttl_ms(0.0001, 5)
     assert 1 <= ttl <= expected
 
 
+async def test_real_lua_first_call_on_fresh_bucket_grants(
+    redis_client: aioredis.Redis,
+    redis_prefix: str,
+) -> None:
+    """A never-seen destination starts at FULL burst and grants (not fail-closed).
+
+    Regression pin for the corrupt-bucket guard (fixed in #220). Redis renders an
+    absent hash field in an HMGET reply as the boolean ``false`` — never ``nil`` —
+    so a ``st[1] ~= nil`` presence test also matched a brand-new bucket, returned
+    -1 (corrupt) and raised :class:`SharedBudgetUnavailableError` on the FIRST
+    consume for every destination. Nothing was written on that path, so the next
+    call was fresh too and the shared limiter stayed wedged: with a
+    ``redis_client`` configured the REST connector could not send one request.
+
+    The unit suite's ``_FakeRedis`` models a missing key as ``None`` and grants,
+    so it cannot fail on this class of defect — only a real server can, and the
+    guard had no coverage at all when it shipped.
+    """
+    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=3, key_prefix=redis_prefix)
+    assert await bucket.consume("brand-new", tokens=1.0) is True
+    stored = await redis_client.hget(f"{redis_prefix}brand-new", "tokens")
+    assert stored is not None  # the granting path must persist the bucket
+    assert float(stored) == pytest.approx(2.0, abs=0.01)  # burst - cost, no refill at 1e-4/s
+
+
+async def test_real_lua_corrupt_stored_value_fails_closed(
+    redis_client: aioredis.Redis,
+    redis_prefix: str,
+) -> None:
+    """A PRESENT-but-unparseable bucket fails closed instead of re-bursting.
+
+    The other half of the same guard: an unparseable ``tokens`` must NOT be
+    treated as a fresh full bucket, because that re-bursts the shared budget to
+    capacity on every call — the ``N x burst`` over-grant the shared limiter
+    exists to prevent. Pinning both halves stops a future rewrite from trading
+    one failure mode for the other.
+    """
+    bucket = RedisTokenBucket(redis_client, rate=1.0, burst=5, key_prefix=redis_prefix)
+    await redis_client.hset(f"{redis_prefix}corrupt", mapping={"tokens": "garbage", "ts": "1"})
+    with pytest.raises(SharedBudgetUnavailableError):
+        await bucket.consume("corrupt", tokens=1.0)
+
+
+async def test_half_written_bucket_fails_closed_instead_of_re_bursting(
+    redis_client: aioredis.Redis,
+    redis_prefix: str,
+) -> None:
+    """A bucket missing ONE field is corrupt, not fresh — it must not re-burst.
+
+    "Both fields absent" (fresh, start full) and "one field absent" (half-written)
+    are different states. Seeding ``tokens = burst`` for a half-written bucket
+    hands a whole fresh burst to a budget that was already spent: an EXHAUSTED
+    bucket (``tokens=0``) which lost only its ``ts`` field granted ``burst``
+    tokens again, breaking the single-shared-budget guarantee in the one direction
+    this module exists to prevent. Fail closed instead.
+    """
+    bucket = RedisTokenBucket(redis_client, rate=0.0001, burst=3, key_prefix=redis_prefix)
+
+    # Exhausted bucket that lost its refill timestamp.
+    await redis_client.hset(f"{redis_prefix}nots", "tokens", "0")
+    with pytest.raises(SharedBudgetUnavailableError):
+        await bucket.consume("nots", tokens=1.0)
+
+    # ...and the mirror image: a timestamp with no token count.
+    await redis_client.hset(f"{redis_prefix}notokens", "ts", "1000")
+    with pytest.raises(SharedBudgetUnavailableError):
+        await bucket.consume("notokens", tokens=1.0)
+
+
 async def test_real_lua_refills_over_server_wall_clock(
     redis_client: aioredis.Redis,
+    redis_prefix: str,
 ) -> None:
     """The shared bucket refills off the server's ``TIME``, not a worker clock."""
-    bucket = RedisTokenBucket(redis_client, rate=2.0, burst=1, key_prefix="itest:")
+    bucket = RedisTokenBucket(redis_client, rate=2.0, burst=1, key_prefix=redis_prefix)
     assert await bucket.consume("k", tokens=1.0) is True
     # Immediately after spend, no refill -> denied.
     assert await bucket.consume("k", tokens=1.0) is False
     # 2/s rate: ~0.6s refills a token.
     await asyncio.sleep(0.6)
     assert await bucket.consume("k", tokens=1.0) is True
-    ttl = await redis_client.pttl("itest:k")
+    ttl = await redis_client.pttl(f"{redis_prefix}k")
     expected = _expected_ttl_ms(2.0, 1)
     assert 1 <= ttl <= expected
 
 
 async def test_shared_budget_enforced_across_workers_real_redis(
     redis_client: aioredis.Redis,
+    redis_prefix: str,
 ) -> None:
     """Two limiter instances (two workers) share ONE real Redis budget."""
     a = PerDestinationRateLimiter(
-        rate=0.0001, burst=3, redis_client=redis_client, tenant_id="org-1", key_prefix="itest:"
+        rate=0.0001, burst=3, redis_client=redis_client, tenant_id="org-1", key_prefix=redis_prefix
     )
     b = PerDestinationRateLimiter(
-        rate=0.0001, burst=3, redis_client=redis_client, tenant_id="org-1", key_prefix="itest:"
+        rate=0.0001, burst=3, redis_client=redis_client, tenant_id="org-1", key_prefix=redis_prefix
     )
     results: list[bool] = []
     for _ in range(5):
@@ -113,13 +199,14 @@ async def test_shared_budget_enforced_across_workers_real_redis(
 
 async def test_per_tenant_budgets_separated_real_redis(
     redis_client: aioredis.Redis,
+    redis_prefix: str,
 ) -> None:
     """Different tenants get independent shared budgets for the same destination."""
     tenant_a = PerDestinationRateLimiter(
-        rate=0.0001, burst=2, redis_client=redis_client, tenant_id="org-A", key_prefix="itest:"
+        rate=0.0001, burst=2, redis_client=redis_client, tenant_id="org-A", key_prefix=redis_prefix
     )
     tenant_b = PerDestinationRateLimiter(
-        rate=0.0001, burst=2, redis_client=redis_client, tenant_id="org-B", key_prefix="itest:"
+        rate=0.0001, burst=2, redis_client=redis_client, tenant_id="org-B", key_prefix=redis_prefix
     )
     for _ in range(2):
         assert await tenant_a.consume("dest") is True
