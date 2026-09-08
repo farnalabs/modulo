@@ -17,6 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.audit_logger.labels import SYSTEM_ACTOR
 from modulo.db.crud.run import _input_hash, get_run
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -337,6 +338,14 @@ async def _record_recovery_audit(
     recovery is never blocked by a transient audit write error.
     """
     action = "skip" if input_data is None else "replay"
+    payload: dict[str, Any] = {
+        "node_id": node_id,
+        "node_type": node_type,
+        "recovery_action": action,
+        "summary": f'{action.capitalize()} recovery applied to node "{node_id}"',
+    }
+    if actor_id is None:
+        payload["actor"] = SYSTEM_ACTOR
     try:
         await append_audit_event(
             session,
@@ -345,11 +354,7 @@ async def _record_recovery_audit(
             actor_user_id=actor_id,
             resource_type="run",
             resource_id=run_id,
-            payload_json={
-                "node_id": node_id,
-                "node_type": node_type,
-                "recovery_action": action,
-            },
+            payload_json=payload,
         )
     except Exception:
         _log.exception("Failed to record recovery audit event for run %s", run_id)
@@ -475,6 +480,14 @@ async def guardrail_override(
     run.is_replay = True
     await session.flush()
 
+    override_payload: dict[str, Any] = {
+        "node_id": None,
+        "action": "override",
+        "is_replay": True,
+        "summary": "Guardrail override applied (run requeued as replay)",
+    }
+    if actor_id is None:
+        override_payload["actor"] = SYSTEM_ACTOR
     try:
         await append_audit_event(
             session,
@@ -483,11 +496,7 @@ async def guardrail_override(
             actor_user_id=actor_id,
             resource_type="run",
             resource_id=run_id,
-            payload_json={
-                "node_id": None,
-                "action": "override",
-                "is_replay": True,
-            },
+            payload_json=override_payload,
         )
     except Exception:
         _log.exception("Failed to record guardrail override audit event for run %s", run_id)
