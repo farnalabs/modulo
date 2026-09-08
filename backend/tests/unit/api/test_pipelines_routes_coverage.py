@@ -5,13 +5,13 @@ Complements ``test_pipelines_endpoint.py`` (CRUD + graph happy paths),
 (team gates) and the per-feature pipeline test modules by covering:
 
 * the graph-write denial translation (``_deny_hitl_gate`` /
-  ``_handle_graph_write_denials`` â€” 403/503 mapping + audited denial),
+  ``_handle_graph_write_denials`` — 403/503 mapping + audited denial),
 * the ``update_pipeline`` surfaces (team-transition re-validation, autonomy
   audit, graph-in-PATCH path, active-runs 409, 404s, denial mapping),
 * restore/archive/unarchive, clone viewer-403 + failure branches,
 * the whole ``save-as-composite`` endpoint (parameter-port detection),
 * the quality-report endpoint + its helpers,
-* the full snapshot suite (list/save-edit/tag/rollback/delete/diff â€” 404s,
+* the full snapshot suite (list/save-edit/tag/rollback/delete/diff — 404s,
   channel 422, latest-delete 409, non-admin 403),
 * folder move (422/404),
 * the whole node conversion endpoints (convert-to-agent / revert-to-manual),
@@ -249,7 +249,7 @@ def _edge_dict() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Denial translation â€” audit + HTTP mapping
+# Denial translation — audit + HTTP mapping
 # ---------------------------------------------------------------------------
 
 
@@ -649,7 +649,7 @@ async def test_quality_report_recipient_urls_filters_subscribers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lifecycle endpoints â€” update/delete/restore/archive/unarchive
+# Lifecycle endpoints — update/delete/restore/archive/unarchive
 # ---------------------------------------------------------------------------
 
 
@@ -1562,7 +1562,7 @@ def test_move_pipeline_folder_error_branches(client: tuple[TestClient, AsyncMock
 
 
 # ---------------------------------------------------------------------------
-# Node conversion â€” convert-to-agent
+# Node conversion — convert-to-agent
 # ---------------------------------------------------------------------------
 
 _CONVERT_URL = f"/api/v1/pipelines/{_PIPELINE_ID}/nodes"

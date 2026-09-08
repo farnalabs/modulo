@@ -113,21 +113,12 @@ export interface LayoutEdgeRef {
   target: string
 }
 
-/** Layered (Sugiyama-style) layout for a lifecycle-map stage graph.
- *
- * Ranks stages left-to-right by longest-path layering so linear chains read
- * horizontally; within a rank, stages are ordered by the average position of
- * their predecessors in the previous rank (barycentre) so split sources and
- * rejoin targets stay clustered. Returns a map of stage id → {x, y}.
- */
-export function computeLifecycleMapLayout(
-  stages: LayoutNodeRef[],
-  edges: LayoutEdgeRef[],
-): Record<string, { x: number; y: number }> {
-  const positions: Record<string, { x: number; y: number }> = {}
-  const ids = stages.map((s) => s.id)
-  if (ids.length === 0) return positions
+interface StageGraph {
+  adjacency: Map<string, string[]>
+  inDegree: Map<string, number>
+}
 
+function buildStageGraph(ids: string[], edges: LayoutEdgeRef[]): StageGraph {
   const adjacency = new Map<string, string[]>()
   const inDegree = new Map<string, number>()
   for (const id of ids) {
@@ -139,9 +130,12 @@ export function computeLifecycleMapLayout(
     adjacency.get(edge.source)!.push(edge.target)
     inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1)
   }
+  return { adjacency, inDegree }
+}
 
+function orderStagesTopologically(ids: string[], graph: StageGraph): string[] {
   // Kahn's algorithm (deterministic: seeded by input order) yields a topo order.
-  const indeg = new Map(inDegree)
+  const indeg = new Map(graph.inDegree)
   const queue = ids.filter((id) => (indeg.get(id) ?? 0) === 0)
   const ordered: string[] = []
   const seen = new Set<string>()
@@ -150,7 +144,7 @@ export function computeLifecycleMapLayout(
     if (seen.has(node)) continue
     seen.add(node)
     ordered.push(node)
-    for (const next of adjacency.get(node) ?? []) {
+    for (const next of graph.adjacency.get(node) ?? []) {
       indeg.set(next, (indeg.get(next) ?? 0) - 1)
       if (indeg.get(next) === 0) queue.push(next)
     }
@@ -160,7 +154,10 @@ export function computeLifecycleMapLayout(
   for (const id of ids) {
     if (!seen.has(id)) ordered.push(id)
   }
+  return ordered
+}
 
+function rankStagesByLongestPath(ordered: string[], edges: LayoutEdgeRef[]): Map<string, number> {
   // Longest-path layering: rank = max(pred rank) + 1.
   const rank = new Map<string, number>()
   for (const node of ordered) {
@@ -173,33 +170,43 @@ export function computeLifecycleMapLayout(
     }
     rank.set(node, r)
   }
+  return rank
+}
 
+function groupNodesByRank(ordered: string[], rank: Map<string, number>): Map<number, string[]> {
   const byRank = new Map<number, string[]>()
   for (const node of ordered) {
     const r = rank.get(node) ?? 0
     if (!byRank.has(r)) byRank.set(r, [])
     byRank.get(r)!.push(node)
   }
-  const ranks = [...byRank.keys()].sort((a, b) => a - b)
+  return byRank
+}
 
-  // Barycentre ordering within each rank (from rank 1) keeps splits/rejoins tight.
-  for (let i = 1; i < ranks.length; i++) {
-    const nodes = byRank.get(ranks[i])!
-    const prevNodes = byRank.get(ranks[i - 1]) ?? []
-    const prevIndex = new Map(prevNodes.map((id, idx) => [id, idx]))
-    const barycentre = (node: string): number => {
-      const predPositions: number[] = []
-      for (const edge of edges) {
-        if (edge.target === node && prevIndex.has(edge.source)) {
-          predPositions.push(prevIndex.get(edge.source)!)
-        }
+function orderRankByBarycentre(
+  nodes: string[],
+  prevNodes: string[],
+  edges: LayoutEdgeRef[],
+): string[] {
+  const prevIndex = new Map(prevNodes.map((id, idx) => [id, idx]))
+  const barycentre = (node: string): number => {
+    const predPositions: number[] = []
+    for (const edge of edges) {
+      if (edge.target === node && prevIndex.has(edge.source)) {
+        predPositions.push(prevIndex.get(edge.source)!)
       }
-      if (predPositions.length === 0) return nodes.indexOf(node)
-      return predPositions.reduce((a, b) => a + b, 0) / predPositions.length
     }
-    byRank.set(ranks[i], [...nodes].sort((a, b) => barycentre(a) - barycentre(b)))
+    if (predPositions.length === 0) return nodes.indexOf(node)
+    return predPositions.reduce((a, b) => a + b, 0) / predPositions.length
   }
+  return [...nodes].sort((a, b) => barycentre(a) - barycentre(b))
+}
 
+function assignLayoutPositions(
+  byRank: Map<number, string[]>,
+  ranks: number[],
+): Record<string, { x: number; y: number }> {
+  const positions: Record<string, { x: number; y: number }> = {}
   for (const r of ranks) {
     const nodes = byRank.get(r)!
     nodes.forEach((node, idx) => {
@@ -210,6 +217,36 @@ export function computeLifecycleMapLayout(
     })
   }
   return positions
+}
+
+/** Layered (Sugiyama-style) layout for a lifecycle-map stage graph.
+ *
+ * Ranks stages left-to-right by longest-path layering so linear chains read
+ * horizontally; within a rank, stages are ordered by the average position of
+ * their predecessors in the previous rank (barycentre) so split sources and
+ * rejoin targets stay clustered. Returns a map of stage id → {x, y}.
+ */
+export function computeLifecycleMapLayout(
+  stages: LayoutNodeRef[],
+  edges: LayoutEdgeRef[],
+): Record<string, { x: number; y: number }> {
+  const ids = stages.map((s) => s.id)
+  if (ids.length === 0) return {}
+
+  const graph = buildStageGraph(ids, edges)
+  const ordered = orderStagesTopologically(ids, graph)
+  const rank = rankStagesByLongestPath(ordered, edges)
+  const byRank = groupNodesByRank(ordered, rank)
+  const ranks = [...byRank.keys()].sort((a, b) => a - b)
+
+  // Barycentre ordering within each rank (from rank 1) keeps splits/rejoins tight.
+  for (let i = 1; i < ranks.length; i++) {
+    const nodes = byRank.get(ranks[i])!
+    const prevNodes = byRank.get(ranks[i - 1]) ?? []
+    byRank.set(ranks[i], orderRankByBarycentre(nodes, prevNodes, edges))
+  }
+
+  return assignLayoutPositions(byRank, ranks)
 }
 
 export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {

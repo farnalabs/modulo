@@ -73,11 +73,17 @@ class _MockSession:
         if "set_config" in s:
             return MagicMock()
         if "UPDATE runs SET" in s:
-            # Dedicated org-scoped terminalizer UPDATEs (B4/B5) — zero rows
-            # matched by default; individual tests configure terminalizer_rows.
+            # Dedicated org-scoped terminalizer UPDATEs (B4/B5/FAR-648) — zero
+            # rows matched by default; individual tests configure
+            # terminalizer_rows.
             ids = self.terminalizer_rows.get("executor_superseded", [])
             if "claim_cap_exhausted" in s:
                 ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
+            if "hitl_claims" in s:
+                # FAR-648 expired-HITL-gate terminalizer — the only
+                # UPDATE-runs statement referencing hitl_claims (its error
+                # code is a bound param, so it cannot be keyed by code).
+                ids = self.terminalizer_rows.get("hitl_gate_expired", [])
             r = MagicMock()
             r.all.return_value = [(uid,) for uid in ids]
             r.rowcount = len(ids)
@@ -147,6 +153,7 @@ def _settings(**overrides: object) -> MagicMock:
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
         "saq_run_claim_cap": 20,
+        "hitl_gate_cancel_grace_seconds": 3600,
         "modulo_telemetry_enabled": False,
     }
     base.update(overrides)
@@ -176,7 +183,17 @@ async def _run_reconcile(
     capacity_free: bool = True,
     awaiting_committed: bool = True,
     terminalizer_ids: dict[str, list[uuid.UUID]] | None = None,
+    terminalizer: AsyncMock | None = None,
+    settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Any, Any, Any, Any, _MockSession]:
+    """Drive one ``dispatcher_reconcile`` tick against a fully mocked env.
+
+    ``terminalizer`` optionally patches ``_terminalize_expired_hitl_gates``
+    (FAR-648 wiring tests) — the caller keeps its own reference and asserts on
+    it directly; ``settings_overrides`` feeds ``_settings`` so a test can
+    prove a settings-derived value (e.g. the gate-expiry grace) reaches the
+    reconciled code unchanged. Both default to the historical behaviour.
+    """
     _patch_env(monkeypatch)
     session = _MockSession([_org_result([ORG]), _rows_result(rows)])
     if terminalizer_ids:
@@ -187,29 +204,41 @@ async def _run_reconcile(
     redis_cls = MagicMock()
     redis_cls.from_url.return_value = redis_client
 
-    with (
-        patch.object(ch, "_open_system_factory", return_value=factory),
-        patch.object(ch, "get_settings", return_value=_settings()),
-        patch.object(ch, "AsyncRedis", redis_cls),
-        patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
-        patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result) as reenqueue,
-        patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
-        patch.object(
-            ch,
-            "_awaiting_human_has_committed_decision",
-            new_callable=AsyncMock,
-            return_value=awaiting_committed,
-        ) as awaiting_guard,
-        patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock) as record_facts,
-    ):
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(ch, "_open_system_factory", return_value=factory))
+        stack.enter_context(patch.object(ch, "get_settings", return_value=_settings(**(settings_overrides or {}))))
+        stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
+        stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
+        if terminalizer is not None:
+            stack.enter_context(patch.object(ch, "_terminalize_expired_hitl_gates", terminalizer))
+        reenqueue = stack.enter_context(
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
+        )
+        ingest = stack.enter_context(patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock))
+        awaiting_guard = stack.enter_context(
+            patch.object(
+                ch,
+                "_awaiting_human_has_committed_decision",
+                new_callable=AsyncMock,
+                return_value=awaiting_committed,
+            )
+        )
+        record_facts = stack.enter_context(
+            patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)
+        )
         if capacity_free is False:
-            with patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5):
-                summary = await ch.dispatcher_reconcile()
+            stack.enter_context(
+                patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5)
+            )
         else:
-            with patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0):
-                summary = await ch.dispatcher_reconcile()
+            stack.enter_context(
+                patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
+            )
+        summary = await ch.dispatcher_reconcile()
 
     session.record_facts = record_facts
+    if terminalizer is not None:
+        session.terminalizer = terminalizer
     return summary, reenqueue, ingest, redis_client, awaiting_guard, session
 
 
@@ -1946,7 +1975,7 @@ class TestRunApiKeySweepWiring:
         into the summary.
 
         Deleting the ``await revoke_run_api_key_sweep(...)`` line from
-        ``cron_helpers.dispatcher_reconcile`` must leave this test red �?" the
+        ``cron_helpers.dispatcher_reconcile`` must leave this test red — the
         sweep mock is asserted awaited once AND the folded summary keys would be
         missing from the summary dict.
         """
@@ -2080,3 +2109,162 @@ class TestRollbackThresholdsWiring:
         # The tick completed its bookkeeping despite the sweep failure.
         assert summary["repaired"] == 0
         assert summary["scanned"] == 0
+
+
+class TestTerminalizeExpiredHitlGates:
+    """FAR-648: the expired-HITL-gate terminalizer's SQL contract.
+
+    The sweep is a SINGLE guarded UPDATE — there is no separate select, so the
+    TOCTOU re-validation (still awaiting_human, gates still unclaimed +
+    undecided + past expiry) happens by construction inside the org
+    transaction: the predicate is re-checked at execution time and a gate
+    claimed mid-tick no longer matches (rowcount 0). These tests pin the
+    predicate shape; the behavioral matrix runs against real Postgres in
+    tests/integration/test_org_sandbox_capacity.py."""
+
+    async def _run(self, terminalized: list[uuid.UUID] | None = None) -> tuple[list[uuid.UUID], _MockSession]:
+        session = _MockSession([])
+        if terminalized is not None:
+            session.terminalizer_rows["hitl_gate_expired"] = terminalized
+        returned = await ch._terminalize_expired_hitl_gates(session, ORG, grace_seconds=3600)
+        return returned, session
+
+    @pytest.mark.asyncio
+    async def test_writes_cancelled_with_hitl_gate_expired_code_and_detail(self) -> None:
+        """P7' contract: the terminalizer writes status='cancelled' with the
+        new ``hitl_gate_expired`` code and its synthetic error_detail."""
+        _returned, session = await self._run()
+        stmt, params = session.executed[-1]
+        sql = str(stmt)
+        assert "status='cancelled'" in sql
+        assert "error_code=:code" in sql
+        assert params["code"] == ch._HITL_GATE_EXPIRED_ERROR_CODE
+        assert ch._HITL_GATE_EXPIRED_ERROR_CODE == "hitl_gate_expired"
+        assert params["detail"] == ch._HITL_GATE_EXPIRED_ERROR_DETAIL
+
+    @pytest.mark.asyncio
+    async def test_source_status_bound_to_awaiting_human_constant(self) -> None:
+        """qa F15: the ``awaiting_human`` status literal is a bound param named
+        from the shared model constant — never a raw SQL literal."""
+        _returned, session = await self._run()
+        stmt, params = session.executed[-1]
+        assert "status=:awaiting_status" in str(stmt)
+        assert params["awaiting_status"] == ch.AWAITING_HUMAN_STATUS
+        assert ch.AWAITING_HUMAN_STATUS == "awaiting_human"
+
+    @pytest.mark.asyncio
+    async def test_predicate_keeps_cancel_wins_precedence(self) -> None:
+        """A cancellation-requested run is owned by the cancel path — the
+        terminalizer must never write ``cancelled`` over it."""
+        _returned, session = await self._run()
+        assert "cancellation_requested=false" in str(session.executed[-1][0])
+
+    @pytest.mark.asyncio
+    async def test_predicate_revalidates_gate_state_in_the_update(self) -> None:
+        """TOCTOU safety: the single UPDATE carries the full gate predicate —
+        an EXISTS clause for an expired unclaimed undecided gate AND a
+        NOT EXISTS clause excluding any claimed or in-grace undecided gate —
+        so a gate claimed between the tick's read and this write no longer
+        matches."""
+        _returned, session = await self._run()
+        sql = str(session.executed[-1][0])
+        assert "NOT EXISTS" in sql
+        assert "hc.decision IS NULL" in sql
+        assert "hc.account_id IS NULL" in sql
+        assert "hc.expires_at < now() - (:grace_seconds * interval '1 second')" in sql
+        assert "hc2.account_id IS NOT NULL" in sql
+        assert "hc2.expires_at >= now() - (:grace_seconds * interval '1 second')" in sql
+
+    @pytest.mark.asyncio
+    async def test_returns_terminalized_ids_and_warns_per_run(self, caplog: pytest.LogCaptureFixture) -> None:
+        expired = [uuid.uuid4(), uuid.uuid4()]
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            returned, _session = await self._run(expired)
+        assert returned == expired
+        assert sum("expired-HITL-gate zombie terminalized" in r.message for r in caplog.records) == len(expired)
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_empty(self) -> None:
+        returned, _session = await self._run()
+        assert not returned
+
+
+class TestHitlGateExpiryTerminalizerWiring:
+    """FAR-648 wiring: the reconcile tick must invoke the expired-HITL-gate
+    terminalizer with the settings grace and fold its results into the summary
+    stats key + the post-commit compensating daily fact (P6', FAR-162)."""
+
+    def test_stats_key_declared_in_both_vocabularies(self) -> None:
+        assert "hitl_gate_expired_terminalized" in ch._dispatcher_reconcile_stats
+        assert "hitl_gate_expired_terminalized" in ch._dispatcher_summary()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_invokes_terminalizer_with_settings_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        expired_run = uuid.uuid4()
+        terminalizer = AsyncMock(return_value=[expired_run])
+        summary, _reenqueue, _ingest, _redis, _awaiting, session = await _run_reconcile(
+            monkeypatch, [], terminalizer=terminalizer
+        )
+
+        terminalizer.assert_awaited_once()
+        assert terminalizer.await_args.kwargs["grace_seconds"] == 3600
+        assert summary["hitl_gate_expired_terminalized"] == 1
+        session.record_facts.assert_awaited_once_with(expired_run, ORG)
+
+    @pytest.mark.asyncio
+    async def test_grace_is_settings_derived_not_hardcoded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The knob is read from settings every tick — an operator override
+        reaches the terminalizer unchanged."""
+        terminalizer = AsyncMock(return_value=[])
+        await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer=terminalizer,
+            settings_overrides={"hitl_gate_cancel_grace_seconds": 180},
+        )
+
+        assert terminalizer.await_args.kwargs["grace_seconds"] == 180
+
+
+class TestRecordFactForTerminalizedRun:
+    """FAR-648 phantom-fact guard: the compensating daily-fact recorder (P6',
+    FAR-162) re-selects the run AFTER the per-org transactions commit. The
+    terminalized ids are collected BEFORE that commit — if an org transaction
+    rolled back after its ids were collected, the run is NOT terminal and the
+    fact would be a lie. The recorder must record for a terminal run and skip
+    a non-terminal one."""
+
+    async def _invoke(self, monkeypatch: pytest.MonkeyPatch, *, status: str) -> AsyncMock:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        factory = MagicMock(return_value=session)
+        record = AsyncMock()
+        run_id = uuid.uuid4()
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.db.crud.run.get_run",
+                new_callable=AsyncMock,
+                return_value=SimpleNamespace(id=run_id, status=status),
+            ),
+            patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record),
+        ):
+            await ch._record_fact_for_terminalized_run(run_id, ORG)
+        return record
+
+    @pytest.mark.asyncio
+    async def test_records_for_terminal_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run re-selected in a terminal status (``cancelled`` — the
+        terminalizer's own write) gets its compensating daily fact."""
+        record = await self._invoke(monkeypatch, status="cancelled")
+        record.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_non_terminal_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run still ``awaiting_human`` at fact time means the terminalizer's
+        org transaction rolled back after the id was collected — no fact may
+        be written (it would describe a terminal transition that never
+        happened)."""
+        record = await self._invoke(monkeypatch, status="awaiting_human")
+        record.assert_not_awaited()

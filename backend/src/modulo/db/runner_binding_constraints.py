@@ -89,7 +89,14 @@ def is_reserved_env_var(name: str) -> bool:
 
 
 def validate_target_env_var(name: str) -> str:
-    """Validate and return the canonical ``target_env_var`` for a binding."""
+    """Validate and return the canonical ``target_env_var`` for a binding.
+
+    The canonical form is UPPERCASE (decision, FAR-592 qa fixes): the SERVER
+    normalises on save — the returned canonical value is what the UNIQUE
+    (org, agent, target_env_var) constraint and every dedupe check see, so
+    case variants cannot create duplicate bindings. Clients must not
+    pre-transform; the server is the single canonicaliser.
+    """
     candidate = (name or "").strip()
     if not candidate:
         raise BindingValidationError("target_env_var must not be empty")
@@ -99,6 +106,7 @@ def validate_target_env_var(name: str) -> str:
         raise BindingValidationError(
             "target_env_var must match [A-Za-z_][A-Za-z0-9_]* (start with a letter or underscore; no dashes or dots)"
         )
+    candidate = candidate.upper()
     if is_reserved_env_var(candidate):
         raise BindingValidationError(f"target_env_var '{candidate}' is reserved and cannot be bound")
     return candidate

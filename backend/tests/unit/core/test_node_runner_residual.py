@@ -384,11 +384,16 @@ async def test_read_gate_markers_returns_dict_on_hit():
 
     def _route(stmt_text: str) -> Any:
         r = MagicMock()
-        r.fetchone.return_value = (markers,)
+        # FAR-583 read re-point: the gate read now goes through
+        # read_run_markers_fenced, which reassembles the flat markers dict from
+        # the run_node_outputs rows via a single .all() (legacy column +
+        # attempt_key + new-table markers). The reassembled flat dict
+        # {"m": {...}} is keyed by the marker key itself.
+        r.all.return_value = [(None, "m", {"delivery_done": True})]
         return r
 
     got = await nr._read_run_raw_output_markers_for_gate(
-        lambda: _FakeSession(_route), run_id=_RUN_ID, org_id_raw=_ORG_ID, claim_lease="tok", node_id="n1"
+        lambda: _FakeSession(_route), run_id=_RUN_UUID_STR, org_id_raw=_ORG_ID, claim_lease="tok", node_id="n1"
     )
     assert got == markers
 
@@ -462,11 +467,15 @@ async def test_read_connector_gate_state_returns_markers_and_key():
 
     def _route(stmt_text: str) -> Any:
         r = MagicMock()
-        r.fetchone.return_value = (markers, "persisted-key")
+        # The connector gate read runs TWO statements: the run-row FOR UPDATE
+        # SELECT (id, idempotency_key) consumed via .fetchone(), then the
+        # fenced markers read (read_run_markers_fenced) consumed via .all().
+        r.fetchone.return_value = (None, "persisted-key")
+        r.all.return_value = [(None, "m", {"delivery_done": True})]
         return r
 
     got_markers, got_key = await nr._read_connector_idempotency_gate_state(
-        lambda: _FakeSession(_route), run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1"
+        lambda: _FakeSession(_route), run_id=_RUN_UUID_STR, org_id_raw=_ORG_ID, node_id="n1"
     )
     assert got_markers == markers
     assert got_key == "persisted-key"
@@ -475,11 +484,15 @@ async def test_read_connector_gate_state_returns_markers_and_key():
 async def test_read_connector_gate_state_non_dict_markers_none_key_kept():
     def _route(stmt_text: str) -> Any:
         r = MagicMock()
-        r.fetchone.return_value = ("not-a-dict", "persisted-key")
+        r.fetchone.return_value = (None, "persisted-key")
+        # No run_node_outputs marker rows -> the fenced reader returns None for
+        # markers (the new-table representation is absent), while the persisted
+        # idempotency key from the run-row read is preserved.
+        r.all.return_value = []
         return r
 
     got_markers, got_key = await nr._read_connector_idempotency_gate_state(
-        lambda: _FakeSession(_route), run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1"
+        lambda: _FakeSession(_route), run_id=_RUN_UUID_STR, org_id_raw=_ORG_ID, node_id="n1"
     )
     assert got_markers is None
     assert got_key == "persisted-key"

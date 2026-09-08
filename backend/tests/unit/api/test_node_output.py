@@ -45,6 +45,25 @@ def _make_run(
     return r
 
 
+@pytest.fixture(autouse=True)
+def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.api.routes.runs as runs_module
+    from modulo.db.crud.run_node_outputs import RunBlobs
+
+    async def _stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        run = getattr(runs_module.get_run, "return_value", None)
+        outputs = run.outputs_json if run is not None and isinstance(run.outputs_json, dict) else {}
+        telemetry = run.node_telemetry_json if run is not None and isinstance(run.node_telemetry_json, dict) else {}
+        return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
+
+    async def _markers_stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        blobs = await _stub(session, run_id=run_id, organisation_id=organisation_id)
+        return blobs.markers
+
+    monkeypatch.setattr(runs_module, "read_run_blobs_with_fallback", _stub)
+    monkeypatch.setattr(runs_module, "read_run_markers_with_fallback", _markers_stub)
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     begin_cm = AsyncMock()

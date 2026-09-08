@@ -12,16 +12,12 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.models.agent import Agent
 from modulo.db.models.agent_runner_binding import AgentRunnerBinding
 from modulo.db.models.model_backend import ModelBackend
-from modulo.db.runner_binding_constraints import validate_binding_pair
+from modulo.db.runner_binding_constraints import BindingValidationError, validate_binding_pair
 
 _log = logging.getLogger(__name__)
-
-
-async def get_binding(session: AsyncSession, binding_id: uuid.UUID) -> AgentRunnerBinding | None:
-    result = await session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == binding_id))
-    return result.scalar_one_or_none()
 
 
 async def list_bindings_for_agent(session: AsyncSession, agent_id: uuid.UUID) -> list[AgentRunnerBinding]:
@@ -37,7 +33,16 @@ def _validate_specs(
     bindings_specs: list[dict[str, Any]],
     backends_by_id: dict[uuid.UUID, ModelBackend],
 ) -> list[tuple[str, str]]:
-    """Validate every (target_env_var, source_field) pair against its backend."""
+    """Validate every (target_env_var, source_field) pair against its backend.
+
+    Raises:
+        HTTPException 400: the referenced backend is missing or not
+            org-visible (bindings accept org-visible backends only).
+        HTTPException 409: the same canonical target_env_var appears twice.
+        HTTPException 422: a validator rejects the var/field shape
+            (BindingValidationError is a ValueError — surfacing it raw would
+            render as a 500).
+    """
     validated: list[tuple[str, str]] = []
     seen_targets: set[str] = set()
     for spec in bindings_specs:
@@ -45,20 +50,29 @@ def _validate_specs(
         if backend is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Model backend not found (or not visible to the organisation)",
+                detail="Model backend not found or not org-visible: bindings accept org-visible backends only.",
             )
-        target, _source = validate_binding_pair(
-            target_env_var=str(spec["target_env_var"]),
-            source_field=str(spec["source_field"]),
-            provider=backend.provider,
-        )
+        try:
+            target, _source = validate_binding_pair(
+                target_env_var=str(spec["target_env_var"]),
+                source_field=str(spec["source_field"]),
+                provider=backend.provider,
+            )
+        except BindingValidationError as exc:
+            # FAR-592 (D6 F7): the validator is ValueError-shaped and would
+            # otherwise escape as a 500 — map to the honest 422 with the
+            # validator message.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
         if target in seen_targets:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"target_env_var '{target}' is bound more than once",
             )
         seen_targets.add(target)
-        validated.append((target, str(spec["source_field"])))
+        validated.append((target, _source))
     return validated
 
 
@@ -76,6 +90,11 @@ async def replace_agent_bindings(
     (``_account_id``). Each backend must exist AND be visible to the org
     (``visibility = 'org'``) — save-time validation surface. Duplicate or
     reserved targets surface as 400/409; IntegrityError maps to the typed 409.
+
+    Concurrency guard (FAR-592 qa fixes / F6): the agent row is locked
+    (``SELECT ... FOR UPDATE``) BEFORE the delete-all + inserts, so two
+    concurrent replace calls serialise — each sees the other's committed
+    state and the result is LAST-WRITER-WINS, not a union of both var sets.
     """
     backend_ids = {spec["_backend_id"] for spec in bindings_specs}
     backends_rows = await session.execute(
@@ -88,6 +107,9 @@ async def replace_agent_bindings(
     backends_by_id = {row.id: row for row in backends_rows.scalars()}
 
     validated = _validate_specs(bindings_specs, backends_by_id)
+
+    # Serialise concurrent saves on the agent row (transaction-scoped).
+    await session.execute(select(Agent.id).where(Agent.id == agent_id).with_for_update())
 
     # Replace wholesale: delete-then-insert keeps the save contract simple and
     # the UNIQUE (org, agent, target_env_var) constraint honest.
@@ -117,21 +139,25 @@ async def replace_agent_bindings(
 async def delete_all_bindings_for_agent(session: AsyncSession, agent_id: uuid.UUID) -> int:
     """Delete every binding row for an agent (agent delete + save-replace)."""
     result = await session.execute(delete(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == agent_id))
-    return int(result.rowcount or 0)  # type: ignore[attr-defined]
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
-async def delete_binding(session: AsyncSession, binding_id: uuid.UUID, *, agent_id: uuid.UUID | None = None) -> bool:
-    """Delete a single binding row.
+async def delete_binding(session: AsyncSession, *, binding_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
+    """Delete one binding row, SCOPED to the agent it belongs to (FAR-592 qa F8).
 
-    When ``agent_id`` is supplied the delete is scoped to that agent: a binding
-    owned by a different (same-org) agent is NOT deleted and ``False`` is
-    returned, so callers can 404 instead of silently deleting the wrong agent's
-    binding and writing an audit event naming the wrong resource.
+    The lookup verifies ``binding.agent_id == agent_id`` — a binding row from
+    a DIFFERENT agent under the same org is a 404-shaped miss (returns
+    False), never a cross-agent delete. The CALLER decides 404 vs raise and
+    appends the audit event only for a True result (no phantom audit rows).
     """
-    binding = await get_binding(session, binding_id)
+    result = await session.execute(
+        select(AgentRunnerBinding).where(
+            AgentRunnerBinding.id == binding_id,
+            AgentRunnerBinding.agent_id == agent_id,
+        )
+    )
+    binding = result.scalar_one_or_none()
     if binding is None:
-        return False
-    if agent_id is not None and binding.agent_id != agent_id:
         return False
     await session.delete(binding)
     await session.flush()

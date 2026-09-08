@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from modulo.core.feedback_manager import (
     InvalidTransitionError,
     ValidationError,
 )
+from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.db.models.feedback_record import FeedbackRecord
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -259,10 +261,12 @@ class TestPaginationValidation:
 
 class TestPaginateUnscopedWarning:
     async def test_warns_when_called_with_no_conditions(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, caplog: pytest.LogCaptureFixture
+        self, mock_session: AsyncMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """_paginate with empty conditions is a tenant-scoping hazard — must log a warning."""
+        """Pagination with empty conditions is a tenant-scoping hazard — must log a warning."""
         import logging
+
+        from modulo.core.feedback_manager.queries import paginate_feedback_records
 
         count_result = MagicMock()
         count_result.scalar.return_value = 0
@@ -271,7 +275,7 @@ class TestPaginateUnscopedWarning:
         mock_session.execute = AsyncMock(side_effect=[count_result, rows_result])
 
         with caplog.at_level(logging.WARNING, logger="modulo.core.feedback_manager"):
-            rows, total = await mgr._paginate([], page=1, page_size=20)
+            rows, total = await paginate_feedback_records(mock_session, [], page=1, page_size=20)
 
         assert rows == []
         assert total == 0
@@ -1086,6 +1090,22 @@ class TestRunPostCorrectionEval:
         r.needs_human_review = None
         return r
 
+    def _blob_patch(self, run: MagicMock) -> Any:
+        """Stub the FAR-583 repo blob read for a mocked session (the AsyncMock
+        session cannot serve the real run_node_outputs queries); the stub
+        reassembles from the mocked run's attributes, exactly as the real
+        reader serves the reassembled legacy shapes."""
+        return patch(
+            "modulo.core.feedback_manager.read_run_blobs_with_fallback",
+            new=AsyncMock(
+                return_value=RunBlobs(
+                    outputs=run.outputs_json,
+                    telemetry=run.node_telemetry_json,
+                    markers=None,
+                )
+            ),
+        )
+
     @pytest.fixture
     def completed_correction_run(self) -> MagicMock:
         r = MagicMock()
@@ -1153,6 +1173,7 @@ class TestRunPostCorrectionEval:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            self._blob_patch(completed_correction_run),
         ):
             outcome = await mgr.run_post_correction_eval(
                 correcting_record.id,
@@ -1193,6 +1214,7 @@ class TestRunPostCorrectionEval:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=correction_run),
+            self._blob_patch(correction_run),
         ):
             await mgr.run_post_correction_eval(
                 correcting_record.id,
@@ -1227,6 +1249,7 @@ class TestRunPostCorrectionEval:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            self._blob_patch(completed_correction_run),
         ):
             outcome = await mgr.run_post_correction_eval(
                 correcting_record.id,
@@ -1257,6 +1280,7 @@ class TestRunPostCorrectionEval:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            self._blob_patch(completed_correction_run),
         ):
             outcome = await mgr.run_post_correction_eval(
                 correcting_record.id,
@@ -1300,6 +1324,7 @@ class TestRunPostCorrectionEval:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=no_output_run),
+            self._blob_patch(no_output_run),
         ):
             outcome = await mgr.run_post_correction_eval(correcting_record.id)
 
@@ -1325,6 +1350,7 @@ class TestRunPostCorrectionEval:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            self._blob_patch(completed_correction_run),
         ):
             outcome = await mgr.run_post_correction_eval(
                 correcting_record.id,
@@ -1351,6 +1377,7 @@ class TestRunPostCorrectionEval:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            self._blob_patch(completed_correction_run),
             pytest.raises(asyncio.CancelledError),
         ):
             await mgr.run_post_correction_eval(
@@ -1380,6 +1407,7 @@ class TestRunPostCorrectionEval:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("modulo.core.feedback_manager.get_run", return_value=completed_correction_run),
+            self._blob_patch(completed_correction_run),
             pytest.raises(ConcurrentModificationError, match="status changed concurrently"),
         ):
             await mgr.run_post_correction_eval(

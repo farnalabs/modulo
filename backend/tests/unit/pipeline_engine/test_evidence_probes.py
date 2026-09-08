@@ -40,6 +40,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
 from modulo.db.models.run_evidence import RunEvidence
+from modulo.db.models.run_node_outputs import RunNodeOutput
 
 # The run_evidence table is org-scoped (0133); unit tests run on SQLite where
 # RLS is absent but the NOT NULL organisation_id must still be supplied.
@@ -424,7 +425,12 @@ async def sqlite_factory():
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as conn:
         await conn.run_sync(
-            lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[RunEvidence.__table__, Run.__table__])
+            lambda sync_conn: Base.metadata.create_all(
+                sync_conn,
+                # FAR-583: the noop-evidence sweep's blob reads go through the
+                # run_node_outputs repo reader — the table must exist here.
+                tables=[RunEvidence.__table__, Run.__table__, RunNodeOutput.__table__],
+            )
         )
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
     yield factory

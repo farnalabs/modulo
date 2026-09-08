@@ -885,6 +885,25 @@ elements:
       - testid: stat-no-baseline
         type: element
         dynamic_testid: false
+    /accept-invite:
+      - testid: accept-invite-missing-token
+        type: element
+        dynamic_testid: false
+      - testid: accept-invite-password
+        type: input
+        dynamic_testid: false
+      - testid: accept-invite-confirm
+        type: input
+        dynamic_testid: false
+      - testid: accept-invite-error
+        type: element
+        dynamic_testid: false
+      - testid: accept-invite-submit
+        type: button
+        dynamic_testid: false
+      - testid: accept-invite-success
+        type: element
+        dynamic_testid: false
     /admin/audit:
       - testid: admin-audit-verify-chain
         type: button
@@ -1074,8 +1093,36 @@ elements:
       - testid: admin-spend-limits-org-limit
         type: input
         dynamic_testid: false
+      - testid: admin-spend-limits-max-run-cost
+        type: input
+        dynamic_testid: false
+      - testid: admin-spend-limits-spend-ceiling
+        type: input
+        dynamic_testid: false
+      - testid: admin-spend-limits-ceiling-save
+        type: button
+        dynamic_testid: false
     /admin/feature-flags:
       - testid: developer-mode-toggle
+        type: element
+        dynamic_testid: false
+      - testid: flags-prev-page
+        type: button
+        dynamic_testid: false
+      - testid: flags-next-page
+        type: button
+        dynamic_testid: false
+      - testid: flag-override-select
+        type: select
+        dynamic_testid: false
+    /admin/errors:
+      - testid: scheduler-starvation
+        type: element
+        dynamic_testid: false
+      - testid: admin-errors-message-full
+        type: element
+        dynamic_testid: false
+      - testid: admin-errors-message-truncated
         type: element
         dynamic_testid: false
     /admin/housekeeping:
@@ -1305,6 +1352,12 @@ elements:
       - testid: admin-notification-log-dlq
         type: element
         dynamic_testid: false
+      - testid: admin-notification-log-retry-all-confirm
+        type: button
+        dynamic_testid: false
+      - testid: admin-notification-log-retry-all-cancel
+        type: button
+        dynamic_testid: false
     /admin/org:
       - testid: org-delete-confirm-input
         type: input
@@ -1471,6 +1524,33 @@ elements:
       - testid: remy-skills-form-triggers
         type: input
         dynamic_testid: false
+      - testid: remy-tool-permissions
+        type: element
+        dynamic_testid: false
+      - testid: remy-tool-perm-mode
+        type: select
+        dynamic_testid: false
+      - testid: remy-tool-perms-save
+        type: button
+        dynamic_testid: false
+      - testid: remy-safety-limits
+        type: element
+        dynamic_testid: false
+      - testid: remy-skills
+        type: element
+        dynamic_testid: false
+      - testid: remy-skill-toggle
+        type: button
+        dynamic_testid: false
+      - testid: remy-skill-edit
+        type: button
+        dynamic_testid: false
+      - testid: remy-skill-delete
+        type: button
+        dynamic_testid: false
+      - testid: remy-primer-regenerate
+        type: button
+        dynamic_testid: false
     /admin/run-retention:
       - testid: admin-run-retention-refresh
         type: button
@@ -1506,6 +1586,36 @@ elements:
         type: element
         dynamic_testid: false
       - testid: admin-run-retention-purge-confirm
+        type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-error
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-export-result
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-purge-result
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-error-msg
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-warning
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-empty
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-candidates-table
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-confirm-dialog
+        type: element
+        dynamic_testid: false
+      - testid: admin-run-retention-purge-cancel
+        type: button
+        dynamic_testid: false
+      - testid: admin-run-retention-reset
         type: button
         dynamic_testid: false
     /admin/sandbox-concurrency:
@@ -1544,6 +1654,45 @@ elements:
         type: button
         dynamic_testid: false
       - testid: admin-users-next
+        type: button
+        dynamic_testid: false
+      - testid: admin-invitations-section
+        type: element
+        dynamic_testid: false
+      - testid: admin-invitations-error
+        type: element
+        dynamic_testid: false
+      - testid: admin-invitations-empty
+        type: element
+        dynamic_testid: false
+      - testid: admin-invitations-row
+        type: element
+        dynamic_testid: false
+      - testid: admin-invitations-revoke
+        type: button
+        dynamic_testid: false
+      - testid: admin-users-mode-create
+        type: button
+        dynamic_testid: false
+      - testid: admin-users-mode-invite
+        type: button
+        dynamic_testid: false
+      - testid: admin-users-invite-qr-wrapper
+        type: element
+        dynamic_testid: false
+      - testid: admin-users-invite-qr
+        type: element
+        dynamic_testid: false
+      - testid: admin-users-credential-value
+        type: element
+        dynamic_testid: false
+      - testid: admin-users-copy-error
+        type: element
+        dynamic_testid: false
+      - testid: admin-users-invite-done
+        type: button
+        dynamic_testid: false
+      - testid: admin-invitations-confirm-revoke
         type: button
         dynamic_testid: false
     /admin/views:
@@ -2172,6 +2321,84 @@ elements:
       - testid: pipeline-editor-snapshot-select
         type: select
         dynamic_testid: false
+      - testid: pipeline-editor-toolbar
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-toolbar-group-identity
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-rename
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-toolbar-group-file
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-version-timeline
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-save-as-template
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-toolbar-group-run
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-toolbar-group-settings
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-archive
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-unarchive
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-delete
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-toolbar-group-canvas
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-node-type-select
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-add-node
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-fit-view
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-node-scope-badge
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-capability-scope
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-scope-no-connectors
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-scope-widen-warning
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-scope-tool-input
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-scope-tool-add
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-scope-context-input
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-scope-context-add
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-scope-reset
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-node-commands
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-node-commands-readonly
+        type: element
+        dynamic_testid: false
     /pipelines/copy:
       - testid: copy-wizard-visibility-filter
         type: button
@@ -2261,6 +2488,12 @@ elements:
     /runs:
       - testid: runs-list-aggregate-cost
         type: element
+        dynamic_testid: false
+      - testid: runs-list-prev-page
+        type: button
+        dynamic_testid: false
+      - testid: runs-list-next-page
+        type: button
         dynamic_testid: false
     /runs/:id:
       - testid: run-detail-share-summary
@@ -2420,6 +2653,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: run-detail-work-items
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-hitl-message
         type: element
         dynamic_testid: false
     /runs/diff:
@@ -2604,6 +2840,35 @@ elements:
       - testid: settings-guardrails-form-error
         type: element
         dynamic_testid: false
+    /admin/system/config:
+      - testid: admin-system-config-refresh
+        type: button
+        dynamic_testid: false
+    /settings/email:
+      - testid: settings-email-from
+        type: input
+        dynamic_testid: false
+      - testid: settings-email-smtp-host
+        type: input
+        dynamic_testid: false
+      - testid: settings-email-smtp-port
+        type: input
+        dynamic_testid: false
+      - testid: settings-email-smtp-username
+        type: input
+        dynamic_testid: false
+      - testid: settings-email-smtp-password
+        type: input
+        dynamic_testid: false
+      - testid: settings-email-smtp-timeout
+        type: input
+        dynamic_testid: false
+      - testid: settings-email-save
+        type: button
+        dynamic_testid: false
+      - testid: settings-email-test
+        type: button
+        dynamic_testid: false
     /settings/hitl-review:
       - testid: hitl-review-pipeline-select
         type: select
@@ -2614,10 +2879,19 @@ elements:
       - testid: hitl-review-date-to
         type: input
         dynamic_testid: false
+      - testid: hitl-review-column-headers
+        type: element
+        dynamic_testid: false
       - testid: hitl-review-toggle-expand
         type: button
         dynamic_testid: false
       - testid: hitl-gate-card
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-pipeline-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-node-name
         type: element
         dynamic_testid: false
       - testid: hitl-gate-copy-id
@@ -2645,6 +2919,27 @@ elements:
         type: element
         dynamic_testid: false
       - testid: hitl-gate-message
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-claim-failure-banner
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-prev-page
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-page-indicator
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-next-page
+        type: button
+        dynamic_testid: false
+      - testid: hitl-review-column-headers
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-pipeline-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-node-name
         type: element
         dynamic_testid: false
     /settings/license:
@@ -2675,6 +2970,9 @@ elements:
         dynamic_testid: false
       - testid: settings-mcp-copy-key-value
         type: button
+        dynamic_testid: false
+      - testid: settings-mcp-org-scope-note
+        type: element
         dynamic_testid: false
     /settings/observability:
       - testid: settings-observability-env-override
@@ -3273,6 +3571,14 @@ features:
             - "[x] The org review endpoint (GET /api/v1/hitl/pending) lists claimed-but-undecided gates alongside unclaimed ones (include_claimed=True) so a claimed gate stays visible and actionable on /settings/hitl-review instead of vanishing on refresh; batched run->snapshot->label lookups resolve per-gate labels there, degrading gracefully to shortId when snapshot/graph data is unavailable"
             - "[x] Same-account re-claim: claiming a gate already held by YOUR account succeeds and re-issues a fresh claim token (claim token lives only in frontend state, so a page reload must not deadlock the reviewer); claiming a gate held by ANOTHER account still 409s"
             - "[x] A shared HitlGateCard component (frontend/src/components/hitl/HitlGateCard.vue) drives claim/approve/reject in BOTH the run-detail HITL section and the /settings/hitl-review expanded row, including a Re-claim button that recovers an action token after a page reload"
+            # FAR-691 batch A: claimant display names + stale-token drop + silent refetch
+            - "[x] Both pending-gate endpoints batch-resolve claimant display names (one accounts select per list, display_name falling back to email, None when the account row is gone) and stamp a server-side claimed_by_me from the principal; the shared card prefers the display name over the raw account UUID and shows 'You' for the caller's own claim"
+            - "[x] A session claim token is dropped as stale when the server reports the gate claimed by ANOTHER account (claimed_by set + claimed_by_me=false): the card renders the claimed-by-other state with no approve/reject and no re-claim (the backend 409s foreign claims); an ABSENT claimed_by_me (older cached payloads) keeps the FAR-686 behaviour"
+            - "[x] The /settings/hitl-review page fetch runs with silentRefetch: only the FIRST load flips `loading`, so the 30s auto-refresh and filter/date-change refetches update the list in place — the expanded card and its notes textarea keep focus instead of being unmounted mid-edit; refetch errors still surface via the error channel"
+            # FAR-692: decided-gate history + server-side status filter + pagination
+            - "[x] GET /api/v1/hitl/gates lists org gates in EVERY state, paginated in the repo's standard items/total/page/page_size envelope: `status` accepts undecided (DEFAULT — decision IS NULL), pending (undecided + unclaimed), claimed (undecided + claimed), approved, rejected and all (a Literal-typed param, so unknown values 422); the pending-work statuses (undecided/pending/claimed) are data-rot fenced (FAR-612/FAR-604) — joined to runs and restricted to HITL_ACTIONABLE_RUN_STATUSES exactly like /hitl/pending — while approved/rejected history and the all audit view are deliberately unfenced (a decided gate's run has legitimately moved past awaiting_human, and the audit view must surface data-rot rows); page_size defaults to 25 and CLAMPS at 100 instead of failing; sort is decision_at DESC NULLS LAST, claimed_at DESC NULLS LAST, id DESC; /api/v1/hitl/pending is deliberately unchanged for API stability"
+            - "[x] The /settings/hitl-review page fetches /hitl/gates with the status filter mapped server-side (empty selection → undecided, preserving the default queue view): approved/rejected history is finally filterable, decided gates render through the same shared HitlGateCard (decision banners, no claim/approve/reject actions), and the status filter change resets pagination to page 1"
+            - "[x] The review page paginates server-side (page/page_size params on every fetch, minimal inline pager with Previous / 'Page X of Y' / Next shown only when total > page_size, disabled states at the bounds, aria-labelled buttons and a role=status page indicator); search/pipeline/date filters remain CLIENT-side over the loaded page (documented limitation: search matches within the current page only)"
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
     feat-library:

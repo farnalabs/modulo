@@ -274,6 +274,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
                 "pipeline_snapshots",
                 "triggers",
                 "runs",
+                "run_node_outputs",
                 "webhook_dedup_hashes",
                 "hitl_claims",
                 "notification_delivery_log",

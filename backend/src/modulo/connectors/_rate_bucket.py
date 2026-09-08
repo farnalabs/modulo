@@ -141,11 +141,18 @@ local now = tt[1] + tt[2] / 1e6
 local st = redis.call('HMGET', key, 'tokens', 'ts')
 local tokens = tonumber(st[1])
 local ts = tonumber(st[2])
-if tokens == nil and st[1] ~= nil then
+-- A missing hash field comes back from Redis as Lua ``false`` (not ``nil``), so
+-- ``st[1] ~= nil`` alone would wrongly classify a fresh/empty bucket as corrupt
+-- and fail closed on every first consume. Only treat the bucket as corrupt when
+-- the field is present (``st[1] ~= false``) yet not parseable as a number.
+if tokens == nil and st[1] ~= false then
     return -1
 end
 if tokens == nil then
     tokens = burst
+    ts = now
+end
+if ts == nil then
     ts = now
 end
 local elapsed = now - ts

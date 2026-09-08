@@ -49,6 +49,13 @@ _SKIPPED_EDGE_TYPES = frozenset({"reject", "kickback", "loop"})
 # gate apart from manual nodes and guardrail rows. A user node id squatting
 # the prefix would be misrouted as a gate.
 HITL_GATE_NODE_ID_PREFIX = "hitl_gate_"
+# FAR-583: node ids starting with "__" are reserved for the run_node_outputs
+# sentinel namespace — "__run_meta__" (the run-level metadata row) and
+# "__unknown__" (unparseable legacy marker keys) are row keys in the per-node
+# blob store, and "__final__" is its attempt-key sentinel. A user node id
+# squatting the namespace would collide with those rows in reassembly (the
+# repo module additionally rejects "__"-prefixed keys on write).
+DB_SENTINEL_NODE_ID_PREFIX = "__"
 # FAR-613: the minimum trimmed length of a HITL gate's human-provided
 # description. The description is the reviewer's decision briefing — a gate
 # must explain WHY a human must decide on it. Shared with the API contract
@@ -621,6 +628,41 @@ def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: Valid
             "cap (1 hour); use <= 3300 to leave provisioning headroom",
             node_id=nid,
         )
+
+
+_HEREDOC_OPENER_RE = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+
+
+def _check_sandbox_heredoc_list_item(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check: reject agent_commands list items ending with a heredoc terminator (FAR-664).
+
+    sandbox_mode joins ``agent_commands`` items with
+    ``commands_concatenation_string`` (default ``" && "``): a heredoc
+    terminator must be the bare final line of its command, so a terminated
+    item becomes ``PY && <next>`` (unterminated heredoc, bash exit 2) and a
+    terminator+newline item becomes a line-leading ``&&`` (bash syntax error).
+    Neither is fixable at the join layer without changing operator semantics,
+    so the shape is rejected at save time (FAR-511 precedent: reject, never
+    clamp). A scalar ``agent_command`` is unaffected — there is no join.
+    """
+    commands = node.get("agent_commands")
+    if not isinstance(commands, list):
+        return
+    for i, item in enumerate(commands):
+        if not isinstance(item, str):
+            continue
+        delimiters = set(_HEREDOC_OPENER_RE.findall(item))
+        if not delimiters:
+            continue
+        final_line = next((line.strip() for line in reversed(item.splitlines()) if line.strip()), None)
+        if final_line is not None and final_line in delimiters:
+            result.error(
+                "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM",
+                f"Sandbox agent node '{nid}' agent_commands item {i} ends with heredoc terminator "
+                f"'{final_line}' — list items are joined with the concatenation operator and the "
+                "terminator would be corrupted; use a single agent_command or base64-embed the script body",
+                node_id=nid,
+            )
 
 
 def _check_sandbox_stall_timeout(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
@@ -1382,6 +1424,11 @@ class GraphValidator:
         reserved ``hitl_gate_`` prefix (TOPOLOGY_NODE_RESERVED_ID_PREFIX) —
         the executor synthesizes HITL gate nodes under that prefix and the
         stamp/reconcile checks route on it.
+
+        FAR-583: also rejects node ids squatting the ``__`` sentinel
+        namespace (TOPOLOGY_NODE_DB_SENTINEL_PREFIX) — those ids are row keys
+        in the run_node_outputs blob store and would collide with the
+        metadata/unknown sentinel rows on reassembly.
         """
         node_ids: set[str] = set()
         for n in nodes:
@@ -1395,6 +1442,14 @@ class GraphValidator:
                     "TOPOLOGY_NODE_RESERVED_ID_PREFIX",
                     f"Node id '{nid_str}' uses the reserved '{HITL_GATE_NODE_ID_PREFIX}' prefix "
                     "(synthesized HITL gate nodes)",
+                    node_id=nid_str,
+                )
+                return None
+            if nid_str.startswith(DB_SENTINEL_NODE_ID_PREFIX):
+                result.error(
+                    "TOPOLOGY_NODE_DB_SENTINEL_PREFIX",
+                    f"Node id '{nid_str}' uses the reserved '{DB_SENTINEL_NODE_ID_PREFIX}' prefix "
+                    "(run_node_outputs sentinel namespace: __run_meta__ / __unknown__ / __final__)",
                     node_id=nid_str,
                 )
                 return None
@@ -2570,6 +2625,8 @@ class GraphValidator:
         9. agent_command is Jinja-renderable (FAR-226).
         10. read_only / git_credentials are validated sandbox-only fields
             (FAR-212 PR B), and no non-sandbox node carries them.
+        11. agent_commands list items must not end with a heredoc terminator
+            (FAR-664) — the join operator would corrupt the terminator.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -2583,6 +2640,7 @@ class GraphValidator:
             _check_sandbox_template(node, nid, result)
             _check_sandbox_timeout(node, nid, result)
             _check_sandbox_timeout_e2b_cap(node, nid, result)
+            _check_sandbox_heredoc_list_item(node, nid, result)
             _check_sandbox_stall_timeout(node, nid, result)
             _check_sandbox_context_files(node, nid, result)
             _check_sandbox_env_vars(node, nid, _reserved_env_prefixes, result)

@@ -13,12 +13,15 @@ Uses the real RedisContainer + migrated Postgres from ``conftest.py``
 
 from __future__ import annotations
 
+import pytest
 import redis.asyncio as aioredis
 from saq import CronJob
 from saq.queue.redis import RedisQueue
 
 import modulo.core.saq_worker as sw
 from modulo.core.saq_worker import reconcile_cron_registrations
+
+pytestmark = pytest.mark.integration
 
 
 async def my_dummy_cron(*_a: object, **_k: object) -> None:  # pragma: no cover - test fixture

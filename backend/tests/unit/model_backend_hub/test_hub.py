@@ -686,6 +686,100 @@ async def test_initialise_plugin_build_failure_skips_backend():
 # ---------------------------------------------------------------------------
 
 
+class _ClosingFakeBackend(ModelBackendBase):
+    """Fake backend that owns a transport resource with an async ``aclose``.
+
+    Mirrors the OpenAI-compatible adapter whose pinned httpx.AsyncClient must be
+    closed best-effort on hub disposal (FAR-592 D6 F11).
+    """
+
+    def __init__(
+        self,
+        bid: str = "closeable/model",
+        aclose_side_effect: BaseException | None = None,
+    ) -> None:
+        self._bid = bid
+        self._aclose_side_effect = aclose_side_effect
+        self.aclose_calls = 0
+
+    @property
+    def backend_id(self) -> str:
+        return self._bid
+
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+        if self._aclose_side_effect is not None:
+            raise self._aclose_side_effect
+
+    async def health_check(self) -> HealthResult:
+        return HealthResult(ok=True)
+
+    async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+        return AIMessage(content="ok")
+
+    def stream(self, messages: list[BaseMessage], **kwargs: Any):  # type: ignore[return]
+        async def _gen():
+            yield AIMessage(content="ok")
+
+        return _gen()
+
+
+async def test_aexit_closes_transport_owning_backend_and_clears_registries():
+    """FAR-592 D6 F11: a backend with a callable ``aclose`` is closed exactly
+    once on __aexit__, and ALL registries are cleared afterward."""
+    hub = ModelBackendHub()
+    bid = uuid.uuid4()
+    backend = _ClosingFakeBackend()
+    hub.register(bid, backend)
+    hub._creds[bid] = {"api_key": "sk-test"}
+
+    async with hub:
+        pass
+
+    assert backend.aclose_calls == 1
+    with pytest.raises(BackendNotFoundError):
+        await hub.get(bid)
+    assert not hub.backend_ids
+    assert not hub._healthy
+    assert not hub._fallbacks
+    assert not hub._creds
+
+
+async def test_aexit_logs_warning_when_aclose_raises_and_does_not_propagate():
+    """FAR-592 D6 F11: a generic Exception from ``aclose`` is logged (warning
+    mentioning 'Failed to close backend') and NEVER escapes __aexit__."""
+    hub = ModelBackendHub()
+    bid = uuid.uuid4()
+    backend = _ClosingFakeBackend(aclose_side_effect=RuntimeError("transport close failed"))
+    hub.register(bid, backend)
+
+    with patch("modulo.core.model_backend_hub.logger.warning") as mock_warn:
+        # The exception must not propagate out of the async with block.
+        async with hub:
+            pass
+
+    assert backend.aclose_calls == 1
+    warned_text = " ".join(str(a) for a in mock_warn.call_args_list[0].args)
+    assert "Failed to close backend" in warned_text
+
+
+async def test_aexit_reraises_cancelled_error_from_aclose():
+    """FAR-592 D6 F11: a CancelledError from ``aclose`` is re-raised and not
+    swallowed by the disposal loop."""
+    hub = ModelBackendHub()
+    bid = uuid.uuid4()
+    backend = _ClosingFakeBackend(aclose_side_effect=asyncio.CancelledError())
+    hub.register(bid, backend)
+
+    with pytest.raises(asyncio.CancelledError):
+        async with hub:
+            pass
+
+    assert backend.aclose_calls == 1
+    # The re-raise happens inside the loop, so registries are NOT cleared on
+    # cancellation — the original CancelledError takes priority over cleanup.
+
+
 async def test_aexit_logs_and_clears_on_error():
     """__aexit__ with an active exception logs it and still clears the hub."""
     hub = ModelBackendHub()

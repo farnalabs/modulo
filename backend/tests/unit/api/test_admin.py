@@ -370,7 +370,7 @@ class TestUpdateUserDeactivationRevocation:
     def _resolved_user_patches(self, deactivated: bool = False) -> ExitStack:
         """Patch the PUT route's user/membership resolution.
 
-        ``active=True`` always: FAR-533 per-org semantics â€” the PUT path never
+        ``active=True`` always: FAR-533 per-org semantics — the PUT path never
         flips the account-global flag; the caller's-org membership tombstone
         (mirrored by *deactivated* on the fake) carries the deactivation.
         """
@@ -686,7 +686,7 @@ class TestDeleteOrgImmediate:
 
 
 class TestAdminListTeamsOwnedResourceCount:
-    """GET /api/v1/admin/teams includes owned_resource_count (PRD Â§9.3)."""
+    """GET /api/v1/admin/teams includes owned_resource_count (PRD §9.3)."""
 
     URL = "/api/v1/admin/teams"
 
@@ -752,7 +752,7 @@ class TestAdminListTeamsOwnedResourceCount:
 
 
 class TestAdminUpdateTeamOptimisticLock:
-    """PUT /api/v1/admin/teams/{id} with expected_updated_at â€” optimistic concurrency."""
+    """PUT /api/v1/admin/teams/{id} with expected_updated_at — optimistic concurrency."""
 
     URL = "/api/v1/admin/teams"
 
@@ -1151,7 +1151,7 @@ class TestBillingOverviewAggregation:
 
 
 class TestOrgSlugImmutability:
-    """The org slug is immutable once set â€” the profile update endpoint
+    """The org slug is immutable once set — the profile update endpoint
     (PUT /api/v1/admin/org) must never change it."""
 
     URL = "/api/v1/admin/org"
@@ -1189,7 +1189,7 @@ class TestOrgSlugImmutability:
             assert updates.get("name") == "Renamed"
 
     def test_update_org_model_has_no_slug_field(self) -> None:
-        """The request model exposes no slug field â€” a client cannot even
+        """The request model exposes no slug field — a client cannot even
         express a slug change."""
         from modulo.api.routes.admin import UpdateOrgRequest
 
@@ -1256,7 +1256,7 @@ class TestAdminCreateUserAudit:
         assert kwargs["payload_json"]["target_user_id"] == str(account.id)
         assert kwargs["payload_json"]["org_role"] == "runner"
         # FAR-460: an admin-minted credential must be replaced by its owner on
-        # first sign-in. Mirror the reset path â€” the create path must set the flag.
+        # first sign-in. Mirror the reset path — the create path must set the flag.
         assert account.must_change_password is True
 
     def test_create_user_audit_write_is_fail_open(self, client: TestClient) -> None:

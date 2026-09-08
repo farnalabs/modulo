@@ -32,7 +32,10 @@ from modulo.db.bootstrap_role import (
     _find_allow_list_violations,
 )
 
-pytestmark = pytest.mark.breakglass_gate
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.breakglass_gate,
+]
 
 # N=3 retries with backoff 1s->2s->4s (plan §3 — the connectivity probe is
 # transient; the tuple is pinned so a later edit cannot silently change the

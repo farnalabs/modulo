@@ -99,3 +99,28 @@ class TestSecurityHeadersMiddleware:
             assert "style-src" in middleware._csp
             assert "frame-src" in middleware._csp
             assert "img-src" in middleware._csp
+            assert "object-src 'none'" in middleware._csp
+            assert "base-uri 'self'" in middleware._csp
+            assert "form-action 'self'" in middleware._csp
+
+    def test_upgrade_insecure_requests_absent_in_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        monkeypatch.setenv("DEBUG", "true")
+        settings = Settings()
+        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+            app = FastAPI()
+            middleware = SecurityHeadersMiddleware(app)
+            assert "upgrade-insecure-requests" not in middleware._csp
+
+    def test_upgrade_insecure_requests_present_in_production(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("SECRET_KEY", "a" * 32)
+        monkeypatch.setenv("FERNET_KEY", "a" * 32)
+        monkeypatch.setenv("DEBUG", "false")
+        settings = Settings()
+        with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+            app = FastAPI()
+            middleware = SecurityHeadersMiddleware(app)
+            assert "upgrade-insecure-requests" in middleware._csp

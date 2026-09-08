@@ -1031,17 +1031,18 @@ def _bind_model_backends_to_agents(
     bundle: dict[str, Any],
     mb_id_by_name: dict[str, str],
 ) -> None:
-    """Stamp resolved model backend ids onto bundle agents by name."""
+    """Stamp resolved model backend ids onto bundle agents by name.
+
+    Runner bindings are deliberately NOT stamped here (FAR-592 qa F9): the
+    dead ``_resolved_model_backend_id`` write was never read —
+    ``_apply_agent_bindings`` resolves each binding through the override map,
+    a stamped id when present, or the org backend by name, so a separate
+    binding-stamp loop on this path is redundant.
+    """
     for agent in bundle.get("agents", []):
         mb_name = agent.get("model_backend_name", "")
         if mb_name and mb_name in mb_id_by_name:
             agent["model_backend_id"] = mb_id_by_name[mb_name]
-        # FAR-592 (D6): runner bindings rebind by the SAME name-based
-        # mechanism — each binding spec carries model_backend_name.
-        for binding in agent.get("model_backend_bindings", []):
-            binding_name = binding.get("model_backend_name", "")
-            if binding_name and binding_name in mb_id_by_name:
-                binding["_resolved_model_backend_id"] = mb_id_by_name[binding_name]
 
 
 async def _read_zip_upload(file: UploadFile) -> bytes:

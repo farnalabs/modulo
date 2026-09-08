@@ -8,7 +8,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange, getInitialAuthState, shouldReRunAutoLogin, isDemoSession, wasDemoSessionEnded } from './lib/api/client'
+import { api, getAccessToken, setAccessToken, setRefreshToken, onAuthChange, getInitialAuthState, shouldReRunAutoLogin, isDemoSession, wasDemoSessionEnded } from './lib/api/client'
 import { getErrorTracker } from './lib/error-tracking'
 import { getAutoLoginConfig } from './config/runtime'
 import { applyMustChangePassword, syncFromMe, useMustChangePassword } from './lib/mustChangePassword'
@@ -77,8 +77,30 @@ async function runAutoLogin(navigateHome = false): Promise<boolean> {
         })
       }
     } else {
-      console.warn('[App.vue] Login response has no user field — skipping error tracker setUser')
-      // TODO: fetch /me after login to set user info on error tracker
+      // Fetch /me to populate error tracker user context when the login
+      // response lacks the user field — the live path, since LoginResponse
+      // carries no `user`.
+      //
+      // Uses the typed `api.GET` openapi-fetch client rather than a bare fetch
+      // so the MeResponse contract is checked at compile time (the fields are
+      // `display_name`/`org_role`, NOT `name`/`role` — a bare fetch silently
+      // set `name: undefined`), and so auth-header injection plus token
+      // refresh are handled centrally. The access token set above is what
+      // `api.GET` picks up.
+      try {
+        const { data: meData } = await api.GET('/api/v1/auth/me')
+        const tracker = getErrorTracker()
+        if (tracker && meData) {
+          tracker.setUser({
+            id: meData.id,
+            email: meData.email,
+            name: meData.display_name,
+            role: meData.org_role,
+          })
+        }
+      } catch {
+        // Non-critical: error tracker user context is best-effort
+      }
     }
     if (navigateHome) router.push('/')
     return true

@@ -692,10 +692,12 @@ async def test_append_conformance_audit_summary_payload(monkeypatch: pytest.Monk
     assert kwargs["resource_type"] == "run"
     assert kwargs["resource_id"] == _RUN_ID
     payload = kwargs["payload_json"]
-    assert set(payload.keys()) == {"node_id", "conformance_state", "detail"}
+    assert set(payload.keys()) == {"node_id", "conformance_state", "detail", "actor", "summary"}
     assert payload["node_id"] == _NODE_ID
     assert payload["conformance_state"] == "absent"
     assert payload["detail"] == "some detail"
+    assert payload["actor"] == "system"
+    assert payload["summary"] == f'Guardrail conformance absent on node "{_NODE_ID}"'
 
 
 async def test_append_conformance_audit_never_raises(monkeypatch: pytest.MonkeyPatch):

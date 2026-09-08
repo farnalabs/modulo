@@ -154,7 +154,7 @@ def _assert_error_matrix(
 
 
 # ---------------------------------------------------------------------------
-# GET /schemas + /counts â€” error mapping + aggregation
+# GET /schemas + /counts — error mapping + aggregation
 # ---------------------------------------------------------------------------
 
 
@@ -198,7 +198,7 @@ def test_schema_counts_assert_error_matrix(client: tuple[TestClient, AsyncMock])
 
 
 # ---------------------------------------------------------------------------
-# POST / GET / PATCH / deprecate / folder / delete â€” error mapping
+# POST / GET / PATCH / deprecate / folder / delete — error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -366,7 +366,7 @@ def test_delete_schema_unknown_returns_404(client: tuple[TestClient, AsyncMock])
 
 
 # ---------------------------------------------------------------------------
-# Schema versions â€” error mapping
+# Schema versions — error mapping
 # ---------------------------------------------------------------------------
 
 
@@ -419,7 +419,7 @@ def test_get_schema_version_unknown_returns_404(client: tuple[TestClient, AsyncM
 
 
 # ---------------------------------------------------------------------------
-# GET /{schema_id}/fields â€” error mapping + unknown schema
+# GET /{schema_id}/fields — error mapping + unknown schema
 # ---------------------------------------------------------------------------
 
 
@@ -450,7 +450,7 @@ def test_list_schema_fields_assert_error_matrix(client: tuple[TestClient, AsyncM
 
 
 # ---------------------------------------------------------------------------
-# Inference helpers â€” connector sampling + model backend resolution
+# Inference helpers — connector sampling + model backend resolution
 # ---------------------------------------------------------------------------
 
 
@@ -644,7 +644,7 @@ def test_resolve_model_backend_happy_path_returns_backend() -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /infer â€” context guards + error mapping + happy path
+# POST /infer — context guards + error mapping + happy path
 # ---------------------------------------------------------------------------
 
 _INFER_URL = "/api/v1/schemas/infer"
@@ -726,7 +726,7 @@ def test_infer_happy_path_returns_suggestion(client: tuple[TestClient, AsyncMock
 
 
 # ---------------------------------------------------------------------------
-# POST /generate â€” no-backend 400, error matrix, service failure
+# POST /generate — no-backend 400, error matrix, service failure
 # ---------------------------------------------------------------------------
 
 _GENERATE_URL = "/api/v1/schemas/generate"
@@ -797,7 +797,7 @@ def test_generate_happy_path_returns_definition(client: tuple[TestClient, AsyncM
 
 
 # ---------------------------------------------------------------------------
-# POST /migrate + /migrate/plan â€” failure paths + dry-run
+# POST /migrate + /migrate/plan — failure paths + dry-run
 # ---------------------------------------------------------------------------
 
 _MIGRATE_BODY = {
@@ -898,7 +898,7 @@ def test_migration_plan_compute_failure_returns_500(client: tuple[TestClient, As
 
 
 # ---------------------------------------------------------------------------
-# POST /validate + /import â€” helpers and error shapes
+# POST /validate + /import — helpers and error shapes
 # ---------------------------------------------------------------------------
 
 

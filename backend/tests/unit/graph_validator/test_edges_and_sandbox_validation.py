@@ -512,6 +512,79 @@ def test_sandbox_multiple_issues_collected():
 
 
 # ---------------------------------------------------------------------------
+# FAR-664: heredoc terminator in agent_commands list items
+# ---------------------------------------------------------------------------
+
+
+def test_sandbox_heredoc_terminated_list_item_errors():
+    """FAR-664: an agent_commands item whose final line is a bare heredoc
+    terminator is rejected — the " && " join would corrupt the terminator."""
+    node = _sandbox_node(
+        agent_command="",
+        agent_commands=["python3 - <<'PY'\nprint('hi')\nPY", "opencode run"],
+    )
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" in _codes(result)
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM")
+    assert issue.node_id == node["id"]
+    assert "item 0" in issue.message
+    assert "PY" in issue.message
+
+
+def test_sandbox_heredoc_terminated_list_item_with_trailing_newline_errors():
+    """FAR-664: terminator + trailing newline (line-leading '&&' after join)
+    is also rejected — the final non-empty line is still the terminator."""
+    node = _sandbox_node(
+        agent_command="",
+        agent_commands=["python3 - <<PY\ndata\nPY\n", "opencode run"],
+    )
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" in _codes(result)
+    assert not result.is_valid
+
+
+def test_sandbox_heredoc_clean_list_is_valid():
+    """FAR-664: a multi-item list without terminator-final lines saves clean."""
+    node = _sandbox_node(
+        agent_command="",
+        agent_commands=["python3 - <<'PY'\nprint('hi')\nPY\nnext_step", "opencode run"],
+    )
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" not in _codes(result)
+    assert result.is_valid
+
+
+def test_sandbox_heredoc_scalar_command_is_not_flagged():
+    """FAR-664: a scalar agent_command containing a heredoc is safe (no join
+    happens for a single command) and must not be rejected."""
+    node = _sandbox_node(agent_command="python3 - <<'PY'\nprint('hi')\nPY")
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" not in _codes(result)
+
+
+def test_sandbox_heredoc_indented_terminator_detected():
+    """FAR-664: <<- allows indented terminators — a stripped final line that
+    matches the delimiter is still rejected."""
+    node = _sandbox_node(
+        agent_command="",
+        agent_commands=["python3 - <<-PY\n\tprint('hi')\n\tPY"],
+    )
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" in _codes(result)
+
+
+# ---------------------------------------------------------------------------
 # validate() end-to-end: sandbox errors block saves
 # ---------------------------------------------------------------------------
 

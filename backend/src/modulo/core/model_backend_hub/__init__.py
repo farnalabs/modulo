@@ -86,6 +86,26 @@ class ModelBackendHub:
     async def __aexit__(self, exc_type: object, exc_val: object, _exc_tb: object) -> None:
         if exc_type is not None:
             logger.error("ModelBackendHub exiting due to error: %s", exc_val, exc_info=sys.exc_info())
+        # FAR-592 (D6 F11): adapters that own transport resources (the
+        # OpenAI-compatible backend's pinned httpx.AsyncClient) are closed
+        # explicitly — hub disposal must not leak one unclosed httpx client
+        # per resolved backend. Best-effort: a failing close is logged and
+        # never masks the original exit state. Adapters without ``aclose``
+        # are simply dropped with the registry.
+        for backend in list(self._backends.values()):
+            aclose = getattr(backend, "aclose", None)
+            if not callable(aclose):
+                continue
+            try:
+                await asyncio.shield(aclose())
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Failed to close backend %s on hub disposal",
+                    getattr(backend, "backend_id", "<unknown>"),
+                    exc_info=True,
+                )
         self._backends.clear()
         self._healthy.clear()
         self._fallbacks.clear()

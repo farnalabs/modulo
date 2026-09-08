@@ -37,12 +37,21 @@ function claimedGate(overrides: Record<string, unknown> = {}) {
   }
 }
 
-const PENDING_URL = '/api/v1/hitl/pending'
+const GATES_URL = '/api/v1/hitl/gates'
+const PAGE_SIZE = 25
+
+/** The /hitl/gates envelope (FAR-692): items/total/page/page_size. */
+function gatesResponse(gates: unknown[], overrides: Record<string, unknown> = {}) {
+  return {
+    data: { items: gates, total: gates.length, page: 1, page_size: PAGE_SIZE, ...overrides },
+    error: undefined,
+  }
+}
 
 function mockGetWithGates(gates: unknown[]) {
   return (url: string) => {
-    if (url === PENDING_URL) {
-      return Promise.resolve({ data: { gates }, error: undefined })
+    if (url === GATES_URL) {
+      return Promise.resolve(gatesResponse(gates))
     }
     if (url === '/api/v1/pipelines') {
       return Promise.resolve({ data: { items: [] }, error: undefined })
@@ -99,7 +108,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders without crashing', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue({ data: { gates: [] }, error: undefined })
+    (api.GET as any).mockResolvedValue(gatesResponse([]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -124,10 +133,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders gates list', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue({
-      data: { gates: [PENDING_GATE] },
-      error: undefined,
-    })
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -140,10 +146,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('expands gate detail panel on click', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue({
-      data: { gates: [PENDING_GATE] },
-      error: undefined,
-    })
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -163,26 +166,21 @@ describe('SettingsHitlReviewView', () => {
   it('does not re-fetch gates when typing in the search box (client-side filtering)', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((url: string) => {
-      if (url === '/api/v1/hitl/pending') {
-        return Promise.resolve({
-          data: {
-            gates: [
-              PENDING_GATE,
-              {
-                run_id: '550e8400-e29b-41d4-a716-446655440002',
-                gate_id: 'deploy-gate-1',
-                pipeline_id: '660e8400-e29b-41d4-a716-446655440003',
-                claimed_by: null,
-                claimed_at: null,
-                expires_at: null,
-                decision: null,
-                decision_at: null,
-                created_at: '2025-06-30T10:00:00Z',
-              },
-            ],
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([
+          PENDING_GATE,
+          {
+            run_id: '550e8400-e29b-41d4-a716-446655440002',
+            gate_id: 'deploy-gate-1',
+            pipeline_id: '660e8400-e29b-41d4-a716-446655440003',
+            claimed_by: null,
+            claimed_at: null,
+            expires_at: null,
+            decision: null,
+            decision_at: null,
+            created_at: '2025-06-30T10:00:00Z',
           },
-          error: undefined,
-        })
+        ]))
       }
       if (url === '/api/v1/pipelines') {
         return Promise.resolve({
@@ -206,7 +204,7 @@ describe('SettingsHitlReviewView', () => {
 
     const callsAfterMount = (api.GET as any).mock.calls.length
     expect(callsAfterMount).toBeGreaterThan(0)
-    const pendingCallsAfterMount = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/hitl/pending').length
+    const pendingCallsAfterMount = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
 
     const searchInput = wrapper!.find('[data-testid="filter-bar-search"]')
     expect(searchInput.exists()).toBe(true)
@@ -216,7 +214,7 @@ describe('SettingsHitlReviewView', () => {
     await nextTick()
 
     expect((api.GET as any).mock.calls.length).toBe(callsAfterMount)
-    expect((api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/hitl/pending').length).toBe(pendingCallsAfterMount)
+    expect((api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length).toBe(pendingCallsAfterMount)
 
     expect(wrapper!.text()).toContain('Alpha')
     expect(wrapper!.text()).not.toContain('Beta')
@@ -225,12 +223,12 @@ describe('SettingsHitlReviewView', () => {
   it('drives the full claim -> approve lifecycle through the shared gate card (FAR-686)', async () => {
     // The shared card owns the claim token: claiming immediately reveals
     // approve/reject (no page reload needed), and a decision re-fetches the
-    // pending list, so the decided gate leaves the PENDING review page.
+    // gate list, so the decided gate leaves the review page.
     const { api } = await import('../lib/api/client')
     let serverGates: Record<string, unknown>[] = [{ ...PENDING_GATE }]
     ;(api.GET as any).mockImplementation((url: string) => {
-      if (url === '/api/v1/hitl/pending') {
-        return Promise.resolve({ data: { gates: serverGates }, error: undefined })
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse(serverGates))
       }
       return Promise.resolve({ data: { items: [] }, error: undefined })
     })
@@ -283,10 +281,7 @@ describe('SettingsHitlReviewView', () => {
     // path after a reload. The claimed gate must stay listed and the card
     // must offer the token-recovery (re-claim) path.
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({
-      data: { gates: [claimedGate()] },
-      error: undefined,
-    })
+    ;(api.GET as any).mockResolvedValue(gatesResponse([claimedGate()]))
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
         return Promise.resolve({ data: { claim_token: 'tok-2', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
@@ -302,7 +297,7 @@ describe('SettingsHitlReviewView', () => {
 
     const badge = wrapper!.findAll('span').find((s) => s.classes().includes('badge'))
     expect(badge?.text()).toBe('claimed')
-    expect(wrapper!.text()).toContain('Assigned: reviewer@team')
+    expect(wrapper!.text()).toContain('reviewer@team')
 
     await wrapper!.find('[data-testid="hitl-review-toggle-expand"]').trigger('click')
     await nextTick()
@@ -320,24 +315,28 @@ describe('SettingsHitlReviewView', () => {
     expect(wrapper!.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
   })
 
-  it('status filter "claimed" matches claimed gates served by the API (FAR-686)', async () => {
+  it('serves the status filter from the server-side status param (FAR-692)', async () => {
+    // The status filter maps to GET /hitl/gates' `status` query param — the
+    // server does the filtering, so the mock honours the requested param:
+    // undecided (default) serves both gates, 'claimed' only the claimed one.
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockImplementation((url: string) => {
-      if (url === '/api/v1/hitl/pending') {
-        return Promise.resolve({
-          data: {
-            gates: [
-              claimedGate(),
-              {
-                ...PENDING_GATE,
-                run_id: '550e8400-e29b-41d4-a716-446655440002',
-                gate_id: 'deploy-gate-1',
-                pipeline_id: '660e8400-e29b-41d4-a716-446655440003',
-              },
-            ],
-          },
-          error: undefined,
-        })
+    const claimed = claimedGate()
+    const deployPending = {
+      ...PENDING_GATE,
+      run_id: '550e8400-e29b-41d4-a716-446655440002',
+      gate_id: 'deploy-gate-1',
+      pipeline_id: '660e8400-e29b-41d4-a716-446655440003',
+    }
+    ;(api.GET as any).mockImplementation((url: string, options: Record<string, any> = {}) => {
+      if (url === GATES_URL) {
+        const status = options?.params?.query?.status
+        if (status === 'claimed') {
+          return Promise.resolve(gatesResponse([claimed]))
+        }
+        if (status === 'undecided') {
+          return Promise.resolve(gatesResponse([claimed, deployPending]))
+        }
+        return Promise.resolve(gatesResponse([]))
       }
       return Promise.resolve({ data: { items: [] }, error: undefined })
     })
@@ -347,27 +346,32 @@ describe('SettingsHitlReviewView', () => {
     })
     await flushPromises()
     await nextTick()
+
+    // Default load: no filter selected → status=undecided on the new endpoint.
+    const firstGatesCall = (api.GET as any).mock.calls.find((c: unknown[]) => c[0] === GATES_URL)
+    expect(firstGatesCall).toBeDefined()
+    expect(firstGatesCall![1]?.params?.query?.status).toBe('undecided')
     expect(wrapper!.text()).toContain('#approval')
     expect(wrapper!.text()).toContain('#deploy-g')
 
-    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/hitl/pending').length
+    const gatesCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
     wrapper!.findComponent(FilterBar).vm.$emit('update:filter', 'status', 'claimed')
     await flushPromises()
     await nextTick()
 
-    // The filter change re-queries the server, which now serves claimed gates.
-    const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === '/api/v1/hitl/pending').length
-    expect(pendingCallsAfter).toBe(pendingCallsBefore + 1)
+    // The filter change re-queries the NEW endpoint with the mapped param,
+    // and the server-side filtering removes the undecided row.
+    const gatesCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
+    expect(gatesCallsAfter).toBe(gatesCallsBefore + 1)
+    const filterCall = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL)[gatesCallsAfter - 1]
+    expect(filterCall[1]?.params?.query?.status).toBe('claimed')
     expect(wrapper!.text()).toContain('#approval')
     expect(wrapper!.text()).not.toContain('#deploy-g')
   })
 
   it('renders the run link inside the expanded gate card', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue({
-      data: { gates: [PENDING_GATE] },
-      error: undefined,
-    })
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -399,7 +403,7 @@ describe('SettingsHitlReviewView', () => {
     await nextTick()
     await expandFirstGate(wrapper!)
 
-    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
     // FAR-686: the claim button lives in the shared gate card.
     const claimButton = wrapper!.find('[data-testid="hitl-gate-claim"]')
     expect(claimButton.exists()).toBe(true)
@@ -415,7 +419,7 @@ describe('SettingsHitlReviewView', () => {
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('no longer waiting for a human decision')
     expect(banner.text()).toContain('status: complete')
-    const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
     expect(pendingCallsAfter).toBe(pendingCallsBefore + 1)
   })
 
@@ -455,7 +459,7 @@ describe('SettingsHitlReviewView', () => {
     await nextTick()
     await expandFirstGate(wrapper!)
 
-    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
     await wrapper!.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -463,7 +467,7 @@ describe('SettingsHitlReviewView', () => {
     // Network errors land in the catch path: the row on screen may be stale
     // (the claim may have landed before the connection dropped), so the
     // refresh must fire here too ÔÇö not only for API-error failures (FAR-612).
-    const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === PENDING_URL).length
+    const pendingCallsAfter = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
     expect(pendingCallsAfter).toBe(pendingCallsBefore + 1)
     const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
     expect(banner.exists()).toBe(true)
@@ -528,34 +532,29 @@ describe('SettingsHitlReviewView', () => {
   it('shows the decision briefing in the expanded panel (FAR-613)', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((url: string) => {
-      if (url === '/api/v1/hitl/pending') {
-        return Promise.resolve({
-          data: {
-            gates: [
-              {
-                run_id: '550e8400-e29b-41d4-a716-446655440000',
-                gate_id: 'approval-gate-1',
-                pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
-                claimed_by: null,
-                claimed_at: null,
-                expires_at: null,
-                decision: null,
-                decision_at: null,
-                created_at: '2025-06-30T10:00:00Z',
-                description: 'Approve only when the generated comments are accurate and safe to post.',
-                context: {
-                  trigger: 'condition',
-                  condition: "node_id=='550e8400-e29b-41d4-a716-446655440000'",
-                  source_node_id: '550e8400-e29b-41d4-a716-446655440000',
-                  source_node_label: 'Comment Generator',
-                  artifacts: [{ node_id: '550e8400-e29b-41d4-a716-446655440000', summary: '{"ok":true}' }],
-                  pipeline_name: 'PR Reviewer',
-                },
-              },
-            ],
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([
+          {
+            run_id: '550e8400-e29b-41d4-a716-446655440000',
+            gate_id: 'approval-gate-1',
+            pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
+            claimed_by: null,
+            claimed_at: null,
+            expires_at: null,
+            decision: null,
+            decision_at: null,
+            created_at: '2025-06-30T10:00:00Z',
+            description: 'Approve only when the generated comments are accurate and safe to post.',
+            context: {
+              trigger: 'condition',
+              condition: "node_id=='550e8400-e29b-41d4-a716-446655440000'",
+              source_node_id: '550e8400-e29b-41d4-a716-446655440000',
+              source_node_label: 'Comment Generator',
+              artifacts: [{ node_id: '550e8400-e29b-41d4-a716-446655440000', summary: '{"ok":true}' }],
+              pipeline_name: 'PR Reviewer',
+            },
           },
-          error: undefined,
-        })
+        ]))
       }
       return Promise.resolve({ data: { items: [] }, error: undefined })
     })
@@ -583,26 +582,21 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders the muted no-description fallback for a legacy gate (FAR-613)', async () => {
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue({
-      data: {
-        gates: [
-          {
-            run_id: '550e8400-e29b-41d4-a716-446655440000',
-            gate_id: 'approval-gate-1',
-            pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
-            claimed_by: null,
-            claimed_at: null,
-            expires_at: null,
-            decision: null,
-            decision_at: null,
-            created_at: '2025-06-30T10:00:00Z',
-            description: null,
-            context: null,
-          },
-        ],
+    ;(api.GET as any).mockResolvedValue(gatesResponse([
+      {
+        run_id: '550e8400-e29b-41d4-a716-446655440000',
+        gate_id: 'approval-gate-1',
+        pipeline_id: '660e8400-e29b-41d4-a716-446655440001',
+        claimed_by: null,
+        claimed_at: null,
+        expires_at: null,
+        decision: null,
+        decision_at: null,
+        created_at: '2025-06-30T10:00:00Z',
+        description: null,
+        context: null,
       },
-      error: undefined,
-    })
+    ]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -618,5 +612,307 @@ describe('SettingsHitlReviewView', () => {
     // The gate stays claimable ÔÇö the legacy briefing never breaks the flow.
     // The claim control is the shared HitlGateCard's `hitl-gate-claim` button.
     expect(wrapper!.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
+  })
+
+  it('keeps the expanded card mounted and focused across a refetch (FAR-691 silentRefetch)', async () => {
+    // The 30s auto-refresh / filter refetches must NOT flip `loading`: the
+    // list branch stays mounted, so the expanded card's notes textarea keeps
+    // its focus (and its in-session token) instead of being unmounted mid-edit.
+    const { api } = await import('../lib/api/client')
+    let holdRefetch: ((value: unknown) => void) | null = null
+    let refetchPending = false
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        if (refetchPending) {
+          return new Promise((resolve) => { holdRefetch = resolve })
+        }
+        return Promise.resolve(gatesResponse([pendingGateRow()]))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    ;(api.POST as any).mockResolvedValue({
+      data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' },
+      error: undefined,
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      // attachTo: real DOM attachment so textarea.focus() actually moves
+      // document.activeElement (jsdom no-ops focus on detached trees).
+      attachTo: document.body,
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    await wrapper!.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const notes = wrapper!.find('[data-testid="hitl-gate-notes"]')
+    expect(notes.exists()).toBe(true)
+    await notes.setValue('typed notes')
+    ;(notes.element as HTMLTextAreaElement).focus()
+    expect(document.activeElement).toBe(notes.element)
+
+    // Trigger a refetch (filter change -> loadGates()) and hold it in flight.
+    const pendingCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
+    refetchPending = true
+    wrapper!.findComponent(FilterBar).vm.$emit('update:filter', 'status', 'pending')
+    await nextTick()
+    await nextTick()
+
+    const pendingCallsDuring = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
+    expect(pendingCallsDuring).toBe(pendingCallsBefore + 1)
+    // silentRefetch: no spinner swap — the list branch (and the focused
+    // textarea) stay mounted while the refetch is in flight.
+    expect(wrapper!.find('.animate-spin').exists()).toBe(false)
+    const notesDuringRefetch = wrapper!.find('[data-testid="hitl-gate-notes"]')
+    expect(notesDuringRefetch.exists()).toBe(true)
+    expect(document.activeElement).toBe(notesDuringRefetch.element)
+
+    refetchPending = false
+    holdRefetch!(gatesResponse([pendingGateRow()]))
+    await flushPromises()
+    await nextTick()
+
+    const notesAfter = wrapper!.find('[data-testid="hitl-gate-notes"]')
+    expect(notesAfter.exists()).toBe(true)
+    expect((notesAfter.element as HTMLTextAreaElement).value).toBe('typed notes')
+    expect(document.activeElement).toBe(notesAfter.element)
+  })
+
+  it('renders pagination when total exceeds the page size and navigates pages (FAR-692)', async () => {
+    const { api } = await import('../lib/api/client')
+    const pageOneGate = { ...pendingGateRow() }
+    const pageTwoGate = {
+      ...pendingGateRow(),
+      run_id: '550e8400-e29b-41d4-a716-446655440002',
+      gate_id: 'deploy-gate-1',
+      pipeline_id: '660e8400-e29b-41d4-a716-446655440003',
+    }
+    ;(api.GET as any).mockImplementation((url: string, options: Record<string, any> = {}) => {
+      if (url === GATES_URL) {
+        const q = options?.params?.query || {}
+        if (q.page === 2) {
+          return Promise.resolve(gatesResponse([pageTwoGate], { page: 2, total: 26 }))
+        }
+        return Promise.resolve(gatesResponse([pageOneGate], { total: 26 }))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // total (26) > page_size (25): the pager renders, page 1 of 2, Prev at
+    // the lower bound, Next enabled. The indicator is announced (role=status).
+    const prev = wrapper!.find('[data-testid="hitl-review-prev-page"]')
+    const next = wrapper!.find('[data-testid="hitl-review-next-page"]')
+    expect(prev.exists()).toBe(true)
+    expect(next.exists()).toBe(true)
+    expect(prev.attributes('disabled')).toBeDefined()
+    expect(next.attributes('disabled')).toBeUndefined()
+    expect(prev.attributes('aria-label')).toBeTruthy()
+    expect(next.attributes('aria-label')).toBeTruthy()
+    expect(wrapper!.find('[data-testid="hitl-review-page-indicator"]').attributes('role')).toBe('status')
+    expect(wrapper!.text()).toContain('Page 1 of 2')
+
+    const gatesCallsBefore = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
+    await next.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // Next navigates to page 2 via the page query param; the page-2 gate row
+    // renders and the bounds flip (Prev enabled, Next disabled at the top).
+    const gatesCalls = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL)
+    expect(gatesCalls.length).toBe(gatesCallsBefore + 1)
+    expect(gatesCalls[gatesCalls.length - 1][1]?.params?.query?.page).toBe(2)
+    expect(wrapper!.text()).toContain('Page 2 of 2')
+    expect(wrapper!.text()).toContain('#deploy-g')
+    expect(wrapper!.find('[data-testid="hitl-review-prev-page"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper!.find('[data-testid="hitl-review-next-page"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('hides pagination when total fits within one page (FAR-692)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue(gatesResponse([pendingGateRow()], { total: 2 }))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-prev-page"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-review-next-page"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-review-page-indicator"]').exists()).toBe(false)
+  })
+
+  it('renders a decided gate through the shared card: decision banner, no actions (FAR-692)', async () => {
+    // The history view lists decided gates; they render through the SAME
+    // HitlGateCard — its status computed shows the decision banner and no
+    // claim/approve/reject controls (no duplicated decision rendering).
+    const { api } = await import('../lib/api/client')
+    const approvedGate = {
+      ...pendingGateRow(),
+      claimed_by: '999e8400-e29b-41d4-a716-446655440009',
+      claimed_at: '2025-06-30T11:00:00Z',
+      decision: 'approved',
+      decision_at: '2025-06-30T12:00:00Z',
+    }
+    ;(api.GET as any).mockResolvedValue(gatesResponse([approvedGate]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    // Row badge + the card's approved banner.
+    const badges = wrapper!.findAll('span.badge').map((s) => s.text())
+    expect(badges).toContain('approved')
+    expect(wrapper!.text()).toContain('Gate was approved. The pipeline has resumed.')
+    expect(wrapper!.find('[data-testid="hitl-gate-claim"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-gate-approve"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
+  })
+
+  it('resets to page 1 when the status filter changes (FAR-692)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string, options: Record<string, any> = {}) => {
+      if (url === GATES_URL) {
+        const q = options?.params?.query || {}
+        return Promise.resolve(gatesResponse([pendingGateRow()], { total: 26, page: q.page ?? 1 }))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Walk to page 2 first.
+    await wrapper!.find('[data-testid="hitl-review-next-page"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // A filter change resets pagination: the next fetch is page 1 again.
+    wrapper!.findComponent(FilterBar).vm.$emit('update:filter', 'status', 'approved')
+    await flushPromises()
+    await nextTick()
+
+    const gatesCalls = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL)
+    const lastQuery = gatesCalls[gatesCalls.length - 1][1]?.params?.query
+    expect(lastQuery?.page).toBe(1)
+    expect(lastQuery?.status).toBe('approved')
+  })
+
+  it('renders column headers above the gate rows (FAR-727)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue(gatesResponse([pendingGateRow()]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const headers = wrapper!.find('[data-testid="hitl-review-column-headers"]')
+    expect(headers.exists()).toBe(true)
+    expect(headers.text()).toContain('Status')
+    expect(headers.text()).toContain('Pipeline')
+    expect(headers.text()).toContain('Node')
+    expect(headers.text()).toContain('Assignee')
+    expect(headers.text()).toContain('Created')
+  })
+
+  it('renders the server-resolved pipeline name even when the cached pipelines list is empty (FAR-727)', async () => {
+    // THE reported bug: rows rendered `#d6b2c25b` because the name was
+    // resolved client-side from the (paginated) /pipelines list. The
+    // endpoint's pipeline_name must win and the raw ID must never show.
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([{ ...pendingGateRow(), pipeline_name: 'PR Reviewer' }]))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const name = wrapper!.find('[data-testid="hitl-review-pipeline-name"]')
+    expect(name.text()).toBe('PR Reviewer')
+    expect(wrapper!.text()).not.toContain('#660e8400')
+  })
+
+  it('falls back to the cached pipelines-list name for legacy payloads without pipeline_name (FAR-727)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([pendingGateRow()]))
+      }
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [{ id: '660e8400-e29b-41d4-a716-446655440001', name: 'Alpha' }] },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-pipeline-name"]').text()).toBe('Alpha')
+  })
+
+  it('shows the deleted-pipeline fallback only when no name resolves at all (FAR-727)', async () => {
+    // pipeline_name absent AND the cached list has nothing: the pipeline row
+    // is gone (deleted) — the only case where an ID may render.
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.resolve(gatesResponse([pendingGateRow()]))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-pipeline-name"]').text()).toBe('Deleted pipeline (#660e8400)')
+  })
+
+  it('renders the server-resolved gate label instead of the raw node-ID prefix (FAR-727)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockResolvedValue(gatesResponse([{ ...pendingGateRow(), label: 'Needs human approval' }]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const node = wrapper!.find('[data-testid="hitl-review-node-name"]')
+    expect(node.text()).toContain('Needs human approval')
+    expect(node.text()).not.toContain('#approval')
   })
 })

@@ -178,6 +178,11 @@ class DockerRuntimeProvider(RuntimeProvider):
         memory_mb = max(4, min(memory_mb, 131072))
         container_name = f"{_WORKSPACE_PREFIX}{ref}"
 
+        # spec.labels maps to container Env (env-var injection). Docker is the
+        # ONLY provider consuming spec.labels (FAR-595 contract): E2B/Local
+        # ignore it — clone inputs ride the first-class spec.repo_url /
+        # spec.repo_ref fields, which this provider does not act on (the
+        # bundled runner image handles code sync).
         env = []
         for k, v in (spec.labels or {}).items():
             entry = f"{k}={v}"
@@ -188,7 +193,8 @@ class DockerRuntimeProvider(RuntimeProvider):
 
         # Provider-neutral workspace metadata maps to container Labels
         # (deployment-identity / org / run correlation, ADR 029). This is
-        # separate from ``spec.labels``, which stays Env-var injection.
+        # separate from ``spec.labels`` (Env injection) and from
+        # ``repo_url``/``repo_ref`` (clone semantics, unused here).
         workspace_labels = dict(spec.workspace_metadata or {})
         # Deployment-identity label: machine-scoped reconciler filters ride
         # on it (two deployments sharing one engine never destroy each

@@ -2532,6 +2532,12 @@ export interface paths {
         /**
          * Delete Binding Endpoint
          * @description Delete one of the agent's binding rows (elevated, audit-logged).
+         *
+         *     The delete is SCOPED to the agent (a binding from a different agent under
+         *     the same org is a 404, never a cross-agent delete), and the audit event is
+         *     appended ONLY for a committed delete — inside the transaction, BEFORE any
+         *     404 raise — so a nonexistent or foreign binding can never leave a phantom
+         *     audit trail.
          */
         delete: operations["delete_binding_endpoint_api_v1_agents__agent_id__bindings__binding_id__delete"];
         options?: never;
@@ -2887,6 +2893,52 @@ export interface paths {
          *     FAR-604).
          */
         get: operations["list_org_pending_gates_api_v1_hitl_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hitl/gates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Org Gates
+         * @description Paginated org-wide gate listing including DECIDED gates (FAR-692).
+         *
+         *     The review page's status filter was a no-op for approved/rejected because
+         *     ``GET /api/v1/hitl/pending`` only ever returns undecided gates. This
+         *     endpoint lists gates in EVERY state:
+         *
+         *     - ``undecided`` (DEFAULT): ``decision IS NULL`` — pending AND claimed.
+         *     - ``pending``: undecided and unclaimed.
+         *     - ``claimed``: undecided and claimed.
+         *     - ``approved`` / ``rejected``: the decided history.
+         *     - ``all``: everything.
+         *
+         *     The data-rot fence (FAR-612/FAR-604) applies ONLY to the pending-work
+         *     statuses — ``undecided``/``pending``/``claimed`` join ``runs`` and keep
+         *     only gates whose run is still in ``HITL_ACTIONABLE_RUN_STATUSES``
+         *     (``awaiting_human``/``claimed``/``hitl_parked``), exactly like
+         *     ``HITLManager.list_pending``: an undecided gate on any other run status
+         *     is orphaned data rot (e.g. rows left by the since-fixed auto-approve
+         *     bug), not pending work. History views (``approved``/``rejected``) and
+         *     the ``all`` audit view are deliberately UNFENCED: a decided gate's run
+         *     has legitimately moved past ``awaiting_human``, and the audit view must
+         *     surface data-rot rows.
+         *
+         *     ``/api/v1/hitl/pending`` is deliberately UNCHANGED (API stability — other
+         *     consumers depend on its undecided-only shape). The response envelope
+         *     mirrors the repo's standard list convention (items/total/page/page_size,
+         *     as the runs list uses) with the existing ``GateResponse`` items.
+         */
+        get: operations["list_org_gates_api_v1_hitl_gates_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11198,6 +11250,20 @@ export interface components {
             /** Edge Count */
             edge_count: number;
         };
+        /**
+         * GateListResponse
+         * @description Paginated org gate listing (FAR-692) — the repo's standard list envelope.
+         */
+        GateListResponse: {
+            /** Items */
+            items: components["schemas"]["GateResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
         /** GateResponse */
         GateResponse: {
             /**
@@ -11232,6 +11298,13 @@ export interface components {
             context?: {
                 [key: string]: unknown;
             } | null;
+            /** Claimed By Name */
+            claimed_by_name?: string | null;
+            /**
+             * Claimed By Me
+             * @default false
+             */
+            claimed_by_me: boolean;
         };
         /** GetOrgGuardrailsKillSwitchResponse */
         GetOrgGuardrailsKillSwitchResponse: {
@@ -14017,7 +14090,7 @@ export interface components {
             description?: string | null;
             /**
              * Provider Type
-             * @description One of: local_docker, e2b, local, runner_docker (the provider_type vocabulary).
+             * @description One of: e2b, local, local_docker, runner_docker (the provider_type vocabulary).
              */
             provider_type: string;
             /** Image Ref */
@@ -14123,7 +14196,7 @@ export interface components {
             description?: string | null;
             /**
              * Provider Type
-             * @description One of: local_docker, e2b, local, runner_docker (the provider_type vocabulary).
+             * @description One of: e2b, local, local_docker, runner_docker (the provider_type vocabulary).
              */
             provider_type?: string | null;
             /** Image Ref */
@@ -24308,6 +24381,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PendingGatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_org_gates_api_v1_hitl_gates_get: {
+        parameters: {
+            query?: {
+                status?: "undecided" | "pending" | "claimed" | "approved" | "rejected" | "all";
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateListResponse"];
                 };
             };
             /** @description Validation Error */

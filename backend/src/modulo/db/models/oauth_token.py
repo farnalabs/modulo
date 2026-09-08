@@ -12,7 +12,19 @@ Token families implement rotation detection (reuse pattern from user token_famil
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, Uuid, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
@@ -106,7 +118,9 @@ class OAuthTokenFamily(Base):
     __tablename__ = "oauth_token_families"
     __table_args__ = ({"comment": "Token families for MCP OAuth access token rotation"},)
 
-    family_id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    family_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     organisation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),

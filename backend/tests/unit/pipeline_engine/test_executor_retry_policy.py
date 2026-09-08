@@ -1,6 +1,6 @@
 """Unit tests for the pipeline retry_policy decision logic in the executor.
 
-The primary contract is ``_retry_after_policy`` â€” the pure decision function
+The primary contract is ``_retry_after_policy`` — the pure decision function
 that maps a terminal (final_status, error_code) outcome to a retry budget.
 These tests assert the matching rules directly; the execute() integration path
 (reset-to-pending + re-raise) is covered by the executor's fenced-retry tests.
@@ -151,7 +151,7 @@ async def _bypass_capacity(mock_self, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# _retry_after_policy â€” pure decision logic (the extensible matching contract)
+# _retry_after_policy — pure decision logic (the extensible matching contract)
 # ---------------------------------------------------------------------------
 
 
@@ -279,11 +279,11 @@ def test_retry_after_policy_failure_excludes_timeout_outcome():
 def test_retry_after_policy_failure_excludes_hang_death():
     # FAR-136 Gap 2 (prove-the-fix): a sandbox-agent hang death terminalizes as
     # error_code="node_cancelled" with "likely hung" in error_detail. A
-    # "failure"-only policy must NOT re-dispatch it â€” each re-dispatch burns a
+    # "failure"-only policy must NOT re-dispatch it — each re-dispatch burns a
     # full node timeout with zero recovery probability.
     hang_detail = (
         "Sandbox agent command produced no output within 1200s. No stdout/stderr "
-        "was captured â€” the agent likely hung before writing any result."
+        "was captured — the agent likely hung before writing any result."
     )
     assert _retry_after_policy({"on": ["failure"], "max_retries": 5}, "failed", "node_cancelled", hang_detail) is None
 
@@ -303,7 +303,7 @@ def test_retry_after_policy_failure_excludes_hang_death_dotted_code():
 
 def test_retry_after_policy_failure_retries_transient_node_cancelled():
     # FAR-136 Gap 2 (both directions): a TRANSIENT node_cancelled (no "likely
-    # hung" marker) stays retryable via the "failure" event â€” the exclusion
+    # hung" marker) stays retryable via the "failure" event — the exclusion
     # must stay surgical.
     assert (
         _retry_after_policy(
@@ -318,25 +318,25 @@ def test_retry_after_policy_failure_retries_transient_node_cancelled():
 
 def test_retry_after_policy_failure_still_matches_with_detail_present():
     # A generic failure with an error_detail (no hang marker) still matches the
-    # "failure" event â€” the new error_detail param must not change the
+    # "failure" event — the new error_detail param must not change the
     # pre-existing generic-failure behaviour.
     assert _retry_after_policy({"on": ["failure"], "max_retries": 2}, "failed", "boom", "some detail") == 2
 
 
 def test_retry_after_policy_stall_error_code_on_failed_status():
     # A stall surfaces as status "failed" with error_code "executor_stalled"
-    # (the zombie watchdog path) â€” the "stall" event must still match it.
+    # (the zombie watchdog path) — the "stall" event must still match it.
     assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "executor_stalled") == 2
 
 
 # ---------------------------------------------------------------------------
-# FAR-503 â€” the "eval_failed" event and the node-deadline "timeout" alias
+# FAR-503 — the "eval_failed" event and the node-deadline "timeout" alias
 # ---------------------------------------------------------------------------
 
 
 def test_retry_after_policy_eval_failed_match():
     # FAR-503: an eval-blocked run terminalizes as final_status "eval_failed"
-    # with raw error_code "eval_blocked" â€” the new event re-dispatches it.
+    # with raw error_code "eval_blocked" — the new event re-dispatches it.
     assert _retry_after_policy({"on": ["eval_failed"], "max_retries": 1}, "eval_failed", "eval_blocked") == 1
 
 
@@ -358,7 +358,7 @@ def test_retry_after_policy_eval_failed_stays_surgical():
 
 def test_retry_after_policy_timeout_matches_node_deadline_exceeded():
     # FAR-369: the absolute node-deadline watchdog terminalizes with
-    # "node_deadline_exceeded" â€” a {on: ["timeout"]} policy must re-dispatch it
+    # "node_deadline_exceeded" — a {on: ["timeout"]} policy must re-dispatch it
     # (the live gap: the deadline code was not in the timeout alias set).
     assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_deadline_exceeded") == 1
 
@@ -369,7 +369,7 @@ def test_retry_after_policy_timeout_matches_dotted_deadline_code():
 
 
 # ---------------------------------------------------------------------------
-# _graph_is_idempotent â€” FAR-295 (idempotent flag gates every retry path)
+# _graph_is_idempotent — FAR-295 (idempotent flag gates every retry path)
 # ---------------------------------------------------------------------------
 
 
@@ -411,7 +411,7 @@ def test_graph_is_idempotent_defaults_for_malformed_input():
 async def test_execute_retry_policy_never_redispatch_non_idempotent_graph():
     """FAR-295: a graph containing a node with idempotent=false is NEVER
     re-dispatched by the run-level retry_policy even when the policy would
-    otherwise retry the failure â€” re-running would double-execute the
+    otherwise retry the failure — re-running would double-execute the
     side-effecting node. Mirrors the FAR-210 correction-run exclusion.
 
     Prove-the-fix: without the ``graph_idempotent`` guard at the dispatch site,
@@ -461,7 +461,7 @@ async def test_execute_retry_policy_never_redispatch_non_idempotent_graph():
 
 async def test_execute_retry_policy_still_redispatch_idempotent_graph():
     """FAR-295 sanity: a graph whose nodes are all idempotent (or carry no
-    idempotent flag) keeps the pre-existing retry_policy re-dispatch behaviour â€”
+    idempotent flag) keeps the pre-existing retry_policy re-dispatch behaviour —
     the guard must stay surgical and not disable retries for normal graphs."""
     run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot(
@@ -530,7 +530,7 @@ async def test_execute_transient_retry_suppressed_on_non_idempotent_graph():
             input_payload={},
             claim_token="tok-claim-abc",
         )
-    # No fenced pending-reset â€” the transient retry was suppressed.
+    # No fenced pending-reset — the transient retry was suppressed.
     resets = [s for s in statements if "status='pending'" in s]
     assert resets == []
     # Terminal failure with a message that names the idempotency suppression.
@@ -544,7 +544,7 @@ async def test_execute_transient_retry_suppressed_on_non_idempotent_graph():
 
 
 # ---------------------------------------------------------------------------
-# RunRetryPolicyError â€” subclasses NodeCancelledError (transient to the caller)
+# RunRetryPolicyError — subclasses NodeCancelledError (transient to the caller)
 # ---------------------------------------------------------------------------
 
 
@@ -558,7 +558,7 @@ def test_run_retry_policy_error_subclasses_node_cancelled():
 
 
 # ---------------------------------------------------------------------------
-# PipelineExecutor.execute â€” terminal failure under a retry policy resets the
+# PipelineExecutor.execute — terminal failure under a retry policy resets the
 # run to pending and re-raises RunRetryPolicyError (not a terminal fail)
 # ---------------------------------------------------------------------------
 
@@ -577,12 +577,12 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
     registry = _mock_registry()
     settings = MagicMock(saq_run_retries=5)
 
-    # _stream_graph raises a transient NodeCancelledError â€” the run's terminal
+    # _stream_graph raises a transient NodeCancelledError — the run's terminal
     # state then goes through the retry-policy decision point. But a
     # NodeCancelledError with retry budget left is handled by the EXISTING
     # NodeCancelledError path, not the retry-policy path. To exercise the
     # retry-policy path we must produce a terminal (final_status, error_code)
-    # tuple WITHOUT a NodeCancelledError â€” a generic exception whose class name
+    # tuple WITHOUT a NodeCancelledError — a generic exception whose class name
     # becomes the error_code, matching "failure".
     class _GenericFailureError(Exception):
         pass
@@ -619,7 +619,7 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
 
 
 def test_graph_non_idempotent_flag_semantics():
-    """FAR-295: the graph helper flags ONLY an explicit boolean False â€” anything
+    """FAR-295: the graph helper flags ONLY an explicit boolean False — anything
     else (absent, True, or a malformed non-bool) stays idempotent so a retry is
     never fail-opened by a type mixup."""
     from modulo.core.pipeline_engine.executor import _graph_is_idempotent
@@ -631,14 +631,14 @@ def test_graph_non_idempotent_flag_semantics():
     assert _graph_is_idempotent({"nodes": [{"id": "node-a", "idempotent": False}]}) is False
     mixed = {"nodes": [{"id": "node-a", "idempotent": True}, {"id": "node-b", "idempotent": False}]}
     assert _graph_is_idempotent(mixed) is False
-    # A malformed non-bool value must NOT count as non-idempotent â€” it stays
+    # A malformed non-bool value must NOT count as non-idempotent — it stays
     # retryable here (save-time validation rejects the graph before it runs).
     assert _graph_is_idempotent({"nodes": [{"id": "node-a", "idempotent": "false"}]}) is True
 
 
 async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
     """FAR-295: a pipeline retry_policy must NOT re-dispatch a run whose graph
-    declares a node with ``idempotent: false`` â€” the re-run would re-execute that
+    declares a node with ``idempotent: false`` — the re-run would re-execute that
     node's external side effect. The run terminal-fails via the single
     finalization path with the generic failure code: no RunRetryPolicyError, no
     fenced pending-reset."""
@@ -675,7 +675,7 @@ async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
     # no fenced pending-reset was issued.
     assert result is not None
     assert not any("status='pending'" in s for s in statements)
-    # Terminal failure via the single finalization path with the generic code â€”
+    # Terminal failure via the single finalization path with the generic code —
     # the non-idempotent graph is excluded from re-dispatch, not remapped to a
     # dedicated error code.
     mock_finalize.assert_awaited_once()
@@ -684,7 +684,7 @@ async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
 
 
 class _GenericFailureError(Exception):
-    """A non-transient generic failure â€” its class name becomes the error_code,
+    """A non-transient generic failure — its class name becomes the error_code,
     matching the "failure" retry event (unlike NodeCancelledError subclasses)."""
 
 
@@ -733,13 +733,13 @@ async def _run_single_retry_attempt(
 
     Each real execute() invocation starts from a fresh DB session (the
     session_factory creates a new session per call), so each simulated attempt
-    must build a fresh session mock â€” reusing one session mock across attempts
+    must build a fresh session mock — reusing one session mock across attempts
     exhausts its canned result iterator and silently corrupts later attempts.
     ``compiled`` overrides the default _GenericFailureError graph (e.g. an
     EvalBlockedError graph for the FAR-503 eval_failed tests).
 
     Returns ``(outcome, payload, statements, finalize_mock)`` where outcome is
-    ``"retry"`` (RunRetryPolicyError raised â€” the run was reset to pending and
+    ``"retry"`` (RunRetryPolicyError raised — the run was reset to pending and
     re-dispatched) or ``"terminal"`` (execute() returned normally).
     """
     run = _make_run(node_attempt_count=node_attempt_count, claim_token="tok-claim-abc")
@@ -788,7 +788,7 @@ async def test_execute_retry_policy_max_retries_1_retries_exactly_once():
     assert "claim_token=:tok" in resets[0]
     mock_finalize.assert_not_awaited()
 
-    # Attempt 2 (count > budget): terminal fail â€” no re-dispatch.
+    # Attempt 2 (count > budget): terminal fail — no re-dispatch.
     kind2, result, statements2, mock_finalize2 = await _run_single_retry_attempt(
         node_attempt_count=2, retry_policy=policy
     )
@@ -835,7 +835,7 @@ async def test_execute_retry_policy_max_retries_5_retries_all_five():
 async def test_execute_retry_policy_exhausted_boundary_terminal_no_redispatch():
     """EXHAUSTED boundary: once the attempt count exceeds the retry budget
     (count == budget + 1 after the budgeted retries are consumed) the run
-    terminal-fails â€” no fenced pending-reset, no RunRetryPolicyError. This
+    terminal-fails — no fenced pending-reset, no RunRetryPolicyError. This
     covers the terminal branch the existing tests only skirt.
     """
 
@@ -854,13 +854,13 @@ async def test_execute_retry_policy_exhausted_boundary_terminal_no_redispatch():
 
 
 # ---------------------------------------------------------------------------
-# FAR-503 â€” eval_failed re-dispatch, budget exhaustion, deadline alias,
+# FAR-503 — eval_failed re-dispatch, budget exhaustion, deadline alias,
 # and the delivery-sentinel composition (guard A)
 # ---------------------------------------------------------------------------
 
 
 def _eval_blocked_compiled() -> MagicMock:
-    """A compiled graph raising EvalBlockedError â€” terminalizes as
+    """A compiled graph raising EvalBlockedError — terminalizes as
     final_status "eval_failed" / error_code "eval_blocked"."""
     from modulo.core.eval_engine import EvalBlockedError
 
@@ -869,7 +869,7 @@ def _eval_blocked_compiled() -> MagicMock:
 
 async def test_execute_retry_policy_eval_failed_redispatches():
     """FAR-503: a run terminalized eval_failed (EvalBlockedError) under
-    {on: ["eval_failed"], max_retries: 1} is re-dispatched â€” fenced
+    {on: ["eval_failed"], max_retries: 1} is re-dispatched — fenced
     pending-reset + RunRetryPolicyError, no terminal finalization."""
     kind, exc, statements, mock_finalize = await _run_single_retry_attempt(
         node_attempt_count=1,
@@ -886,7 +886,7 @@ async def test_execute_retry_policy_eval_failed_redispatches():
 
 
 async def test_execute_retry_policy_eval_failed_budget_exhaustion_terminalizes():
-    """FAR-503: max_retries counts RETRIES â€” attempt 1 (count <= budget 1)
+    """FAR-503: max_retries counts RETRIES — attempt 1 (count <= budget 1)
     re-dispatches; attempt 2 (count > budget) terminal-fails as
     eval_failed/eval_blocked and stays failed (no second re-dispatch)."""
     policy = {"on": ["eval_failed"], "max_retries": 1}
@@ -910,7 +910,7 @@ async def test_execute_retry_policy_eval_failed_budget_exhaustion_terminalizes()
 
 async def test_execute_retry_policy_node_deadline_exceeded_redispatches_under_timeout():
     """FAR-369 / FAR-503: a terminal outcome carrying the deadline code
-    re-dispatches under {on: ["timeout"]} â€” the code resolves into the timeout
+    re-dispatches under {on: ["timeout"]} — the code resolves into the timeout
     event's alias set.
 
     The generic-catch publishes ``type(exc).__name__`` as the error_code, so an
@@ -918,7 +918,7 @@ async def test_execute_retry_policy_node_deadline_exceeded_redispatches_under_ti
     alias chain a deadline outcome produces (``node_deadline_exceeded`` ->
     ``map_legacy_code`` -> ``node.deadline_exceeded`` -> timeout event). NOTE:
     the watchdog itself currently terminal-fails the run directly and bypasses
-    this decision (see the known-limitation note on ``_retry_after_policy``) â€”
+    this decision (see the known-limitation note on ``_retry_after_policy``) —
     this test pins the alias chain, not the watchdog wiring."""
 
     class _NodeDeadlineExceededError(Exception):
@@ -957,7 +957,7 @@ async def test_execute_retry_policy_eval_failed_with_delivery_marker_guard_a_com
     """FAR-503 sentinel composition: a run whose node marker already carries
     delivery_done=True that terminally fails eval_failed IS re-dispatched by
     the policy (unlike a transient cancellation, which guard B suppresses), and
-    on re-execution guard A returns the SKIPPED envelope for that marker â€” the
+    on re-execution guard A returns the SKIPPED envelope for that marker — the
     delivered node never re-executes its side effect (no duplicate delivery).
 
     The executor-level half proves the re-dispatch happens with the marker
@@ -1001,7 +1001,7 @@ async def test_execute_retry_policy_eval_failed_with_delivery_marker_guard_a_com
     assert "claim_token=:tok" in resets[0]
     mock_finalize.assert_not_awaited()
     # On re-execution, guard A reads THIS marker and returns the skipped
-    # envelope â€” no sandbox provisioning, no duplicate side effect.
+    # envelope — no sandbox provisioning, no duplicate side effect.
     assert _marker_delivery_done_for_node(run.raw_output_markers, str(run.id), "node-a") is True
     envelope = _idempotency_gate_skipped_envelope("node-a")
     assert envelope["artifacts"][0]["status"] == "skipped"
@@ -1010,7 +1010,7 @@ async def test_execute_retry_policy_eval_failed_with_delivery_marker_guard_a_com
 
 
 # ---------------------------------------------------------------------------
-# FAR-136 Gap 1 â€” jittered, capped exponential backoff between re-dispatches
+# FAR-136 Gap 1 — jittered, capped exponential backoff between re-dispatches
 # ---------------------------------------------------------------------------
 
 
@@ -1072,7 +1072,7 @@ def test_retry_backoff_bounded_by_max_retries():
 
 async def test_execute_retry_policy_applies_backoff_delay():
     """FAR-136 Gap 1 wiring: the computed backoff delay is actually awaited
-    (via asyncio.sleep) before the RunRetryPolicyError re-raise â€” the retry
+    (via asyncio.sleep) before the RunRetryPolicyError re-raise — the retry
     is not re-dispatched back-to-back."""
     run = _make_run(node_attempt_count=2, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
@@ -1100,18 +1100,18 @@ async def test_execute_retry_policy_applies_backoff_delay():
     # The fenced pending-reset still fired before the re-raise.
     reset_stmt = next(s for s in statements if "status='pending'" in s)
     assert "claim_token=:tok" in reset_stmt
-    # No terminal failure â€” the retry path never finalizes.
+    # No terminal failure — the retry path never finalizes.
     mock_finalize.assert_not_awaited()
 
 
 async def test_execute_retry_policy_hang_death_terminal_no_redispatch():
     """FAR-136 Gap 2 end-to-end wiring: a sandbox-agent HANG death that
     exhausts the SAQ retry budget reaches the retry-policy decision as
-    error_code "node_cancelled" with "likely hung" in error_detail â€” and is NOT
+    error_code "node_cancelled" with "likely hung" in error_detail — and is NOT
     re-dispatched. The run terminal-fails via finalize_cost (no
     RunRetryPolicyError, no fenced pending-reset, no backoff sleep).
 
-    This proves the hang exclusion is wired at the execute() call site â€” that
+    This proves the hang exclusion is wired at the execute() call site — that
     ``error_detail`` is actually passed into ``_retry_after_policy``. A
     regression that dropped ``error_detail`` at the call site would keep the
     pure-function hang tests green while real hang deaths resumed retrying."""
@@ -1201,7 +1201,7 @@ async def test_execute_retry_policy_never_redispatch_correction_run():
 
 
 # ---------------------------------------------------------------------------
-# FAR-525 â€” configurable run-level retry backoff (backoff_schedule)
+# FAR-525 — configurable run-level retry backoff (backoff_schedule)
 # ---------------------------------------------------------------------------
 
 
@@ -1223,7 +1223,7 @@ def test_retry_backoff_multiplier_fixed_and_growth_tables(monkeypatch):
 
 def test_retry_backoff_cap_clamps_computed_value(monkeypatch):
     """The 300s cap clamps the COMPUTED value: delay=300 x M=10 pins at 300
-    from attempt 1 â€” the cap is code-held, not user-configurable."""
+    from attempt 1 — the cap is code-held, not user-configurable."""
     monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
     for n in range(1, 8):
         assert _retry_backoff_seconds(n, base=300, multiplier=10.0) == 300.0
@@ -1238,7 +1238,7 @@ def test_retry_backoff_jitter_bounds_via_pinned_seam(monkeypatch):
 
 
 def test_retry_backoff_jitter_dead_zone_at_cap(monkeypatch):
-    """Computed >= cap clamps to EXACTLY cap with ZERO jitter spread â€”
+    """Computed >= cap clamps to EXACTLY cap with ZERO jitter spread —
     reachable at attempt 1 with delay_seconds=300 (dead zone called out in
     ADR 028's fleet math)."""
     monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: b)
@@ -1285,7 +1285,7 @@ def test_retry_backoff_defaults_single_sourced_from_retry_compensation():
 
 async def test_execute_retry_policy_schedule_fixed_delay_wiring():
     """Wiring: the awaited sleep arg == the resolved schedule delay == the log
-    field (ONE jitter draw â€” no re-resolution between log and sleep)."""
+    field (ONE jitter draw — no re-resolution between log and sleep)."""
     import logging as _logging
 
     run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
@@ -1378,7 +1378,7 @@ async def test_execute_retry_policy_resolver_defect_cannot_strand_a_reset():
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RuntimeError, match="resolver defect"):
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
-    # NO fenced pending-reset was issued â€” the reset cannot be stranded.
+    # NO fenced pending-reset was issued — the reset cannot be stranded.
     assert not any("status='pending'" in s for s in statements)
     sleep_mock.assert_not_awaited()
 
@@ -1408,7 +1408,7 @@ async def test_execute_retry_policy_eval_failed_with_schedule_same_path():
         with pytest.raises(RunRetryPolicyError) as exc_info:
             await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
     assert exc_info.value.status == "eval_failed"
-    # 20 (+ up to 25% jitter) â€” the schedule, not the 45s default.
+    # 20 (+ up to 25% jitter) — the schedule, not the 45s default.
     sleep_arg = sleep_mock.await_args.args[0]
     assert 20.0 <= sleep_arg <= 25.0
     assert mock_finalize.assert_not_awaited() is None
@@ -1500,7 +1500,7 @@ async def test_execute_retry_policy_counter_no_op_without_meter_provider():
 
 
 async def test_execute_retry_policy_counter_never_blocks_the_reraise():
-    """A metrics failure inside the emit is swallowed (warning-logged) â€” the
+    """A metrics failure inside the emit is swallowed (warning-logged) — the
     RunRetryPolicyError still re-raises."""
     run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
@@ -1585,7 +1585,7 @@ async def _execute_with_real_runstart_checks(retry_policy: dict[str, Any]):
 
 
 async def test_run_start_malformed_core_policy_still_raises_graph_validation_error():
-    """A malformed CORE policy (bad max_retries) STILL raises at run start â€”
+    """A malformed CORE policy (bad max_retries) STILL raises at run start —
     the FAR-525 schedule layering must not soften the core check."""
     _kind, exc, _statements, _sleep, _finalize = await _execute_with_real_runstart_checks(
         {"on": ["failure"], "max_retries": 99, "backoff_schedule": {"delay_seconds": 45}}

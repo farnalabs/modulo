@@ -85,7 +85,24 @@ def env_var_for_provider_type(provider_type: str) -> str | None:
 
 @dataclass
 class WorkspaceSpec:
-    """Parameters for creating a new workspace from an EnvironmentProfile."""
+    """Parameters for creating a new workspace from an EnvironmentProfile.
+
+    Field semantics are provider-specific (FAR-595 contract, pinned on the
+    :class:`RuntimeProvider` ABC):
+
+    - ``labels``: environment-variable injection — Docker maps it to the
+      container Env. E2B and Local ignore it (they have no env-injection
+      carrier at provision time).
+    - ``workspace_metadata``: provider-neutral metadata carrier — Docker
+      maps it to container Labels, E2B to sandbox metadata, Local ignores it.
+    - ``repo_url`` / ``repo_ref``: first-class clone inputs (FAR-595) —
+      E2B clones into ``/home/user/repo`` and optionally checks out
+      ``repo_ref``; Local clones into the workspace directory (``repo_ref``
+      is not honoured on this tier); Docker ignores both (the bundled
+      runner image handles code sync). Deliberately NOT carried in
+      ``labels`` — a consumer setting labels for env-injection on an
+      E2B/Local profile must never silently trigger a clone.
+    """
 
     environment_profile_id: uuid.UUID
     organisation_id: uuid.UUID
@@ -99,13 +116,20 @@ class WorkspaceSpec:
     labels: dict[str, str] = field(default_factory=dict)
     # Provider-neutral metadata attached to the workspace itself (Docker maps
     # it to container Labels, E2B to sandbox metadata, Local ignores it).
-    # Deliberately separate from ``labels``, which stays Env-var injection.
+    # Deliberately separate from ``labels`` (Docker env-var injection) and
+    # from ``repo_url``/``repo_ref`` (clone semantics).
     workspace_metadata: dict[str, str] = field(default_factory=dict)
     # Dedicated workspace network name (D4): the Docker provider attaches the
     # container to THIS bridge network (never the compose/backend network).
     # None -> provider default. The `none` opt-in is expressed via
     # ``egress_policy == "none"``.
     workspace_network: str | None = None
+    # First-class repo-clone inputs (FAR-595). Previously smuggled through
+    # ``labels["repo_url"]``/``labels["repo_ref"]``, which collided with
+    # Docker's labels-as-Env semantics. See the class docstring for the
+    # per-provider semantics.
+    repo_url: str = ""
+    repo_ref: str = ""
 
 
 @dataclass
@@ -164,7 +188,20 @@ class RuntimeProvider(ABC):
 
     @abstractmethod
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
-        """Provision a new workspace and return its provider-specific reference."""
+        """Provision a new workspace and return its provider-specific reference.
+
+        WorkspaceSpec semantics every implementation must honour (FAR-595):
+
+        - ``spec.labels``: env-var injection only. Docker maps it to the
+          container Env; E2B and Local ignore it. Never read clone inputs
+          out of it — those are the first-class ``spec.repo_url`` /
+          ``spec.repo_ref`` fields.
+        - ``spec.workspace_metadata``: provider-neutral metadata. Docker ->
+          container Labels, E2B -> sandbox metadata, Local -> ignored.
+        - ``spec.repo_url`` / ``spec.repo_ref``: clone semantics. E2B clones
+          into ``/home/user/repo`` (+ optional checkout); Local clones into
+          the workspace directory; Docker ignores both.
+        """
         ...
 
     @abstractmethod

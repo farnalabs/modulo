@@ -67,9 +67,18 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
 - **Wasm/Sandbox surfaces are split** — workspace leases/events live here, but the
   run sandbox lifecycle is tracked under `feat-environments`; cross-cutting coverage
   is not unified in one tracker.
+- **`run_lifecycle.feature` / `run_sequential.feature` are dead BDD files** — the two
+  run-time feature files ship under `backend/tests/bdd/features/pipelines/` but no step
+  module registers them via `scenarios(...)`, so they never execute. The lifecycle
+  transitions they describe are otherwise pinned by the `steps/test_pipelines.py` step
+  suite and the unit suites (`test_runs_endpoint.py`); wiring them up needs a few missing
+  step definitions written.
 
 ## QA History
 
+- 2026-09-08: **improve-architecture (product-map walk)** — recorded `run_lifecycle.feature`
+  / `run_sequential.feature` as a dead-BDD-file known gap (run-time surfaces owned here that
+  no step module registers).
 - 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-runs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/runs.py`,

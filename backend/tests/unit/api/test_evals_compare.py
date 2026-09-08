@@ -5,6 +5,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -67,6 +68,40 @@ def _make_result(scalar_one_value=None, scalar_value=None, all_value=None, one_v
     if one_value is not None:
         m.one = MagicMock(return_value=one_value)
     return m
+
+
+def _blob_read_results(run: MagicMock) -> list[MagicMock]:
+    """The two execute() results the FAR-583 repo blob read consumes: the
+    run_node_outputs rows page (empty — the mocked session serves no
+    new-table rows) and the legacy fallback SELECT carrying the run's
+    reassembled legacy-dict shapes."""
+    rows_result = _make_result(all_value=[])
+    legacy_row = MagicMock()
+    legacy_row.outputs_json = run.outputs_json
+    legacy_row.node_telemetry_json = run.node_telemetry_json
+    legacy_row.raw_output_markers = None
+    legacy_result = _make_result()
+    legacy_result.first = MagicMock(return_value=legacy_row)
+    return [rows_result, legacy_result]
+
+
+def _blob_aware_side_effects(run: MagicMock, scripted: list[MagicMock]) -> Any:
+    """Side-effect router for the from-run endpoint's session: the FAR-583
+    repo blob read's two queries (the run_node_outputs rows page + the legacy
+    fallback SELECT) are served from the run's reassembled shapes; every
+    other execute pops the test's scripted sequence in order (order-proof
+    against the endpoint's internal read count)."""
+    rows_result, legacy_result = _blob_read_results(run)
+    iterator = iter(scripted)
+
+    async def _route(stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        if "FROM run_node_outputs" in str(stmt):
+            return rows_result
+        if "runs.outputs_json, runs.node_telemetry_json, runs.raw_output_markers" in str(stmt):
+            return legacy_result
+        return next(iterator)
+
+    return _route
 
 
 def _make_row(**attrs) -> MagicMock:
@@ -342,14 +377,17 @@ class TestEvalFromRun:
         mock_pipeline = MagicMock()
         mock_pipeline.id = _PIPELINE_ID
 
-        mock_session.execute.side_effect = [
-            _make_result(),  # require_permission authz_enforce (kill-switch) read
-            _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=run),
-            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
-        ]
+        mock_session.execute.side_effect = _blob_aware_side_effects(
+            run,
+            [
+                _make_result(),  # require_permission authz_enforce (kill-switch) read
+                _make_result(scalar_one_value=None),  # set_rls_org
+                _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+                _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+                _make_result(scalar_one_value=run),
+                _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+            ],
+        )
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
 
@@ -391,14 +429,17 @@ class TestEvalFromRun:
         mock_pipeline = MagicMock()
         mock_pipeline.id = _PIPELINE_ID
 
-        mock_session.execute.side_effect = [
-            _make_result(),  # require_permission authz_enforce (kill-switch) read
-            _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=run),
-            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
-        ]
+        mock_session.execute.side_effect = _blob_aware_side_effects(
+            run,
+            [
+                _make_result(),  # require_permission authz_enforce (kill-switch) read
+                _make_result(scalar_one_value=None),  # set_rls_org
+                _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+                _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+                _make_result(scalar_one_value=run),
+                _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+            ],
+        )
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
 
@@ -433,14 +474,17 @@ class TestEvalFromRun:
         mock_pipeline = MagicMock()
         mock_pipeline.id = _PIPELINE_ID
 
-        mock_session.execute.side_effect = [
-            _make_result(),  # require_permission authz_enforce (kill-switch) read
-            _make_result(scalar_one_value=None),  # set_rls_org
-            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-            _make_result(scalar_one_value=run),
-            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
-        ]
+        mock_session.execute.side_effect = _blob_aware_side_effects(
+            run,
+            [
+                _make_result(),  # require_permission authz_enforce (kill-switch) read
+                _make_result(scalar_one_value=None),  # set_rls_org
+                _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+                _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+                _make_result(scalar_one_value=run),
+                _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+            ],
+        )
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()
 
@@ -517,14 +561,17 @@ class TestEvalFromRun:
             mock_pipeline = MagicMock()
             mock_pipeline.id = _PIPELINE_ID
 
-            mock_session.execute.side_effect = [
-                _make_result(),  # require_permission authz_enforce (kill-switch) read
-                _make_result(scalar_one_value=None),  # set_rls_org
-                _make_result(scalar_value=None),  # set_rls_user_context (user_id)
-                _make_result(scalar_value=None),  # set_rls_user_context (org_role)
-                _make_result(scalar_one_value=run),
-                _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
-            ]
+            mock_session.execute.side_effect = _blob_aware_side_effects(
+                run,
+                [
+                    _make_result(),  # require_permission authz_enforce (kill-switch) read
+                    _make_result(scalar_one_value=None),  # set_rls_org
+                    _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+                    _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+                    _make_result(scalar_one_value=run),
+                    _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+                ],
+            )
             mock_session.add = MagicMock()
             mock_session.flush = AsyncMock()
 

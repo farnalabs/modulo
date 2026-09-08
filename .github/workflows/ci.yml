@@ -178,6 +178,12 @@ jobs:
       - name: Detect changed integration test files
         id: changed
         shell: bash
+        # The job sets `working-directory: backend`, which makes the
+        # `backend/tests/integration/` pathspec below resolve to
+        # `backend/backend/tests/integration/` (always empty) and silently skip
+        # every PR. Run the Detect step from the repo root so the pathspec
+        # matches the real tree (cf. PR #224 review feedback).
+        working-directory: .
         run: |
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # actions/checkout checks out the GitHub merge commit for the PR
@@ -819,3 +825,83 @@ jobs:
       - name: Report PR Reviewer check status
         if: success()
         run: echo "PR Reviewer trigger check passed (all required checks green, webhook sent or suppressed by manual-delivery label)."
+
+  self-report-ci:
+    name: Self-report CI stage to Modulo
+    # FAR-666: the lifecycle-map "Farnalabs SDLC (dogfooding)" journey's CI
+    # Validate stage is EXTERNAL (a GitHub Actions workflow, not a Modulo
+    # pipeline), so no pipeline run ever advanced it — merge-queue.yml reports
+    # the "merge" stage and deploy.yml the "deploy" stage, but nothing reported
+    # "ci". This job closes that gap once the PR-validation jobs have finished.
+    #
+    # stage_id: "ci" names the lifecycle-map stage this workflow completes. The
+    # stage is EXTERNAL, so it has no pipeline_id for the advancement service to
+    # resolve; the endpoint uses stage_id to advance the journey into it.
+    #
+    # REF CONTRACT: the work-item ref uses kind "pr" + the BARE PR number.
+    # Webhook triggers mint journeys keyed (org, "pr", "<number>") and the
+    # canonical journey key is uuid5(NAMESPACE, "{org}:{kind}:{ref}") — kind
+    # "github_pr" would never match, so confirm_reported_refs would find no
+    # journey and the report would be dropped as unmatched. (The leading "#"
+    # is stripped by canonicalisation — it was never the issue.)
+    #
+    # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a Modulo
+    # outage can NEVER fail CI. The payload is always recorded in the log; the
+    # POST only fires when MODULO_SELF_REPORT_URL is configured, and a POST
+    # failure is downgraded to a ::warning::. The endpoint is POST
+    # /api/v1/lifecycle-maps/{lifecycle_map_id}/journeys/self-report (FAR-143);
+    # the URL secret points at the dogfood map's endpoint.
+    #
+    # NOT a required check: this job is observability only.
+    if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    needs: [backend-lint, backend-test, integration-changed, frontend, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)
+        env:
+          MODULO_SELF_REPORT_URL: ${{ secrets.MODULO_SELF_REPORT_URL }}
+          MODULO_SELF_REPORT_TOKEN: ${{ secrets.MODULO_SELF_REPORT_TOKEN }}
+          # Mapped through the step env block (S7630): GitHub expressions inside
+          # a run block are interpolated before the shell parses the script, so
+          # via env: the value is data, never code. (Same pattern as the
+          # notify-* jobs above.)
+          PR_NUM: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          # Exactly one ref: the PR this CI run validates. jq --arg JSON-escapes
+          # the value; kind "pr" + bare number matches the webhook-minted
+          # journey family (see the job comment above).
+          PAYLOAD=$(jq -n --arg ref "${PR_NUM}" \
+            '{event: "workflow_self_report", source: "github_actions", workflow: "ci", stage_id: "ci", work_item_refs: [{"kind": "pr", "ref": $ref, "status": "done"}]}')
+
+          echo "=== Modulo self-report payload (CI Validate) ==="
+          echo "$PAYLOAD"
+
+          if [ -z "$MODULO_SELF_REPORT_URL" ]; then
+            echo "::notice::MODULO_SELF_REPORT_URL not configured - CI stage recorded in log only, POST skipped (fail-open)."
+            exit 0
+          fi
+
+          # Capture status + body: a 200 with {"accepted":0,"unmatched":1} must
+          # NOT read as success — that masking is the exact FAR-666 failure mode.
+          # Keep -sS (stderr stays visible: connection/TLS errors reach the log);
+          # drop -f so we can branch on the real HTTP status code.
+          HTTP_CODE=$(curl -sS -o "${RUNNER_TEMP}/self-report-body.json" -w '%{http_code}' --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
+            -d "$PAYLOAD") || HTTP_CODE="000"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::warning::Modulo self-report POST failed (HTTP $HTTP_CODE): $(cat "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 'no body') - CI stage recorded in log only (fail-open)."
+            exit 0
+          fi
+
+          ACCEPTED=$(jq -r '.accepted // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          UNMATCHED=$(jq -r '.unmatched // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          REJECTED=$(jq -r '.rejected // 0' "${RUNNER_TEMP}/self-report-body.json" 2>/dev/null || echo 0)
+          REF_COUNT=$(echo "$PAYLOAD" | jq '.work_item_refs | length' 2>/dev/null || echo 0)
+          if [ "$UNMATCHED" -gt 0 ] || { [ "$ACCEPTED" -eq 0 ] && [ "$REF_COUNT" -gt 0 ]; }; then
+            echo "::warning::Modulo self-report matched no journeys (accepted=$ACCEPTED unmatched=$UNMATCHED rejected=$REJECTED) - check the ref kind/ref contract (expected kind 'pr' + bare PR number matching webhook-minted journeys)"
+            exit 0
+          fi
+          echo "Self-report delivered to Modulo (accepted=$ACCEPTED unmatched=$UNMATCHED)."

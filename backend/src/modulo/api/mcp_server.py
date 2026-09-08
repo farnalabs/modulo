@@ -15,6 +15,7 @@ Org context validated per-event for streaming (SSE) connections.
 
 import asyncio
 import contextvars
+import functools
 import json
 import logging
 import re
@@ -28,7 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, ParamSpec, cast
 from urllib.parse import quote, urlencode
 
 from jwt import InvalidTokenError as JWTError
@@ -50,7 +51,7 @@ from modulo.api.dependencies import (
     get_or_create_session_factory,
 )
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
-from modulo.api.middleware.sensitive_mask import merge_masked_config
+from modulo.api.middleware.sensitive_mask import mask_config_json, merge_masked_config
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for
 from modulo.auth.api_key import (
@@ -148,6 +149,7 @@ from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGate
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import get_run
+from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs_with_fallback
 from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
@@ -158,6 +160,9 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
 
+if TYPE_CHECKING:
+    from modulo.db.models.eval_definition import EvalDefinition
+
 _log = logging.getLogger(__name__)
 
 _CT_APPLICATION_JSON = "application/json"
@@ -167,6 +172,10 @@ _MSG_DB_MIGRATION_REQUIRED = "Database migration required. Run `alembic upgrade 
 _MSG_DB_MIGRATION_REQUIRED_HEADS = "Database migration required. Run alembic upgrade heads."
 _MSG_TRIGGER_NOT_FOUND = "Trigger not found"
 _MSG_UUID_PARSE_FAILED = "UUID parse failed"
+_MSG_EVAL_DEF_CREATE_FAILED = "create_eval_definition failed"
+_MSG_EVAL_DEF_UPDATE_FAILED = "update_eval_definition failed"
+_MSG_EVAL_DEF_DELETE_FAILED = "delete_eval_definition failed"
+_MSG_DB_OPERATION_FAILED = "Database operation failed. Please try again."
 _MSG_CREATE_API_KEY_FAILED = "create_api_key failed"
 _MSG_LIST_API_KEYS_FAILED = "list_api_keys failed"
 _MSG_REVOKE_API_KEY_FAILED = "revoke_api_key failed"
@@ -1394,6 +1403,87 @@ def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[st
         return uuid.UUID(value), None
     except ValueError:
         return None, {"error": "invalid_id", "field": field, "detail": f"Invalid UUID format: {value}"}
+
+
+_TOOL_SHELL_P = ParamSpec("_TOOL_SHELL_P")
+
+
+def _tool_db_shell(
+    *,
+    log_constant: str,
+    integrity_detail: str | None,
+    fallback: str,
+    handle_http_exception: bool = False,
+    db_errors_to_fallback: bool = False,
+) -> Callable[
+    [Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]],
+    Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
+]:
+    """Wrap an async MCP tool body in the shared DB/tool exception ladder.
+
+    Every clause reproduces the verbatim per-tool ``try/except`` shells it
+    replaces, keyed by params so the remaining tools can adopt it without
+    hardcoding:
+
+    - ``MCPAuthorizationError`` → ``insufficient_scope`` (all shells).
+    - ``StarletteHTTPException`` → ``validation_failed`` when
+      ``handle_http_exception`` is True; otherwise the generic ``Exception``
+      behaviour (log + ``fallback``), which is what shells without the clause
+      did.
+    - ``IntegrityError`` → ``conflict`` with ``integrity_detail`` formatted
+      with ``orig``; when ``integrity_detail`` is None the ``SQLAlchemyError``
+      behaviour (log + ``database_unavailable``), which is what shells
+      without an IntegrityError clause did. When ``db_errors_to_fallback``
+      is True the clause is skipped entirely and the exception falls through
+      to the generic ``Exception`` behaviour, reproducing shells (e.g.
+      ``get_trigger``) that had no IntegrityError clause at all.
+    - ``ProgrammingError`` → ``migration_required``.
+    - ``SQLAlchemyError`` → ``database_unavailable``; when
+      ``db_errors_to_fallback`` is True the clause is skipped entirely and
+      the exception falls through to the generic ``Exception`` behaviour,
+      reproducing shells that had no SQLAlchemyError clause.
+    - ``Exception`` → log + ``_tool_error(fallback)``.
+    """
+
+    def decorator(
+        fn: Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
+    ) -> Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]:
+        @functools.wraps(fn)
+        async def wrapper(*args: _TOOL_SHELL_P.args, **kwargs: _TOOL_SHELL_P.kwargs) -> dict[str, Any]:
+            try:
+                return await fn(*args, **kwargs)
+            except MCPAuthorizationError as exc:
+                return {"error": "insufficient_scope", "detail": str(exc)}
+            except StarletteHTTPException as exc:
+                if handle_http_exception:
+                    return {"error": "validation_failed", "detail": str(exc.detail)}
+                _log.exception(log_constant)
+                return _tool_error(fallback)
+            except IntegrityError as exc:
+                if db_errors_to_fallback:
+                    _log.exception(log_constant)
+                    return _tool_error(fallback)
+                if integrity_detail is None:
+                    _log.exception(log_constant)
+                    return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+                _log.exception(log_constant)
+                return {"error": "conflict", "detail": integrity_detail.format(orig=exc.orig)}
+            except ProgrammingError:
+                _log.exception(log_constant)
+                return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+            except SQLAlchemyError:
+                if db_errors_to_fallback:
+                    _log.exception(log_constant)
+                    return _tool_error(fallback)
+                _log.exception(log_constant)
+                return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+            except Exception:
+                _log.exception(log_constant)
+                return _tool_error(fallback)
+
+        return wrapper
+
+    return decorator
 
 
 def _serialize_edges(edges: list[Any]) -> list[dict[str, Any]]:
@@ -2654,12 +2744,14 @@ def _run_status_base(run: Run) -> dict[str, Any]:
     return result
 
 
-def _run_status_detail(run: Run) -> dict[str, Any]:
+def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     from modulo.api.routes.runs import _clamp_node_token_usage_union
 
     token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
-    outputs_json = run.outputs_json or {}
-    telemetry_json = run.node_telemetry_json
+    # FAR-583 read-switch: the blobs reassemble from run_node_outputs (with
+    # the legacy fallback) by the caller, inside the run-load transaction.
+    outputs_json = blobs.outputs or {}
+    telemetry_json = blobs.telemetry
     if not isinstance(telemetry_json, dict):
         telemetry_json = {}
     node_ids: set[str] = set()
@@ -2721,9 +2813,14 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
             return _team_scope_error("run", run_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
+        # FAR-583 read-switch: reassemble the blobs INSIDE the run-load
+        # transaction (one batched repo query + the legacy fallback SELECT);
+        # the detail body is built after the session closes. Read only when
+        # detail is requested (the base response never touches the blobs).
+        blobs = await read_run_blobs_with_fallback(s, run_id=rid, organisation_id=org_id) if detail else None
     result = _run_status_base(run)
-    if detail:
-        result.update(_run_status_detail(run))
+    if detail and blobs is not None:
+        result.update(_run_status_detail(run, blobs))
     return result
 
 
@@ -2796,10 +2893,13 @@ async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         run_owner_team_id = await _run_owner_team_id(s, run)
-    if _team_scoped_key_mismatch(run_owner_team_id):
-        return _team_scope_error("run", run_id)
-    outputs = run.outputs_json or {}
-    telemetry = run.node_telemetry_json
+        if _team_scoped_key_mismatch(run_owner_team_id):
+            return _team_scope_error("run", run_id)
+        # FAR-583 read-switch: reassemble the blobs INSIDE the run-load
+        # transaction (one batched repo query + the legacy fallback SELECT).
+        blobs = await read_run_blobs_with_fallback(s, run_id=rid, organisation_id=org_id)
+    outputs = blobs.outputs or {}
+    telemetry = blobs.telemetry
     if not isinstance(telemetry, dict):
         telemetry = {}
     node_output = _resolve_run_node_output(outputs, telemetry, node_id)
@@ -2959,12 +3059,149 @@ def _assert_admin_scope(action: str) -> None:
         raise MCPAuthorizationError(f"Only admins can {action} eval definitions")
 
 
+def _parse_eval_ref_ids(
+    primary_value: str,
+    primary_field: str,
+    node_id: str | None,
+) -> tuple[uuid.UUID | None, uuid.UUID | None, dict[str, Any] | None]:
+    """Parse a primary eval-reference UUID plus an optional node UUID.
+
+    Returns ``(primary, node, None)`` on success or ``(primary_or_None, None,
+    error_dict)`` when parsing fails.
+    """
+    primary, primary_err = _parse_uuid_param(primary_value, primary_field)
+    if primary_err is not None:
+        return None, None, primary_err
+    node: uuid.UUID | None = None
+    if node_id is not None:
+        node, node_err = _parse_uuid_param(node_id, "node_id")
+        if node_err is not None:
+            return primary, None, node_err
+    return primary, node, None
+
+
+async def _load_eval_def(s: AsyncSession, org_id: uuid.UUID, eid: uuid.UUID) -> "EvalDefinition | None":
+    """Load an org-scoped EvalDefinition row; None when the row does not exist.
+
+    Shared by the update and delete impls; the model import stays lazy per
+    this module's convention.
+    """
+    from modulo.db.models.eval_definition import EvalDefinition
+
+    return (
+        await s.execute(
+            select(EvalDefinition).where(
+                EvalDefinition.id == eid,
+                EvalDefinition.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def _assert_create_eval_definition_params(
+    name: str,
+    eval_type: str,
+    failure_behaviour: str,
+    pass_threshold: float | None,
+) -> dict[str, Any] | None:
+    """Validate the scalar create-inputs of an eval definition; error dict or None."""
+    if not name or not name.strip():
+        return {"error": "invalid_name", "detail": "name must be a non-empty string"}
+    if len(name) > _EVAL_NAME_MAX_LENGTH:
+        return {
+            "error": "invalid_name",
+            "detail": f"name must be at most {_EVAL_NAME_MAX_LENGTH} characters",
+        }
+    if (err := _assert_eval_type(eval_type)) is not None:
+        return err
+    if (err := _assert_failure_behaviour(failure_behaviour)) is not None:
+        return err
+    return _assert_pass_threshold(pass_threshold)
+
+
+async def _create_eval_definition_impl(
+    pipeline_id: str,
+    node_id: str | None,
+    name: str,
+    eval_type: str,
+    config_json: dict[str, Any] | None,
+    failure_behaviour: str,
+    pass_threshold: float | None,
+    suite_id: str | None,
+) -> dict[str, Any]:
+    """Persist a new EvalDefinition; shared with the MCP tool wrapper."""
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("create_eval_definition")
+
+    from modulo.api.routes.evals import (
+        _MSG_PIPELINE_NOT_FOUND,
+        _eval_def_to_dict,
+    )
+
+    if (err := _assert_create_eval_definition_params(name, eval_type, failure_behaviour, pass_threshold)) is not None:
+        return err
+
+    _assert_admin_scope("create")
+
+    org_id = _ctx_org_id_val()
+    account_id = _ctx_user_id_val()
+
+    pid, nid, pid_err = _parse_eval_ref_ids(pipeline_id, "pipeline_id", node_id)
+    if pid_err is not None:
+        return pid_err
+    assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+
+    cfg = config_json if config_json is not None else {}
+
+    if (guard_err := _eval_def_guardrail_validation_error(eval_type, failure_behaviour, cfg)) is not None:
+        return guard_err
+
+    from modulo.db.models.eval_definition import EvalDefinition
+    from modulo.db.models.pipeline import Pipeline
+
+    async with _session(org_id) as s:
+        pipeline = (
+            await s.execute(
+                select(Pipeline).where(
+                    Pipeline.id == pid,
+                    Pipeline.organisation_id == org_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if pipeline is None:
+            return {"error": "pipeline_not_found", "detail": _MSG_PIPELINE_NOT_FOUND}
+
+        eval_def = EvalDefinition(
+            organisation_id=org_id,
+            pipeline_id=pid,
+            node_id=nid,
+            name=name,
+            eval_type=eval_type,
+            config_json=cfg,
+            failure_behaviour=failure_behaviour,
+            pass_threshold=pass_threshold,
+            suite_id=suite_id,
+            account_id=account_id,
+            version=1,
+        )
+        s.add(eval_def)
+        await s.flush()
+        return _eval_def_to_dict(eval_def)
+
+
 @mcp.tool(
     description="Create a new eval definition (admin only). Persists an "
     "EvalDefinition row scoped to the caller's org and returns its details. "
     "Requires an admin caller; non-admins receive an insufficient_scope error.",
 )
 @_RETRY_DB
+@_tool_db_shell(
+    log_constant=_MSG_EVAL_DEF_CREATE_FAILED,
+    integrity_detail="Eval definition references a resource that does not exist: {orig}",
+    fallback="Failed to create eval definition",
+    handle_http_exception=True,
+)
 async def create_eval_definition(
     pipeline_id: str,
     node_id: str | None = None,
@@ -2975,106 +3212,156 @@ async def create_eval_definition(
     pass_threshold: float | None = None,
     suite_id: str | None = None,
 ) -> dict[str, Any]:
+    return await _create_eval_definition_impl(
+        pipeline_id,
+        node_id,
+        name,
+        eval_type,
+        config_json,
+        failure_behaviour,
+        pass_threshold,
+        suite_id,
+    )
+
+
+def _assert_update_eval_definition_params(
+    eval_type: str | None,
+    failure_behaviour: str | None,
+    pass_threshold: float | None,
+    name: str | None,
+) -> dict[str, Any] | None:
+    """Validate the scalar update-inputs of an eval definition; error dict or None."""
+    if eval_type is not None and (err := _assert_eval_type(eval_type)) is not None:
+        return err
+    if failure_behaviour is not None and (err := _assert_failure_behaviour(failure_behaviour)) is not None:
+        return err
+    if (err := _assert_pass_threshold(pass_threshold)) is not None:
+        return err
+    if name is not None and (not name or not name.strip()):
+        return {"error": "invalid_name", "detail": "name must be a non-empty string when provided"}
+    if name is not None and len(name) > _EVAL_NAME_MAX_LENGTH:
+        return {
+            "error": "invalid_name",
+            "detail": f"name must be at most {_EVAL_NAME_MAX_LENGTH} characters",
+        }
+    return None
+
+
+def _collect_eval_definition_updates(
+    node_id: str | None,
+    nid: uuid.UUID | None,
+    name: str | None,
+    eval_type: str | None,
+    config_json: dict[str, Any] | None,
+    failure_behaviour: str | None,
+    pass_threshold: float | None,
+    suite_id: str | None,
+) -> dict[str, Any]:
+    """Build the partial-update field map from the provided (non-None) inputs."""
+    updates: dict[str, Any] = {}
+    if node_id is not None:
+        updates["node_id"] = nid
+    if name is not None:
+        updates["name"] = name
+    if eval_type is not None:
+        updates["eval_type"] = eval_type
+    if config_json is not None:
+        updates["config_json"] = config_json
+    if failure_behaviour is not None:
+        updates["failure_behaviour"] = failure_behaviour
+    if pass_threshold is not None:
+        updates["pass_threshold"] = pass_threshold
+    if suite_id is not None:
+        updates["suite_id"] = suite_id
+    return updates
+
+
+def _eval_def_guardrail_validation_error(
+    eval_type: str,
+    failure_behaviour: str | None,
+    config_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Run the REST guardrail validator; returns a validation_failed dict or None."""
+    from modulo.api.routes.evals import _validate_guardrail_request
+
     try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        _check_agent_tool_scope("create_eval_definition")
-
-        from modulo.api.routes.evals import (
-            _MSG_PIPELINE_NOT_FOUND,
-            _eval_def_to_dict,
-            _validate_guardrail_request,
+        _validate_guardrail_request(
+            eval_type=eval_type,
+            failure_behaviour=failure_behaviour,
+            config_json=config_json,
         )
-
-        if not name or not name.strip():
-            return {"error": "invalid_name", "detail": "name must be a non-empty string"}
-        if len(name) > _EVAL_NAME_MAX_LENGTH:
-            return {
-                "error": "invalid_name",
-                "detail": f"name must be at most {_EVAL_NAME_MAX_LENGTH} characters",
-            }
-        if (err := _assert_eval_type(eval_type)) is not None:
-            return err
-        if (err := _assert_failure_behaviour(failure_behaviour)) is not None:
-            return err
-        if (err := _assert_pass_threshold(pass_threshold)) is not None:
-            return err
-
-        _assert_admin_scope("create")
-
-        org_id = _ctx_org_id_val()
-        account_id = _ctx_user_id_val()
-
-        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
-        if pid_err:
-            return pid_err
-        nid: uuid.UUID | None = None
-        if node_id is not None:
-            nid, nid_err = _parse_uuid_param(node_id, "node_id")
-            if nid_err:
-                return nid_err
-
-        cfg = config_json if config_json is not None else {}
-
-        try:
-            _validate_guardrail_request(
-                eval_type=eval_type,
-                failure_behaviour=failure_behaviour,
-                config_json=cfg,
-            )
-        except StarletteHTTPException as exc:
-            return {"error": "validation_failed", "detail": str(exc.detail)}
-
-        from modulo.db.models.eval_definition import EvalDefinition
-        from modulo.db.models.pipeline import Pipeline
-
-        async with _session(org_id) as s:
-            pipeline = (
-                await s.execute(
-                    select(Pipeline).where(
-                        Pipeline.id == pid,
-                        Pipeline.organisation_id == org_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if pipeline is None:
-                return {"error": "pipeline_not_found", "detail": _MSG_PIPELINE_NOT_FOUND}
-
-            eval_def = EvalDefinition(
-                organisation_id=org_id,
-                pipeline_id=pid,
-                node_id=nid,
-                name=name,
-                eval_type=eval_type,
-                config_json=cfg,
-                failure_behaviour=failure_behaviour,
-                pass_threshold=pass_threshold,
-                suite_id=suite_id,
-                account_id=account_id,
-                version=1,
-            )
-            s.add(eval_def)
-            await s.flush()
-            return _eval_def_to_dict(eval_def)
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
     except StarletteHTTPException as exc:
         return {"error": "validation_failed", "detail": str(exc.detail)}
-    except IntegrityError as exc:
-        _log.exception("create_eval_definition failed")
-        return {
-            "error": "conflict",
-            "detail": f"Eval definition references a resource that does not exist: {exc.orig}",
-        }
-    except ProgrammingError:
-        _log.exception("create_eval_definition failed")
-        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
-        _log.exception("create_eval_definition failed")
-        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
-    except Exception:
-        _log.exception("create_eval_definition failed")
-        return _tool_error("Failed to create eval definition")
+    return None
+
+
+async def _update_eval_definition_impl(
+    eval_id: str,
+    node_id: str | None,
+    name: str | None,
+    eval_type: str | None,
+    config_json: dict[str, Any] | None,
+    failure_behaviour: str | None,
+    pass_threshold: float | None,
+    suite_id: str | None,
+) -> dict[str, Any]:
+    """Apply a partial update to an EvalDefinition; shared with the MCP tool wrapper."""
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("update_eval_definition")
+
+    from modulo.api.routes.evals import (
+        _MSG_EVAL_DEFINITION_NOT_FOUND,
+        _eval_def_to_dict,
+        _stamp_eval_definition_version,
+    )
+
+    val_err: dict[str, Any] | None = _assert_update_eval_definition_params(
+        eval_type, failure_behaviour, pass_threshold, name
+    )
+    if val_err is not None:
+        return val_err
+
+    _assert_admin_scope("update")
+
+    org_id = _ctx_org_id_val()
+
+    eid, nid, params_err = _parse_eval_ref_ids(eval_id, "eval_id", node_id)
+    if params_err is not None:
+        return params_err
+    assert eid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+
+    updates = _collect_eval_definition_updates(
+        node_id=node_id,
+        nid=nid,
+        name=name,
+        eval_type=eval_type,
+        config_json=config_json,
+        failure_behaviour=failure_behaviour,
+        pass_threshold=pass_threshold,
+        suite_id=suite_id,
+    )
+
+    async with _session(org_id) as s:
+        eval_def = await _load_eval_def(s, org_id, eid)
+        if eval_def is None:
+            return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
+
+        guard_err = _eval_def_guardrail_validation_error(
+            eval_type=updates.get("eval_type", eval_def.eval_type),
+            failure_behaviour=updates.get("failure_behaviour", eval_def.failure_behaviour),
+            config_json=updates.get("config_json", eval_def.config_json),
+        )
+        if guard_err is not None:
+            return guard_err
+
+        # FAR-382: snapshot the pre-edit config, then bump the version so a
+        # rubric/config change is an explicitly version-scoped event.
+        _stamp_eval_definition_version(eval_def)
+        for key, value in updates.items():
+            setattr(eval_def, key, value)
+        await s.flush()
+        return _eval_def_to_dict(eval_def)
 
 
 @mcp.tool(
@@ -3086,6 +3373,12 @@ async def create_eval_definition(
     "this tool - the REST PUT route must be used to unset them.",
 )
 @_RETRY_DB
+@_tool_db_shell(
+    log_constant=_MSG_EVAL_DEF_UPDATE_FAILED,
+    integrity_detail="Update would violate a constraint. Check referenced pipeline/suite: {orig}",
+    fallback="Failed to update eval definition",
+    handle_http_exception=True,
+)
 async def update_eval_definition(
     eval_id: str,
     node_id: str | None = None,
@@ -3096,113 +3389,81 @@ async def update_eval_definition(
     pass_threshold: float | None = None,
     suite_id: str | None = None,
 ) -> dict[str, Any]:
-    try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        _check_agent_tool_scope("update_eval_definition")
+    return await _update_eval_definition_impl(
+        eval_id,
+        node_id,
+        name,
+        eval_type,
+        config_json,
+        failure_behaviour,
+        pass_threshold,
+        suite_id,
+    )
 
-        from modulo.api.routes.evals import (
-            _MSG_EVAL_DEFINITION_NOT_FOUND,
-            _eval_def_to_dict,
-            _stamp_eval_definition_version,
-            _validate_guardrail_request,
+
+async def _audit_eval_def_delete(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    eid: uuid.UUID,
+    hard: bool,
+    soft: bool,
+    eval_name: str,
+) -> None:
+    """Best-effort audit event for a guardrail eval-definition delete."""
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        await append_audit_event(
+            s,
+            org_id=org_id,
+            event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
+            actor_user_id=account_id,
+            resource_type="eval_definition",
+            resource_id=eid,
+            payload_json={"eval_id": str(eid), "name": eval_name, "purge": hard},
+        )
+    except Exception:
+        _log.exception(
+            "delete_eval_definition_audit_failed",
+            extra={"org_id": str(org_id), "eval_id": str(eid)},
         )
 
-        if eval_type is not None and (err := _assert_eval_type(eval_type)) is not None:
-            return err
-        if failure_behaviour is not None and (err := _assert_failure_behaviour(failure_behaviour)) is not None:
-            return err
-        if (err := _assert_pass_threshold(pass_threshold)) is not None:
-            return err
-        if name is not None and (not name or not name.strip()):
-            return {"error": "invalid_name", "detail": "name must be a non-empty string when provided"}
-        if name is not None and len(name) > _EVAL_NAME_MAX_LENGTH:
-            return {
-                "error": "invalid_name",
-                "detail": f"name must be at most {_EVAL_NAME_MAX_LENGTH} characters",
-            }
 
-        _assert_admin_scope("update")
+async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, Any]:
+    """Soft-delete or purge an EvalDefinition; shared with the MCP tool wrapper."""
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("delete_eval_definition")
 
-        org_id = _ctx_org_id_val()
+    from modulo.api.routes.evals import _MSG_EVAL_DEFINITION_NOT_FOUND
 
-        eid, eid_err = _parse_uuid_param(eval_id, "eval_id")
-        if eid_err:
-            return eid_err
-        nid: uuid.UUID | None = None
-        if node_id is not None:
-            nid, nid_err = _parse_uuid_param(node_id, "node_id")
-            if nid_err:
-                return nid_err
+    _assert_admin_scope("delete")
 
-        updates: dict[str, Any] = {}
-        if node_id is not None:
-            updates["node_id"] = nid
-        if name is not None:
-            updates["name"] = name
-        if eval_type is not None:
-            updates["eval_type"] = eval_type
-        if config_json is not None:
-            updates["config_json"] = config_json
-        if failure_behaviour is not None:
-            updates["failure_behaviour"] = failure_behaviour
-        if pass_threshold is not None:
-            updates["pass_threshold"] = pass_threshold
-        if suite_id is not None:
-            updates["suite_id"] = suite_id
+    org_id = _ctx_org_id_val()
+    account_id = _ctx_user_id_val()
 
-        from modulo.db.models.eval_definition import EvalDefinition
+    eid, eid_err = _parse_uuid_param(eval_id, "eval_id")
+    if eid_err is not None:
+        return eid_err
+    assert eid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
 
-        async with _session(org_id) as s:
-            eval_def = (
-                await s.execute(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eid,
-                        EvalDefinition.organisation_id == org_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if eval_def is None:
-                return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
+    async with _session(org_id) as s:
+        eval_def = await _load_eval_def(s, org_id, eid)
+        if eval_def is None:
+            return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
 
-            new_type = updates.get("eval_type", eval_def.eval_type)
-            new_behaviour = updates.get("failure_behaviour", eval_def.failure_behaviour)
-            new_config = updates.get("config_json", eval_def.config_json)
-            try:
-                _validate_guardrail_request(
-                    eval_type=new_type,
-                    failure_behaviour=new_behaviour,
-                    config_json=new_config,
-                )
-            except StarletteHTTPException as exc:
-                return {"error": "validation_failed", "detail": str(exc.detail)}
-
-            # FAR-382: snapshot the pre-edit config, then bump the version so a
-            # rubric/config change is an explicitly version-scoped event.
-            _stamp_eval_definition_version(eval_def)
-            for key, value in updates.items():
-                setattr(eval_def, key, value)
-            await s.flush()
-            return _eval_def_to_dict(eval_def)
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
-    except StarletteHTTPException as exc:
-        return {"error": "validation_failed", "detail": str(exc.detail)}
-    except IntegrityError as exc:
-        _log.exception("update_eval_definition failed")
-        return {
-            "error": "conflict",
-            "detail": f"Update would violate a constraint. Check referenced pipeline/suite: {exc.orig}",
-        }
-    except ProgrammingError:
-        _log.exception("update_eval_definition failed")
-        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
-        _log.exception("update_eval_definition failed")
-        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
-    except Exception:
-        _log.exception("update_eval_definition failed")
-        return _tool_error("Failed to update eval definition")
+        is_guardrail = eval_def.eval_type == "guardrail"
+        soft = is_guardrail and not hard
+        eval_name = eval_def.name
+        if soft:
+            eval_def.deleted_at = datetime.now(UTC)
+            eval_def.deleted_by = account_id
+        else:
+            await s.delete(eval_def)
+        if is_guardrail:
+            await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name)
+    return {"id": str(eid), "soft_deleted": soft, "hard_deleted": not soft}
 
 
 @mcp.tool(
@@ -3212,83 +3473,16 @@ async def update_eval_definition(
     "receive an insufficient_scope error.",
 )
 @_RETRY_DB
+@_tool_db_shell(
+    log_constant=_MSG_EVAL_DEF_DELETE_FAILED,
+    integrity_detail="Delete would violate a constraint: {orig}",
+    fallback="Failed to delete eval definition",
+)
 async def delete_eval_definition(
     eval_id: str,
     hard: bool = False,
 ) -> dict[str, Any]:
-    try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        _check_agent_tool_scope("delete_eval_definition")
-
-        from modulo.api.routes.evals import _MSG_EVAL_DEFINITION_NOT_FOUND
-        from modulo.core.audit_logger import append_audit_event
-
-        _assert_admin_scope("delete")
-
-        org_id = _ctx_org_id_val()
-        account_id = _ctx_user_id_val()
-
-        eid, eid_err = _parse_uuid_param(eval_id, "eval_id")
-        if eid_err:
-            return eid_err
-
-        from modulo.db.models.eval_definition import EvalDefinition
-
-        async with _session(org_id) as s:
-            eval_def = (
-                await s.execute(
-                    select(EvalDefinition).where(
-                        EvalDefinition.id == eid,
-                        EvalDefinition.organisation_id == org_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if eval_def is None:
-                return {"error": "eval_definition_not_found", "detail": _MSG_EVAL_DEFINITION_NOT_FOUND}
-
-            is_guardrail = eval_def.eval_type == "guardrail"
-            soft = is_guardrail and not hard
-            eval_name = eval_def.name
-            if soft:
-                eval_def.deleted_at = datetime.now(UTC)
-                eval_def.deleted_by = account_id
-            else:
-                await s.delete(eval_def)
-            if is_guardrail:
-                try:
-                    await append_audit_event(
-                        s,
-                        org_id=org_id,
-                        event_type="eval_definition.soft_deleted" if soft else "eval_definition.purged",
-                        actor_user_id=account_id,
-                        resource_type="eval_definition",
-                        resource_id=eid,
-                        payload_json={"eval_id": str(eid), "name": eval_name, "purge": hard},
-                    )
-                except Exception:
-                    _log.exception(
-                        "delete_eval_definition_audit_failed",
-                        extra={"org_id": str(org_id), "eval_id": str(eid)},
-                    )
-        return {"id": str(eid), "soft_deleted": soft, "hard_deleted": not soft}
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
-    except IntegrityError as exc:
-        _log.exception("delete_eval_definition failed")
-        return {
-            "error": "conflict",
-            "detail": f"Delete would violate a constraint: {exc.orig}",
-        }
-    except ProgrammingError:
-        _log.exception("delete_eval_definition failed")
-        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
-        _log.exception("delete_eval_definition failed")
-        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
-    except Exception:
-        _log.exception("delete_eval_definition failed")
-        return _tool_error("Failed to delete eval definition")
+    return await _delete_eval_definition_impl(eval_id, hard)
 
 
 @mcp.tool(description="Cancel a running pipeline run.")
@@ -4384,6 +4578,114 @@ async def create_model_backend(
         return _tool_error("Failed to create model backend")
 
 
+def _model_backend_item(mb: Any) -> dict[str, Any]:
+    """Serialise a model backend row for the MCP read tools.
+
+    Mirrors the REST ``model_backend.list`` surface: credential material is
+    NEVER included — only a boolean presence flag.
+    """
+    return {
+        "id": str(mb.id),
+        "name": mb.name,
+        "display_name": mb.display_name,
+        "provider": mb.provider,
+        "model_id": mb.model_id,
+        "has_credentials": bool(mb.credentials_ciphertext),
+        "default_params": mb.default_params or {},
+        "visibility": mb.visibility,
+        "owner_team_id": str(mb.owner_team_id) if mb.owner_team_id else None,
+        "tier": mb.tier,
+        "status": mb.status,
+        "created_at": mb.created_at.isoformat() if mb.created_at else None,
+        "updated_at": mb.updated_at.isoformat() if mb.updated_at else None,
+    }
+
+
+@mcp.tool(
+    name="list_model_backends",
+    description=(
+        "List model backends (LLM provider configurations) in the organisation with cursor-based "
+        "pagination. Returns metadata only — never credential values."
+    ),
+)
+@_RETRY_DB
+async def list_model_backends(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_model_backends")
+
+        from modulo.db.crud.model_backend import list_model_backends as db_list_model_backends
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_model_backends(s, org_id=org_id, cursor=cursor, page_size=lim)
+
+        return {
+            "data": [_model_backend_item(mb) for mb in result.items],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_model_backends failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_model_backends failed")
+        return _tool_error("Failed to list model backends")
+
+
+@mcp.tool(
+    description=("Get a single model backend by ID. Returns metadata only — never credential values."),
+)
+@_RETRY_DB
+async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_model_backend")
+
+        org_id = _ctx_org_id_val()
+        mid, mid_err = _parse_uuid_param(model_backend_id, "model_backend_id")
+        if mid_err:
+            return mid_err
+        if mid is None:
+            return {"error": "invalid_param", "detail": f"Invalid model_backend_id: {model_backend_id}"}
+
+        from modulo.db.crud.model_backend import get_model_backend as db_get_model_backend
+
+        async with _session(org_id) as s:
+            mb = await db_get_model_backend(s, mid)
+
+        # Belt-and-braces org check (mirrors the REST get route) — RLS already
+        # scopes the row, but a cross-org id must read as not_found even if
+        # RLS were misconfigured.
+        if mb is None or mb.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Model backend {model_backend_id} not found"}
+
+        item = _model_backend_item(mb)
+        raw_fallback_ids = getattr(mb, "fallback_backend_ids", None)
+        item["fallback_backend_ids"] = [str(fid) for fid in raw_fallback_ids] if raw_fallback_ids is not None else None
+        item["cost_tracking"] = mb.cost_tracking
+        item["currency"] = mb.currency
+        return item
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_model_backend failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_model_backend failed")
+        return _tool_error("Failed to get model backend")
+
+
 @mcp.tool(
     description="Create a new connector instance (provider configuration). "
     "Credentials are encrypted at rest. Returns the created connector details."
@@ -4643,50 +4945,52 @@ def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> di
     }
 
 
+async def _get_trigger_impl(trigger_id: str) -> dict[str, Any]:
+    """Load a single trigger with team-scope + streak detail; shared with the MCP tool wrapper."""
+    if not await validate_current_auth():
+        return _tool_auth_error(_MSG_TOKEN_REVOKED)
+    _check_agent_tool_scope("get_trigger")
+
+    org_id = _ctx_org_id_val()
+    tid, tid_err = _parse_uuid_param(trigger_id, "trigger_id")
+    if tid_err:
+        return tid_err
+    if tid is None:
+        return {"error": "invalid_id", "field": "trigger_id", "detail": _MSG_UUID_PARSE_FAILED}
+
+    from modulo.core.cron_helpers import _count_ongoing_runs
+
+    async with _session(org_id) as s:
+        trigger = await _load_trigger_row(s, org_id, tid)
+        if trigger is not None:
+            owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", str(trigger.pipeline_id))
+        in_flight = (
+            await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
+        )
+        # FAR-251 — surface the SAME streak_status shape as the REST
+        # trigger detail serializer (shared ``_streak_status_for``), computed
+        # INSIDE the RLS transaction (mirrors the FAR-191 fix — never read
+        # streak status post-commit).
+        streak_status = await _streak_status_for(s, trigger) if trigger is not None else None
+
+    if trigger is None:
+        return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
+
+    return _trigger_detail_dict(trigger, in_flight, streak_status)
+
+
 @mcp.tool(description="Get a single trigger by ID.")
 @_RETRY_DB
+@_tool_db_shell(
+    log_constant="get_trigger failed",
+    integrity_detail=None,
+    fallback="Failed to get trigger",
+    db_errors_to_fallback=True,
+)
 async def get_trigger(trigger_id: str) -> dict[str, Any]:
-    try:
-        if not await validate_current_auth():
-            return _tool_auth_error(_MSG_TOKEN_REVOKED)
-        _check_agent_tool_scope("get_trigger")
-
-        org_id = _ctx_org_id_val()
-        tid, tid_err = _parse_uuid_param(trigger_id, "trigger_id")
-        if tid_err:
-            return tid_err
-        if tid is None:
-            return {"error": "invalid_id", "field": "trigger_id", "detail": _MSG_UUID_PARSE_FAILED}
-
-        from modulo.core.cron_helpers import _count_ongoing_runs
-
-        async with _session(org_id) as s:
-            trigger = await _load_trigger_row(s, org_id, tid)
-            if trigger is not None:
-                owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
-                if _team_scoped_key_mismatch(owner_team_id):
-                    return _team_scope_error("pipeline", str(trigger.pipeline_id))
-            in_flight = (
-                await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
-            )
-            # FAR-251 — surface the SAME streak_status shape as the REST
-            # trigger detail serializer (shared ``_streak_status_for``), computed
-            # INSIDE the RLS transaction (mirrors the FAR-191 fix — never read
-            # streak status post-commit).
-            streak_status = await _streak_status_for(s, trigger) if trigger is not None else None
-
-        if trigger is None:
-            return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-
-        return _trigger_detail_dict(trigger, in_flight, streak_status)
-    except MCPAuthorizationError as exc:
-        return {"error": "insufficient_scope", "detail": str(exc)}
-    except ProgrammingError:
-        _log.exception("get_trigger failed")
-        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
-        _log.exception("get_trigger failed")
-        return _tool_error("Failed to get trigger")
+    return await _get_trigger_impl(trigger_id)
 
 
 def _validate_trigger_update_inputs(
@@ -5148,6 +5452,179 @@ async def delete_connector(
     except Exception:
         _log.exception("delete_connector failed")
         return _tool_error("Failed to delete connector")
+
+
+def _connector_item(ci: Any) -> dict[str, Any]:
+    """Serialise a connector instance row for the MCP read tools.
+
+    Mirrors the REST ``connector.list`` surface: the credential ciphertext is
+    NEVER included (only a ``has_credentials`` presence flag) and ``config_json``
+    is passed through the shared sensitive-key mask.
+    """
+    return {
+        "id": str(ci.id),
+        "name": ci.name,
+        "connector_type_id": ci.connector_type_id,
+        "has_credentials": bool(ci.credentials_ciphertext),
+        "config_json": mask_config_json(ci.config_json or {}),
+        "allowed_operations": ci.allowed_operations or [],
+        "status": ci.status,
+        "visibility": ci.visibility,
+        "owner_team_id": str(ci.owner_team_id) if ci.owner_team_id else None,
+        "tier": ci.tier,
+        "created_at": ci.created_at.isoformat() if ci.created_at else None,
+        "updated_at": ci.updated_at.isoformat() if ci.updated_at else None,
+    }
+
+
+@mcp.tool(
+    name="list_connectors",
+    description=(
+        "List connector instances in the organisation with cursor-based pagination. "
+        "Returns connector metadata (type, status, masked config) — never credential values."
+    ),
+)
+@_RETRY_DB
+async def list_connectors(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_connectors")
+
+        from modulo.db.crud.connector_instance import list_connector_instances as db_list_connector_instances
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_connector_instances(
+                s,
+                organisation_id=org_id,
+                page_size=lim,
+                cursor=cursor,
+            )
+
+        return {
+            "data": [_connector_item(ci) for ci in result.items],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_connectors failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_connectors failed")
+        return _tool_error("Failed to list connectors")
+
+
+@mcp.tool(description="Get a single connector instance by ID. Returns metadata — never credential values.")
+@_RETRY_DB
+async def get_connector(connector_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_connector")
+
+        org_id = _ctx_org_id_val()
+        cid, cid_err = _parse_uuid_param(connector_id, "connector_id")
+        if cid_err:
+            return cid_err
+        if cid is None:
+            return {"error": "invalid_param", "detail": f"Invalid connector_id: {connector_id}"}
+
+        from modulo.db.crud.connector_instance import get_connector_instance as db_get_connector_instance
+
+        async with _session(org_id) as s:
+            ci = await db_get_connector_instance(s, cid)
+
+        # Belt-and-braces org check (mirrors the REST get route) — RLS already
+        # scopes the row, but a cross-org id must read as not_found even if
+        # RLS were misconfigured.
+        if ci is None or ci.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Connector {connector_id} not found"}
+
+        item = _connector_item(ci)
+        item["degraded_at"] = ci.degraded_at.isoformat() if ci.degraded_at else None
+        item["last_skip_error"] = ci.last_skip_error
+        return item
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_connector failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_connector failed")
+        return _tool_error("Failed to get connector")
+
+
+def _connector_type_field_metadata(type_id: str) -> dict[str, Any] | None:
+    """Credential/config FIELD metadata for a connector type (values never included).
+
+    Sourced from the canonical library integration definitions (the single
+    source of truth for the credential keys a connector type consumes). Best
+    effort: returns None when the type has no library definition.
+    """
+    try:
+        from modulo.core.library.integrations import __all__ as _integration_exports
+        from modulo.core.library.integrations import definitions as _integration_defs
+
+        for name in _integration_exports:
+            definition = getattr(_integration_defs, name)
+            if definition.get("connector_type") != type_id:
+                continue
+            credential_fields = definition.get("credential_fields") or {}
+            return {
+                "credential_fields": {
+                    key: {"required": bool(spec.get("required", False))} for key, spec in credential_fields.items()
+                },
+                "config_fields": sorted((definition.get("default_config") or {}).keys()),
+            }
+    except Exception:
+        _log.debug("connector type field metadata unavailable for %s", type_id, exc_info=True)
+    return None
+
+
+@mcp.tool(
+    name="list_connector_types",
+    description=(
+        "List the registered connector type catalogue: id, display name, capabilities, and — for "
+        "types with a canonical definition — the credential/config FIELD metadata each type "
+        "consumes (field names and required flags only, never values)."
+    ),
+)
+async def list_connector_types() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_connector_types")
+
+        from modulo.connectors.base import ConnectorType
+
+        items: list[dict[str, Any]] = []
+        for t in ConnectorType:
+            item: dict[str, Any] = {
+                "id": t.value,
+                "name": t.value.replace("_", " ").title(),
+                "capabilities": sorted(c.value for c in t.capabilities),
+            }
+            metadata = _connector_type_field_metadata(t.value)
+            if metadata is not None:
+                item["credential_fields"] = metadata["credential_fields"]
+                item["config_fields"] = metadata["config_fields"]
+            items.append(item)
+
+        return {"data": items, "total": len(items)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("list_connector_types failed")
+        return _tool_error("Failed to list connector types")
 
 
 @mcp.tool(
@@ -5855,9 +6332,118 @@ async def create_agent(
         _log.exception("create_agent failed")
         return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
 
-    # ---------------------------------------------------------------------------
-    # Context retrieval tools
-    # ---------------------------------------------------------------------------
+
+def _agent_item(a: Any) -> dict[str, Any]:
+    """Build an agent summary for list_agents (no prompt template bodies)."""
+    return {
+        "id": str(a.id),
+        "name": a.name,
+        "description": a.description,
+        "is_executable": a.is_executable,
+        "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
+        "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
+        "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+    }
+
+
+@mcp.tool(
+    name="list_agents",
+    description=(
+        "List agents in the organisation with cursor-based pagination. Returns agent summaries "
+        "(no prompt templates — use get_agent for the full definition)."
+    ),
+)
+@_RETRY_DB
+async def list_agents(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_agents")
+
+        from modulo.db.crud.agent import list_agents as db_list_agents
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_agents(s, cursor=cursor, page_size=lim)
+
+        return {
+            "data": [_agent_item(a) for a in result.items],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_agents failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_agents failed")
+        return _tool_error("Failed to list agents")
+
+
+@mcp.tool(description="Get a single agent by ID, including its prompt template and configuration.")
+@_RETRY_DB
+async def get_agent(agent_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_agent")
+
+        org_id = _ctx_org_id_val()
+        aid, aid_err = _parse_uuid_param(agent_id, "agent_id")
+        if aid_err:
+            return aid_err
+        if aid is None:
+            return {"error": "invalid_param", "detail": f"Invalid agent_id: {agent_id}"}
+
+        from modulo.db.crud.agent import get_agent as db_get_agent
+
+        async with _session(org_id) as s:
+            agent = await db_get_agent(s, aid)
+
+        # Belt-and-braces org check (mirrors the REST get route) — RLS already
+        # scopes the row, but a cross-org id must read as not_found even if
+        # RLS were misconfigured.
+        if agent is None or agent.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Agent {agent_id} not found"}
+
+        return {
+            "id": str(agent.id),
+            "name": agent.name,
+            "description": agent.description,
+            "is_executable": agent.is_executable,
+            "prompt_template": agent.prompt_template,
+            "prompt_version_history": agent.prompt_version_history or [],
+            "model_backend_id": str(agent.model_backend_id) if agent.model_backend_id else None,
+            "input_schema_id": str(agent.input_schema_id) if agent.input_schema_id else None,
+            "input_schema_version": agent.input_schema_version,
+            "output_schema_id": str(agent.output_schema_id) if agent.output_schema_id else None,
+            "output_schema_version": agent.output_schema_version,
+            "parameter_schema_id": str(agent.parameter_schema_id) if agent.parameter_schema_id else None,
+            "connector_type_refs": agent.connector_type_refs or [],
+            "required_environment_capabilities": agent.required_environment_capabilities or [],
+            "retry_policy": agent.retry_policy or {},
+            "token_budget": agent.token_budget,
+            "max_input_length": agent.max_input_length,
+            "agent_command": agent.agent_command,
+            "created_at": agent.created_at.isoformat() if agent.created_at else None,
+            "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_agent failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_agent failed")
+        return _tool_error("Failed to get agent")
 
 
 _doc_index: DocumentationIndex | None = None
@@ -5894,6 +6480,11 @@ SENSITIVE_CONFIG_KEYS: set[str] = {
 def _is_sensitive_key(key: str) -> bool:
     lower = key.lower()
     return any(lower.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# Context retrieval tools
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool(
@@ -6176,7 +6767,7 @@ async def create_schema(
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
-        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return _tool_error("Failed to create schema")
@@ -6220,6 +6811,118 @@ async def list_schemas(
     except Exception:
         _log.exception("list_schemas failed")
         return _tool_error("Failed to list schemas")
+
+
+@mcp.tool(
+    name="list_environment_profiles",
+    description=(
+        "List environment profiles (execution environments: local_docker, e2b, etc.) in the "
+        "organisation with cursor-based pagination. Config values under sensitive keys are masked; "
+        "secret_refs are vault key references, never secret values."
+    ),
+)
+@_RETRY_DB
+async def list_environment_profiles(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_environment_profiles")
+
+        from modulo.db.crud.environment_profile import list_environment_profiles as db_list_environment_profiles
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_environment_profiles(s, cursor=cursor, page_size=lim)
+
+        return {
+            "data": [
+                {
+                    "id": str(p.id),
+                    "name": p.name,
+                    "description": p.description,
+                    "provider_type": p.provider_type,
+                    "image_ref": p.image_ref,
+                    "capabilities": p.capabilities_json or [],
+                    "config_json": mask_config_json(p.config_json or {}),
+                    "network_policy": p.network_policy,
+                    "initialisation_strategy": p.initialisation_strategy,
+                    "secret_refs": p.secret_refs_json or [],
+                    "persistence_policy": p.persistence_policy,
+                    "status": p.status,
+                    "visibility": p.visibility,
+                    "owner_team_id": str(p.owner_team_id) if p.owner_team_id else None,
+                    "created_at": p.created_at.isoformat() if p.created_at else None,
+                }
+                for p in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_environment_profiles failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_environment_profiles failed")
+        return _tool_error("Failed to list environment profiles")
+
+
+@mcp.tool(
+    name="list_parameter_schemas",
+    description=(
+        "List parameter schemas in the organisation with cursor-based pagination. Returns the "
+        "schema metadata and parameter definitions."
+    ),
+)
+@_RETRY_DB
+async def list_parameter_schemas(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_parameter_schemas")
+
+        from modulo.db.crud.parameter_schema import list_schemas as db_list_parameter_schemas
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_parameter_schemas(s, org_id=org_id, cursor=cursor, limit=lim)
+
+        return {
+            "data": [
+                {
+                    "id": str(ps.id),
+                    "name": ps.name,
+                    "description": ps.description,
+                    "version": ps.version,
+                    "parameters": ps.parameters or [],
+                    "created_at": ps.created_at.isoformat() if ps.created_at else None,
+                }
+                for ps in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_parameter_schemas failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_parameter_schemas failed")
+        return _tool_error("Failed to list parameter schemas")
 
 
 @mcp.tool(

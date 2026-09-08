@@ -19,6 +19,15 @@ interface InitializedDataFetchResult<T> extends Omit<DataFetchResult<T>, 'data'>
 interface DataFetchOptions<T> {
   initialValue?: T
   immediate?: boolean
+  /**
+   * FAR-691: when true, only the FIRST load flips `loading`; subsequent
+   * refetches update `data` in place without flipping it, so a rendered
+   * list stays mounted across auto-refresh / filter refetches (the expanded
+   * HITL gate card keeps its notes textarea focused). Refetch errors still
+   * surface through the existing error channel. Default false — other
+   * consumers keep today's behaviour.
+   */
+  silentRefetch?: boolean
 }
 
 type FetcherResult<T> = { data?: T; error?: { detail?: unknown } }
@@ -39,6 +48,7 @@ export function useDataFetch<T>(
   const queryClient = useQueryClient()
   const fetched = ref(false)
   const errorOverride = ref<string | null>(null)
+  const silentRefetch = options?.silentRefetch ?? false
 
   const { data, error, isLoading, isFetching, refetch } = useQuery<T, Error>({
     queryKey: key,
@@ -54,7 +64,10 @@ export function useDataFetch<T>(
   })
 
   return {
-    loading: computed(() => isLoading.value || isFetching.value),
+    // silentRefetch (FAR-691): `isLoading` is true only while the query has
+    // no data yet (the first load — or a first load that failed), so
+    // refetches of an already-populated query never flip `loading`.
+    loading: computed(() => (silentRefetch ? isLoading.value : isLoading.value || isFetching.value)),
     error: computed({
       get: () => errorOverride.value ?? (error.value ? (error.value.message ?? 'An error occurred') : null),
       set: value => { errorOverride.value = value },

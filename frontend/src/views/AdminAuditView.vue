@@ -204,7 +204,7 @@
                 </span>
               </td>
               <td class="table-cell font-mono">
-                {{ formatActor(event.actor_user_id) }}
+                {{ formatActor(event) }}
               </td>
               <td class="table-cell">
                 <span v-if="event.resource_type" class="text-muted-foreground">
@@ -361,9 +361,13 @@ const exportingJsonl = ref(false)
 const verifying = ref(false)
 const chainResult = ref<{ valid: boolean; event_count?: number; error?: string } | null>(null)
 
-function formatActor(actorId: string | null): string {
-  if (!actorId) return '—'
-  return 'usr_' + shortId(actorId).replace('#', '')
+function formatActor(event: AuditEvent): string {
+  // Prefer the semantic actor label the backend composed at emit time
+  // (trigger identity / "system"); fall back to the user id rendering.
+  const label = (event.payload_json ?? {})['actor']
+  if (typeof label === 'string' && label.length > 0) return label
+  if (!event.actor_user_id) return '—'
+  return 'usr_' + shortId(event.actor_user_id).replace('#', '')
 }
 
 function formatTimestamp(ts: string | null): string {
@@ -395,6 +399,12 @@ function badgeClass(eventType: string): string {
 }
 
 function summarize(event: AuditEvent): string {
+  // Prefer the descriptive summary the backend composed at emit time (part of
+  // the hash-chained payload); the heuristic below is the legacy fallback for
+  // events written before summaries existed.
+  const provided = (event.payload_json ?? {})['summary']
+  if (typeof provided === 'string' && provided.length > 0) return provided
+
   const et = event.event_type
   const action = et.includes('.') ? et.split('.')[1] : et
   const resource = event.resource_type ?? 'resource'

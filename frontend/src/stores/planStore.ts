@@ -27,6 +27,24 @@ interface TiersPayload {
   tiers: Array<{ tier_id: string; label: string; rank: number }>;
 }
 
+function pushSettledError(apiErrors: string[], label: string, reason: unknown): void {
+  const message = (reason as { message?: unknown } | null | undefined)?.message;
+  apiErrors.push(`${label}: ${message ?? String(reason)}`);
+}
+
+function runPlanSource<T>(
+  label: string,
+  settled: PromiseSettledResult<unknown>,
+  apply: (res: ApiResult<T>, apiErrors: string[]) => void,
+  apiErrors: string[],
+): void {
+  if (settled.status === "fulfilled") {
+    apply(settled.value as unknown as ApiResult<T>, apiErrors);
+  } else {
+    pushSettledError(apiErrors, label, settled.reason);
+  }
+}
+
 export const usePlanStore = defineStore("plan", () => {
   const currentTier = ref("community");
   const features = ref<Record<string, boolean>>({});
@@ -68,6 +86,46 @@ export const usePlanStore = defineStore("plan", () => {
 
   let fetchPlanPromise: Promise<void> | null = null;
 
+  function applyFeatureFlagsPayload(res: ApiResult<FeatureFlagsPayload>, apiErrors: string[]): void {
+    if (res.error) {
+      apiErrors.push(`Feature flags: ${formatApiError(res.error)}`);
+    } else if (res.data) {
+      currentTier.value = res.data.license.tier;
+      devMode.value = res.data.dev_mode === true;
+      const map: Record<string, boolean> = {};
+      for (const flag of res.data.flags) {
+        map[flag.name] = flag.currently_active;
+      }
+      features.value = map;
+      loaded.value = true;
+    }
+  }
+
+  function applyLicensePayload(res: ApiResult<LicensePayload>, apiErrors: string[]): void {
+    if (res.error) {
+      apiErrors.push(`License: ${formatApiError(res.error)}`);
+    } else if (res.data) {
+      expiresAt.value = res.data.expires_at ?? null;
+      orgId.value = res.data.org_id ?? null;
+      if (res.data.tier) currentTier.value = res.data.tier;
+    }
+  }
+
+  function applyTiersPayload(res: ApiResult<TiersPayload>, apiErrors: string[]): void {
+    if (res.error) {
+      apiErrors.push(`Tiers: ${formatApiError(res.error)}`);
+    } else if (res.data?.tiers?.length) {
+      const labels: Record<string, string> = {};
+      const ranks: Record<string, number> = {};
+      for (const t of res.data.tiers) {
+        labels[t.tier_id] = t.label;
+        ranks[t.tier_id] = t.rank;
+      }
+      tierLabels.value = labels;
+      tierRanks.value = ranks;
+    }
+  }
+
   async function fetchPlan() {
     if (fetchPlanPromise) return fetchPlanPromise;
     fetchPlanPromise = doFetchPlan();
@@ -104,57 +162,11 @@ export const usePlanStore = defineStore("plan", () => {
 
       const [flagsSettled, licenseSettled, tiersSettled] = results;
 
-      if (flagsSettled.status === "fulfilled") {
-        const flagsRes = flagsSettled.value as unknown as ApiResult<FeatureFlagsPayload>;
-        if (flagsRes.error) {
-          apiErrors.push(`Feature flags: ${formatApiError(flagsRes.error)}`);
-        } else if (flagsRes.data) {
-          currentTier.value = flagsRes.data.license.tier;
-          devMode.value = flagsRes.data.dev_mode === true;
-          const map: Record<string, boolean> = {};
-          for (const flag of flagsRes.data.flags) {
-            map[flag.name] = flag.currently_active;
-          }
-          features.value = map;
-          loaded.value = true;
-        }
-      } else {
-        apiErrors.push(`Feature flags: ${flagsSettled.reason?.message ?? String(flagsSettled.reason)}`);
-      }
+      runPlanSource("Feature flags", flagsSettled, applyFeatureFlagsPayload, apiErrors);
+      runPlanSource("License", licenseSettled, applyLicensePayload, apiErrors);
+      runPlanSource("Tiers", tiersSettled, applyTiersPayload, apiErrors);
 
-      if (licenseSettled.status === "fulfilled") {
-        const licenseRes = licenseSettled.value as unknown as ApiResult<LicensePayload>;
-        if (licenseRes.error) {
-          apiErrors.push(`License: ${formatApiError(licenseRes.error)}`);
-        } else if (licenseRes.data) {
-          expiresAt.value = licenseRes.data.expires_at ?? null;
-          orgId.value = licenseRes.data.org_id ?? null;
-          if (licenseRes.data.tier) currentTier.value = licenseRes.data.tier;
-        }
-      } else {
-        apiErrors.push(`License: ${licenseSettled.reason?.message ?? String(licenseSettled.reason)}`);
-      }
-
-      if (tiersSettled.status === "fulfilled") {
-        const tiersRes = tiersSettled.value as unknown as ApiResult<TiersPayload>;
-        if (tiersRes.error) {
-          apiErrors.push(`Tiers: ${formatApiError(tiersRes.error)}`);
-        } else if (tiersRes.data?.tiers?.length) {
-          const labels: Record<string, string> = {};
-          const ranks: Record<string, number> = {};
-          for (const t of tiersRes.data.tiers) {
-            labels[t.tier_id] = t.label;
-            ranks[t.tier_id] = t.rank;
-          }
-          tierLabels.value = labels;
-          tierRanks.value = ranks;
-        }
-      } else {
-        apiErrors.push(`Tiers: ${tiersSettled.reason?.message ?? String(tiersSettled.reason)}`);
-      }
-
-      const combinedError = apiErrors.length > 0 ? apiErrors.join("; ") : null;
-      error.value = combinedError;
+      error.value = apiErrors.length > 0 ? apiErrors.join("; ") : null;
     } catch (e: unknown) {
       error.value = formatApiError(e);
     } finally {

@@ -102,12 +102,15 @@ def get_run(run_id, client, request):
     with (
         patch("modulo.api.routes.runs.set_rls_org"),
         patch(
-            "modulo.api.routes.runs._do_get_run",
-            return_value=make_mock_run(
-                id=run_id,
-                status="failed",
-                error_detail="Node 2: Connection timeout",
-                final_state={"node-1": {"output": "ok"}},
+            "modulo.api.routes.runs._do_get_run_with_gate",
+            return_value=(
+                make_mock_run(
+                    id=run_id,
+                    status="failed",
+                    error_detail="Node 2: Connection timeout",
+                    final_state={"node-1": {"output": "ok"}},
+                ),
+                False,
             ),
         ),
         patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal("0.00"), 0)),
