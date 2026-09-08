@@ -819,6 +819,9 @@ def test_list_org_gates_default_status_is_undecided(client: tuple[TestClient, As
     assert resp.status_code == 200, resp.text
     where = " ".join(_where_sql(s) for s in captured)
     assert "decision IS NULL" in where
+    # Default view is pending work — fenced to actionable runs (FAR-612/FAR-604).
+    assert "runs.status IN" in where
+    assert "JOIN runs ON hitl_claims.run_id = runs.id" in _compiled_sql(_page_statements(captured))
     assert "approved" not in where
     body = resp.json()
     assert body["page"] == 1
@@ -830,9 +833,9 @@ def test_list_org_gates_default_status_is_undecided(client: tuple[TestClient, As
 @pytest.mark.parametrize(
     ("status_param", "expected_fragments"),
     [
-        ("undecided", ["decision IS NULL"]),
-        ("pending", ["decision IS NULL", "account_id IS NULL"]),
-        ("claimed", ["decision IS NULL", "account_id IS NOT NULL"]),
+        ("undecided", ["decision IS NULL", "runs.status IN"]),
+        ("pending", ["decision IS NULL", "account_id IS NULL", "runs.status IN"]),
+        ("claimed", ["decision IS NULL", "account_id IS NOT NULL", "runs.status IN"]),
         ("approved", ["decision = 'approved'"]),
         ("rejected", ["decision = 'rejected'"]),
     ],
@@ -858,6 +861,58 @@ def test_list_org_gates_status_filter_compiles_the_right_where(
     where = " ".join(_where_sql(s) for s in page_stmts)
     for fragment in expected_fragments:
         assert fragment in where, f"{status_param}: {fragment!r} not in {where!r}"
+
+
+@pytest.mark.parametrize("status_param", ["undecided", "pending", "claimed"])
+def test_list_org_gates_pending_work_statuses_join_and_fence_to_actionable_runs(
+    client: tuple[TestClient, AsyncMock], status_param: str
+) -> None:
+    """Pending-work statuses are fenced like HITLManager.list_pending
+    (FAR-612/FAR-604): joined to runs and restricted to actionable run
+    statuses, so orphaned undecided gates on terminal runs never surface —
+    on BOTH the page query and the count (the count must match the page)."""
+    http, session = client
+    # total > 0 so the endpoint actually issues the page query to inspect.
+    captured = _capture_gates_execute(session, gates=[], total=1)
+
+    resp = http.get(f"/api/v1/hitl/gates?status={status_param}")
+
+    assert resp.status_code == 200, resp.text
+    page_stmts = _page_statements(captured)
+    assert page_stmts
+    page_sql = _compiled_sql(page_stmts)
+    assert "JOIN runs ON hitl_claims.run_id = runs.id" in page_sql
+    assert "runs.status IN" in _where_sql(page_stmts[0])
+    count_stmts = [s for s in captured if "count(*)" in str(s)]
+    assert len(count_stmts) == 1
+    count_sql = str(count_stmts[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "JOIN runs ON hitl_claims.run_id = runs.id" in count_sql
+    assert "runs.status IN" in count_sql
+
+
+@pytest.mark.parametrize("status_param", ["approved", "rejected", "all"])
+def test_list_org_gates_history_statuses_are_not_run_fenced(
+    client: tuple[TestClient, AsyncMock], status_param: str
+) -> None:
+    """Decided history (approved/rejected) and the `all` audit view are
+    deliberately unfenced: a decided gate's run has legitimately moved past
+    awaiting_human, and the audit view must surface data-rot rows."""
+    http, session = client
+    captured = _capture_gates_execute(session, gates=[], total=1)
+
+    resp = http.get(f"/api/v1/hitl/gates?status={status_param}")
+
+    assert resp.status_code == 200, resp.text
+    page_stmts = _page_statements(captured)
+    assert page_stmts
+    page_sql = _compiled_sql(page_stmts)
+    assert "JOIN runs" not in page_sql
+    assert "runs.status IN" not in page_sql
+    count_stmts = [s for s in captured if "count(*)" in str(s)]
+    assert len(count_stmts) == 1
+    count_sql = str(count_stmts[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "JOIN runs" not in count_sql
+    assert "runs.status IN" not in count_sql
 
 
 def test_list_org_gates_status_all_skips_the_decision_filter(client: tuple[TestClient, AsyncMock]) -> None:

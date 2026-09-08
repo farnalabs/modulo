@@ -65,7 +65,7 @@ from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
-from modulo.db.models.run import Run
+from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
@@ -192,6 +192,13 @@ GateStatusFilter = Literal["undecided", "pending", "claimed", "approved", "rejec
 #: page_size is clamped (not 422'd) at this ceiling — mirrors the runs-list
 #: convention of a bounded page size without failing the whole request.
 _GATE_PAGE_SIZE_MAX = 100
+
+#: The ``status`` values on GET /api/v1/hitl/gates that view PENDING WORK. The
+#: data-rot fence (FAR-612/FAR-604) applies only to these: like
+#: ``HITLManager.list_pending`` they join ``runs`` and keep only gates whose run
+#: is still actionable. ``approved``/``rejected`` (decided history) and ``all``
+#: (audit view) are deliberately unfenced — see ``list_org_gates``.
+_PENDING_WORK_GATE_STATUSES = frozenset({"undecided", "pending", "claimed"})
 
 
 async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -966,6 +973,17 @@ async def list_org_gates(
     - ``approved`` / ``rejected``: the decided history.
     - ``all``: everything.
 
+    The data-rot fence (FAR-612/FAR-604) applies ONLY to the pending-work
+    statuses — ``undecided``/``pending``/``claimed`` join ``runs`` and keep
+    only gates whose run is still in ``HITL_ACTIONABLE_RUN_STATUSES``
+    (``awaiting_human``/``claimed``/``hitl_parked``), exactly like
+    ``HITLManager.list_pending``: an undecided gate on any other run status
+    is orphaned data rot (e.g. rows left by the since-fixed auto-approve
+    bug), not pending work. History views (``approved``/``rejected``) and
+    the ``all`` audit view are deliberately UNFENCED: a decided gate's run
+    has legitimately moved past ``awaiting_human``, and the audit view must
+    surface data-rot rows.
+
     ``/api/v1/hitl/pending`` is deliberately UNCHANGED (API stability — other
     consumers depend on its undecided-only shape). The response envelope
     mirrors the repo's standard list convention (items/total/page/page_size,
@@ -984,6 +1002,15 @@ async def list_org_gates(
     else:  # "rejected" — Literal narrows everything else away
         decision_filters = [HitlClaim.decision == "rejected"]
 
+    # Pending-work fence (FAR-612/FAR-604): the undecided family must match
+    # HITLManager.list_pending — joined to runs and restricted to runs still
+    # in an actionable status, because an undecided gate on a terminal/
+    # complete run is orphaned data rot, not pending work. History views
+    # (approved/rejected) and the `all` audit view are deliberately unfenced.
+    fenced_to_actionable_runs = status_filter in _PENDING_WORK_GATE_STATUSES
+    if fenced_to_actionable_runs:
+        decision_filters.append(Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES))
+
     # page_size clamps at the ceiling (never 422s) — an oversized client hint
     # still gets a usable page, matching the "don't fail the request" intent.
     effective_page_size = min(page_size, _GATE_PAGE_SIZE_MAX)
@@ -993,14 +1020,21 @@ async def list_org_gates(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            count_stmt = select(func.count()).select_from(HitlClaim).where(*decision_filters)
+            # Count and page derive from the SAME composed filters; the runs
+            # join is part of both so the count matches the fenced page.
+            count_stmt = select(func.count()).select_from(HitlClaim)
+            if fenced_to_actionable_runs:
+                count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
+            count_stmt = count_stmt.where(*decision_filters)
             total = (await session.execute(count_stmt)).scalar_one()
 
             gates: list[HitlClaim] = []
             if total:
+                gates_stmt = select(HitlClaim)
+                if fenced_to_actionable_runs:
+                    gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
                 gates_stmt = (
-                    select(HitlClaim)
-                    .where(*decision_filters)
+                    gates_stmt.where(*decision_filters)
                     .order_by(
                         nullslast(HitlClaim.decision_at.desc()),
                         nullslast(HitlClaim.claimed_at.desc()),
