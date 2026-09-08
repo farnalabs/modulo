@@ -578,31 +578,65 @@ def _resolve_action(eval_def: EvalDefinition) -> GuardrailAction:
         return GuardrailAction.OBSERVE
 
 
+@dataclass(frozen=True)
+class BlockDecision:
+    """The block decision of an interception pass (internal carrier).
+
+    ``blocked`` / ``block_message`` / ``blocking_eval_name`` travel as one
+    named carrier instead of a positional ``(bool, str, str)`` tuple — the
+    two adjacent same-typed strings are transposition-prone when unpacked
+    positionally.
+    """
+
+    blocked: bool = False
+    block_message: str = ""
+    blocking_eval_name: str = ""
+
+
+@dataclass(frozen=True)
+class RedactionPhaseOutcome:
+    """Outcome of phase two — the redaction phase of an interception pass."""
+
+    redacted: dict[str, Any]
+    entries: list[RedactionEntry]
+    decision: BlockDecision
+
+
+@dataclass(frozen=True)
+class DetectionLoopOutcome:
+    """Outcome of the bounded async detection loop (phase one)."""
+
+    results: list[EvalResult]
+    evaluated_defs: list[EvalDefinition]
+    decision: BlockDecision
+
+
 def _detect_block(
     definitions: Sequence[EvalDefinition],
     results: Sequence[EvalResult],
-) -> tuple[bool, str, str]:
+) -> BlockDecision:
     """Determine the block decision from aligned (definitions, results)."""
     for eval_def, result in zip(definitions, results, strict=True):
         detection_type, _ = _resolve_detection(eval_def)
         if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
-            return True, f"Guardrail {eval_def.name!r} blocked: {result.detail}", eval_def.name
-    return False, "", ""
+            return BlockDecision(
+                blocked=True,
+                block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
+                blocking_eval_name=eval_def.name,
+            )
+    return BlockDecision()
 
 
 def _apply_redaction_phase(
     definitions: Sequence[EvalDefinition],
     redacted: dict[str, Any],
-) -> tuple[dict[str, Any], list[RedactionEntry], bool, str, str]:
+) -> RedactionPhaseOutcome:
     """Phase two — apply redaction masks to redact-action guardrails.
 
-    Returns ``(redacted, entries, blocked, block_message, blocking_eval_name)``.
     A block-mode redaction policy firing records a block (never raises).
     """
     entries: list[RedactionEntry] = []
-    blocked: bool = False
-    block_message: str = ""
-    blocking_eval_name: str = ""
+    decision = BlockDecision()
     for eval_def in definitions:
         try:
             cfg = _validate_guardrail_definition(eval_def)
@@ -632,11 +666,9 @@ def _apply_redaction_phase(
             )
             entries.extend(batch_entries)
         except GuardrailBlockedError as exc:
-            if not blocked:
-                blocked = True
-                block_message = str(exc)
-                blocking_eval_name = eval_def.name
-    return redacted, entries, blocked, block_message, blocking_eval_name
+            if not decision.blocked:
+                decision = BlockDecision(blocked=True, block_message=str(exc), blocking_eval_name=eval_def.name)
+    return RedactionPhaseOutcome(redacted=redacted, entries=entries, decision=decision)
 
 
 def _mechanism_fail_result(eval_def: EvalDefinition, reason: str) -> EvalResult:
@@ -828,6 +860,50 @@ def derive_conformance_state(
 # ---------------------------------------------------------------------------
 
 
+def _assemble_outcome(
+    definitions: Sequence[EvalDefinition],
+    pre_act: dict[str, Any],
+    results: list[EvalResult],
+    decision: BlockDecision,
+    *,
+    detection_only: bool,
+    skipped: Sequence[GuardrailSkip] = (),
+) -> GuardrailInterceptionOutcome:
+    """Assemble the full interception outcome from the pass phases.
+
+    Shared tail of :func:`run_interception_pass` and
+    :func:`run_interception_pass_async`: the detection-only early return, the
+    redaction phase, the block merge (a redaction-phase block only wins when
+    the detection block decision is silent), and the outcome construction.
+
+    The sync/async skipped difference is preserved deliberately via the
+    *skipped* parameter: the async pass forwards its skip entries (e.g.
+    soft-deleted pinned guardrails, item 10) so the seam can audit them,
+    while the sync pass has no skip concept and passes ``()`` — the outcome's
+    ``skipped`` then defaults to an empty list exactly as before this helper
+    existed.
+    """
+    if detection_only:
+        return GuardrailInterceptionOutcome(
+            payload=pre_act,
+            results=results,
+            skipped=list(skipped),
+            blocked=False,
+        )
+    redaction_outcome = _apply_redaction_phase(definitions, pre_act)
+    if not decision.blocked and redaction_outcome.decision.blocked:
+        decision = redaction_outcome.decision
+    return GuardrailInterceptionOutcome(
+        payload=redaction_outcome.redacted,
+        results=results,
+        redactions=redaction_outcome.entries,
+        blocked=decision.blocked,
+        block_message=decision.block_message,
+        blocking_eval_name=decision.blocking_eval_name,
+        skipped=list(skipped),
+    )
+
+
 def run_interception_pass(
     engine: EvalEngine,
     definitions: Sequence[EvalDefinition],
@@ -856,20 +932,13 @@ def run_interception_pass(
     pre_act = copy.deepcopy(payload)
     results = evaluate_guardrails(engine, definitions, pre_act, raise_on_block=False)
 
-    blocked, block_message, blocking_eval_name = _detect_block(definitions, results)
-    if detection_only:
-        return GuardrailInterceptionOutcome(payload=pre_act, results=results, blocked=False)
-
-    redacted, entries, rb, rbm, rbname = _apply_redaction_phase(definitions, pre_act)
-    if not blocked and rb:
-        blocked, block_message, blocking_eval_name = rb, rbm, rbname
-    return GuardrailInterceptionOutcome(
-        payload=redacted,
-        results=results,
-        redactions=entries,
-        blocked=blocked,
-        block_message=block_message,
-        blocking_eval_name=blocking_eval_name,
+    decision = _detect_block(definitions, results)
+    return _assemble_outcome(
+        definitions,
+        pre_act,
+        results,
+        decision,
+        detection_only=detection_only,
     )
 
 
@@ -977,10 +1046,9 @@ async def _run_detection_loop(
     *,
     detection_only: bool,
     timeout_seconds: float,
-) -> tuple[list[EvalResult], list[EvalDefinition], bool, str, str]:
+) -> DetectionLoopOutcome:
     """Run every guardrail detection under its budget.
 
-    Returns ``(results, evaluated_defs, blocked, block_message, blocking_eval_name)``.
     A mechanism error (timeout / malformed config / misrouting) fails CLOSED
     for block/redact guardrails (recorded as a block); observe/warn — and any
     guardrail in detection-only replay mode — records an errored result so it
@@ -988,9 +1056,7 @@ async def _run_detection_loop(
     """
     results: list[EvalResult] = []
     evaluated_defs: list[EvalDefinition] = []
-    blocked: bool = False
-    block_message: str = ""
-    blocking_eval_name: str = ""
+    decision = BlockDecision()
     for eval_def in definitions:
         action = _resolve_action(eval_def)
         guarding = action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
@@ -1014,9 +1080,11 @@ async def _run_detection_loop(
             # evidence of what happened (guardrail_summary errored bucket).
             reason = _log_mechanism_error(eval_def, exc, timeout_seconds)
             if guarding and not detection_only:
-                blocked = True
-                block_message = "guardrail mechanism error at ingestion edge"
-                blocking_eval_name = eval_def.name
+                decision = BlockDecision(
+                    blocked=True,
+                    block_message="guardrail mechanism error at ingestion edge",
+                    blocking_eval_name=eval_def.name,
+                )
             else:
                 results.append(_mechanism_fail_result(eval_def, reason))
                 evaluated_defs.append(eval_def)
@@ -1024,7 +1092,7 @@ async def _run_detection_loop(
         results.append(result)
         evaluated_defs.append(eval_def)
 
-    return results, evaluated_defs, blocked, block_message, blocking_eval_name
+    return DetectionLoopOutcome(results=results, evaluated_defs=evaluated_defs, decision=decision)
 
 
 async def run_interception_pass_async(
@@ -1078,7 +1146,7 @@ async def run_interception_pass_async(
 
     timeout = timeout_seconds if timeout_seconds is not None else resolve_guardrail_timeout(definitions)
     pre_act = copy.deepcopy(payload)
-    results, evaluated_defs, blocked, block_message, blocking_eval_name = await _run_detection_loop(
+    detection_outcome = await _run_detection_loop(
         engine,
         definitions,
         pre_act,
@@ -1086,27 +1154,16 @@ async def run_interception_pass_async(
         timeout_seconds=timeout,
     )
 
-    if not blocked:
-        blocked, block_message, blocking_eval_name = _detect_block(evaluated_defs, results)
-    if detection_only:
-        return GuardrailInterceptionOutcome(
-            payload=pre_act,
-            results=results,
-            skipped=list(skipped),
-            blocked=False,
-        )
-
-    redacted, entries, rb, rbm, rbname = _apply_redaction_phase(definitions, pre_act)
-    if not blocked and rb:
-        blocked, block_message, blocking_eval_name = rb, rbm, rbname
-    return GuardrailInterceptionOutcome(
-        payload=redacted,
-        results=results,
-        redactions=entries,
-        blocked=blocked,
-        block_message=block_message,
-        blocking_eval_name=blocking_eval_name,
-        skipped=list(skipped),
+    decision = detection_outcome.decision
+    if not decision.blocked:
+        decision = _detect_block(detection_outcome.evaluated_defs, detection_outcome.results)
+    return _assemble_outcome(
+        definitions,
+        pre_act,
+        detection_outcome.results,
+        decision,
+        detection_only=detection_only,
+        skipped=skipped,
     )
 
 

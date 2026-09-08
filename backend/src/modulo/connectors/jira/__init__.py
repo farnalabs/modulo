@@ -98,6 +98,38 @@ def _rate_limit_metadata(response: httpx.Response) -> dict[str, str | None]:
     return extract_rate_limit_metadata(response, _RATE_LIMIT_HEADERS)
 
 
+def _require_filter(q: ConnectorQuery, key: str, resource: str) -> Any:
+    """Return ``q.filters[key]`` or raise the standard missing-filter error."""
+    if key not in q.filters:
+        raise ValueError(f"Jira {resource} query requires '{key}' filter")
+    return q.filters[key]
+
+
+def _require_data_key(data: dict[str, Any], key: str, op: str) -> Any:
+    """Return ``data[key]`` or raise the standard missing-data-key error."""
+    if key not in data:
+        raise ValueError(f"Jira {op} requires '{key}' in data")
+    return data[key]
+
+
+def _paginate(body: dict[str, Any], records: list[Any], max_results_fallback: int) -> tuple[int, str | None]:
+    """Derive ``(total, next_cursor)`` from a Jira offset-paginated list body.
+
+    Shared cursor-pagination arithmetic for the ``startAt`` + ``maxResults``
+    responses: the next cursor is the next offset while the current window
+    does not reach ``total``. ``max_results_fallback`` is the ``maxResults``
+    value used when the body omits it (the requested page size, or the API
+    default of 50).
+    """
+    total = _safe_int(body.get("total"), len(records))
+    start_at = _safe_int(body.get("startAt"), 0)
+    max_results = _safe_int(body.get("maxResults"), max_results_fallback)
+    next_cursor: str | None = None
+    if start_at + max_results < total:
+        next_cursor = str(start_at + max_results)
+    return total, next_cursor
+
+
 class JiraConnector(ConnectorBase):
     """Read/write Jira issues via the REST API (Cloud API v3 / Data Center API v2).
 
@@ -345,9 +377,7 @@ class JiraConnector(ConnectorBase):
 
     async def _query_issue(self, q: ConnectorQuery) -> ConnectorResult:
         """Get a single issue by ``issue_key``."""
-        if "issue_key" not in q.filters:
-            raise ValueError("Jira issue query requires 'issue_key' filter")
-        issue_key = q.filters["issue_key"]
+        issue_key = _require_filter(q, "issue_key", "issue")
         r = await self._call_api("GET", f"/issue/{issue_key}")
         data: dict[str, Any] = await self._parse_json(r)
         return ConnectorResult(
@@ -367,12 +397,7 @@ class JiraConnector(ConnectorBase):
         issues = payload.get("issues", [])
         if not isinstance(issues, list):
             issues = []
-        total = _safe_int(payload.get("total"), len(issues))
-        start_at = _safe_int(payload.get("startAt"), 0)
-        max_results = _safe_int(payload.get("maxResults"), max_results)
-        next_cursor: str | None = None
-        if start_at + max_results < total:
-            next_cursor = str(start_at + max_results)
+        total, next_cursor = _paginate(payload, issues, max_results)
         return ConnectorResult(
             records=issues,
             total=total,
@@ -382,9 +407,7 @@ class JiraConnector(ConnectorBase):
 
     async def _query_issue_comments(self, q: ConnectorQuery) -> ConnectorResult:
         """List comments on an issue with cursor pagination."""
-        if "issue_key" not in q.filters:
-            raise ValueError("Jira issue_comments query requires 'issue_key' filter")
-        issue_key = q.filters["issue_key"]
+        issue_key = _require_filter(q, "issue_key", "issue_comments")
         comment_params: dict[str, Any] = {}
         if q.cursor:
             comment_params["startAt"] = int(q.cursor)
@@ -393,24 +416,17 @@ class JiraConnector(ConnectorBase):
         comments = body.get("comments", [])
         if not isinstance(comments, list):
             comments = []
-        total = _safe_int(body.get("total"), len(comments))
-        start_at = _safe_int(body.get("startAt"), 0)
-        max_results = _safe_int(body.get("maxResults"), 50)
-        comment_next_cursor: str | None = None
-        if start_at + max_results < total:
-            comment_next_cursor = str(start_at + max_results)
+        total, next_cursor = _paginate(body, comments, 50)
         return ConnectorResult(
             records=comments,
             total=total,
-            next_cursor=comment_next_cursor,
+            next_cursor=next_cursor,
             metadata={"rate_limit": _rate_limit_metadata(r)},
         )
 
     async def _query_transitions(self, q: ConnectorQuery) -> ConnectorResult:
         """List available transitions for an issue."""
-        if "issue_key" not in q.filters:
-            raise ValueError("Jira transitions query requires 'issue_key' filter")
-        issue_key = q.filters["issue_key"]
+        issue_key = _require_filter(q, "issue_key", "transitions")
         r = await self._call_api("GET", f"/issue/{issue_key}/transitions")
         body = await self._parse_json(r)
         transitions = body.get("transitions", [])
@@ -422,9 +438,7 @@ class JiraConnector(ConnectorBase):
 
     async def _query_issue_attachments(self, q: ConnectorQuery) -> ConnectorResult:
         """List attachments on an issue via the issue's ``fields.attachment``."""
-        if "issue_key" not in q.filters:
-            raise ValueError("Jira issue_attachments query requires 'issue_key' filter")
-        issue_key = q.filters["issue_key"]
+        issue_key = _require_filter(q, "issue_key", "issue_attachments")
         r = await self._call_api("GET", f"/issue/{issue_key}")
         body = await self._parse_json(r)
         attachments = body.get("fields", {}).get("attachment") or []
@@ -436,9 +450,7 @@ class JiraConnector(ConnectorBase):
 
     async def _query_issue_remote_links(self, q: ConnectorQuery) -> ConnectorResult:
         """List remote links on an issue (list or ``links``-keyed response)."""
-        if "issue_key" not in q.filters:
-            raise ValueError("Jira issue_remote_links query requires 'issue_key' filter")
-        issue_key = q.filters["issue_key"]
+        issue_key = _require_filter(q, "issue_key", "issue_remote_links")
         r = await self._call_api("GET", f"/issue/{issue_key}/remotelink")
         body = await self._parse_json(r)
         remote_links: list[Any] = body if isinstance(body, list) else body.get("links", [])
@@ -448,39 +460,33 @@ class JiraConnector(ConnectorBase):
             metadata={"rate_limit": _rate_limit_metadata(r)},
         )
 
-    async def _query_project_components(self, q: ConnectorQuery) -> ConnectorResult:
-        """List components for a project."""
-        if "project" not in q.filters:
-            raise ValueError("Jira project_components query requires 'project' filter")
-        project = q.filters["project"]
-        r = await self._call_api("GET", f"/project/{project}/components")
+    async def _query_project_listing(self, q: ConnectorQuery, resource: str, sub_path: str) -> ConnectorResult:
+        """List one of a project's sub-resources (components / versions / statuses).
+
+        Shared body of the structurally identical project-subresource handlers:
+        require the ``project`` filter, GET ``/project/{project}/{sub_path}``,
+        parse a bare list response, and expose the project in the metadata.
+        """
+        project = _require_filter(q, "project", resource)
+        r = await self._call_api("GET", f"/project/{project}/{sub_path}")
         data = await self._parse_json(r)
-        components: list[Any] = data if isinstance(data, list) else []
+        records: list[Any] = data if isinstance(data, list) else []
         return ConnectorResult(
-            records=components,
-            total=len(components),
+            records=records,
+            total=len(records),
             metadata={
                 "rate_limit": _rate_limit_metadata(r),
                 "project": project,
             },
         )
 
+    async def _query_project_components(self, q: ConnectorQuery) -> ConnectorResult:
+        """List components for a project."""
+        return await self._query_project_listing(q, "project_components", "components")
+
     async def _query_project_versions(self, q: ConnectorQuery) -> ConnectorResult:
         """List versions/releases for a project."""
-        if "project" not in q.filters:
-            raise ValueError("Jira project_versions query requires 'project' filter")
-        project = q.filters["project"]
-        r = await self._call_api("GET", f"/project/{project}/versions")
-        data = await self._parse_json(r)
-        versions: list[Any] = data if isinstance(data, list) else []
-        return ConnectorResult(
-            records=versions,
-            total=len(versions),
-            metadata={
-                "rate_limit": _rate_limit_metadata(r),
-                "project": project,
-            },
-        )
+        return await self._query_project_listing(q, "project_versions", "versions")
 
     async def _query_projects(self, q: ConnectorQuery) -> ConnectorResult:
         """List accessible projects (list or ``values``-keyed response)."""
@@ -495,9 +501,7 @@ class JiraConnector(ConnectorBase):
 
     async def _query_field_metadata(self, q: ConnectorQuery) -> ConnectorResult:
         """List issue types + create-issue fields for a project (createmeta)."""
-        if "project" not in q.filters:
-            raise ValueError("Jira field_metadata query requires 'project' filter")
-        project = q.filters["project"]
+        project = _require_filter(q, "project", "field_metadata")
         createmeta_params: dict[str, Any] = {
             "projectKeys": project,
             "expand": "projects.issuetypes.fields",
@@ -528,26 +532,11 @@ class JiraConnector(ConnectorBase):
 
     async def _query_statuses(self, q: ConnectorQuery) -> ConnectorResult:
         """List issue types + their statuses for a project."""
-        if "project" not in q.filters:
-            raise ValueError("Jira statuses query requires 'project' filter")
-        project = q.filters["project"]
-        r = await self._call_api("GET", f"/project/{project}/statuses")
-        data = await self._parse_json(r)
-        statuses: list[Any] = data if isinstance(data, list) else []
-        return ConnectorResult(
-            records=statuses,
-            total=len(statuses),
-            metadata={
-                "rate_limit": _rate_limit_metadata(r),
-                "project": project,
-            },
-        )
+        return await self._query_project_listing(q, "statuses", "statuses")
 
     async def _query_attachments(self, q: ConnectorQuery) -> ConnectorResult:
         """List attachments on an issue (fields-scoped fetch)."""
-        if "issue_key" not in q.filters:
-            raise ValueError("Jira attachments query requires 'issue_key' filter")
-        issue_key = q.filters["issue_key"]
+        issue_key = _require_filter(q, "issue_key", "attachments")
         r = await self._call_api("GET", f"/issue/{issue_key}", params={"fields": "attachment"})
         body = await self._parse_json(r)
         attachments = body.get("fields", {}).get("attachment", [])
@@ -559,9 +548,7 @@ class JiraConnector(ConnectorBase):
 
     async def _query_attachment(self, q: ConnectorQuery) -> ConnectorResult:
         """Download an attachment's content (base64-encoded)."""
-        if "attachment_id" not in q.filters:
-            raise ValueError("Jira attachment query requires 'attachment_id' filter")
-        attachment_id = q.filters["attachment_id"]
+        attachment_id = _require_filter(q, "attachment_id", "attachment")
         r = await self._call_api("GET", f"/attachment/{attachment_id}/content")
         content_type = r.headers.get("content-type", _OCTET_STREAM)
         encoded = base64.b64encode(r.content).decode("ascii")
@@ -594,27 +581,21 @@ class JiraConnector(ConnectorBase):
 
     async def _write_issue_update(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Update an issue's fields."""
-        if "issue_key" not in payload.data:
-            raise ValueError("Jira issue update requires 'issue_key' in data")
-        issue_key = payload.data["issue_key"]
+        issue_key = _require_data_key(payload.data, "issue_key", "issue update")
         fields: dict[str, Any] = payload.data.get("fields", {})
         await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": fields})
         return {"issue_key": issue_key, "updated": True}
 
     async def _write_issue_assign(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Assign (or unassign) an issue's assignee."""
-        if "issue_key" not in payload.data:
-            raise ValueError("Jira issue assign requires 'issue_key' in data")
-        issue_key = payload.data["issue_key"]
+        issue_key = _require_data_key(payload.data, "issue_key", "issue assign")
         assignee_field = await self._resolve_assignee(payload.data)
         await self._call_api("PUT", f"/issue/{issue_key}", json={"fields": {"assignee": assignee_field}})
         return {"issue_key": issue_key, "assignee": assignee_field}
 
     async def _write_issue_label(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Add/remove labels on an issue (set semantics against the current labels)."""
-        if "issue_key" not in payload.data:
-            raise ValueError("Jira issue label requires 'issue_key' in data")
-        issue_key = payload.data["issue_key"]
+        issue_key = _require_data_key(payload.data, "issue_key", "issue label")
         add_labels = payload.data.get("add") or []
         remove_labels = payload.data.get("remove") or []
         if not add_labels and not remove_labels:
@@ -625,17 +606,13 @@ class JiraConnector(ConnectorBase):
 
     async def _write_issue_delete(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Delete an issue."""
-        if "issue_key" not in payload.data:
-            raise ValueError("Jira issue delete requires 'issue_key' in data")
-        issue_key = payload.data["issue_key"]
+        issue_key = _require_data_key(payload.data, "issue_key", "issue delete")
         await self._call_api("DELETE", f"/issue/{issue_key}")
         return {"issue_key": issue_key, "deleted": True}
 
     async def _write_issue_comment(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Add a comment to an issue."""
-        if "issue_key" not in payload.data:
-            raise ValueError("Jira issue comment requires 'issue_key' in data")
-        issue_key = payload.data["issue_key"]
+        issue_key = _require_data_key(payload.data, "issue_key", "issue comment")
         if "body" not in payload.data:
             raise ValueError("Jira issue comment requires 'body' in data")
         body = payload.data["body"]
@@ -649,9 +626,7 @@ class JiraConnector(ConnectorBase):
 
     async def _write_issue_remote_link(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Add a remote link to an issue."""
-        if "issue_key" not in payload.data:
-            raise ValueError("Jira issue_remote_link requires 'issue_key' in data")
-        issue_key = payload.data["issue_key"]
+        issue_key = _require_data_key(payload.data, "issue_key", "issue_remote_link")
         if "url" not in payload.data:
             raise ValueError("Jira issue_remote_link requires 'url' in data")
         link_object: dict[str, Any] = {"url": payload.data["url"]}
@@ -667,20 +642,16 @@ class JiraConnector(ConnectorBase):
 
     async def _write_remote_link_delete(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Delete a remote link from an issue."""
-        if "issue_key" not in payload.data:
-            raise ValueError("Jira remote_link_delete requires 'issue_key' in data")
+        issue_key = _require_data_key(payload.data, "issue_key", "remote_link_delete")
         if "link_id" not in payload.data:
             raise ValueError("Jira remote_link_delete requires 'link_id' in data")
-        issue_key = payload.data["issue_key"]
         link_id = payload.data["link_id"]
         await self._call_api("DELETE", f"/issue/{issue_key}/remotelink/{link_id}")
         return {"issue_key": issue_key, "link_id": link_id, "deleted": True}
 
     async def _write_transition(self, payload: ConnectorPayload) -> dict[str, Any]:
         """Transition an issue via its transition id."""
-        if "issue_key" not in payload.data:
-            raise ValueError("Jira transition requires 'issue_key' in data")
-        issue_key = payload.data["issue_key"]
+        issue_key = _require_data_key(payload.data, "issue_key", "transition")
         if "transition_id" not in payload.data:
             raise ValueError("Jira transition requires 'transition_id' in data")
         transition_id = payload.data["transition_id"]
@@ -707,9 +678,7 @@ class JiraConnector(ConnectorBase):
         the ``X-Atlassian-Token: no-check`` header Jira requires for attachment
         uploads to bypass XSRF protection.
         """
-        if "issue_key" not in data:
-            raise ValueError("Jira issue attachment requires 'issue_key' in data")
-        issue_key = data["issue_key"]
+        issue_key = _require_data_key(data, "issue_key", "issue attachment")
         if "filename" not in data:
             raise ValueError("Jira issue attachment requires 'filename' in data")
         filename = data["filename"]
