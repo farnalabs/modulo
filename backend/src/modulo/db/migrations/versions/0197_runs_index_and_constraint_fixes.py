@@ -37,7 +37,7 @@ def upgrade() -> None:
     #    their created_at, so that constraint would reject valid writes.
     _add_check(
         "ck_runs_completed_after_started",
-        "completed_at IS NULL OR (started_at IS NOT NULL AND completed_at >= started_at)",
+        "completed_at IS NULL OR started_at IS NULL OR completed_at >= started_at",
     )
     _add_check("ck_runs_parent_not_self", "parent_run_id IS NULL OR parent_run_id != id")
     _add_check("ck_runs_claim_count_nonneg", "claim_count >= 0")
