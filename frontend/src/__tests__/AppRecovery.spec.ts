@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { shallowMount, flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import App from '../App.vue'
+import { api } from '../lib/api/client'
+import type { components } from '../lib/api/schema'
 
 const routeRef = vi.hoisted(() => ({ meta: {} as Record<string, unknown> }))
 const mockRouter = vi.hoisted(() => ({
@@ -298,6 +300,23 @@ describe('App demo reload guard (FAR-535)', () => {
   })
 })
 
+// Typed from the generated OpenAPI schema, so this fixture round-trips the
+// REAL MeResponse shape: renaming or dropping a field backend-side breaks
+// `npm run type-check` here instead of silently reintroducing the
+// `name: undefined` bug at runtime.
+type MeResponse = components['schemas']['modulo__api__routes__auth__MeResponse']
+
+const ME_PAYLOAD: MeResponse = {
+  id: 'acc-1',
+  email: 'demo@modulo',
+  display_name: 'Demo User',
+  org_role: 'admin',
+  active: true,
+  created_at: '2026-01-01T00:00:00Z',
+  is_system_admin: false,
+  must_change_password: false,
+}
+
 describe('App auto-login error-tracker user context (/me fallback)', () => {
   // LoginResponse carries no `user` field, so this fallback is the live path
   // for every auto-login. It must map the MeResponse wire contract
@@ -306,17 +325,7 @@ describe('App auto-login error-tracker user context (/me fallback)', () => {
   it('maps display_name to name and org_role to role from /me', async () => {
     const setUser = vi.fn()
     trackerState.tracker = { setUser }
-    meState.response = {
-      data: {
-        id: 'acc-1',
-        email: 'demo@modulo',
-        display_name: 'Demo User',
-        org_role: 'admin',
-        active: true,
-        created_at: '2026-01-01T00:00:00Z',
-      },
-      error: undefined,
-    }
+    meState.response = { data: ME_PAYLOAD, error: undefined }
     const deferredLogin = deferred<{ ok: boolean; json: () => Promise<Record<string, unknown>> }>()
     mockLoginFetch(deferredLogin)
 
@@ -330,11 +339,33 @@ describe('App auto-login error-tracker user context (/me fallback)', () => {
     await flushPromises()
 
     expect(setUser).toHaveBeenCalledWith({
-      id: 'acc-1',
-      email: 'demo@modulo',
-      name: 'Demo User',
-      role: 'admin',
+      id: ME_PAYLOAD.id,
+      email: ME_PAYLOAD.email,
+      name: ME_PAYLOAD.display_name,
+      role: ME_PAYLOAD.org_role,
     })
+  })
+
+  it('keeps the session when the /me call rejects (best-effort user context)', async () => {
+    // A thrown error (network failure / hard 401 hand-off) must not undo the
+    // successful auto-login: user context is decoration, not a session gate.
+    const setUser = vi.fn()
+    trackerState.tracker = { setUser }
+    vi.mocked(api.GET).mockRejectedValueOnce(new Error('network down'))
+    const deferredLogin = deferred<{ ok: boolean; json: () => Promise<Record<string, unknown>> }>()
+    mockLoginFetch(deferredLogin)
+
+    shallowMount(App)
+    await flushPromises()
+    deferredLogin.resolve({
+      ok: true,
+      json: async () => ({ access_token: 'fresh-token', refresh_token: 'fresh-refresh' }),
+    })
+    await flushPromises()
+
+    expect(setUser).not.toHaveBeenCalled()
+    // First-mount auto-login still succeeded, so the app navigates to the root.
+    expect(mockRouter.push).toHaveBeenCalledWith('/')
   })
 
   it('leaves user context unset when /me returns no data', async () => {
