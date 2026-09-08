@@ -426,23 +426,18 @@ def _retry_after_policy(
     is excluded from ``"failure"`` retries — while TRANSIENT ``node_cancelled``
     (no hang marker) stays retryable via the existing NodeCancelledError path.
 
-    Known limitation of the ``"stall"`` event: it covers the **node-idle stall**
-    path only — a node returns a stalled output dict (``stall_reason``) in
-    ``_stream_graph``, which reaches this decision. The **executor-level
-    zombie-watchdog stall** (``execute_run`` watchdog terminal-fails the run and
-    cancels ``execute()``; the ``CancelledError`` is re-raised at the top of the
-    stream block before this decision runs) is NOT retried. See
-    ``docs/troubleshooting.md`` (``executor_stalled`` row) — the zombie watchdog's
-    terminal fail is documented as "never re-dispatched".
-
-    Same-shaped limitation for the FAR-369 deadline alias above: the absolute
-    node-deadline watchdog terminal-fails the run DIRECTLY (``fail_run_terminal``
-    with ``node_deadline_exceeded``) and cancels ``execute()``, so a watchdog
-    kill currently bypasses this decision exactly like the zombie stall. The
-    ``"timeout"`` alias still matters: any deadline outcome that DOES reach this
-    decision (raw watchdog spelling via the generic catch, dotted registry
-    spelling, or a future wiring of watchdog-killed runs into the retry
-    decision) now matches the ``"timeout"`` event instead of falling through.
+    Watchdog kills reach this decision too (FAR-690 / FAR-693): the FAR-369
+    absolute node-deadline watchdog consults this function — via the shared
+    ``pipeline_engine.watchdog_retry`` module — with final_status ``failed``
+    and the raw ``node_deadline_exceeded`` code before terminal-failing, and
+    the executor-level zombie-watchdog consults it with final_status
+    ``stalled`` and ``executor_stalled``. When the budget allows, both
+    re-dispatch the run through the SAME mechanism the in-execute path uses
+    (fenced pending-reset + backoff + ``RunRetryPolicyError`` re-raise → SAQ
+    job retry); with no coverage or an exhausted budget they keep the
+    unconditional terminal fail. The ``"timeout"`` / ``"stall"`` aliases above
+    therefore cover both the in-execute outcome spellings AND the raw watchdog
+    codes (both resolve through ``map_legacy_code``).
 
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
@@ -567,16 +562,19 @@ def _failure_event_matches(
     """``failure`` event matches a failed outcome, excluding hang deaths.
 
     A sandbox-agent HANG death terminalizes as ``node_cancelled`` + "likely
-    hung" in ``error_detail`` — re-dispatching would burn a full node timeout
+    hung" in ``error_detail`` - re-dispatching would burn a full node timeout
     with zero recovery probability, so it is excluded from ``"failure"`` retries.
     """
     if (
         "failure" not in event_set
         or final_status != "failed"
-        # Timeout is a distinct event — a "failure"-only policy must not retry
-        # a timeout outcome, and a stall is not a generic failure.
-        or code in ("node_timeout", "TimeoutError", "executor_stalled")
-        or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", "agent.stall")
+        # Timeout is a distinct event - a "failure"-only policy must not retry
+        # a timeout outcome, and a stall is not a generic failure. The
+        # absolute node-deadline watchdog code resolves to the timeout event
+        # too (map_legacy_code: node_deadline_exceeded -> node.deadline_exceeded),
+        # so both spellings are excluded the same way.
+        or code in ("node_timeout", "TimeoutError", "executor_stalled", "node_deadline_exceeded")
+        or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", "agent.stall", _ERROR_CODE_NODE_DEADLINE_EXCEEDED)
     ):
         return False
     # FAR-296 Phase 2: never-retryable script-mode terminal codes are excluded
