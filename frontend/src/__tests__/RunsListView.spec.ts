@@ -787,7 +787,7 @@ describe('RunsListView', () => {
 
   it('renders the heartbeat column humanized rather than raw seconds', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
-    vi.setSystemTime(new Date('2026-01-02T12:00:00Z'))
+    vi.setSystemTime(new Date('2026-01-02T12:00:00Z')) // nosemgrep: new-date-without-guard
     const justNowAt = new Date(Date.now() - 5000).toISOString() // nosemgrep: new-date-without-guard
     const fortyFiveSecondsAgoAt = new Date(Date.now() - 45_000).toISOString() // nosemgrep: new-date-without-guard
     mockResponses['/api/v1/runs'] = listWith([
