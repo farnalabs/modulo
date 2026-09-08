@@ -1594,7 +1594,10 @@ async def test_fail_nodeless_run_noop_when_run_missing_or_not_running():
 
 async def test_record_fact_for_terminalized_run_success():
     session = _MockSession()
-    run = SimpleNamespace(id=uuid.uuid4())
+    # FAR-648 phantom-fact guard: the recorder only writes for a TERMINAL run,
+    # so the re-selected mock must carry one (cancelled = the terminalizer's
+    # own write).
+    run = SimpleNamespace(id=uuid.uuid4(), status="cancelled")
     fact = AsyncMock()
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
