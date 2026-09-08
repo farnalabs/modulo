@@ -2787,6 +2787,7 @@ async def _append_conformance_audit(
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
             from modulo.core.audit_logger import append_audit_event
+            from modulo.core.audit_logger.labels import SYSTEM_ACTOR
 
             await append_audit_event(
                 session,
@@ -2798,6 +2799,8 @@ async def _append_conformance_audit(
                     "node_id": node_id,
                     "conformance_state": state,
                     "detail": detail[:5000],
+                    "actor": SYSTEM_ACTOR,
+                    "summary": f'Guardrail conformance {state} on node "{node_id}"',
                 },
             )
     except asyncio.CancelledError:

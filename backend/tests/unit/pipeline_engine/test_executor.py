@@ -2933,13 +2933,20 @@ async def test_check_capacity_admission_emits_run_started_audit():
     emitted at the pending→running claim transition — the single point where a
     run genuinely starts (the resume() path sets ``running`` directly and is
     NOT counted, so the event fires once per run, not once per resume).
+    FAR-728: the event carries a semantic actor and a descriptive summary
+    composed at the emit site.
     """
     session = _make_capacity_session()
     executor = _make_capacity_executor(session)
     run = _capacity_run()
+    run.trigger_type = "cron"
+    run.trigger_id = uuid.uuid4()
+    run.account_id = None
     org_id = uuid.uuid4()
     pipeline_id = uuid.uuid4()
     audit = AsyncMock(return_value=MagicMock())
+    pipeline = MagicMock()
+    pipeline.name = "PR Reviewer Agent"
 
     with (
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
@@ -2948,6 +2955,7 @@ async def test_check_capacity_admission_emits_run_started_audit():
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
         patch("modulo.core.pipeline_engine.executor.append_audit_event", new=audit),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -2964,7 +2972,122 @@ async def test_check_capacity_admission_emits_run_started_audit():
     assert kwargs["org_id"] == org_id
     assert kwargs["resource_type"] == "run"
     assert kwargs["resource_id"] == run.id
-    assert kwargs["payload_json"] == {"pipeline_id": str(pipeline_id)}
+    assert kwargs["actor_user_id"] is None
+    payload = kwargs["payload_json"]
+    assert payload["pipeline_id"] == str(pipeline_id)
+    assert payload["summary"] == (f'Pipeline "PR Reviewer Agent" ({str(pipeline_id)[:8]}) run triggered by cron')
+    assert payload["actor"] == f"cron trigger ({str(run.trigger_id)[:8]})"
+
+
+async def test_check_capacity_run_started_actor_is_acting_user_for_manual_run():
+    """A manually-started run resolves the actor to the acting user's account.
+
+    The summary attributes the source to the user request; the canonical
+    ``actor_user_id`` audit column carries the user (no ``actor`` label key).
+    """
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    run.trigger_type = "manual"
+    run.trigger_id = None
+    run.account_id = uuid.uuid4()
+    audit = AsyncMock(return_value=MagicMock())
+    pipeline = MagicMock()
+    pipeline.name = "Deploy Pipeline"
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.append_audit_event", new=audit),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    kwargs = audit.await_args.kwargs
+    assert kwargs["actor_user_id"] == run.account_id
+    payload = kwargs["payload_json"]
+    assert "actor" not in payload
+    assert payload["summary"].endswith("run triggered by user request")
+
+
+async def test_check_capacity_run_started_actor_system_when_unidentifiable():
+    """No trigger type and no account resolves the actor to the system actor."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    run.trigger_type = None
+    run.trigger_id = None
+    run.account_id = None
+    audit = AsyncMock(return_value=MagicMock())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.append_audit_event", new=audit),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=None)),
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    kwargs = audit.await_args.kwargs
+    assert kwargs["actor_user_id"] is None
+    payload = kwargs["payload_json"]
+    assert payload["actor"] == "system"
+
+
+async def test_check_capacity_run_started_survives_pipeline_name_lookup_failure():
+    """A failed pipeline-name lookup degrades the summary, never the event."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    run.trigger_type = "cron"
+    run.trigger_id = None
+    run.account_id = None
+    pipeline_id = uuid.uuid4()
+    audit = AsyncMock(return_value=MagicMock())
+
+    async def _boom(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("pipeline lookup boom")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.append_audit_event", new=audit),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", side_effect=_boom),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=pipeline_id,
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "running"
+    audit.assert_awaited_once()
+    payload = audit.await_args.kwargs["payload_json"]
+    assert payload["summary"] == f"Pipeline ({str(pipeline_id)[:8]}) run triggered by cron"
+    assert payload["actor"] == "cron trigger"
 
 
 async def test_check_capacity_blocked_emits_no_run_started_audit():

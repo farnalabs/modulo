@@ -83,6 +83,8 @@ class TestContextWriteAuditHook:
             "node_id": "reviewer",
             "role": "agent",
             "attempted_keys": ["secret", "model_tier"],
+            "actor": "system",
+            "summary": 'Non-setter context write on node "reviewer" (role agent)',
         }
         assert rls_orgs == [org_id]
         assert factory.session.begin_called is True
@@ -110,6 +112,8 @@ class TestContextWriteAuditHook:
             "node_id": None,
             "role": None,
             "attempted_keys": [],
+            "actor": "system",
+            "summary": "Non-setter context write",
         }
 
     async def test_hook_failure_is_logged_and_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:

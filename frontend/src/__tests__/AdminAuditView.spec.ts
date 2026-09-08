@@ -97,6 +97,32 @@ describe('AdminAuditView — event list', () => {
     expect(wrapper.text()).toContain('2 events')
   })
 
+  it('renders the semantic actor and summary the backend composed (FAR-728)', async () => {
+    mockAuditGet([
+      auditEvent('evt-sem', {
+        actor_user_id: null,
+        payload_json: {
+          actor: 'cron trigger (a1b2c3d4)',
+          summary: 'Pipeline "PR Reviewer Agent" (d6b2c25b) run triggered by cron',
+        },
+      }),
+    ])
+    const wrapper = await mountLoaded()
+
+    expect(wrapper.text()).toContain('cron trigger (a1b2c3d4)')
+    expect(wrapper.text()).toContain('Pipeline "PR Reviewer Agent" (d6b2c25b) run triggered by cron')
+    // The legacy heuristic must NOT win over the backend-provided summary.
+    expect(wrapper.text()).not.toContain('Created pipeline')
+  })
+
+  it('falls back to usr_ rendering for user events without a semantic actor', async () => {
+    mockAuditGet([auditEvent('evt-user', { actor_user_id: 'user-12345678', payload_json: { summary: 'X' } })])
+    const wrapper = await mountLoaded()
+
+    expect(wrapper.text()).toContain('usr_user-123')
+    expect(wrapper.text()).toContain('X')
+  })
+
   it('applies the destructive badge class to run.failed events', async () => {
     const wrapper = await mountLoaded()
     const badge = wrapper.find('[data-testid="admin-audit-event-row-evt-2"] .badge')

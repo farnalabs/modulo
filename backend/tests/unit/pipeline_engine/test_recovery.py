@@ -155,6 +155,12 @@ async def test_recover_node_with_valid_input():
     audit_kwargs = mock_audit.await_args.kwargs
     assert audit_kwargs["event_type"] == "node.recovery"
     assert audit_kwargs["payload_json"]["recovery_action"] == "replay"
+    # FAR-728: descriptive summary composed at the emit site; a user-initiated
+    # recovery carries the acting user on the canonical actor column and does
+    # NOT get a label key.
+    assert audit_kwargs["payload_json"]["summary"] == f'Replay recovery applied to node "{_NODE_ID}"'
+    assert audit_kwargs["actor_user_id"] == _ACTOR_ID
+    assert "actor" not in audit_kwargs["payload_json"]
 
 
 @pytest.mark.asyncio
@@ -197,6 +203,46 @@ async def test_skip_node_on_awaiting_human():
     assert _NODE_ID not in result.outputs_json
     assert result.node_telemetry_json is not None
     assert result.node_telemetry_json[_NODE_ID]["skipped"] is True
+
+
+@pytest.mark.asyncio
+async def test_recovery_audit_without_actor_resolves_to_system():
+    """A recovery with no acting user records the literal system actor (FAR-728)."""
+    run = _make_run(status="failed", outputs_json={})
+    session = _mock_session()
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        snapshot_result = MagicMock()
+        snapshot_result.scalar_one_or_none.return_value = _make_snapshot()
+        locked_result = MagicMock()
+        locked_result.scalar_one_or_none.return_value = _RUN_ID
+
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,  # Pipeline lock
+                snapshot_result,  # Snapshot query
+                locked_result,  # Update RUN ... RETURNING
+            ]
+        )
+
+        await recover_node(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id=_NODE_ID,
+            input_data={"review": "approved"},
+        )
+
+    mock_audit.assert_awaited_once()
+    audit_kwargs = mock_audit.await_args.kwargs
+    assert audit_kwargs["payload_json"]["actor"] == "system"
+    assert audit_kwargs["payload_json"]["summary"] == f'Replay recovery applied to node "{_NODE_ID}"'
+    assert audit_kwargs["actor_user_id"] is None
 
 
 @pytest.mark.asyncio
