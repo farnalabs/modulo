@@ -1681,6 +1681,7 @@ async def test_reconcile_org_processes_rows():
         patch.object(ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, return_value=[]),
         patch.object(ch, "_terminalize_claim_cap_exhausted", new_callable=AsyncMock, return_value=[uuid.uuid4()]),
         patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, return_value=0) as one_row,
+        patch.object(ch, "_run_outputs_sweep_for_org", new_callable=AsyncMock),
     ):
         got = await ch._reconcile_org(
             _factory_for(session),
