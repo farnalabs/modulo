@@ -453,15 +453,19 @@ class TestReconcilePredicateMatrix:
         """Without a retry_policy, re-dispatch is bounded by the configurable
         nodeless budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2). Once
         claim_count has advanced past the budget (already re-dispatched), the
-        run is terminal-failed so it is never left dangling in a re-dispatch loop."""
+        run is terminal-failed so it is never left dangling in a re-dispatch loop.
+        FAR-714: the terminal-fail now also ingests the
+        claimed-but-never-dispatched error event (alert surface)."""
         summary, reenqueue, ingest, _, _, session = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True, claim_count=3)],
         )
         assert summary["nodeless_failed"] == 1
         assert summary["nodeless_redispatched"] == 0
+        assert summary["claimed_but_never_dispatched"] == 1
         reenqueue.assert_not_awaited()
-        ingest.assert_not_awaited()
+        ingest.assert_awaited_once()
+        assert "claimed-but-never-dispatched" in ingest.await_args.kwargs["message"]
         session.record_facts.assert_awaited_once_with(RUN_RUNNING, ORG)
 
     async def test_running_nodeless_retry_policy_stall_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1076,6 +1080,203 @@ class TestNodelessRedispatchPerTickCap:
         assert summary["nodeless_failed"] == 0
         assert reenqueue.await_count == 2
         assert not any("nodeless re-dispatch cap hit" in r.message for r in caplog.records)
+
+
+class TestClaimedButNeverDispatchedCounter:
+    """FAR-714: the claimed-but-never-dispatched detection surface. Every run
+    the zombie repair TERMINAL-FAILS with the "Claimed by SAQ but dispatched no
+    node" detail (the ~30/week executor_stalled class) must be counted in the
+    tick summary's ``claimed_but_never_dispatched``, logged at ERROR level with
+    the wasted age, and ingested as a ``source='saq'`` error event — while the
+    non-terminal repair legs (re-dispatch, throttle, cap) must NOT bump it."""
+
+    @pytest.mark.asyncio
+    async def test_budget_exhausted_terminal_fail_bumps_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Prove-the-fix: the counter is bumped from the ACTUAL repair decision
+        — a budget-exhausted nodeless zombie terminal-failed by
+        ``_fail_nodeless_run`` — not from a fixture shortcut. The stable-message
+        error event fires with the run id in context."""
+        exhausted = _run_row(
+            uuid.uuid4(),
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=40,
+            claim_count=3,
+        )
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(monkeypatch, [exhausted])
+        assert summary["nodeless_failed"] == 1
+        assert summary["claimed_but_never_dispatched"] == 1
+        assert summary["nodeless_redispatched"] == 0
+        reenqueue.assert_not_awaited()
+        session.record_facts.assert_awaited_once_with(exhausted.id, ORG)
+        ingest.assert_awaited_once()
+        assert "claimed-but-never-dispatched" in ingest.await_args.kwargs["message"]
+        assert ingest.await_args.kwargs["context"]["run_id"] == str(exhausted.id)
+
+    @pytest.mark.asyncio
+    async def test_redispatch_leg_does_not_bump_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A first-sighting zombie within its budget is RE-DISPATCHED (not
+        terminal-failed): no counter bump, no error event."""
+        fresh = _run_row(
+            uuid.uuid4(),
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=None,
+            claim_count=1,
+        )
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(monkeypatch, [fresh])
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["claimed_but_never_dispatched"] == 0
+        reenqueue.assert_awaited_once()
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_throttled_and_capped_legs_do_not_bump_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Throttle-skip and per-tick-cap defer rows WITHOUT terminal-failing:
+        neither leg may bump the terminal-fail counter. Row order drives the
+        outcomes: the first zombie exhausts the cap-1 budget, the second is
+        capped, the third is throttled."""
+        monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 1)
+        redispatched = _run_row(
+            uuid.uuid4(),
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=40,
+            claim_count=1,
+        )
+        capped = _run_row(
+            uuid.uuid4(),
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=40,
+            claim_count=1,
+        )
+        throttled = _run_row(
+            uuid.uuid4(),
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=10,
+            claim_count=1,
+        )
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(monkeypatch, [redispatched, capped, throttled])
+        assert summary["nodeless_redispatched"] == 1
+        assert summary["nodeless_capped"] == 1
+        assert summary["nodeless_failed"] == 0
+        assert summary["claimed_but_never_dispatched"] == 0
+        assert reenqueue.await_count == 1
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_terminal_fail_logs_alert_grade_at_error_level(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The repair logs at ERROR level (alert-grade, not the old WARNING)
+        with the run id, claim_count and the wasted zombie age; the tick summary
+        adds its own ERROR-level alert line."""
+        exhausted = _run_row(
+            uuid.uuid4(),
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=40,
+            claim_count=3,
+        )
+        with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+            summary, _, _, _, _, _ = await _run_reconcile(monkeypatch, [exhausted])
+        assert summary["claimed_but_never_dispatched"] == 1
+        per_run = [r for r in caplog.records if "claimed_but_never_dispatched run=" in r.message]
+        assert len(per_run) == 1
+        assert str(exhausted.id) in per_run[0].getMessage()
+        assert "zombie_age_minutes=" in per_run[0].getMessage()
+        tick_summary = [r for r in caplog.records if "claimed_but_never_dispatched_summary" in r.message]
+        assert len(tick_summary) == 1
+        assert "1 run(s)" in tick_summary[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_no_zombies_no_summary_alert(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A quiet tick emits no claimed-but-never-dispatched summary alert."""
+        with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+            summary, _, _, _, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)])
+        assert summary["claimed_but_never_dispatched"] == 0
+        assert not any("claimed_but_never_dispatched" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_counter_persisted_to_shared_stats(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The new counter reaches the shared Redis stats payload the WEB
+        process's /healthz/ready reads."""
+        exhausted = _run_row(
+            uuid.uuid4(),
+            "running",
+            stale=False,
+            nodeless=True,
+            dispatched=False,
+            dispatched_minutes_ago=40,
+            claim_count=3,
+        )
+        summary, _, _, redis_client, _, _ = await _run_reconcile(monkeypatch, [exhausted])
+        stats_sets = [c for c in redis_client.set.await_args_list if c.args[0] == ch.DISPATCHER_RECONCILE_STATS_KEY]
+        assert stats_sets, "dispatcher_reconcile must persist its outcome to the shared Redis stats key"
+        payload = json.loads(stats_sets[0].args[1])
+        assert payload["claimed_but_never_dispatched"] == 1
+        assert summary["claimed_but_never_dispatched"] == 1
+        # Module-dict plumbing (the /healthz in-worker view) reflects the tick.
+        assert ch._dispatcher_reconcile_stats["claimed_but_never_dispatched"] == 1
+
+    def test_stats_setter_copies_counter(self) -> None:
+        """set_dispatcher_reconcile_stats carries the new key into the module
+        dict (a missing copy line would silently zero /healthz/ready)."""
+        ch.set_dispatcher_reconcile_stats({"claimed_but_never_dispatched": 4})
+        assert ch._dispatcher_reconcile_stats["claimed_but_never_dispatched"] == 4
+        ch.set_dispatcher_reconcile_stats({"claimed_but_never_dispatched": 0})
+        assert ch._dispatcher_reconcile_stats["claimed_but_never_dispatched"] == 0
+
+    @pytest.mark.asyncio
+    async def test_fail_nodeless_run_bumps_only_when_transition_lands(self) -> None:
+        """Direct unit check of the chokepoint: the counter bumps ONLY when the
+        run row is still ``running`` (the actual repair); a missing row is a
+        no-op for both the run and the counter."""
+        summary = ch._dispatcher_summary()
+        ingest = AsyncMock()
+        with (
+            patch.object(ch, "_ingest_saq_error", ingest),
+            patch.object(ch, "get_settings", return_value=_settings()),
+        ):
+            await ch._fail_nodeless_run(_MockSession([_org_result([])]), uuid.uuid4(), ORG, summary)
+        assert summary["claimed_but_never_dispatched"] == 1
+        ingest.assert_awaited_once()
+        # A missing/not-running row: the residual _MockSession.get returns None
+        # → early return → no bump, no alert.
+        summary2 = ch._dispatcher_summary()
+        ingest2 = AsyncMock()
+        with patch.object(ch, "_ingest_saq_error", ingest2):
+            await ch._fail_nodeless_run(_NoRunSession(), uuid.uuid4(), ORG, summary2)
+        assert summary2["claimed_but_never_dispatched"] == 0
+        ingest2.assert_not_awaited()
+
+
+class _NoRunSession:
+    """Session double whose ``get`` never finds a row (the no-op repair path)."""
+
+    begin_cm = _MockBegin()
+
+    def begin(self) -> _MockBegin:
+        return self.begin_cm
+
+    async def get(self, model: Any, pk: Any) -> None:
+        return None
 
 
 class TestReconcileRedisFailSafe:
