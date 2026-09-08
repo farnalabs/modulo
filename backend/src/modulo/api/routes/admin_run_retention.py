@@ -15,6 +15,7 @@ system admins may operate across all orgs, optionally narrowed by an
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -35,6 +36,7 @@ from modulo.api.dependencies import (
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.run_retention import (
+    ESTIMATE_DEADLINE_SECONDS,
     iter_run_export,
     list_retention_candidates,
     purge_terminal_runs,
@@ -136,6 +138,11 @@ async def candidates(
     """
 
     org_id = _resolve_org_id(principal, organisation_id)
+    # FAR-660: request-scoped estimate budget. The size estimate runs as
+    # bounded SQL aggregates; a pathological filter degrades to a partial
+    # approximation at this deadline instead of the minutes-long Python walk
+    # that 503'd the endpoint on the multi-GB production DB.
+    deadline = time.monotonic() + ESTIMATE_DEADLINE_SECONDS
     try:
         async with session.begin():
             await _run_scoped(session, org_id)
@@ -148,6 +155,7 @@ async def candidates(
                 status=status,
                 limit=limit,
                 offset=offset,
+                deadline=deadline,
             )
     except ProgrammingError:
         _log.exception("run_retention.candidates.programming_error")

@@ -13,7 +13,11 @@ This module adds the FAR-427 operations:
 
 * ``list_retention_candidates`` — list runs matching a filter set, with an
   ``estimated_bytes`` per run (its own JSON payload columns + its checkpoint
-  rows) and a whole-set ``total_estimated_bytes``.
+  rows) and a whole-set ``total_estimated_bytes``. FAR-660: the whole-set
+  totals are estimated by bounded SQL aggregates (one grouped scan per source
+  table under a per-request deadline), never by walking every matching run —
+  the retired Python walk hydrated the full dataset twice and 503'd the
+  endpoint on the multi-GB production DB.
 * ``iter_run_export`` — an async generator of JSONL lines (one per run) that
   streams run metadata + full outputs + telemetry + a checkpoint summary. Runs
   in pages so memory stays bounded regardless of how much data the run holds.
@@ -41,12 +45,30 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import bindparam, delete, func, select, text
+from sqlalchemy import (
+    JSON,
+    Column,
+    LargeBinary,
+    MetaData,
+    String,
+    Table,
+    Text,
+    Uuid,
+    bindparam,
+    cast,
+    delete,
+    func,
+    select,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run_node_outputs import (
@@ -62,6 +84,7 @@ from modulo.db.models.run import TERMINAL_STATUSES, Run
 # run_node_outputs repo module — the single shared copy now lives on the leaf
 # model module; imported under the historical private name so existing
 # callers/tests are untouched.
+from modulo.db.models.run_node_outputs import META_NODE_ID
 from modulo.db.models.run_node_outputs import json_bytes as _json_bytes
 from modulo.db.models.trigger_event import TriggerEvent
 
@@ -121,6 +144,95 @@ _CHECKPOINT_DELETE_SQL: dict[str, str] = {
 # Appended to a template ONLY when org_id is in scope; the org value is a bound
 # parameter (:org), never string-interpolated.
 _ORG_CLAUSE = " AND organisation_id = :org"
+
+# FAR-660: request budget for the candidates size estimate. The estimate runs
+# as bounded SQL aggregates (one grouped scan per source table) instead of the
+# retired O(N/500 x 4)-query Python walk, but a pathological filter still has
+# to scan its matching rows once. Each scan is guarded by this monotonic
+# deadline: components that would start after it are skipped (logged,
+# contributing 0) and the response degrades to a partial approximation rather
+# than a minutes-long walk. The admin candidates route stamps the deadline at
+# handler start and threads it down; direct callers get the same default.
+ESTIMATE_DEADLINE_SECONDS = 20.0
+
+# SELECT-only Core definitions (the QUARANTINE_TABLE precedent) of the tables
+# the SQL-side estimate aggregates. The ``langgraph.*`` checkpoint tables are
+# created at runtime by ModuloPostgresSaver.setup() and are deliberately NOT
+# ORM models; ``run_node_outputs`` IS an ORM model but its legacy-blob columns
+# must not be referenced as ORM attributes here (FAR-583 read-switch lens —
+# the size aggregates are a sanctioned accounting read, not a payload read),
+# so the Core subset keeps the reference to the Column objects only. Only the
+# columns the aggregates reference are declared (SQLAlchemy renders just
+# those; nothing here writes). Types mirror the runtime DDL in
+# modulo_saver._MIGRATION_SQL / migration 0192.
+_CHECKPOINT_AGG_METADATA = MetaData()
+
+_CHECKPOINTS_AGG = Table(
+    "checkpoints",
+    _CHECKPOINT_AGG_METADATA,
+    Column("organisation_id", Uuid()),
+    Column("thread_id", String(512)),
+    Column("checkpoint", JSON().with_variant(JSONB(), "postgresql")),
+    Column("metadata", JSON().with_variant(JSONB(), "postgresql")),
+)
+
+_CHECKPOINT_BLOBS_AGG = Table(
+    "checkpoint_blobs",
+    _CHECKPOINT_AGG_METADATA,
+    Column("organisation_id", Uuid()),
+    Column("thread_id", String(512)),
+    Column("blob", LargeBinary()),
+)
+
+_CHECKPOINT_WRITES_AGG = Table(
+    "checkpoint_writes",
+    _CHECKPOINT_AGG_METADATA,
+    Column("organisation_id", Uuid()),
+    Column("thread_id", String(512)),
+    Column("blob", LargeBinary()),
+)
+
+_RUN_NODE_OUTPUTS_AGG = Table(
+    "run_node_outputs",
+    _CHECKPOINT_AGG_METADATA,
+    Column("run_id", Uuid()),
+    Column("node_id", String()),
+    Column("outputs_json", JSON().with_variant(JSONB(), "postgresql")),
+    Column("node_telemetry_json", JSON().with_variant(JSONB(), "postgresql")),
+    Column("raw_output_markers", JSON().with_variant(JSONB(), "postgresql")),
+)
+
+# Per-table byte-size expressions, mirroring the raw _CHECKPOINT_SIZE_SQL
+# formulas exactly (octet_length(checkpoint::text) + octet_length(metadata::text)
+# for the checkpoints row, octet_length(blob) for the BYTEA blob columns) so the
+# checkpoint accounting cannot drift between the page-level reader
+# (_checkpoint_detail) and the whole-set aggregates. JSON payload columns use
+# length(cast(col AS TEXT)) — a character count, the same semantics as the
+# retired Python estimator's len(json.dumps(...)) and portable to SQLite; the
+# per-column COALESCE keeps an SQL-NULL (absent) column at 0 so a single NULL
+# never voids the row's whole contribution.
+_RUN_PAYLOAD_BYTES = (
+    func.coalesce(func.length(cast(Run.cost_breakdown, Text)), 0)
+    + func.coalesce(func.length(cast(Run.input_payload, Text)), 0)
+    + func.coalesce(func.length(cast(Run.run_classification, Text)), 0)
+)
+
+_NODE_OUTPUT_BYTES = (
+    func.coalesce(func.length(cast(_RUN_NODE_OUTPUTS_AGG.c["outputs_json"], Text)), 0)
+    + func.coalesce(func.length(cast(_RUN_NODE_OUTPUTS_AGG.c["node_telemetry_json"], Text)), 0)
+    + func.coalesce(func.length(cast(_RUN_NODE_OUTPUTS_AGG.c["raw_output_markers"], Text)), 0)
+)
+
+# (table, size expression) pairs for the three checkpoint aggregates.
+_CHECKPOINT_AGG_SOURCES: tuple[tuple[Table, Any], ...] = (
+    (
+        _CHECKPOINTS_AGG,
+        func.octet_length(cast(_CHECKPOINTS_AGG.c["checkpoint"], Text))
+        + func.octet_length(cast(_CHECKPOINTS_AGG.c["metadata"], Text)),
+    ),
+    (_CHECKPOINT_BLOBS_AGG, func.octet_length(_CHECKPOINT_BLOBS_AGG.c.blob)),
+    (_CHECKPOINT_WRITES_AGG, func.octet_length(_CHECKPOINT_WRITES_AGG.c.blob)),
+)
 
 
 def _run_row_bytes(run: Run, node_output_bytes: int = 0) -> int:
@@ -306,6 +418,7 @@ async def list_retention_candidates(
     status: str | None = None,
     limit: int = PAGE_SIZE_DEFAULT,
     offset: int = 0,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """List runs matching the filter set with an estimated per-run byte size.
 
@@ -315,6 +428,14 @@ async def list_retention_candidates(
     "reclaimable" figure. Runs of every status are listed (including live ones);
     only the purge refuses non-terminal runs — the UI shows terminal-only as
     purge-able.
+
+    FAR-660: the whole-set figures come from bounded SQL aggregates (one
+    grouped scan per source table — see :func:`_estimate_bytes_by_status`),
+    never from walking every matching run. ``deadline`` is a
+    ``time.monotonic()`` timestamp bounding those scans; ``None`` applies the
+    module default (``ESTIMATE_DEADLINE_SECONDS``). The per-run
+    ``estimated_bytes`` values on the page stay per-row Python estimates —
+    bounded to the page.
     """
 
     conditions = _retention_conditions(
@@ -358,40 +479,42 @@ async def list_retention_candidates(
             }
         )
 
-    total_estimated_bytes = await _estimate_total_bytes(
+    # FAR-660: ONE grouped estimate pass covers both whole-set figures —
+    # total = every status group, terminal = the TERMINAL_STATUSES groups —
+    # replacing the two full-dataset Python walks (which hydrated every
+    # matching Run with all payload columns and 503'd the endpoint on the
+    # multi-GB production DB).
+    est_by_status = await _estimate_bytes_by_status(
         session,
         org_id=org_id,
         date_from=date_from,
         date_to=date_to,
         pipeline_id=pipeline_id,
         status=status,
-        statuses=None,
+        deadline=deadline,
     )
-
+    total_estimated_bytes = sum(est_by_status.values())
     # Terminal-only totals drive the purge UI. The purge deletes every matching
     # TERMINAL run (unbounded — it pages the whole set), so the confirm dialog
     # and reclaimable figure must come from a server-side terminal count, never
     # from the page-capped candidate list the client happens to hold.
-    terminal_conditions = _retention_conditions(
-        org_id=org_id,
-        date_from=date_from,
-        date_to=date_to,
-        pipeline_id=pipeline_id,
-        status=status,
-        statuses=TERMINAL_STATUSES,
-    )
+    terminal_estimated_bytes = sum(est for est_status, est in est_by_status.items() if est_status in TERMINAL_STATUSES)
     terminal_total = (
-        await session.execute(select(func.count()).select_from(Run).where(*terminal_conditions))
+        await session.execute(
+            select(func.count())
+            .select_from(Run)
+            .where(
+                *_retention_conditions(
+                    org_id=org_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    pipeline_id=pipeline_id,
+                    status=status,
+                    statuses=TERMINAL_STATUSES,
+                )
+            )
+        )
     ).scalar_one() or 0
-    terminal_estimated_bytes = await _estimate_total_bytes(
-        session,
-        org_id=org_id,
-        date_from=date_from,
-        date_to=date_to,
-        pipeline_id=pipeline_id,
-        status=status,
-        statuses=TERMINAL_STATUSES,
-    )
 
     return {
         "runs": runs_out,
@@ -402,61 +525,154 @@ async def list_retention_candidates(
     }
 
 
-async def _estimate_total_bytes(
+def _runs_payload_stmt(conditions: list[Any]) -> Any:
+    """Grouped scan: per-status retained-payload bytes over the matching runs."""
+    return select(Run.status, func.coalesce(func.sum(_RUN_PAYLOAD_BYTES), 0)).where(*conditions).group_by(Run.status)
+
+
+def _node_output_stmt(conditions: list[Any]) -> Any:
+    """Grouped scan: per-status blob bytes from ``run_node_outputs`` for the
+    matching runs. Metadata rows (``__run_meta__``) are excluded — parity with
+    ``read_node_output_blob_bytes`` (the flags payload overhead would skew the
+    accounting)."""
+    return (
+        select(Run.status, func.coalesce(func.sum(_NODE_OUTPUT_BYTES), 0))
+        .select_from(_RUN_NODE_OUTPUTS_AGG)
+        .join(Run, Run.id == _RUN_NODE_OUTPUTS_AGG.c.run_id)
+        .where(*conditions, _RUN_NODE_OUTPUTS_AGG.c["node_id"] != META_NODE_ID)
+        .group_by(Run.status)
+    )
+
+
+def _checkpoint_agg_stmt(cp_table: Table, size_expr: Any, conditions: list[Any], org_id: uuid.UUID | None) -> Any:
+    """Grouped scan: per-status checkpoint bytes for the matching runs' threads.
+
+    Joins the checkpoint table to the filtered runs on ``thread_id`` (globally
+    unique, encodes the org — see the module docstring); the checkpoint-side
+    ``organisation_id`` filter is applied when in scope as defense in depth,
+    mirroring the raw size/delete SQL above. An inner join also excludes
+    orphaned checkpoint rows no run references — the purge could never
+    reclaim those via the run set, so they are not "reclaimable" here.
+    """
+    wheres = list(conditions)
+    if org_id is not None:
+        wheres.append(cp_table.c.organisation_id == org_id)
+    return (
+        select(Run.status, func.coalesce(func.sum(size_expr), 0))
+        .select_from(cp_table)
+        .join(Run, Run.langgraph_thread_id == cp_table.c.thread_id)
+        .where(*wheres)
+        .group_by(Run.status)
+    )
+
+
+async def _run_grouped_estimate(
+    session: AsyncSession,
+    stmt: Any,
+    *,
+    label: str,
+    deadline: float,
+    by_status: dict[str, int],
+) -> None:
+    """Execute one grouped estimate scan, accumulating per-status bytes.
+
+    Each scan is best-effort and bounded:
+
+    * skipped (contributing 0) when the request deadline has passed — the
+      response degrades to a partial approximation rather than a minutes-long
+      walk (FAR-660);
+    * executed inside its own SAVEPOINT so a failure (missing checkpoint
+      tables on a pre-checkpointer DB, a dialect without the size functions)
+      rolls back only the failed scan and contributes 0 — never a 503 for the
+      whole listing.
+    """
+    if time.monotonic() >= deadline:
+        _log.warning("run_retention.estimate_deadline_skipped", extra={"component": label})
+        return
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(stmt)).all()
+    except SQLAlchemyError:
+        _log.exception("run_retention.estimate_component_unavailable", extra={"component": label})
+        return
+    for row_status, row_bytes in rows:
+        if row_status is None:
+            continue
+        by_status[row_status] = by_status.get(row_status, 0) + int(row_bytes or 0)
+
+
+async def _estimate_bytes_by_status(
     session: AsyncSession,
     *,
     org_id: uuid.UUID | None,
-    date_from: datetime | None,
-    date_to: datetime | None,
-    pipeline_id: uuid.UUID | None,
-    status: str | None,
-    statuses: frozenset[str] | None = None,
-) -> int:
-    """Estimate the total reclaimable bytes across ALL matching runs.
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    pipeline_id: uuid.UUID | None = None,
+    status: str | None = None,
+    deadline: float | None = None,
+) -> dict[str, int]:
+    """Per-status estimated byte totals for ALL runs matching the filter set.
 
-    Computed as the sum of run-row JSON payload bytes plus the sum of the
-    checkpoint rows attributed to every matching run's ``thread_id``. Runs only;
-    the run-daily-fact / journey-fact tables are intentionally left in place
-    (ADR 020), so they are never counted as reclaimable here. The matching runs
-    are streamed in pages so the estimate stays bounded in memory.
+    FAR-660: replaces the retired ``_estimate_total_bytes`` Python walk (which
+    hydrated every matching Run — full payload columns — twice, once for the
+    whole-set total and once for the terminal-only figure, with three
+    checkpoint aggregates and per-run ``json.dumps`` per 500-row batch) with
+    ONE grouped SQL scan per source table:
 
-    ``statuses`` narrows the estimate to a status whitelist (e.g.
-    ``TERMINAL_STATUSES``) so the UI can show a terminal-only reclaimable figure
-    that matches what the purge will actually delete.
+    * ``runs`` — the three retained JSON payload columns
+      (``_RUN_PAYLOAD_BYTES``);
+    * ``run_node_outputs`` — the per-node blob store joined to the matching
+      runs, metadata rows excluded (``_node_output_stmt``);
+    * the three ``langgraph.*`` checkpoint tables joined on ``thread_id``,
+      using the exact ``octet_length`` expressions of the raw size SQL
+      (``_CHECKPOINT_AGG_SOURCES``).
+
+    Both response figures derive from this single result set:
+    ``total_estimated_bytes`` sums every status group and
+    ``terminal_estimated_bytes`` sums only the ``TERMINAL_STATUSES`` groups —
+    no second walk. The byte sizes are on-disk approximations (text-cast
+    rendering of the stored payloads), the same "estimated" contract as
+    before. Every scan is best-effort and deadline-guarded (see
+    :func:`_run_grouped_estimate`); a failed or late component contributes 0
+    and the listing still renders.
+
+    ``deadline`` is a ``time.monotonic()`` timestamp; ``None`` applies the
+    module default budget (``ESTIMATE_DEADLINE_SECONDS``).
     """
-
+    if deadline is None:
+        deadline = time.monotonic() + ESTIMATE_DEADLINE_SECONDS
     conditions = _retention_conditions(
         org_id=org_id,
         date_from=date_from,
         date_to=date_to,
         pipeline_id=pipeline_id,
         status=status,
-        statuses=statuses,
+        statuses=None,
     )
-    total = 0
-    page_size = BATCH_SIZE_DEFAULT
-    offset = 0
-    while True:
-        page = list(
-            (
-                await session.execute(
-                    select(Run).where(*conditions).order_by(Run.created_at, Run.id).limit(page_size).offset(offset)
-                )
-            )
-            .scalars()
-            .all()
+    by_status: dict[str, int] = {}
+    await _run_grouped_estimate(
+        session,
+        _runs_payload_stmt(conditions),
+        label="runs_payload",
+        deadline=deadline,
+        by_status=by_status,
+    )
+    await _run_grouped_estimate(
+        session,
+        _node_output_stmt(conditions),
+        label="run_node_outputs",
+        deadline=deadline,
+        by_status=by_status,
+    )
+    for cp_table, size_expr in _CHECKPOINT_AGG_SOURCES:
+        await _run_grouped_estimate(
+            session,
+            _checkpoint_agg_stmt(cp_table, size_expr, conditions, org_id),
+            label=f"checkpoint:{cp_table.name}",
+            deadline=deadline,
+            by_status=by_status,
         )
-        if not page:
-            break
-        threads = [r.langgraph_thread_id for r in page]
-        bytes_by_thread, _counts = await _checkpoint_detail(session, threads, org_id)
-        node_bytes_by_run = await read_node_output_blob_bytes(session, [r.id for r in page])
-        total += sum(_run_row_bytes(r, node_bytes_by_run.get(r.id, 0)) for r in page) + sum(bytes_by_thread.values())
-        offset += len(page)
-        if len(page) < page_size:
-            break
-
-    return total
+    return by_status
 
 
 async def iter_run_export(

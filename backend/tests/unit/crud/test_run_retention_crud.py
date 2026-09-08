@@ -16,13 +16,15 @@ thread-ids) rather than against a live schema.
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.dialects import sqlite
+from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.db.crud import run_retention as rr
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -146,16 +148,21 @@ class TestListRetentionCandidates:
         # FAR-583: per-run blob bytes come from the repo reader; the mock
         # session cannot execute it, so the orchestration-level test mocks
         # the reader (zero bytes) like _checkpoint_detail above.
+        # FAR-660: the whole-set estimate is the SQL-side grouped scan —
+        # mocked here at the orchestration boundary.
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({"tid": 500}, {"tid": 2}))),
-            patch.object(rr, "_estimate_total_bytes", new=AsyncMock(return_value=12345)),
+            patch.object(rr, "_estimate_bytes_by_status", new=AsyncMock(return_value={"complete": 100, "failed": 23})),
             patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
         assert result["total_count"] == 3
-        assert result["total_estimated_bytes"] == 12345
+        # Both statuses are terminal, so the whole-set estimate is the sum of
+        # every status group and the terminal figure equals it.
+        assert result["total_estimated_bytes"] == 123
+        assert result["terminal_estimated_bytes"] == 123
         assert len(result["runs"]) == 2
         # Each run's estimate = its own JSON columns + its checkpoint bytes.
         for item in result["runs"]:
@@ -165,7 +172,10 @@ class TestListRetentionCandidates:
 
     async def test_terminal_total_is_surfaced_and_distinct_from_total(self) -> None:
         """terminal_total/terminal_estimated_bytes are reported separately so the
-        purge UI can show the uncapped terminal count, not the page-capped set."""
+        purge UI can show the uncapped terminal count, not the page-capped set.
+
+        FAR-660: the terminal byte figure derives from the grouped estimate's
+        terminal-status groups only — no second walk of the dataset."""
         session = AsyncMock()
         total_result = MagicMock()
         total_result.scalar_one.return_value = 10
@@ -175,20 +185,172 @@ class TestListRetentionCandidates:
         session.execute = AsyncMock(side_effect=[total_result, terminal_result])
         runs = [_run("complete"), _run("failed")]
 
-        # FAR-583: per-run blob bytes come from the repo reader; the mock
-        # session cannot execute it, so the orchestration-level test mocks
-        # the reader (zero bytes) like _checkpoint_detail above.
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
             patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(rr, "_estimate_total_bytes", new=AsyncMock(return_value=99)),
+            patch.object(rr, "_estimate_bytes_by_status", new=AsyncMock(return_value={"complete": 99, "pending": 5})),
             patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
         assert result["total_count"] == 10
         assert result["terminal_total"] == 7
+        assert result["total_estimated_bytes"] == 104
         assert result["terminal_estimated_bytes"] == 99
+
+    async def test_deadline_is_threaded_to_the_estimator(self) -> None:
+        """The candidates listing passes its deadline through to the estimator
+        untouched; with no explicit deadline the estimator applies the module
+        default budget (asserted in TestEstimateBytesByStatus)."""
+        session = AsyncMock()
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        session.execute = AsyncMock(return_value=count_result)
+        estimate = AsyncMock(return_value={})
+
+        with (
+            patch.object(rr, "_select_run_page", new=AsyncMock(return_value=[])),
+            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
+            patch.object(rr, "_estimate_bytes_by_status", new=estimate),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
+        ):
+            await rr.list_retention_candidates(session, org_id=_ORG, status=None)
+            assert estimate.call_args.kwargs["deadline"] is None
+
+            explicit_deadline = time.monotonic() + 5
+            await rr.list_retention_candidates(session, org_id=_ORG, status=None, deadline=explicit_deadline)
+            assert estimate.call_args.kwargs["deadline"] == explicit_deadline
+
+
+# ---------------------------------------------------------------------------
+# _estimate_bytes_by_status — the FAR-660 SQL-side estimate (aggregate SQL
+# building + bounded best-effort execution)
+# ---------------------------------------------------------------------------
+
+
+class _FakeEstimateRows:
+    def __init__(self, rows: list[tuple[str, int]]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[tuple[str, int]]:
+        return list(self._rows)
+
+
+class _EstimateSession:
+    """Fake AsyncSession for the estimate pass: canned per-component rows."""
+
+    def __init__(self, results: list[list[tuple[str, int]]]) -> None:
+        self._results = list(results)
+        self.executed: list[object] = []
+        self.begin_nested = MagicMock(return_value=_nested_cm())
+
+    async def execute(self, stmt: object, params: object = None) -> _FakeEstimateRows:
+        self.executed.append(stmt)
+        rows = self._results.pop(0) if self._results else []
+        return _FakeEstimateRows(rows)
+
+
+class TestEstimateStatementBuilders:
+    """The aggregate SQL is built (never string-interpolated) — compile each
+    statement and assert its shape against a real dialect."""
+
+    def _compile(self, stmt: object, dialect: object, *, literal_binds: bool = False) -> str:
+        compile_kwargs = {"literal_binds": True} if literal_binds else {}
+        return str(stmt.compile(dialect=dialect, compile_kwargs=compile_kwargs))  # type: ignore[attr-defined]
+
+    def test_runs_payload_stmt_groups_by_status_and_measures_the_three_columns(self) -> None:
+        sql = self._compile(rr._runs_payload_stmt([]), sqlite.dialect())
+        assert "GROUP BY runs.status" in sql
+        for col in ("cost_breakdown", "input_payload", "run_classification"):
+            assert col in sql
+        assert "length(" in sql
+
+    def test_runs_payload_stmt_applies_the_filter_conditions(self) -> None:
+        sql = self._compile(rr._runs_payload_stmt([Run.status == "failed"]), sqlite.dialect(), literal_binds=True)
+        assert "failed" in sql
+
+    def test_node_output_stmt_excludes_metadata_rows_and_joins_runs(self) -> None:
+        sql = self._compile(rr._node_output_stmt([]), sqlite.dialect(), literal_binds=True)
+        assert "__run_meta__" in sql
+        assert "run_node_outputs" in sql
+        assert "JOIN runs" in sql
+        assert "GROUP BY runs.status" in sql
+
+    def test_checkpoint_agg_stmt_uses_octet_length_and_joins_on_thread(self) -> None:
+        cp_table, size_expr = rr._CHECKPOINT_AGG_SOURCES[0]
+        sql = self._compile(rr._checkpoint_agg_stmt(cp_table, size_expr, [], None), postgresql.dialect())
+        assert "octet_length" in sql
+        assert "checkpoints" in sql
+        assert "runs.langgraph_thread_id = checkpoints.thread_id" in sql
+        assert "GROUP BY runs.status" in sql
+        # Cross-org system admin (org_id=None): no checkpoint org filter.
+        assert "organisation_id" not in sql
+
+    def test_checkpoint_agg_stmt_adds_org_filter_when_scoped(self) -> None:
+        cp_table, size_expr = rr._CHECKPOINT_AGG_SOURCES[0]
+        sql = self._compile(rr._checkpoint_agg_stmt(cp_table, size_expr, [], _ORG), postgresql.dialect())
+        assert "checkpoints.organisation_id =" in sql
+
+    def test_checkpoint_blob_sources_measure_the_bytea_column(self) -> None:
+        for cp_table, size_expr in rr._CHECKPOINT_AGG_SOURCES[1:]:
+            sql = self._compile(rr._checkpoint_agg_stmt(cp_table, size_expr, [], None), postgresql.dialect())
+            assert cp_table.name in sql
+            assert f"octet_length({cp_table.name}.blob)" in sql
+
+
+@pytest.mark.asyncio
+class TestEstimateBytesByStatus:
+    async def test_accumulates_per_status_across_all_five_components(self) -> None:
+        """Component order: runs payload, run_node_outputs, then the three
+        checkpoint tables; per-status bytes accumulate across all of them."""
+        session = _EstimateSession(
+            [
+                [("complete", 10), ("failed", 5)],
+                [("complete", 3)],
+                [("complete", 100)],
+                [("failed", 7)],
+                [],
+            ]
+        )
+        result = await rr._estimate_bytes_by_status(session, org_id=_ORG)
+
+        assert result == {"complete": 113, "failed": 12}
+        assert len(session.executed) == 5
+        assert session.begin_nested.call_count == 5
+
+    async def test_default_deadline_is_applied_when_none(self) -> None:
+        session = _EstimateSession([])
+        await rr._estimate_bytes_by_status(session, org_id=_ORG)
+        # The default budget is in the future, so every component ran.
+        assert len(session.executed) == 5
+
+    async def test_expired_deadline_skips_every_component(self) -> None:
+        session = _EstimateSession([])
+        result = await rr._estimate_bytes_by_status(session, org_id=_ORG, deadline=time.monotonic() - 1)
+
+        assert not result
+        assert not session.executed
+        session.begin_nested.assert_not_called()
+
+    async def test_failed_component_is_skipped_without_failing_the_estimate(self) -> None:
+        """A failed scan (missing table / unsupported function) contributes 0;
+        the remaining components still run and the caller still gets a total."""
+        session = _EstimateSession([[("complete", 10)]])
+        calls = {"n": 0}
+        canned = [[("complete", 10)], None, [("complete", 100)], [], []]
+
+        async def flaky_execute(stmt: object, params: object = None) -> _FakeEstimateRows:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise SQLAlchemyError("no such function: length")
+            rows = canned[calls["n"] - 1] or []
+            return _FakeEstimateRows(rows)
+
+        session.execute = flaky_execute
+        result = await rr._estimate_bytes_by_status(session, org_id=_ORG)
+
+        assert result == {"complete": 110}
+        assert calls["n"] == 5
 
 
 # ---------------------------------------------------------------------------
