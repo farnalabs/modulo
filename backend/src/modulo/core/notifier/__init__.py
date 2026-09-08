@@ -497,22 +497,44 @@ class Notifier:
         finally:
             await client.aclose()
 
-    async def _dispatch_to_endpoint(
+    @staticmethod
+    def _retry_delay(attempt: int, response_code: int | None, resp: httpx.Response | None) -> float:
+        """Compute the backoff delay before the next delivery attempt.
+
+        Honours a 429 ``Retry-After`` header (capped at 60s); any unparsable
+        or absent header falls back to the fixed exponential backoff table.
+        """
+        if response_code == 429 and resp is not None:
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after is not None:
+                try:
+                    return min(float(retry_after), 60.0)
+                except (ValueError, TypeError):
+                    pass
+        return RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
+
+    async def _deliver_with_retries(
         self,
         client: httpx.AsyncClient,
         endpoint: NotificationEndpoint,
-        event_type: str,
+        signature: str,
         body: bytes,
-        run_id: uuid.UUID | None,
-        retain_payload: bool,
-    ) -> DispatchResult:
-        """Send a single notification to one endpoint with retry logic."""
-        signature = await self._sign_payload(body, endpoint)
+    ) -> tuple[bool, int, int | None, str | None]:
+        """POST one notification with retry/backoff.
 
-        last_error: str | None = None
-        response_code: int | None = None
+        Returns ``(succeeded, attempt_count, response_code, last_error)``.
+        Delivery semantics: up to MAX_ATTEMPTS attempts; success on any 2xx;
+        sleep between attempts (Retry-After-aware on 429) and never after
+        the final attempt.
+        """
         succeeded = False
         attempt_count = 0
+        response_code: int | None = None
+        last_error: str | None = None
+        # Pre-initialised so the 429 check below can never hit an unbound
+        # name on a first-attempt RequestError (mirrors the original
+        # short-circuit semantics exactly).
+        resp: httpx.Response | None = None
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             attempt_count = attempt
@@ -546,29 +568,46 @@ class Notifier:
                         "last_error": last_error,
                     },
                 )
-                if response_code == 429 and resp is not None:
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after is not None:
-                        try:
-                            delay = min(float(retry_after), 60.0)
-                        except (ValueError, TypeError):
-                            delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
-                    else:
-                        delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
-                else:
-                    delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
-                await asyncio.sleep(delay)
+                await asyncio.sleep(self._retry_delay(attempt, response_code, resp))
+
+        return succeeded, attempt_count, response_code, last_error
+
+    def _encrypt_payload(
+        self,
+        body: bytes,
+        endpoint: NotificationEndpoint,
+        retain_payload: bool,
+    ) -> bytes | None:
+        """Encrypt the request body for delivery-log retention (opt-in)."""
+        if not retain_payload:
+            return None
+        try:
+            return self._fernet.encrypt(body)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("notifier.encrypt_failed", extra={"endpoint_id": str(endpoint.id)})
+            return None
+
+    async def _dispatch_to_endpoint(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: NotificationEndpoint,
+        event_type: str,
+        body: bytes,
+        run_id: uuid.UUID | None,
+        retain_payload: bool,
+    ) -> DispatchResult:
+        """Send a single notification to one endpoint with retry logic."""
+        signature = await self._sign_payload(body, endpoint)
+
+        succeeded, attempt_count, response_code, last_error = await self._deliver_with_retries(
+            client, endpoint, signature, body
+        )
 
         status = "delivered" if succeeded else "dead_lettered"
 
-        payload_ciphertext: bytes | None = None
-        if retain_payload:
-            try:
-                payload_ciphertext = self._fernet.encrypt(body)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("notifier.encrypt_failed", extra={"endpoint_id": str(endpoint.id)})
+        payload_ciphertext = self._encrypt_payload(body, endpoint, retain_payload)
 
         await self._record_delivery(
             endpoint,
