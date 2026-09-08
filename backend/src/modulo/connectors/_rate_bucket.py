@@ -139,24 +139,26 @@ local tt = redis.call('TIME')
 local now = tt[1] + tt[2] / 1e6
 
 local st = redis.call('HMGET', key, 'tokens', 'ts')
-local tokens_raw = st[1]
-local ts_raw = st[2]
--- The Lua always HSETs BOTH hash fields together, so a bucket with exactly one
--- field present is half-written: an external writer, a per-field HEXPIRE (Redis
--- 7.4+), or a partial restore touched the key. A half-written bucket must FAIL
--- CLOSED rather than re-burst a spent budget in the one direction this script
--- exists to prevent. Both fields absent = a brand-new bucket (start full). A
--- field that is present but unparseable is also corrupt.
+-- A missing hash field comes back from Redis as Lua ``false`` (not ``nil``), so
+-- a ``~= nil`` presence test also matches a brand-new bucket and would wedge
+-- every first consume as corrupt. The granting path below always HSETs
+-- ``tokens`` and ``ts`` together, so exactly two states are legitimate: BOTH
+-- absent (fresh bucket -> start at full burst) or BOTH present and parseable.
+-- Anything else is corrupt and must fail closed. Seeding ``burst`` for a
+-- half-written bucket would hand a whole fresh burst to an already-spent
+-- budget - the ``N x burst`` over-grant this shared limiter exists to prevent.
 local tokens
 local ts
-if tokens_raw == false and ts_raw == false then
+if st[1] == false and st[2] == false then
     tokens = burst
     ts = now
-elseif tokens_raw == false or ts_raw == false then
-    return -1
 else
-    tokens = tonumber(tokens_raw)
-    ts = tonumber(ts_raw)
+    if st[1] == false or st[2] == false then
+        return -1
+    end
+    tokens = tonumber(st[1])
+    ts = tonumber(st[2])
+end
     if tokens == nil or ts == nil then
         return -1
     end
