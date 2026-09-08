@@ -354,7 +354,11 @@ def runner_gets_run(run_id, request):
     resolved = getattr(request.node, "_run_id", uuid.uuid4())
     run = make_mock_run(id=resolved, status="completed")
     with (
-        patch("modulo.api.routes.runs._do_get_run", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs._do_get_run_with_gate",
+            new_callable=AsyncMock,
+            return_value=(run, False),
+        ),
         patch(
             "modulo.api.routes.runs._do_get_child_run_rollup",
             new_callable=AsyncMock,

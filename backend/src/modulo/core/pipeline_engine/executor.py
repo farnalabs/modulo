@@ -129,6 +129,7 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     update_run_status,
 )
+from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback, read_run_markers_with_fallback
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
@@ -3138,14 +3139,25 @@ class PipelineExecutor:
         including a missing row or a non-dict column — yields empty dicts so
         the downgrade falls back to scanning the live dict only. It must never
         crash finalization.
+
+        FAR-583: the blobs reassemble from ``run_node_outputs`` via the repo
+        reader (with the empty/mismatch legacy fallback) inside the SAME
+        transaction that loads the run row — one batched query, never a
+        per-node lazy load.
         """
         if self._session_factory is None:
             return {}, {}
+        outputs_json: dict[str, Any] = {}
+        telemetry_json: dict[str, Any] = {}
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
                 run = await get_run(session, run_id)
+                if run is not None:
+                    blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=org_id)
+                    outputs_json = dict(blobs.outputs) if isinstance(blobs.outputs, dict) else {}
+                    telemetry_json = dict(blobs.telemetry) if isinstance(blobs.telemetry, dict) else {}
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -3155,14 +3167,7 @@ class PipelineExecutor:
                 exc_info=True,
             )
             return {}, {}
-        if run is None:
-            return {}, {}
-        outputs_json = getattr(run, "outputs_json", None)
-        telemetry_json = getattr(run, "node_telemetry_json", None)
-        return (
-            dict(outputs_json) if isinstance(outputs_json, dict) else {},
-            dict(telemetry_json) if isinstance(telemetry_json, dict) else {},
-        )
+        return outputs_json, telemetry_json
 
     async def _finalize_run_after_stream(
         self,
@@ -3702,8 +3707,9 @@ class PipelineExecutor:
         # budget and re-sending the side effect. ORDERING INVARIANT: computed
         # AFTER superseded/stalled (above) and BEFORE any mutation —
         # final_status/error_code are first mutated only in the
-        # retries-exhausted branch below. `markers` is the ALREADY-LOADED
-        # current_run.raw_output_markers — no fresh SELECT.
+        # retries-exhausted branch below. `markers` was loaded by
+        # `_load_transient_state` (repo reader, same transaction) — no extra
+        # SELECT here.
         gate_ok = self._idempotency_gate_ok(
             exc=exc,
             run_markers=run_markers,
@@ -4195,7 +4201,13 @@ class PipelineExecutor:
             if current_run is not None:
                 node_attempt_count = int(current_run.node_attempt_count or 0)
                 current_token = current_run.claim_token
-                run_markers = current_run.raw_output_markers
+                # FAR-583 read-switch: the markers reassemble from
+                # run_node_outputs (with the empty/mismatch legacy fallback)
+                # inside this SAME transaction — one batched repo read, no
+                # per-node lazy loads. The run row here is a FRESH load in
+                # this transaction, so no in-session unsaved state is relied
+                # on.
+                run_markers = await read_run_markers_with_fallback(session, run_id=run_id, organisation_id=org_id)
                 cancellation_requested = bool(current_run.cancellation_requested)
                 idempotency_key = current_run.idempotency_key
         return node_attempt_count, current_token, run_markers, cancellation_requested, idempotency_key
@@ -4244,8 +4256,9 @@ class PipelineExecutor:
         sandbox marker write.
 
         TOCTOU note (known, documented): ``run_markers`` is the run's
-        ``raw_output_markers`` read by ``_load_transient_state`` via plain
-        ``get_run`` — NOT under ``SELECT ... FOR UPDATE``. Two executors racing
+        raw-output markers (reassembled by ``_load_transient_state`` via the
+        FAR-583 repo reader) read via plain ``get_run`` — NOT under
+        ``SELECT ... FOR UPDATE``. Two executors racing
         on the same run could both read ``delivery_done`` absent and both decide
         to suppress/retry. The marker WRITE side (``_write_raw_output_marker``)
         DOES take ``with_for_update`` on the run row before persisting, so a

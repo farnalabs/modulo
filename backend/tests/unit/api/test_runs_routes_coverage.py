@@ -647,13 +647,20 @@ def test_list_runs_error_mapping(exc: Exception, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /runs/{run_id} — error mapping via _do_get_run
+# GET /runs/{run_id} — error mapping via _do_get_run_with_gate
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("exc", "expected"), [(_INTEGRITY, 409), (_PROG, 501), (_SQL, 503), (_RUNTIME, 500)])
 def test_get_run_error_mapping(exc: Exception, expected: int) -> None:
-    with _fresh_client() as http, patch("modulo.api.routes.runs._do_get_run", new_callable=AsyncMock, side_effect=exc):
+    with (
+        _fresh_client() as http,
+        patch(
+            "modulo.api.routes.runs._do_get_run_with_gate",
+            new_callable=AsyncMock,
+            side_effect=exc,
+        ),
+    ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}")
 
     assert resp.status_code == expected, resp.text

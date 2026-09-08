@@ -26,6 +26,57 @@ _TENANT_KEY = "org_id"
 _TENANT_COLUMN = "organisation_id"
 
 
+class OutputsRlsMismatch(RuntimeError):  # noqa: N818  # name mandated by the reviewed FAR-583 design
+    """The session's RLS org context disagrees with the run_node_outputs org.
+
+    Raised by the run_node_outputs repo module (FAR-583): the new table's
+    Python-side org gate must catch what the database does not — Postgres'
+    strict fail-closed policy kills a NULL-context write with 42501 anyway,
+    but SQLite's ``_inject_tenant_filter`` does not cover INSERT (and raw
+    text() reads bypass it entirely), so write paths REQUIRE a bound,
+    matching org context and read paths reject a mismatched one here.
+    """
+
+
+async def read_rls_org(session: AsyncSession) -> uuid.UUID | None:
+    """Read the RLS org id currently bound to *session*, or ``None``.
+
+    Ported from ``auth/secret_storage._read_rls_org_id`` (kept separate so the
+    auth module keeps its private helper untouched): generic backends store
+    the org in ``session.info['org_id']``; Postgres reads
+    ``current_setting('app.organisation_id', true)`` — the empty string (GUC
+    unset) normalises to ``None``. A value that cannot be coerced to a UUID is
+    treated as absent. Any failure executing the GUC read (non-Postgres
+    backend without the function, closed session) degrades to ``None``.
+    """
+    info = getattr(session, "info", None)
+    if isinstance(info, dict):
+        value = info.get(_TENANT_KEY)
+        if value is not None:
+            parsed = _coerce_org_id(value)
+            if parsed is not None:
+                return parsed
+
+    try:
+        result = await session.execute(text("SELECT current_setting('app.organisation_id', true)"))
+    except Exception:
+        return None
+    raw: object = result.scalar()
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip() == "":
+        return None
+    return _coerce_org_id(raw)
+
+
+def _coerce_org_id(value: object) -> uuid.UUID | None:
+    """Return a ``UUID`` when *value* is a valid UUID/str, else ``None``."""
+    try:
+        return uuid.UUID(str(value).strip())
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 async def _ensure_active_transaction(session: AsyncSession) -> str:
     """Verify an active transaction exists and return the dialect name.
 

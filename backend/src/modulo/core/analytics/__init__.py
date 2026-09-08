@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modulo.core.analytics.metrics import record_facts_write_failed
+from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs_with_fallback
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -126,38 +127,71 @@ def _fact_final_idle_ms(run: Run) -> int | None:
     return None
 
 
-def _fact_output_bytes(run: Run) -> int | None:
-    """Serialised size of Run.outputs_json (``json.dumps`` length) when present.
+async def _fact_run_blobs(session: AsyncSession, run: Run) -> RunBlobs | None:
+    """ONE reassembly read per terminalization (qa M14).
 
-    Since FAR-125 P1 ``outputs_json`` holds PURE returns (telemetry excluded),
-    so this fact measures the pure-return size. Historical values measured the
-    pre-P1 envelope size and are NOT comparable across the P1 boundary —
-    accepted, no fact backfill (pre-alpha). ``outputs_json`` is read via
-    ``getattr`` so any run-shaped object without the attribute degrades to NULL
-    instead of raising.
+    The two byte facts used to call the per-side fallback readers, each of
+    which ran the FULL rows-fetch + RLS probe + legacy SELECT — six statements
+    per terminalization where three suffice. One
+    :func:`read_run_blobs_with_fallback` call serves BOTH sides (the EMPTY /
+    direction-aware fallback to the legacy columns is part of that one read,
+    so pre-sweep stragglers still measure stably); the two byte helpers are
+    then pure computations over the returned blobs. A read failure degrades
+    to ``None`` (BOTH facts go NULL — they share the data source) with a
+    logged warning: this component is best-effort inside the fail-open facts
+    writer and must never be the thing that fails a fact write.
     """
-    outputs_json = getattr(run, "outputs_json", None)
-    if outputs_json is None:
+    try:
+        return await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "analytics.facts.blob_read_failed",
+            extra={"run_id": str(run.id), "org_id": str(run.organisation_id)},
+            exc_info=True,
+        )
+        return None
+
+
+def _fact_output_bytes(blobs: RunBlobs | None) -> int | None:
+    """Serialised size of the run's outputs (``json.dumps`` length) when present.
+
+    Pure computation over the single :func:`_fact_run_blobs` read (qa M14).
+    FAR-583: the payload is the REASSEMBLED run-level dict from the
+    ``run_node_outputs`` store (legacy-dict shape) — the same
+    ``len(json.dumps(payload, default=str))`` formula, applied to the
+    reassembled value (``default=str`` is byte-identical for the JSON-typed
+    payloads that reach it, and matches ``run_retention._json_bytes``). Since
+    FAR-125 P1 outputs hold PURE returns (telemetry excluded), so this fact
+    measures the pure-return size. ``None`` blobs (read failure) or a NULL
+    side (absent) measure as NULL.
+    """
+    if blobs is None:
+        return None
+    outputs = blobs.outputs
+    if outputs is None:
         return None
     try:
-        return len(json.dumps(outputs_json))
+        return len(json.dumps(outputs, default=str))
     except (TypeError, ValueError):
         return None
 
 
-def _fact_telemetry_bytes(run: Run) -> int | None:
-    """Serialised size of Run.node_telemetry_json (``json.dumps`` length) when present.
+def _fact_telemetry_bytes(blobs: RunBlobs | None) -> int | None:
+    """Serialised size of the run's telemetry (``json.dumps`` length) when present.
 
-    Mirrors ``_fact_output_bytes``: NULL when the telemetry payload is absent
-    and NULL (never a raise) when it cannot be serialised. ``node_telemetry_json``
-    is read via ``getattr`` so any run-shaped object without the attribute
-    degrades to NULL instead of raising.
+    Pure computation over the single :func:`_fact_run_blobs` read (qa M14);
+    mirrors :func:`_fact_output_bytes`. NULL when the blobs read failed or
+    the side is absent — never a raise.
     """
-    node_telemetry_json = getattr(run, "node_telemetry_json", None)
-    if node_telemetry_json is None:
+    if blobs is None:
+        return None
+    telemetry = blobs.telemetry
+    if telemetry is None:
         return None
     try:
-        return len(json.dumps(node_telemetry_json))
+        return len(json.dumps(telemetry, default=str))
     except (TypeError, ValueError):
         return None
 
@@ -263,6 +297,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             )
         team_name, pipeline_name, folder_id = await _snapshot_dimensions(session, run)
         node_count, sandbox_agent_node_count, max_node_timeout_seconds = await _snapshot_graph_dimensions(session, run)
+        blobs = await _fact_run_blobs(session, run)
         values: dict[str, Any] = {
             "run_id": run.id,
             "organisation_id": run.organisation_id,
@@ -291,8 +326,9 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "snapshot_id": getattr(run, "snapshot_id", None),
             "batch_id": getattr(run, "batch_id", None),
             "run_number": getattr(run, "run_number", None),
-            "output_bytes": _fact_output_bytes(run),
-            "telemetry_bytes": _fact_telemetry_bytes(run),
+            # qa M14: ONE blobs read feeds both byte facts.
+            "output_bytes": _fact_output_bytes(blobs),
+            "telemetry_bytes": _fact_telemetry_bytes(blobs),
             "rate_limited": getattr(run, "rate_limit_key", None) is not None,
             # FAR-134 concurrency columns — absolute run-lifecycle instants +
             # the full queue wait (started - created). getattr defensively for

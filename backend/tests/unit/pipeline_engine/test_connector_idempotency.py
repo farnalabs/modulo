@@ -1873,6 +1873,11 @@ class TestPayloadHashDeterminism:
         assert out == [["a", "z"], "alpha", "beta", "gamma"], out
         assert len({str(_canonical_coerce(s)) for _ in range(50)}) == 1
 
+    # Two subprocesses, each paying a full cold import of node_runner's graph
+    # (45-70s each on Windows dev machines). The repo-wide --timeout=120 has
+    # no margin there, so pin a wide per-test ceiling (repo timing-margin
+    # rule); CI (Linux, ~3-5s per import) is unaffected.
+    @pytest.mark.timeout(900)
     def test_payload_hash_set_level_cross_pythonhashseed(self) -> None:
         """Hash-level proof of the MAJOR finding: ``_connector_write_payload_hash``
         must derive an identical key for set-valued ``data`` across two different
@@ -1902,7 +1907,13 @@ class TestPayloadHashDeterminism:
                 env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": backend_src},
                 capture_output=True,
                 text=True,
-                timeout=60,
+                # Each subprocess pays a FULL cold import of node_runner's
+                # dependency graph, which measures 45-70s on Windows dev
+                # machines (Defender + disk). 60s had no margin and flaked
+                # with TimeoutExpired; the repo timing-margin rule asks for
+                # wide headroom on wall-clock-sensitive tests. The assertion
+                # itself is unchanged (both seeds must still agree).
+                timeout=600,
                 check=False,
             )
             assert proc.returncode == 0, proc.stderr
@@ -1958,6 +1969,7 @@ class TestPayloadHashDeterminism:
         # A genuinely different payload still derives a different hash.
         assert h1 != _connector_write_payload_hash(resource="command", filters={}, data={"obj": _Opaque(), "n": 2})
 
+    @pytest.mark.timeout(900)
     def test_payload_hash_opaque_object_cross_pythonhashseed(self) -> None:
         """End-to-end AC5 proof: a payload containing an opaque object must
         derive the IDENTICAL hash under two different PYTHONHASHSEED values
@@ -1983,7 +1995,13 @@ class TestPayloadHashDeterminism:
                 env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": backend_src},
                 capture_output=True,
                 text=True,
-                timeout=60,
+                # Each subprocess pays a FULL cold import of node_runner's
+                # dependency graph, which measures 45-70s on Windows dev
+                # machines (Defender + disk). 60s had no margin and flaked
+                # with TimeoutExpired; the repo timing-margin rule asks for
+                # wide headroom on wall-clock-sensitive tests. The assertion
+                # itself is unchanged (both seeds must still agree).
+                timeout=600,
                 check=False,
             )
             assert proc.returncode == 0, proc.stderr

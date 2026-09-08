@@ -61,14 +61,26 @@ def _parse_uuid(value: Any) -> uuid.UUID | None:
         return None
 
 
-def _normalise_executed_nodes(run: Run, executed_nodes: dict[str, Any] | None) -> dict[str, Any]:
+async def _normalise_executed_nodes(
+    session: AsyncSession,
+    run: Run,
+    executed_nodes: dict[str, Any] | None,
+) -> dict[str, Any]:
     """Resolve the executed-node map, keeping only dict outputs.
 
-    Falls back to the run's persisted ``outputs_json`` when the caller does not
-    supply one. ``outputs_json`` is keyed by node_id in completion order, so the
-    summary's executed-node order is deterministic.
+    Falls back to the run's persisted outputs when the caller does not
+    supply one. The persisted map is keyed by node_id in completion order, so
+    the summary's executed-node order is deterministic. The fallback reads
+    through the ``run_node_outputs`` repo reader (FAR-583 read-switch, with
+    the legacy fallback) — the caller's RLS org context must already be set.
     """
-    raw = dict(run.outputs_json or {}) if executed_nodes is None else dict(executed_nodes)
+    if executed_nodes is None:
+        from modulo.db.crud.run_node_outputs import read_run_outputs_with_fallback
+
+        outputs = await read_run_outputs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+        raw = dict(outputs or {})
+    else:
+        raw = dict(executed_nodes)
     return {str(node_id): value for node_id, value in raw.items() if isinstance(value, dict)}
 
 
@@ -331,7 +343,7 @@ async def compensate_blocked_run(
     where no nodes have executed) only the summary + summary audit are written.
     """
     org_id = run.organisation_id
-    executed = _normalise_executed_nodes(run, executed_nodes)
+    executed = await _normalise_executed_nodes(session, run, executed_nodes)
 
     per_node: list[dict[str, Any]] = []
     if connector_hub is not None and executed:

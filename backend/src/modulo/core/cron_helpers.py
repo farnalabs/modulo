@@ -47,6 +47,7 @@ from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from modulo.core.run_outputs_dualwrite import DUAL_WRITE_COUNTERS
 
 # FAR-190 streak engine lives in its own module (extracted so cron_helpers can
 # stay focused on scheduling). Re-exported here for the dispatcher_reconcile
@@ -280,7 +281,25 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "run_api_key_errors": 0,
     "rollback_thresholds_checked": 0,
     "rollback_thresholds_flagged": 0,
+    # FAR-583 run_node_outputs migration counters. The dual_write_* keys are
+    # NOT tick counters and are NOT bumped here: the app-process chokepoint
+    # orchestration (core.run_outputs_dualwrite) INCRs DEDICATED cumulative
+    # Redis keys (``saq:run_outputs:counters:<name>`` — qa M10: the old
+    # read-modify-write of this shared blob was wiped by the tick's
+    # wholesale rewrite every 60s), and the tick READS them into the summary
+    # at tick end (see _overlay_dual_write_counters). The sweep_* keys are
+    # populated by the catch-up sweep leg wired into _reconcile_org (pass 2b).
+    "outputs_sweep_healed": 0,
+    "outputs_sweep_org_failed": 0,
 }
+
+# The dual_write_* counter vocabulary is IMPORTED (qa iteration 2, rider 11):
+# one source of truth — core.run_outputs_dualwrite.DUAL_WRITE_COUNTERS —
+# drives the defaults here, the stats setter, and the tick-summary defaults
+# below; a new counter cannot be added on one side and missed on the other.
+for _dual_write_counter in DUAL_WRITE_COUNTERS:
+    _dispatcher_reconcile_stats[_dual_write_counter] = 0
+del _dual_write_counter
 
 
 def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
@@ -313,6 +332,18 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["run_api_key_errors"] = stats.get("run_api_key_errors", 0)
     _dispatcher_reconcile_stats["rollback_thresholds_checked"] = stats.get("rollback_thresholds_checked", 0)
     _dispatcher_reconcile_stats["rollback_thresholds_flagged"] = stats.get("rollback_thresholds_flagged", 0)
+    # qa M10: the dual_write_* values arrive pre-read from the dedicated
+    # cumulative Redis counters (the summary carries them; the tick does not
+    # own or reset them). outputs_sweep_failed is DEAD —
+    # backfill_run_node_outputs_batch never returns a ``runs_failed`` key, so
+    # the field was always 0; outputs_sweep_org_failed is the failure channel.
+    # qa iteration 2 (rider 11): the dual_write_* vocabulary loops the
+    # IMPORTED DUAL_WRITE_COUNTERS (one source of truth with the defaults
+    # above and the tick summary below).
+    for _dual_write_counter in DUAL_WRITE_COUNTERS:
+        _dispatcher_reconcile_stats[_dual_write_counter] = stats.get(_dual_write_counter, 0)
+    _dispatcher_reconcile_stats["outputs_sweep_healed"] = stats.get("outputs_sweep_healed", 0)
+    _dispatcher_reconcile_stats["outputs_sweep_org_failed"] = stats.get("outputs_sweep_org_failed", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -4899,6 +4930,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         if not org_ids:
             # Still record the run so /healthz/ready sees a fresh last_run_at
             # even in an empty-org environment (the cron keeps ticking every 60s).
+            await _overlay_dual_write_counters(redis_client, summary)
             set_dispatcher_reconcile_stats(summary)
             await write_dispatcher_reconcile_stats(redis_client, summary)
             return summary
@@ -4952,6 +4984,10 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         for run_id, run_org_id in terminalized_run_ids:
             await _record_fact_for_terminalized_run(run_id, run_org_id)
         await _run_reconcile_sweeps(redis_client, summary)
+        # qa M10: overlay the dedicated dual-write counters into the summary
+        # BEFORE the stats persist — /healthz reads the counters' current
+        # values from the summary, and the tick never owns or resets them.
+        await _overlay_dual_write_counters(redis_client, summary)
         # Record the outcome for /healthz/ready BEFORE the client is closed:
         # the shared Redis key is what the WEB process reads (the in-process
         # dict lives only in this worker process).
@@ -4965,7 +5001,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
 
 
 def _dispatcher_summary() -> dict[str, Any]:
-    return {
+    summary: dict[str, Any] = {
         "scanned": 0,
         "repaired": 0,
         "skipped": 0,
@@ -4991,7 +5027,133 @@ def _dispatcher_summary() -> dict[str, Any]:
         "run_api_key_scanned": 0,
         "run_api_key_revoked": 0,
         "run_api_key_errors": 0,
+        # FAR-583 counters. The dual_write_* keys are NOT tick counters: the
+        # app-side chokepoint orchestration INCRs dedicated cumulative Redis
+        # keys (core.run_outputs_dualwrite) and the tick READS them into these
+        # summary fields at tick end (qa M10 — _overlay_dual_write_counters):
+        # /healthz keeps showing the numbers, the tick never owns or resets
+        # them. The sweep keys ARE tick-owned (bumped per org by the sweep leg
+        # inside _reconcile_org); outputs_sweep_failed is dead (the batch
+        # helper never returned ``runs_failed``) and is gone.
+        # qa iteration 2 (rider 11): the dual_write_* defaults loop the
+        # IMPORTED DUAL_WRITE_COUNTERS (one vocabulary with the stats dict
+        # and the setter above).
+        "outputs_sweep_healed": 0,
+        "outputs_sweep_org_failed": 0,
     }
+    summary.update(dict.fromkeys(DUAL_WRITE_COUNTERS, 0))
+    return summary
+
+
+# Per-org, per-tick cap on runs the FAR-583 catch-up sweep backfills. Bounds
+# the sweep's write volume so a drained backlog cannot starve the tick's
+# terminalizers: with the drain loop below, a backlog of N unhealed runs is
+# consumed at 500 runs per org per tick, and a steady-state org (every run
+# healed) selects zero rows because the helper's NOT-EXISTS trigger legs keep
+# healed runs out of the selection. 500 mirrors the repo helper's default cap.
+_OUTPUTS_SWEEP_TICK_CAP = 500
+
+
+async def _overlay_dual_write_counters(redis_client: AsyncRedis, summary: dict[str, Any]) -> None:
+    """READ the dedicated dual-write counters into the tick's summary (qa M10).
+
+    The app-side chokepoint orchestration INCRs cumulative keys the tick never
+    touches; the tick copies their CURRENT values into the summary's
+    outputs_dual_write_* fields so /healthz keeps showing them. Best-effort:
+    a Redis failure leaves the summary's zero defaults (the counters reappear
+    on the next healthy tick) — never fails the tick.
+    """
+    from modulo.core.run_outputs_dualwrite import read_dual_write_counters
+
+    try:
+        counters = await read_dual_write_counters(redis_client)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.dual_write_counter_read_failed", exc_info=True)
+        return
+    summary.update(counters)
+
+
+async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any]) -> None:
+    """FAR-583 catch-up sweep for ONE org (own session/transaction).
+
+    Drains the org's un-healed TERMINAL runs into ``run_node_outputs`` by
+    calling the repo module's batched backfill helper in a drain loop. The
+    selection is TRIGGER-driven, not cursor-driven (qa iteration 2 — reworded
+    to match the repo helper): the batch helper's SQL-side NOT-EXISTS trigger
+    legs pick every run still lacking its new-table representation, with NO
+    high-water filtering of the completed_at range — *high_water* /
+    ``new_high_water`` are carried only as a NO-PROGRESS SAFETY BREAK (the
+    drain loop stops when the mark cannot advance, which would otherwise
+    re-select the same rows forever) plus observability. Each iteration
+    backfills up to *remaining* runs until either the trigger selection is
+    exhausted (a not-full batch) or the per-tick cap is consumed.
+
+    Isolation contract (design §CATCH-UP SWEEP): the sweep runs in its OWN
+    session/transaction — never the outer reconcile transaction — so a sweep
+    failure cannot roll back that tick's terminalizers. Per-org error
+    isolation: a failing org bumps ``outputs_sweep_org_failed`` and the
+    remaining orgs continue. Best-effort: a failure never raises past this
+    helper (cancellation excepted).
+    """
+    from modulo.db.crud.run_node_outputs import backfill_run_node_outputs_batch
+
+    factory = _open_system_factory()
+    healed = 0
+    skipped_healed = 0
+    skipped_ghost = 0
+    quarantined = 0
+    high_water: datetime | None = None
+    remaining = _OUTPUTS_SWEEP_TICK_CAP
+    try:
+        while remaining > 0:
+            requested = remaining
+            async with factory() as session, session.begin():
+                await _set_rls_org(session, org_id)
+                result = await backfill_run_node_outputs_batch(
+                    session,
+                    organisation_id=org_id,
+                    high_water_mark=high_water,
+                    cap=remaining,
+                )
+            selected = int(result["runs_selected"])
+            healed += int(result["runs_backfilled"])
+            skipped_healed += int(result.get("runs_skipped_healed", 0))
+            skipped_ghost += int(result.get("runs_skipped_ghost", 0))
+            quarantined += int(result.get("runs_quarantined", 0))
+            new_high_water = result["new_high_water"]
+            remaining -= selected
+            # Drain loop safety: stop when the backlog is exhausted (a
+            # not-full batch means nothing further to select) or the mark
+            # cannot advance (no completed_at in the batch — the loop would
+            # re-select the same rows forever).
+            if selected == 0 or selected < requested:
+                break
+            if new_high_water is None or new_high_water == high_water:
+                break
+            high_water = new_high_water
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["outputs_sweep_org_failed"] += 1
+        _log.exception("dispatcher_reconcile.outputs_sweep_org_failed (org %s)", org_id)
+        return
+    if healed or quarantined or skipped_ghost:
+        # qa M10b: outputs_sweep_failed is GONE — backfill_run_node_outputs_batch
+        # never returned a ``runs_failed`` key, so the counter was always 0;
+        # per-org failures are counted on outputs_sweep_org_failed above.
+        summary["outputs_sweep_healed"] += healed
+        _log.info(
+            "dispatcher_reconcile.outputs_sweep",
+            extra={
+                "org_id": str(org_id),
+                "healed": healed,
+                "skipped_healed": skipped_healed,
+                "skipped_ghost": skipped_ghost,
+                "quarantined": quarantined,
+            },
+        )
 
 
 async def _reconcile_org(
@@ -5091,6 +5253,12 @@ async def _reconcile_org(
                 summary,
                 terminalized_run_ids,
             )
+
+    # FAR-583 catch-up sweep: runs AFTER the reconcile transaction committed
+    # (its own session/tx — a sweep failure must not roll back this tick's
+    # terminalizers) and is per-org failure-isolated: one org failing bumps
+    # outputs_sweep_org_failed while the remaining orgs continue.
+    await _run_outputs_sweep_for_org(org_id, summary)
     return enqueue_failed_redispatched
 
 

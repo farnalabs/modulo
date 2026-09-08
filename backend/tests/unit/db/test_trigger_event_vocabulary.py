@@ -61,9 +61,12 @@ _MIGRATION_PATH = (
 # re-parented onto the 0184 trigger_events head, then main's improve-database
 # migrations 0186_pipeline_check_constraints_deleted_by and
 # 0187_pipeline_performance_indexes, main's 0188_pipeline_run_context_defaults_default,
-# main's 0189_agent_runner_bindings and 0190_hitl_claim_context_json, and this PR's
-# 0191_bundled_runner_seed_backfill re-parented onto 0190_hitl_claim_context_json as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0191_bundled_runner_seed_backfill"
+# main's 0189_agent_runner_bindings and 0190_hitl_claim_context_json, main's
+# 0191_bundled_runner_seed_backfill re-parented onto 0190_hitl_claim_context_json,
+# and FAR-583's 0192_run_node_outputs re-parented onto 0191 with its
+# 0193_run_node_outputs_sweep_index (qa iteration 2, the sweep's partial index)
+# chained onto 0192.
+_CHAIN_HEAD_MIGRATION_NAME = "0193_run_node_outputs_sweep_index"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
