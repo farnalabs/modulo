@@ -588,6 +588,59 @@ async def test_claim_update_race_on_terminal_run_raises_run_not_awaiting():
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
+async def test_claim_update_race_on_decided_gate_raises_gate_already_decided():
+    """FAR-645: when the atomic UPDATE refuses the claim because the gate was
+    DECIDED inside the pre-check→write window (while the run stayed claimable),
+    the error names the decision (GateAlreadyDecidedError) instead of a generic
+    already-claimed -- the typed problem the frontend maps to its
+    already-decided banner."""
+    pre_check = _gate(account_id=None)
+    decided = _gate(account_id=_USER, decision="approved")
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = None
+    pre_check_result = MagicMock()
+    pre_check_result.scalar_one_or_none.return_value = pre_check
+    # Both runs-SELECTs (pre-check + race re-read) see the run still claimable:
+    # the UPDATE was refused by the gate columns, not the run status.
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = _run_mock("awaiting_human")
+    decided_result = MagicMock()
+    decided_result.scalar_one_or_none.return_value = decided
+
+    run_calls = 0
+    gate_calls = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal run_calls, gate_calls
+        if _is_runs_select(stmt):
+            run_calls += 1
+            return run_result
+        gate_calls += 1
+        if gate_calls == 1:
+            return pre_check_result
+        if gate_calls == 2:
+            return update_result
+        # Third gate statement is the race re-read: the concurrent operator's
+        # decision is now visible.
+        return decided_result
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=pre_check)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+
+    mgr = HITLManager()
+    with pytest.raises(GateAlreadyDecidedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
 @pytest.mark.parametrize("run_status", ["complete", "failed", "running", "cancelled"])
 async def test_claim_on_non_awaiting_run_raises(run_status: str):
     """FAR-612: claiming a gate whose run is not awaiting_human is refused.

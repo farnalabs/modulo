@@ -406,14 +406,28 @@ class HITLManager:
         if claimed_id is None:
             # The UPDATE matched no row. Either another operator claimed the
             # gate between our pre-check and this write (AlreadyClaimedError),
-            # or the run went terminal in the same window and the run-status
-            # EXISTS predicate refused the claim (RunNotAwaitingError,
-            # FAR-645). Re-read the run so the raised error names the actual
-            # cause instead of a generic already-claimed.
+            # the gate was DECIDED in the same window
+            # (GateAlreadyDecidedError), or the run went terminal in the same
+            # window and the run-status EXISTS predicate refused the claim
+            # (RunNotAwaitingError, FAR-645). Re-read the run and the gate so
+            # the raised error names the actual cause instead of a generic
+            # already-claimed.
             race_run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
             race_run = race_run_result.scalar_one_or_none()
             if race_run is not None and race_run.status not in HITL_CLAIMABLE_RUN_STATUSES:
                 raise RunNotAwaitingError(run_id, race_run.status)
+            race_gate_result = await session.execute(
+                select(HitlClaim).where(
+                    HitlClaim.run_id == run_id,
+                    HitlClaim.gate_id == gate_id,
+                    HitlClaim.organisation_id == org_id,
+                )
+            )
+            race_gate = race_gate_result.scalar_one_or_none()
+            if race_gate is None:
+                raise GateNotFoundError(run_id, gate_id)
+            if race_gate.decision is not None:
+                raise GateAlreadyDecidedError(run_id, gate_id)
             raise AlreadyClaimedError(run_id, gate_id)
 
         gate = await session.get(HitlClaim, claimed_id, populate_existing=True)
