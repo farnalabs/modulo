@@ -60,6 +60,7 @@ _PROMPT_PATH = "/home/user/prompt.md"
 _STREAM_THROTTLE_INTERVAL = 1.0
 _PROVIDER_ACLOSE_TIMEOUT = 60.0
 _DESTROY_TIMEOUT = 30.0
+_LOOP_BRIDGE_CLOSE_TIMEOUT = 30.0
 
 
 class SandboxDispatchUnboundError(ValueError):
@@ -733,6 +734,7 @@ async def run_bundled_runner_node(
                     provider_ref=provider_ref,
                     sandbox_envs=sandbox_envs,
                     loop_intercept=loop_intercept,
+                    rendered_command=rendered_agent_command,
                     session_factory=session_factory,
                     org_id=state.get("_org_id"),
                     pipeline_id=state.get("_pipeline_id"),
@@ -991,6 +993,7 @@ async def _maybe_start_loop_bridge(
     provider_ref: str,
     sandbox_envs: dict[str, str],
     loop_intercept: Any,
+    rendered_command: str,
     session_factory: Callable[..., Any] | None,
     org_id: Any,
     pipeline_id: Any,
@@ -1035,6 +1038,7 @@ async def _maybe_start_loop_bridge(
             ),
         )
         bridge_port = await bridge_server.start()
+        state["_loop_intercept_bridge_server"] = bridge_server
         await _write_file_via_exec(provider, provider_ref, "/home/user/modulo_bridge.py", bridge_client_source())
         await _write_file_via_exec(
             provider,
@@ -1044,7 +1048,7 @@ async def _maybe_start_loop_bridge(
         )
         sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://host.docker.internal:{bridge_port}"
         sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
-        return f"python3 /home/user/modulo_bridge.py --wrap -- {loop_intercept.command_wrapper}"
+        return f"python3 /home/user/modulo_bridge.py --wrap -- {rendered_command}"
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1090,7 +1094,18 @@ async def _teardown_and_clear(
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("runner_dispatch.hub_aclose_failed", exc_info=True)
+            _log.exception("runner_dispatch.hub_aclose_failed")
+    bridge_server = state.get("_loop_intercept_bridge_server")
+    if bridge_server is not None:
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(bridge_server.close()),
+                timeout=_LOOP_BRIDGE_CLOSE_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("runner_dispatch.loop_intercept_teardown_failed")
     if dispatch_marker_set:
         from modulo.core.pipeline_engine.node_runner import _sandbox_clear_dispatch_marker
 
