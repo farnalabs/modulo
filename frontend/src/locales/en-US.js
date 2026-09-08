@@ -761,6 +761,8 @@ export default {
       "empty_description": "All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet.",
       "assigned_to": "Assigned: {user}",
       "unassigned": "Unassigned",
+      "assignee_label": "Assignee",
+      "deleted_pipeline_fallback": "Deleted pipeline ({id})",
       "claim_metadata": "Claim Metadata",
       "run_id": "Run ID",
       "node_label": "Node",
