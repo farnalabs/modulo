@@ -759,7 +759,6 @@ async def test_aexit_logs_warning_when_aclose_raises_and_does_not_propagate():
             pass
 
     assert backend.aclose_calls == 1
-    mock_warn.assert_called()
     warned_text = " ".join(str(a) for a in mock_warn.call_args_list[0].args)
     assert "Failed to close backend" in warned_text
 
