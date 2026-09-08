@@ -505,7 +505,10 @@ LEGACY_ALIASES: dict[str, str] = {
     "SandboxCapacityExceededError": _CODE_CAPACITY_ORG,
     # FAR-592 (D6): provision-time binding-resolution failures map to the
     # retryable ``sandbox.binding_resolution`` code (D6 rollback-trigger
-    # signal); the typed wrapper and the raw core class name both publish.
+    # signal); both the typed wrapper and the raw core class name publish.
+    # The dotted spellings are registry keys — map_legacy_code's alias lookup
+    # misses them and the registry check then passes them through unchanged,
+    # so no dotted alias entry is needed.
     "SandboxBindingResolutionError": _CODE_SANDBOX_BINDING_RESOLUTION,
     "AgentBindingResolutionError": _CODE_SANDBOX_BINDING_RESOLUTION,
     # FAR-592 (D6): the Local tier refusal maps to the terminal

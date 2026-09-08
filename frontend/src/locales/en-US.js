@@ -999,6 +999,7 @@ export default {
       "runner_bindings_remove": "Remove binding",
       "runner_bindings_save": "Save bindings",
       "runner_bindings_save_failed": "Saving bindings failed — check the target env var (must be valid and not Modulo-reserved) and the source field.",
+      "runner_bindings_duplicate": "The target env var '{target}' is already bound on this agent.",
       "runner_bindings_local_warning": "Bindings are refused on the Local (host-subprocess) provider tier without an explicit opt-in.",
 
       "context_files": "Context Files",

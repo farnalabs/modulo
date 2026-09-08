@@ -25,6 +25,7 @@ class TestReservedEnvVarConstant:
         "name",
         [
             pytest.param("MODULO_API_KEY", id="modulo_minted_runner_key"),
+            pytest.param("GITHUB_TOKEN", id="github_pat_node_wins_override"),
             pytest.param("LD_PRELOAD", id="loader_injective"),
             pytest.param("LD_LIBRARY_PATH", id="loader_library_path"),
             pytest.param("PATH", id="path"),
@@ -58,8 +59,11 @@ class TestReservedEnvVarConstant:
 
 class TestTargetEnvVarValidation:
     def test_valid_name_canonical(self) -> None:
+        # The canonical form is UPPERCASE (server-side canonicalisation —
+        # the UNIQUE constraint must be case-variant-proof).
         assert validate_target_env_var("OPENCODE_API_KEY") == "OPENCODE_API_KEY"
-        assert validate_target_env_var(" _var1 ") == "_var1"
+        assert validate_target_env_var(" _var1 ") == "_VAR1"
+        assert validate_target_env_var("opencode_api_key") == "OPENCODE_API_KEY"
 
     def test_empty_rejected(self) -> None:
         with pytest.raises(BindingValidationError):
@@ -125,14 +129,20 @@ class TestErrorCodeMapping:
         assert map_legacy_code("SandboxTierRefusedError") == "sandbox.tier_refused"
 
     def test_typed_error_classes_are_sandbox_node_failures(self) -> None:
-        """The node raises SandboxNodeFailedError subclasses (A6 propagation)."""
+        """The node raises SandboxNodeFailedError subclasses (A6 propagation).
+
+        Pinned against the SPECIFIC parent class (not ``Exception``) — the
+        subclass contract is what routes these through the executor's
+        retryable-node-failure handling before the error-code table.
+        """
         from modulo.core.pipeline_engine.node_runner import (
             SandboxBindingResolutionError,
+            SandboxNodeFailedError,
             SandboxTierRefusedError,
         )
 
-        assert issubclass(SandboxBindingResolutionError, Exception)
-        assert issubclass(SandboxTierRefusedError, Exception)
+        assert issubclass(SandboxBindingResolutionError, SandboxNodeFailedError)
+        assert issubclass(SandboxTierRefusedError, SandboxNodeFailedError)
         # The LEGACY_ALIASES keys must be the RAISED class names (the executor
         # maps via ``type(exc).__name__``).
         assert SandboxBindingResolutionError.__name__ == "SandboxBindingResolutionError"

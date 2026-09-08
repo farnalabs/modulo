@@ -104,6 +104,7 @@ from modulo.core.pipeline_engine.node_runner import (
     MODULO_SYNTHETIC_FAILURE_MARKER,
     OutputSchemaValidationError,
     SandboxNodeFailedError,
+    SandboxTierRefusedError,
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
     _marker_delivery_done_for_node,
@@ -183,6 +184,10 @@ _ERROR_CODE_NODE_DEADLINE_EXCEEDED = "node.deadline_exceeded"
 _ERROR_CODE_EVAL_BLOCKED = "eval.blocked"
 _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN = "script.side_effect_unknown"
 _ERROR_CODE_HARNESS_IDEMPOTENCY_GATE = "harness.idempotency_gate"
+# FAR-592 (D6 F2): the Local-tier refusal is TERMINAL (deterministic config
+# fault) — written directly by the run-level handler before the transient
+# machinery so the refusal is never requeued.
+_ERROR_CODE_SANDBOX_TIER_REFUSED = "sandbox.tier_refused"
 
 # Backoff schedule for a retry_policy re-dispatch (FAR-136). A policy-triggered
 # retry must NOT re-fire back-to-back — the run is re-dispatched only after a
@@ -3414,6 +3419,9 @@ class PipelineExecutor:
         error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
         completed_node_outputs: dict[str, Any] = {}
+        # FAR-592 (D6 F2): False only when the run terminal-failed through the
+        # deterministic tier-refusal shortcut (never requeue it).
+        retry_policy_eligible = True
         # Initialised so the terminalization work_intact computation is safe even
         # when the stream never started (compile/pre-stream failure) — a run with
         # no executed nodes is never work-intact.
@@ -3476,41 +3484,65 @@ class PipelineExecutor:
             error_code = "router.no_match"
             error_detail = _sanitize_detail(str(exc), limit=5000)
         except (NodeCancelledError, SandboxNodeFailedError) as exc:
-            # Transient node cancellation / sandbox-infra failure (e.g. an E2B
-            # sandbox command wait cancelled from outside, a stall, or a command
-            # timeout). Do NOT terminal-fail: the run is still retryable.
-            # Bounded by the SAQ node-attempt count (NOT the claim count —
-            # capacity-deferred / non-executing claims must not consume the
-            # retry budget). Uses the ORIGINAL executor's captured claim token
-            # for the fenced pending-reset; a superseded original, a watchdog
-            # stall, or a requested cancellation SKIP the reset (the run is
-            # owned elsewhere / terminal / cancelled — never demote it).
-            # The gate/requeue/superseded/terminal decision chain lives in
-            # ``_decide_transient_failure`` — this handler is a thin dispatcher.
-            # For requeue/superseded the helper already performed the fenced
-            # pending-reset + cleanup, and the bare re-raise below propagates out
-            # of execute() BEFORE the post-stream try/finally, exactly as today.
-            _log.warning(
-                "pipeline.node_cancelled_transient",
-                extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
-            )
-            transient = await self._decide_transient_failure(
-                exc=exc,
-                run_id=run_id,
-                org_id=org_id,
-                graph_json=graph_json,
-                graph_idempotent=graph_idempotent,
-                single_sandbox_node=single_sandbox_node,
-                model_backend_hub=model_backend_hub,
-                connector_hub=connector_hub,
-                broker=broker,
-                stall_requested=self._stall_requested,
-            )
-            gate_suppressed, final_status, error_code, error_detail = self._apply_transient_decision(
-                transient,
-                completed_node_outputs=completed_node_outputs,
-                gate_suppressed=gate_suppressed,
-            )
+            # FAR-592 (D6 F2): the Local-tier refusal is a DETERMINISTIC config
+            # fault — the profile opt-in cannot change mid-run, so requeueing
+            # it would burn the retry budget on a refusal that cannot succeed.
+            # Terminal-fail DIRECTLY (before ``_decide_transient_failure``) so
+            # the typed ``sandbox.tier_refused`` code is written and the run
+            # never requeues.
+            tier_refused = isinstance(exc, SandboxTierRefusedError)
+            if tier_refused:
+                _log.warning(
+                    "pipeline.tier_refused_terminal",
+                    extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
+                )
+                final_status = "failed"
+                error_code = _ERROR_CODE_SANDBOX_TIER_REFUSED
+                error_detail = _sanitize_detail(str(exc), limit=5000)
+                # A tier refusal MUST also skip the pipeline retry_policy below:
+                # the "failure" event matches final_status == "failed" and would
+                # requeue the deterministic refusal despite the non-retryable
+                # registry flag.
+                retry_policy_eligible = False
+            else:
+                # Transient node cancellation / sandbox-infra failure (e.g. an E2B
+                # sandbox command wait cancelled from outside, a stall, or a command
+                # timeout). Do NOT terminal-fail: the run is still retryable.
+                # Bounded by the SAQ node-attempt count (NOT the claim count —
+                # capacity-deferred / non-executing claims must not consume the
+                # retry budget). Uses the ORIGINAL executor's captured claim token
+                # for the fenced pending-reset; a superseded original, a watchdog
+                # stall, or a requested cancellation SKIP the reset (the run is
+                # owned elsewhere / terminal / cancelled — never demote it).
+                # The gate/requeue/superseded/terminal decision chain lives in
+                # ``_decide_transient_failure`` — this handler is a thin dispatcher.
+                # For requeue/superseded the helper already performed the fenced
+                # pending-reset + cleanup, and the bare re-raise below propagates out
+                # of execute() BEFORE the post-stream try/finally, exactly as today.
+                _log.warning(
+                    "pipeline.node_cancelled_transient",
+                    extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
+                )
+                transient = await self._decide_transient_failure(
+                    exc=exc,
+                    run_id=run_id,
+                    org_id=org_id,
+                    graph_json=graph_json,
+                    graph_idempotent=graph_idempotent,
+                    single_sandbox_node=single_sandbox_node,
+                    model_backend_hub=model_backend_hub,
+                    connector_hub=connector_hub,
+                    broker=broker,
+                    stall_requested=self._stall_requested,
+                )
+                gate_suppressed, final_status, error_code, error_detail = self._apply_transient_decision(
+                    transient,
+                    completed_node_outputs=completed_node_outputs,
+                    gate_suppressed=gate_suppressed,
+                )
+            # A tier refusal MUST also skip the pipeline retry_policy below: the
+            # "failure" event matches final_status == "failed" and would requeue
+            # the deterministic refusal despite the non-retryable registry flag.
         except Exception as exc:
             _tb = _traceback_detail(exc, limit=2000)
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
@@ -3525,20 +3557,30 @@ class PipelineExecutor:
         # NodeCancelledError path above. The E2B dispatch fence was retired in
         # favour of ``runs.claim_token`` fencing (settings.py F3a note), so the
         # fenced pending-reset below IS the fence release.
-        retry_decision = await self._maybe_retry_after_policy(
-            run_id=run_id,
-            org_id=org_id,
-            pipeline_retry_policy=pipeline_retry_policy,
-            final_status=final_status,
-            error_code=error_code,
-            error_detail=error_detail,
-            is_correction_run=is_correction_run,
-            graph_idempotent=graph_idempotent,
-            graph_json=graph_json,
-            model_backend_hub=model_backend_hub,
-            connector_hub=connector_hub,
-            broker=broker,
-        )
+        retry_decision = "none"
+        if not retry_policy_eligible:
+            # FAR-592 (D6 F2): a tier-refused run never consults the retry
+            # policy — the deterministic config refusal cannot be retried
+            # away, only reconfigured.
+            _log.info(
+                "pipeline.retry_policy_skipped_tier_refused",
+                extra={"run_id": str(run_id)},
+            )
+        else:
+            retry_decision = await self._maybe_retry_after_policy(
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_retry_policy=pipeline_retry_policy,
+                final_status=final_status,
+                error_code=error_code,
+                error_detail=error_detail,
+                is_correction_run=is_correction_run,
+                graph_idempotent=graph_idempotent,
+                graph_json=graph_json,
+                model_backend_hub=model_backend_hub,
+                connector_hub=connector_hub,
+                broker=broker,
+            )
         if retry_decision == "side_effect_unknown":
             # FAR-296 Phase 2: the lease probe blocked the requeue — a script
             # process may have run with unknown side-effect state. Terminal-fail

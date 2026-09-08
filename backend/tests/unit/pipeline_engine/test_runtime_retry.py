@@ -72,3 +72,36 @@ def test_control_flow_fault_graph_interrupt_does_not_run_compensation() -> None:
         assert comp_calls == []
 
     asyncio.run(run())
+
+
+def test_control_flow_fault_tier_refused_does_not_run_compensation() -> None:
+    """FAR-592 (D6): the Local-tier refusal is in the control-flow set — a
+    compensation edge must NOT absorb a deterministic refusal (the run must
+    terminal-fail with ``sandbox.tier_refused``, never continue)."""
+    from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+
+    async def run() -> None:
+        wrapped, comp_calls = _wrap_with_compensation(SandboxTierRefusedError("tier refused"))
+        with pytest.raises(SandboxTierRefusedError):
+            await wrapped({})
+        assert comp_calls == []
+
+    asyncio.run(run())
+
+
+def test_tier_refused_is_never_retryable_inline() -> None:
+    """FAR-592 (D6): the never-retryable set shows the typed refusal (the
+    inline node retry must NOT re-execute a node body that can only re-hit
+    the same deterministic refusal)."""
+    from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+    from modulo.core.pipeline_engine.runtime_retry import (
+        _CONTROL_FLOW_NO_COMPENSATION_NAMES,
+        _NEVER_RETRYABLE_NAMES,
+        _is_control_flow_fault,
+        _is_never_retryable,
+    )
+
+    assert SandboxTierRefusedError.__name__ in _NEVER_RETRYABLE_NAMES
+    assert SandboxTierRefusedError.__name__ in _CONTROL_FLOW_NO_COMPENSATION_NAMES
+    assert _is_never_retryable(SandboxTierRefusedError("refusal"))
+    assert _is_control_flow_fault(SandboxTierRefusedError("refusal"))

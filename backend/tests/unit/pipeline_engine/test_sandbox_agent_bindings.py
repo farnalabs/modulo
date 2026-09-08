@@ -143,6 +143,27 @@ async def test_resolution_failure_raises_before_sandbox_create() -> None:
     create_mock.assert_not_called()
 
 
+async def test_generic_binding_resolution_error_classifies_retryable() -> None:
+    """A bare Exception from resolve_agent_bindings (secrets-backend hard
+    failure) hits the NEW generic branch and classifies as the RETRYABLE
+    ``SandboxBindingResolutionError`` — never the terminal ``harness.unknown``
+    path. The sandbox is NEVER created (pre-claim, re-dispatch safe)."""
+    fn = make_sandbox_agent_fn(_script_node_def())
+    sandbox = _script_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
+        patch(
+            "modulo.core.runner_bindings.resolve_agent_bindings",
+            new=AsyncMock(side_effect=RuntimeError("secrets backend down")),
+        ),
+        pytest.raises(SandboxBindingResolutionError),
+    ):
+        await fn(_run_state())
+
+    create_mock.assert_not_called()
+
+
 async def test_agent_without_bindings_skips_resolution() -> None:
     """No agent_id on the node -> resolution is never invoked (zero overhead)."""
     node_def = _script_node_def()

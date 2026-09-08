@@ -2532,6 +2532,12 @@ export interface paths {
         /**
          * Delete Binding Endpoint
          * @description Delete one of the agent's binding rows (elevated, audit-logged).
+         *
+         *     The delete is SCOPED to the agent (a binding from a different agent under
+         *     the same org is a 404, never a cross-agent delete), and the audit event is
+         *     appended ONLY for a committed delete — inside the transaction, BEFORE any
+         *     404 raise — so a nonexistent or foreign binding can never leave a phantom
+         *     audit trail.
          */
         delete: operations["delete_binding_endpoint_api_v1_agents__agent_id__bindings__binding_id__delete"];
         options?: never;
