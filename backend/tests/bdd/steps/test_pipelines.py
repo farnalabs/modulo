@@ -1680,7 +1680,7 @@ def check_trigger_has_next_fire(request: pytest.FixtureRequest) -> None:
     assert body.get("next_fire_at") is not None, f"Response missing 'next_fire_at': {body}"
 
 
-@then('a run is created with status "{status}"')
+@then(parsers.parse('a run is created with status "{status}"'))
 def check_run_created(status: str, request: pytest.FixtureRequest) -> None:
     body = request.node._resp_body
     if isinstance(body, dict) and "run_id" in body:
