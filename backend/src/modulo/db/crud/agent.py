@@ -13,6 +13,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
+from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.agent import Agent
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
@@ -84,7 +85,27 @@ async def list_agents(
     *,
     page: int = 1,
     page_size: int = 20,
+    cursor: str | None = None,
 ) -> PageResult[Agent]:
+    base = select(Agent)
+    if cursor is not None:
+        paginator = CursorPaginator()
+        cp = await paginator.paginate(
+            session,
+            base,
+            cursor=cursor,
+            limit=page_size,
+            model=Agent,
+            compute_total=True,
+        )
+        return PageResult(
+            items=cp.items,
+            total=cp.total or 0,
+            page=page,
+            page_size=page_size,
+            next_cursor=cp.next_cursor,
+            has_more=cp.has_more,
+        )
     offset = (page - 1) * page_size
     try:
         total = (await session.execute(select(func.count()).select_from(Agent))).scalar_one()

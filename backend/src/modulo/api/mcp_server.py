@@ -50,7 +50,7 @@ from modulo.api.dependencies import (
     get_or_create_session_factory,
 )
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
-from modulo.api.middleware.sensitive_mask import merge_masked_config
+from modulo.api.middleware.sensitive_mask import mask_config_json, merge_masked_config
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for
 from modulo.auth.api_key import (
@@ -4384,6 +4384,113 @@ async def create_model_backend(
         return _tool_error("Failed to create model backend")
 
 
+def _model_backend_item(mb: Any) -> dict[str, Any]:
+    """Serialise a model backend row for the MCP read tools.
+
+    Mirrors the REST ``model_backend.list`` surface: credential material is
+    NEVER included — only a boolean presence flag.
+    """
+    return {
+        "id": str(mb.id),
+        "name": mb.name,
+        "display_name": mb.display_name,
+        "provider": mb.provider,
+        "model_id": mb.model_id,
+        "has_credentials": bool(mb.credentials_ciphertext),
+        "default_params": mb.default_params or {},
+        "visibility": mb.visibility,
+        "owner_team_id": str(mb.owner_team_id) if mb.owner_team_id else None,
+        "tier": mb.tier,
+        "status": mb.status,
+        "created_at": mb.created_at.isoformat() if mb.created_at else None,
+        "updated_at": mb.updated_at.isoformat() if mb.updated_at else None,
+    }
+
+
+@mcp.tool(
+    name="list_model_backends",
+    description=(
+        "List model backends (LLM provider configurations) in the organisation with cursor-based "
+        "pagination. Returns metadata only — never credential values."
+    ),
+)
+@_RETRY_DB
+async def list_model_backends(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_model_backends")
+
+        from modulo.db.crud.model_backend import list_model_backends as db_list_model_backends
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_model_backends(s, org_id=org_id, cursor=cursor, page_size=lim)
+
+        return {
+            "data": [_model_backend_item(mb) for mb in result.items],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_model_backends failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_model_backends failed")
+        return _tool_error("Failed to list model backends")
+
+
+@mcp.tool(
+    description=("Get a single model backend by ID. Returns metadata only — never credential values."),
+)
+@_RETRY_DB
+async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_model_backend")
+
+        org_id = _ctx_org_id_val()
+        mid, mid_err = _parse_uuid_param(model_backend_id, "model_backend_id")
+        if mid_err:
+            return mid_err
+        assert mid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, handled above
+
+        from modulo.db.crud.model_backend import get_model_backend as db_get_model_backend
+
+        async with _session(org_id) as s:
+            mb = await db_get_model_backend(s, mid)
+
+        # Belt-and-braces org check (mirrors the REST get route) — RLS already
+        # scopes the row, but a cross-org id must read as not_found even if
+        # RLS were misconfigured.
+        if mb is None or mb.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Model backend {model_backend_id} not found"}
+
+        item = _model_backend_item(mb)
+        raw_fallback_ids = getattr(mb, "fallback_backend_ids", None)
+        item["fallback_backend_ids"] = [str(fid) for fid in raw_fallback_ids] if raw_fallback_ids is not None else None
+        item["cost_tracking"] = mb.cost_tracking
+        item["currency"] = mb.currency
+        return item
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_model_backend failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_model_backend failed")
+        return _tool_error("Failed to get model backend")
+
+
 @mcp.tool(
     description="Create a new connector instance (provider configuration). "
     "Credentials are encrypted at rest. Returns the created connector details."
@@ -5150,6 +5257,178 @@ async def delete_connector(
         return _tool_error("Failed to delete connector")
 
 
+def _connector_item(ci: Any) -> dict[str, Any]:
+    """Serialise a connector instance row for the MCP read tools.
+
+    Mirrors the REST ``connector.list`` surface: the credential ciphertext is
+    NEVER included (only a ``has_credentials`` presence flag) and ``config_json``
+    is passed through the shared sensitive-key mask.
+    """
+    return {
+        "id": str(ci.id),
+        "name": ci.name,
+        "connector_type_id": ci.connector_type_id,
+        "has_credentials": bool(ci.credentials_ciphertext),
+        "config_json": mask_config_json(ci.config_json or {}),
+        "allowed_operations": ci.allowed_operations or [],
+        "status": ci.status,
+        "visibility": ci.visibility,
+        "owner_team_id": str(ci.owner_team_id) if ci.owner_team_id else None,
+        "tier": ci.tier,
+        "created_at": ci.created_at.isoformat() if ci.created_at else None,
+        "updated_at": ci.updated_at.isoformat() if ci.updated_at else None,
+    }
+
+
+@mcp.tool(
+    name="list_connectors",
+    description=(
+        "List connector instances in the organisation with cursor-based pagination. "
+        "Returns connector metadata (type, status, masked config) — never credential values."
+    ),
+)
+@_RETRY_DB
+async def list_connectors(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_connectors")
+
+        from modulo.db.crud.connector_instance import list_connector_instances as db_list_connector_instances
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_connector_instances(
+                s,
+                organisation_id=org_id,
+                page_size=lim,
+                cursor=cursor,
+            )
+
+        return {
+            "data": [_connector_item(ci) for ci in result.items],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_connectors failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_connectors failed")
+        return _tool_error("Failed to list connectors")
+
+
+@mcp.tool(description="Get a single connector instance by ID. Returns metadata — never credential values.")
+@_RETRY_DB
+async def get_connector(connector_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_connector")
+
+        org_id = _ctx_org_id_val()
+        cid, cid_err = _parse_uuid_param(connector_id, "connector_id")
+        if cid_err:
+            return cid_err
+        assert cid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, handled above
+
+        from modulo.db.crud.connector_instance import get_connector_instance as db_get_connector_instance
+
+        async with _session(org_id) as s:
+            ci = await db_get_connector_instance(s, cid)
+
+        # Belt-and-braces org check (mirrors the REST get route) — RLS already
+        # scopes the row, but a cross-org id must read as not_found even if
+        # RLS were misconfigured.
+        if ci is None or ci.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Connector {connector_id} not found"}
+
+        item = _connector_item(ci)
+        item["degraded_at"] = ci.degraded_at.isoformat() if ci.degraded_at else None
+        item["last_skip_error"] = ci.last_skip_error
+        return item
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_connector failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_connector failed")
+        return _tool_error("Failed to get connector")
+
+
+def _connector_type_field_metadata(type_id: str) -> dict[str, Any] | None:
+    """Credential/config FIELD metadata for a connector type (values never included).
+
+    Sourced from the canonical library integration definitions (the single
+    source of truth for the credential keys a connector type consumes). Best
+    effort: returns None when the type has no library definition.
+    """
+    try:
+        from modulo.core.library.integrations import __all__ as _integration_exports
+        from modulo.core.library.integrations import definitions as _integration_defs
+
+        for name in _integration_exports:
+            definition = getattr(_integration_defs, name)
+            if definition.get("connector_type") != type_id:
+                continue
+            credential_fields = definition.get("credential_fields") or {}
+            return {
+                "credential_fields": {
+                    key: {"required": bool(spec.get("required", False))} for key, spec in credential_fields.items()
+                },
+                "config_fields": sorted((definition.get("default_config") or {}).keys()),
+            }
+    except Exception:
+        _log.debug("connector type field metadata unavailable for %s", type_id, exc_info=True)
+    return None
+
+
+@mcp.tool(
+    name="list_connector_types",
+    description=(
+        "List the registered connector type catalogue: id, display name, capabilities, and — for "
+        "types with a canonical definition — the credential/config FIELD metadata each type "
+        "consumes (field names and required flags only, never values)."
+    ),
+)
+async def list_connector_types() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_connector_types")
+
+        from modulo.connectors.base import ConnectorType
+
+        items: list[dict[str, Any]] = []
+        for t in ConnectorType:
+            item: dict[str, Any] = {
+                "id": t.value,
+                "name": t.value.replace("_", " ").title(),
+                "capabilities": sorted(c.value for c in t.capabilities),
+            }
+            metadata = _connector_type_field_metadata(t.value)
+            if metadata is not None:
+                item["credential_fields"] = metadata["credential_fields"]
+                item["config_fields"] = metadata["config_fields"]
+            items.append(item)
+
+        return {"data": items, "total": len(items)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception:
+        _log.exception("list_connector_types failed")
+        return _tool_error("Failed to list connector types")
+
+
 @mcp.tool(
     description="Create or update a secret in the organisation vault. "
     "Secrets are encrypted at rest and scoped to the organisation. "
@@ -5855,6 +6134,116 @@ async def create_agent(
         _log.exception("create_agent failed")
         return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
 
+
+@mcp.tool(
+    name="list_agents",
+    description=(
+        "List agents in the organisation with cursor-based pagination. Returns agent summaries "
+        "(no prompt templates — use get_agent for the full definition)."
+    ),
+)
+@_RETRY_DB
+async def list_agents(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_agents")
+
+        from modulo.db.crud.agent import list_agents as db_list_agents
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_agents(s, cursor=cursor, page_size=lim)
+
+        return {
+            "data": [
+                {
+                    "id": str(a.id),
+                    "name": a.name,
+                    "description": a.description,
+                    "is_executable": a.is_executable,
+                    "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
+                    "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
+                    "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
+                    "created_at": a.created_at.isoformat() if a.created_at else None,
+                }
+                for a in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_agents failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_agents failed")
+        return _tool_error("Failed to list agents")
+
+
+@mcp.tool(description="Get a single agent by ID, including its prompt template and configuration.")
+@_RETRY_DB
+async def get_agent(agent_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_agent")
+
+        org_id = _ctx_org_id_val()
+        aid, aid_err = _parse_uuid_param(agent_id, "agent_id")
+        if aid_err:
+            return aid_err
+        assert aid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, handled above
+
+        from modulo.db.crud.agent import get_agent as db_get_agent
+
+        async with _session(org_id) as s:
+            agent = await db_get_agent(s, aid)
+
+        # Belt-and-braces org check (mirrors the REST get route) — RLS already
+        # scopes the row, but a cross-org id must read as not_found even if
+        # RLS were misconfigured.
+        if agent is None or agent.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Agent {agent_id} not found"}
+
+        return {
+            "id": str(agent.id),
+            "name": agent.name,
+            "description": agent.description,
+            "is_executable": agent.is_executable,
+            "prompt_template": agent.prompt_template,
+            "prompt_version_history": agent.prompt_version_history or [],
+            "model_backend_id": str(agent.model_backend_id) if agent.model_backend_id else None,
+            "input_schema_id": str(agent.input_schema_id) if agent.input_schema_id else None,
+            "input_schema_version": agent.input_schema_version,
+            "output_schema_id": str(agent.output_schema_id) if agent.output_schema_id else None,
+            "output_schema_version": agent.output_schema_version,
+            "parameter_schema_id": str(agent.parameter_schema_id) if agent.parameter_schema_id else None,
+            "connector_type_refs": agent.connector_type_refs or [],
+            "required_environment_capabilities": agent.required_environment_capabilities or [],
+            "retry_policy": agent.retry_policy or {},
+            "token_budget": agent.token_budget,
+            "max_input_length": agent.max_input_length,
+            "agent_command": agent.agent_command,
+            "created_at": agent.created_at.isoformat() if agent.created_at else None,
+            "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_agent failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("get_agent failed")
+        return _tool_error("Failed to get agent")
+
     # ---------------------------------------------------------------------------
     # Context retrieval tools
     # ---------------------------------------------------------------------------
@@ -6220,6 +6609,118 @@ async def list_schemas(
     except Exception:
         _log.exception("list_schemas failed")
         return _tool_error("Failed to list schemas")
+
+
+@mcp.tool(
+    name="list_environment_profiles",
+    description=(
+        "List environment profiles (execution environments: local_docker, e2b, etc.) in the "
+        "organisation with cursor-based pagination. Config values under sensitive keys are masked; "
+        "secret_refs are vault key references, never secret values."
+    ),
+)
+@_RETRY_DB
+async def list_environment_profiles(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_environment_profiles")
+
+        from modulo.db.crud.environment_profile import list_environment_profiles as db_list_environment_profiles
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_environment_profiles(s, cursor=cursor, page_size=lim)
+
+        return {
+            "data": [
+                {
+                    "id": str(p.id),
+                    "name": p.name,
+                    "description": p.description,
+                    "provider_type": p.provider_type,
+                    "image_ref": p.image_ref,
+                    "capabilities": p.capabilities_json or [],
+                    "config_json": mask_config_json(p.config_json or {}),
+                    "network_policy": p.network_policy,
+                    "initialisation_strategy": p.initialisation_strategy,
+                    "secret_refs": p.secret_refs_json or [],
+                    "persistence_policy": p.persistence_policy,
+                    "status": p.status,
+                    "visibility": p.visibility,
+                    "owner_team_id": str(p.owner_team_id) if p.owner_team_id else None,
+                    "created_at": p.created_at.isoformat() if p.created_at else None,
+                }
+                for p in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_environment_profiles failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_environment_profiles failed")
+        return _tool_error("Failed to list environment profiles")
+
+
+@mcp.tool(
+    name="list_parameter_schemas",
+    description=(
+        "List parameter schemas in the organisation with cursor-based pagination. Returns the "
+        "schema metadata and parameter definitions."
+    ),
+)
+@_RETRY_DB
+async def list_parameter_schemas(
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_parameter_schemas")
+
+        from modulo.db.crud.parameter_schema import list_schemas as db_list_parameter_schemas
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_parameter_schemas(s, org_id=org_id, cursor=cursor, limit=lim)
+
+        return {
+            "data": [
+                {
+                    "id": str(ps.id),
+                    "name": ps.name,
+                    "description": ps.description,
+                    "version": ps.version,
+                    "parameters": ps.parameters or [],
+                    "created_at": ps.created_at.isoformat() if ps.created_at else None,
+                }
+                for ps in result.items
+            ],
+            "total": result.total,
+            "next_cursor": result.next_cursor,
+            "has_more": result.has_more,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_parameter_schemas failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception:
+        _log.exception("list_parameter_schemas failed")
+        return _tool_error("Failed to list parameter schemas")
 
 
 @mcp.tool(
