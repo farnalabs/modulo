@@ -516,6 +516,11 @@ jobs:
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The SARIF artifact upload hits a 403 from the runner's blob-storage
+          # proxy in this environment, which fails the whole job even when no
+          # leaks are found. The scan itself still runs and reports; we just
+          # skip the (non-essential) artifact upload that returns Forbidden.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
 
 
 
