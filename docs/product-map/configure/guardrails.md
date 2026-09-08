@@ -14,6 +14,7 @@ unit-tests:
   - backend/tests/unit/core/test_guardrails.py
   - backend/tests/unit/core/test_guardrails_contract.py
   - backend/tests/unit/test_guardrail_loop_intercept.py
+  - backend/tests/unit/pipeline_engine/test_node_runner_residual.py
   - backend/tests/unit/test_guardrail_compensation.py
   - backend/tests/unit/test_guardrail_correction.py
   - backend/tests/unit/test_guardrails_kill_switch.py
@@ -84,6 +85,15 @@ compensation, and single-node self-correction. Built on the eval engine
       inside `sandbox_agent` loops reports each tool invocation before execution
       and each tool result before it re-enters model context, REUSING the T1
       guardrail rows + engine — detection is never reimplemented
+- [x] The bridge handoff is newline-safe (FAR-664): the rendered agent command
+      is written to a command FILE (`/home/user/.modulo_bridge_cmd.sh`) and the
+      wrapped command invokes `bash <file>` after `--` — never the command
+      inline, which the outer bash word-splits so only the first line would
+      reach the bridge argv and post-heredoc statements would escape
+      interception; uniform for single-line and multi-line commands, and a
+      command-file write failure fails OPEN (bridge disabled for the node,
+      `loop_intercept_setup_failed` logged, plain command still dispatches)
+      (`backend/tests/unit/pipeline_engine/test_node_runner_residual.py`)
 - [x] Run-termination compensation (FAR-213): on a guardrail-blocked
       terminalization, per-node connector compensating callbacks run
       best-effort with failure isolation (e.g. GitHub closes an opened PR), a
@@ -110,6 +120,15 @@ compensation, and single-node self-correction. Built on the eval engine
 
 ## QA History
 
+- 2026-09-08: **improve-architecture (product-map walk)** — added the FAR-664
+  newline-safe bridge handoff behaviour + citation: the loop-intercept bridge
+  receives the rendered agent command via a command file (`bash <file>` after
+  `--`) instead of inline interpolation, so multi-line / post-heredoc
+  statements can never escape guardrail interception; a command-file write
+  failure fails open (bridge disabled for the node, plain command dispatches).
+  Verified in `core/guardrails/loop_intercept.py` +
+  `core/pipeline_engine/node_runner.py` and unit-covered in
+  `tests/unit/pipeline_engine/test_node_runner_residual.py`.
 - 2026-08-30: **improve-architecture (product-map walk)** — new behaviour
   tracker for the registered `feat-guardrails` manifest feature (route
   `/settings/guardrails`, previously absent from the feature graph and invisible
