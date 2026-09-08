@@ -177,6 +177,111 @@ def test_below_floor_routes_to_estimate_not_self_report() -> None:
     assert per_node_cost["n1"] == Decimal("0.00005")
 
 
+def test_genuine_zero_report_is_classified_self_reported() -> None:
+    """FAR-653: an EXACT ZERO model_cost_usd with the full all-zero
+    agent-reported token proof IS a real self-report — the report key is
+    recorded (with amount 0, so no missing flag) and the node is not
+    estimated."""
+    comps = [_comp(report_key="model_cost_usd")]
+    entries = {
+        "n1": {
+            "sandbox_by_map": True,
+            "model_cost_usd": 0.0,
+            "model_cost_raw_usd": 0.0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 0,
+            "reported_total_tokens": 0,
+        }
+    }
+    tele, per_node_cost = build_telemetry(entries, comps)
+    assert tele.reported == {"model_cost_usd": Decimal(0)}
+    assert tele.raw_reported == {"n1": 0.0}
+    assert per_node_cost == {"n1": Decimal(0)}
+    assert tele.nodes_estimated == 0
+    assert not tele.orphan_report_nodes
+    assert not tele.missing_report_keys
+
+
+def test_genuine_zero_with_zero_cache_reported_keys_is_a_report() -> None:
+    comps = [_comp(report_key="model_cost_usd")]
+    entries = {
+        "n1": {
+            "sandbox_by_map": True,
+            "model_cost_usd": 0.0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 0,
+            "reported_total_tokens": 0,
+            "reported_cache_read_tokens": 0,
+            "reported_cache_write_tokens": 0,
+        }
+    }
+    tele, _per_node_cost = build_telemetry(entries, comps)
+    assert tele.reported == {"model_cost_usd": Decimal(0)}
+    assert not tele.missing_report_keys
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"sandbox_by_map": True, "model_cost_usd": 0.0},  # no reported tokens at all
+        {  # mandatory union key absent
+            "sandbox_by_map": True,
+            "model_cost_usd": 0.0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 0,
+        },
+        {  # a non-zero reported token count means there WAS activity
+            "sandbox_by_map": True,
+            "model_cost_usd": 0.0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 7,
+            "reported_total_tokens": 7,
+        },
+        {  # an invalid reported value is not a zero proof
+            "sandbox_by_map": True,
+            "model_cost_usd": 0.0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 0,
+            "reported_total_tokens": "zero",
+        },
+        {  # a present non-zero optional cache key is token activity
+            "sandbox_by_map": True,
+            "model_cost_usd": 0.0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 0,
+            "reported_total_tokens": 0,
+            "reported_cache_read_tokens": 2,
+        },
+    ],
+)
+def test_unproven_zero_routes_to_estimate(entry: dict) -> None:
+    """FAR-653: a zero WITHOUT the zero-token proof is not a report — the node
+    routes to estimate and the missing-report key is recorded."""
+    comps = [_comp(report_key="model_cost_usd")]
+    tele, per_node_cost = build_telemetry({"n1": entry}, comps)
+    assert not tele.reported
+    assert tele.nodes_estimated == 1
+    assert tele.missing_report_keys == {"model_cost_usd"}
+    assert per_node_cost["n1"] == Decimal(0)
+
+
+def test_non_sandbox_zero_report_is_not_self_reported() -> None:
+    """The sandbox eligibility gate applies to the genuine-zero class too."""
+    comps = [_comp(report_key="model_cost_usd")]
+    entries = {
+        "n1": {
+            "sandbox_by_map": False,
+            "model_cost_usd": 0.0,
+            "reported_input_tokens": 0,
+            "reported_output_tokens": 0,
+            "reported_total_tokens": 0,
+        }
+    }
+    tele, _per_node_cost = build_telemetry(entries, comps)
+    assert not tele.reported
+    assert tele.nodes_estimated == 1
+
+
 def test_sandbox_with_report_but_no_consuming_component_is_orphan() -> None:
     comps = [_comp(report_key="custom_key")]
     entries = {"n1": {"sandbox_by_map": True, "model_cost_usd": 0.05, "model_cost_raw_usd": 0.05}}
