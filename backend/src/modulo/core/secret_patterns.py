@@ -29,7 +29,7 @@ SENSITIVE_VALUE_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
 
 # Hard cap BEFORE any value-pattern regex runs — bounds the ReDoS surface on the
 # connection-string / private-key patterns (which use nested quantifiers). Mirrors
-# the 5000-char cap in error_codes.py (``runs.error_detail`` is String(5000)), so
+# the 5000-char cap in error_codes.py (``runs.error_detail`` is ``Text``), so
 # the pattern engine is never fed an unbounded string.
 SECRET_VALUE_REDACT_CHAR_CAP = 5000
 
