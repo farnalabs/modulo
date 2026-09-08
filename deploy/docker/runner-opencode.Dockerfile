@@ -77,12 +77,12 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL https://deb.nodesource.com/gpgkey/node
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g --ignore-scripts "opencode-ai@${OPENCODE_VERSION}"
+    && npm install -g --ignore-scripts "opencode-ai@${OPENCODE_VERSION}" \
+    && groupadd -g 1001 runner && useradd -m -u 1001 -g runner -s /bin/bash runner
 
 # Non-root user (ADR 029 workspace hardening): uid 1001, writable session dirs
 # are handed to the container as tmpfs mounts on workdir/$HOME (the provider
 # mounts tmpfs at provision), so the image itself stays immutable.
-RUN groupadd -g 1001 runner && useradd -m -u 1001 -g runner -s /bin/bash runner
 USER runner
 WORKDIR /home/user
 ENV HOME=/home/user \
