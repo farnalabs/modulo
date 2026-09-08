@@ -30,6 +30,8 @@ bdd:
   - backend/tests/bdd/features/pipelines/scheduling.feature
   - backend/tests/bdd/features/pipelines/webhook_trigger.feature
   - backend/tests/bdd/features/pipelines/checkpoint_resume.feature
+  - backend/tests/bdd/features/pipelines/run_lifecycle.feature
+  - backend/tests/bdd/features/pipelines/run_sequential.feature
   - backend/tests/bdd/features/admin/node-categories.feature
   - backend/tests/bdd/steps/test_pipelines.py
   - backend/tests/bdd/steps/test_alpha_pipelines.py
@@ -69,6 +71,16 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       failed run from its last checkpoint — now BDD-exercised end to end
       (`checkpoint_resume.feature`) and unit-covered
       (`tests/unit/pipeline_engine` recovery suite)
+- [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending
+      run (202), the engine moves it pending → running, a clean completion lands on
+      `completed` with a `final_state`, an unhandled node exception lands on `failed`
+      with an `error_detail`, and a mid-run cancellation is terminal (`cancelled`,
+      no further nodes schedule). A node that returns `None` output is a normal empty
+      result — the run continues to the next node with no error — and sequential
+      pipelines complete nodes strictly in order (`run_lifecycle.feature`,
+      `run_sequential.feature`); a trigger refused by `max_concurrent_runs` while a
+      pending run is already active surfaces 429 through the typed
+      `RateLimitConflictError` path
 - [x] Node categories: deleting an unreferenced category succeeds, deleting one still
       referenced by a pipeline node is refused (409) with the referencing pipeline listed,
       and viewers cannot delete categories (403) (`admin/node-categories.feature`)
@@ -93,24 +105,31 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   directory but describe run-time behaviour and are registered for execution — by
   `steps/test_run_context.py` and `steps/test_pipelines.py` respectively — so they are
   not re-listed here to keep the run surfaces owned by `feat-runs` / `feat-variants`.
-- **No executing BDD surface for `run_lifecycle.feature` / `run_sequential.feature`** —
-  the two feature files ship under `tests/bdd/features/pipelines/` but no step module
-  registers them via `scenarios(...)`, so they never execute. The run lifecycle is
-  otherwise pinned by the registered step suite (`steps/test_pipelines.py` engine-pickup
-  / node-completion / error / cancellation transitions); wiring these files up needs a
-  few missing step definitions written.
-- **No executing BDD surface for graph validation, pipeline-config validation or
-  checkpoint/resume** — `pipelines/validation.feature` and
+- **No executing BDD surface for graph validation / pipeline-config validation** —
+  `pipelines/validation.feature` and
   `pipelines/pipeline_config_validation.feature` ship under `tests/bdd/features/pipelines/`
   but `steps/test_pipelines.py` does not register them via `scenarios(...)`, so they
   never execute and are no longer cited as coverage here. The behaviours are
   unit-covered (`tests/unit/graph_validator`, `tests/unit/pipeline_engine`,
-  `test_pipelines_endpoint.py`); wiring the feature files up needs their missing step
-  definitions written. `checkpoint_resume.feature` is now registered and exercises the
-  replay-from-last-checkpoint contract (`steps/test_pipelines.py`).
+  `test_pipelines_endpoint.py`); the existing validation steps are awaiting a dedicated
+  graph-validation endpoint — POST /api/v1/pipelines uses `PipelineCreate` (no graph
+  body), so graph assertions would pass/fail for the wrong reason today. Wiring the
+  feature files up needs a real graph-validation create/edit surface first.
 
 ## QA History
 
+- 2026-09-08: **improve-architecture (product-map walk)** — closed the
+  "no executing BDD surface for `run_lifecycle.feature` / `run_sequential.feature`"
+  gap: both files are now registered in `steps/test_pipelines.py` and the missing
+  step definitions are written (`a running pipeline with a node that returns None
+  output` / `the node completes` / `no error is raised for the None output` /
+  `cancellation is requested` / `no further nodes execute` / `node N completes
+  before node M starts`). The manual-trigger step now models `max_concurrent_runs`
+  admission (a capped pipeline with a pending run refuses the extra trigger with
+  a typed `RateLimitConflictError` → 429). 12 scenarios collect and pass. The
+  graph/config-validation BDD gap remains for `validation.feature` /
+  `pipeline_config_validation.feature` — their steps are awaiting a dedicated
+  graph-validation create/edit surface.
 - 2026-09-08: **improve-architecture (product-map walk)** — added the FAR-664
   sandbox save-time validation behaviour to the graph layer: `agent_commands`
   list items terminated by a heredoc terminator are rejected at save time
