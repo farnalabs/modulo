@@ -803,13 +803,15 @@ def test_single_migration_head() -> None:
     # partial index) chains off 0192.
     chaining_off_0192 = [p for p in revisions if parents[p] == "0192_run_node_outputs"]
     assert [_basename(p) for p in chaining_off_0192] == ["0193_run_node_outputs_sweep_index.py"]
-    # This PR's 0194_uuid_pk_server_defaults (FAR-718) chains off 0193 and is
-    # the single head.
+    # 0194_uuid_pk_server_defaults (FAR-718) chains off 0193.
     chaining_off_0193 = [p for p in revisions if parents[p] == "0193_run_node_outputs_sweep_index"]
     assert [_basename(p) for p in chaining_off_0193] == ["0194_uuid_pk_server_defaults.py"]
-    # Nothing chains off 0194 -> it is the single head.
+    # This PR's 0195_spend_anomaly_unique_org_date chains off 0194.
     chaining_off_0194 = [p for p in revisions if parents[p] == "0194_uuid_pk_server_defaults"]
-    assert chaining_off_0194 == []
+    assert [_basename(p) for p in chaining_off_0194] == ["0195_spend_anomaly_unique_org_date.py"]
+    # Nothing chains off 0195 -> it is the single head.
+    chaining_off_0195 = [p for p in revisions if parents[p] == "0195_spend_anomaly_unique_org_date"]
+    assert chaining_off_0195 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
