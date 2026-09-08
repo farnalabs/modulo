@@ -460,11 +460,10 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
     patcher.start()
     patches.append(patcher)
 
-    # PipelineExecutor — prevent background execution
-    mock_executor = MagicMock()
+    # dispatch_run — prevent background execution of the triggered run
     patcher = patch(
-        "modulo.api.routes.runs.PipelineExecutor",
-        return_value=mock_executor,
+        "modulo.api.routes.runs.dispatch_run",
+        new_callable=AsyncMock,
     )
     patcher.start()
     patches.append(patcher)
@@ -623,10 +622,10 @@ def trigger_with_run_context(client, branch: str, request: pytest.FixtureRequest
     patcher.start()
     patches.append(patcher)
 
-    mock_executor = MagicMock()
+    # dispatch_run — prevent background execution of the triggered run
     patcher = patch(
-        "modulo.api.routes.runs.PipelineExecutor",
-        return_value=mock_executor,
+        "modulo.api.routes.runs.dispatch_run",
+        new_callable=AsyncMock,
     )
     patcher.start()
     patches.append(patcher)
@@ -851,7 +850,7 @@ def check_run_status_becomes(request: pytest.FixtureRequest, status: str) -> Non
 
 @then("the run has a final_state")
 def check_run_has_final_state(request: pytest.FixtureRequest) -> None:
-    body = request.node._resp_body
+    body = getattr(request.node, "_resp_body", None)
     if isinstance(body, dict) and "final_state" in body:
         assert body["final_state"] is not None
     else:
