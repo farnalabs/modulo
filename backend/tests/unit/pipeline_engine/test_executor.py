@@ -1489,6 +1489,199 @@ async def test_execute_handles_streamed_interrupt_from_real_graph():
     registry.close.assert_not_called()
 
 
+async def test_interrupt_persists_fire_time_context_on_the_gate_row():
+    """FAR-613: the interrupt handler captures the decision briefing bundle
+    (build_hitl_gate_context) and persists it on the claim row via
+    create_gate(context_json=...)."""
+    from langgraph.types import interrupt as langgraph_interrupt
+
+    async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
+        langgraph_interrupt({"gate_id": "native-gate"})
+        return {}
+
+    graph = StateGraph(_InterruptState)
+    graph.add_node("native-gate", interrupting_gate)
+    graph.add_edge(START, "native-gate")
+    graph.add_edge("native-gate", END)
+    compiled = graph.compile()
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="awaiting_human")
+    snapshot = _make_snapshot({"nodes": [{"id": "native-gate", "role": None}], "edges": []})
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.name = "PR Reviewer"
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    hitl_manager.create_gate.assert_awaited_once()
+    context = hitl_manager.create_gate.await_args.kwargs["context_json"]
+    assert context is not None
+    assert set(context) == {
+        "description",
+        "condition",
+        "trigger",
+        "source_node_id",
+        "source_node_label",
+        "artifacts",
+        "reason",
+        "pipeline_name",
+    }
+    assert context["pipeline_name"] == "PR Reviewer"
+
+
+async def test_interrupt_capture_failure_still_persists_gate_with_null_context():
+    """FAR-613 failure isolation: a briefing capture defect must never block
+    the interrupt — create_gate receives context_json=None and the run still
+    terminalises awaiting_human."""
+    from langgraph.types import interrupt as langgraph_interrupt
+
+    async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
+        langgraph_interrupt({"gate_id": "native-gate"})
+        return {}
+
+    graph = StateGraph(_InterruptState)
+    graph.add_node("native-gate", interrupting_gate)
+    graph.add_edge(START, "native-gate")
+    graph.add_edge("native-gate", END)
+    compiled = graph.compile()
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="awaiting_human")
+    snapshot = _make_snapshot({"nodes": [{"id": "native-gate", "role": None}], "edges": []})
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.name = "PR Reviewer"
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.hitl_context.get_run", AsyncMock(side_effect=RuntimeError("boom"))),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    hitl_manager.create_gate.assert_awaited_once()
+    assert hitl_manager.create_gate.await_args.kwargs["context_json"] is None
+    assert mock_finalize.await_args.kwargs["status"] == "awaiting_human"
+
+
+async def test_interrupt_capture_db_error_runs_inside_savepoint_and_never_blocks_the_interrupt():
+    """qa-iterate iteration-1 MAJOR-2 (FAR-613): the briefing capture performs
+    DB reads on the SHARED session inside the interrupt handler's outer
+    transaction. A DB-level capture error must be savepoint-scoped — the
+    handler opens a ``begin_nested()`` savepoint around the capture, the
+    builder swallows the error, the savepoint enters and exits cleanly, and
+    ``create_gate`` still proceeds with ``context_json=None`` (the
+    failure-isolation contract: a briefing defect must never block the
+    interrupt). Without the savepoint a poisoned transaction would make the
+    next statement raise ``PendingRollbackError`` and fail the whole
+    interrupt."""
+    from langgraph.types import interrupt as langgraph_interrupt
+    from sqlalchemy.exc import SQLAlchemyError
+
+    async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
+        langgraph_interrupt({"gate_id": "native-gate"})
+        return {}
+
+    graph = StateGraph(_InterruptState)
+    graph.add_node("native-gate", interrupting_gate)
+    graph.add_edge(START, "native-gate")
+    graph.add_edge("native-gate", END)
+    compiled = graph.compile()
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="awaiting_human")
+    snapshot = _make_snapshot({"nodes": [{"id": "native-gate", "role": None}], "edges": []})
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+
+    # Model the savepoint: every begin_nested() call returns a recorded CM so
+    # the test can assert the savepoint was entered AND exited (mock sessions
+    # hide poison-state; the CM stand-in is the observable seam).
+    savepoint_cms: list[AsyncMock] = []
+
+    def _make_savepoint_cm(*_args: Any) -> AsyncMock:
+        cm = _make_nested_savepoint_cm()
+        savepoint_cms.append(cm)
+        return cm
+
+    session.begin_nested = MagicMock(side_effect=_make_savepoint_cm)
+
+    pipeline = MagicMock()
+    pipeline.name = "PR Reviewer"
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        # DB-level capture failure: the capture's snapshot/run read dies with
+        # a SQLAlchemy error (not a plain RuntimeError defect) — the exact
+        # poison-the-transaction shape the savepoint exists for.
+        patch("modulo.core.pipeline_engine.hitl_context.get_run", AsyncMock(side_effect=SQLAlchemyError("db gone"))),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    # The capture ran (its DB read failed) inside a savepoint that was
+    # entered AND exited for every savepoint the handler opened; no savepoint
+    # exited with an exception (the builder swallowed the DB error, so the
+    # exit is clean and create_gate proceeded on the healthy transaction).
+    assert savepoint_cms, "the interrupt handler must open a savepoint around the capture"
+    for cm in savepoint_cms:
+        cm.__aenter__.assert_awaited_once()
+        cm.__aexit__.assert_awaited_once()
+        exc_type = cm.__aexit__.await_args.args[0]
+        assert exc_type is None
+    hitl_manager.create_gate.assert_awaited_once()
+    assert hitl_manager.create_gate.await_args.kwargs["context_json"] is None
+    assert mock_finalize.await_args.kwargs["status"] == "awaiting_human"
+
+
 async def test_dispatch_hitl_awaiting_routes_through_notifier():
     notifier = MagicMock()
     notifier.dispatch_event = AsyncMock()

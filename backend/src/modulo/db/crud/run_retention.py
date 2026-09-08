@@ -754,9 +754,9 @@ async def _delete_quarantine_rows(session: AsyncSession, run_ids: list[Any]) -> 
     (qa Major 3a).
 
     The quarantine table deliberately has NO foreign key to ``runs``
-    (migration 0190), so purged runs leave their quarantined blob copies
+    (migration 0192), so purged runs leave their quarantined blob copies
     orphaned forever unless the purge deletes them explicitly. Its privileges
-    are explicit on Postgres (qa iteration 2, Major 5 — migration 0190 grants
+    are explicit on Postgres (qa iteration 2, Major 5 — migration 0192 grants
     ``SELECT, DELETE`` to ``modulo_app``, the role this purge runs on via the
     admin run-retention route; ``SELECT, INSERT, DELETE`` to the system role
     the catch-up sweep runs on) and it has no ORM mapping, so the delete

@@ -28,10 +28,12 @@ _MIGRATION_0006 = "0108_schema_org_identity"
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _HEAD_MIGRATION = "0120_org_fk_hardening"
 # Current chain head (tracks the latest migration; 0188_pipeline_run_context_defaults_default
-# is main's index sweep head, and this PR's 0189_agent_runner_bindings re-parents onto
-# 0188 as the chain head; FAR-583's 0190_run_node_outputs re-parents onto 0189 and its
-# 0191_run_node_outputs_sweep_index chains onto 0190).
-_CHAIN_HEAD_MIGRATION = "0191_run_node_outputs_sweep_index"
+# is main's sweep head, 0189_agent_runner_bindings (main, D6) chains off it,
+# 0190_hitl_claim_context_json (main, FAR-613) re-parents onto 0189, main's
+# 0191_bundled_runner_seed_backfill re-parents onto 0190_hitl_claim_context_json,
+# and FAR-583's 0192_run_node_outputs re-parents onto 0191 with its
+# 0193_run_node_outputs_sweep_index chaining onto 0192).
+_CHAIN_HEAD_MIGRATION = "0193_run_node_outputs_sweep_index"
 
 
 def _source(name: str) -> str:

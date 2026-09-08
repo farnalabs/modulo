@@ -249,6 +249,29 @@ class TestCreateProfile:
         assert resp.status_code == 409
         assert "already exists" in resp.json()["detail"]
 
+    @pytest.mark.parametrize("persistence", ["retained", "cache"])
+    def test_create_runner_docker_non_ephemeral_returns_422(self, persistence: str, client: TestClient) -> None:
+        """The Bundled Runner LOCKS persistence to ephemeral (FAR-590 D4): the
+        crud validator's ValueError maps to a typed 422, never a 500."""
+        with (
+            patch(f"{_ROUTES}.create_environment_profile", new_callable=AsyncMock, side_effect=ValueError("locked")),
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.post(
+                self.URL, json={"name": "runner", "provider_type": "runner_docker", "persistence_policy": persistence}
+            )
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize("persistence", ["retained", "cache"])
+    def test_update_runner_docker_non_ephemeral_returns_422(self, persistence: str, client: TestClient) -> None:
+        """The update path re-validates the merged row (validator parity)."""
+        with (
+            patch(f"{_ROUTES}.update_environment_profile", new_callable=AsyncMock, side_effect=ValueError("locked")),
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            resp = client.put(f"{self.URL}/{_PROFILE_ID}", json={"persistence_policy": persistence})
+        assert resp.status_code == 422
+
 
 class TestGetProfile:
     URL = "/api/v1/environment-profiles"

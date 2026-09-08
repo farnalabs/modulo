@@ -129,6 +129,7 @@ class TestFunctionsWiring:
         assert "stale_run_recovery" in names
         assert "slot_reconciliation" in names
         assert "hitl_park_sweep" in names
+        assert "runner_workspace_reconcile" in names
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
@@ -150,6 +151,7 @@ class TestFunctionsWiring:
             "stale_run_recovery",
             "slot_reconciliation",
             "hitl_park_sweep",
+            "runner_workspace_reconcile",
             "cost_probe",
             "analytics_facts_maintenance",
             "journey_reconcile",
@@ -208,6 +210,16 @@ class TestFunctionsWiring:
         assert hp.heartbeat == 30
         assert hp.ttl == 300
         assert hp.unique is True
+        # runner_workspace_reconcile: every 5 min (FAR-590 D4), unique so
+        # overlapping ticks cannot double-destroy; failures re-raise so
+        # retries=2 engages (partial counts are persisted first).
+        rwr = jobs["runner_workspace_reconcile"]
+        assert rwr.cron == "*/5 * * * *"
+        assert rwr.timeout == 120
+        assert rwr.retries == 2
+        assert rwr.heartbeat == 30
+        assert rwr.ttl == 300
+        assert rwr.unique is True
         # check_missed_fire_alerts: hourly, 5-field form (NOT 6-field — the bug
         # class #680 croniter seconds-field misparse), unique so overlaps are
         # impossible (the probe has its own in-memory cooldown).

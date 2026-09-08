@@ -192,7 +192,7 @@ class RunBlobs(NamedTuple):
 
 # Anchored marker-key grammar (node_runner): run:<uuid>:node:<node_id>:<suffix>
 # where the suffix is a claim count, sha256 prefix, 'claim-unknown', 'fallback'
-# or 'connector'. MUST stay byte-identical to migration 0190's bound regex
+# or 'connector'. MUST stay byte-identical to migration 0192's bound regex
 # (asserted by tests/unit/db/test_migration_run_node_outputs.py).
 _MARKER_KEY_RE = r"^run:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:node:.+$"
 _MARKER_KEY_PREFIX_RE = re.compile(_MARKER_KEY_RE)
@@ -288,7 +288,7 @@ def _side_present(column: Any) -> Any:
 
 # A side holds '{}': an explicit EMPTY dict. For outputs/telemetry that is
 # meaningful (it produces the metadata row); for MARKERS it means "no
-# markers" and is NOT representable (the same definition as migration 0190's
+# markers" and is NOT representable (the same definition as migration 0192's
 # _ANY_BLOB_OBJECT_SQL, which excludes markers = '{}'). Selecting a
 # '{}'-markers-only run would write zero rows every pass — an un-healable
 # zombie the sweep would re-select on every tick.
@@ -340,10 +340,10 @@ def _dialect_insert(dialect: str) -> Any:
     )
 
 
-# The quarantine side table (migration 0190) as a CORE-ONLY Table —
+# The quarantine side table (migration 0192) as a CORE-ONLY Table —
 # deliberately NOT an ORM model (ops/remediation surface: written by the
 # migration + this sweep body, read by ops SQL only). Column set matches
-# migration 0190's DDL exactly (JSONB on Postgres via the variant, generic
+# migration 0192's DDL exactly (JSONB on Postgres via the variant, generic
 # JSON elsewhere).
 # NOTE: remove this Core table (and the sweep's quarantine legs + the
 # retention purge's delete) when the quarantine table itself drops (B2b+).
@@ -398,7 +398,7 @@ async def _quarantine_run(
 ) -> None:
     """Copy a run's legacy blobs to the quarantine side table (idempotent).
 
-    Mirrors migration 0190's quarantine step for data the sweep encounters
+    Mirrors migration 0192's quarantine step for data the sweep encounters
     post-deploy: the blobs are preserved AS-IS (evidence), the run is
     EXCLUDED from all future sweep selections (the NOT-EXISTS trigger leg on
     ``run_node_outputs_quarantine``), and the reason is logged — data
@@ -1370,7 +1370,7 @@ async def backfill_run_node_outputs_batch(
     Returns ``{"runs_selected", "runs_backfilled", "runs_skipped_healed",
     "runs_skipped_ghost", "runs_quarantined", "rows_written",
     "unknown_marker_keys", "new_high_water"}``. The ``status='unknown'``
-    markers leg lives in migration 0190 only: the sweep heals TERMINAL
+    markers leg lives in migration 0192 only: the sweep heals TERMINAL
     runs, whose markers are complete.
     """
     await _assert_write_org(session, organisation_id)

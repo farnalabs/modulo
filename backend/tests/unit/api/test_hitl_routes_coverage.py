@@ -39,6 +39,7 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000100")
+_SNAPSHOT_ID = uuid.UUID("00000000-0000-0000-0000-000000000200")
 
 _PROG = ProgrammingError("s", {}, Exception())
 _SQL = SQLAlchemyError("boom")
@@ -398,6 +399,98 @@ def test_list_org_pending_gates_no_gates_skips_pipeline_query(client: tuple[Test
     assert not resp.json()["gates"]
 
 
+def test_list_org_pending_gates_requests_include_claimed(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-686: the org endpoint asks list_pending() for claimed-but-undecided
+    gates too, so a claimed gate stays on the review page after a refresh
+    instead of vanishing (the reported bug)."""
+    http, _session = client
+    claimed = _org_gate()
+    unclaimed = _org_gate()
+    unclaimed.account_id = None
+    list_pending = AsyncMock(return_value=[claimed, unclaimed])
+    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=list_pending):
+        resp = http.get("/api/v1/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    list_pending.assert_awaited_once()
+    assert list_pending.await_args.args[1] == _ORG_ID
+    assert list_pending.await_args.kwargs["include_claimed"] is True
+    gates = resp.json()["gates"]
+    assert len(gates) == 2
+    claimed_rows = [g for g in gates if g["claimed_by"] is not None]
+    assert len(claimed_rows) == 1
+    assert claimed_rows[0]["claimed_by"] == str(_USER_ID)
+
+
+def test_list_org_pending_gates_resolves_gate_labels(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-686: the org endpoint batch-resolves each pending gate's human
+    label via run → snapshot → hitl_gate_config.label. A gate whose run has
+    no snapshot degrades to label=None while the rest of the list keeps its
+    labels, and pipeline_name resolution keeps working."""
+    http, session = client
+    snap_id = uuid.uuid4()
+    run_with_snapshot = uuid.uuid4()
+    run_without_snapshot = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+
+    claimed = _org_gate()
+    claimed.run_id = run_with_snapshot
+    claimed.gate_id = "hitl_gate_planner_deploy"
+    claimed.pipeline_id = pipeline_id
+    unclaimed = _org_gate()
+    unclaimed.run_id = run_without_snapshot
+    unclaimed.gate_id = "hitl_gate_review_ship"
+    unclaimed.pipeline_id = pipeline_id
+    unclaimed.account_id = None
+
+    graph_json = {
+        "edges": [
+            {
+                "source": "planner",
+                "target": "deploy",
+                "hitl_gate_config": {"label": "Deploy gate"},
+            }
+        ]
+    }
+
+    def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        result = MagicMock()
+        text = str(stmt)
+        if "pipeline_snapshots" in text:
+            result.all.return_value = [(snap_id, graph_json)]
+        elif "FROM runs" in text:
+            result.all.return_value = [
+                (run_with_snapshot, snap_id),
+                (run_without_snapshot, None),
+            ]
+        elif "pipelines" in text:
+            result.all.return_value = [(pipeline_id, "Reviewer Pipeline")]
+        else:
+            # set_config / authz plumbing — benign empty result
+            result.scalar.return_value = None
+            result.scalar_one_or_none.return_value = None
+            result.all.return_value = []
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[claimed, unclaimed])):
+        resp = http.get("/api/v1/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gates = resp.json()["gates"]
+    assert len(gates) == 2
+    assert gates[0]["gate_id"] == "hitl_gate_planner_deploy"
+    assert gates[0]["label"] == "Deploy gate"
+    assert gates[1]["gate_id"] == "hitl_gate_review_ship"
+    assert gates[1]["label"] is None
+    assert gates[0]["pipeline_name"] == "Reviewer Pipeline"
+    assert gates[1]["pipeline_name"] == "Reviewer Pipeline"
+
+
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (RuntimeError("kaboom"), 500)])
 def test_list_org_pending_gates_error_mapping(
     client: tuple[TestClient, AsyncMock], exc: Exception, expected: int
@@ -407,3 +500,132 @@ def test_list_org_pending_gates_error_mapping(
         resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == expected, resp.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-613 — pending gates carry the decision briefing (description + context)
+# ---------------------------------------------------------------------------
+
+
+def _briefed_gate(graph_gate_id: str, *, context: dict | None) -> MagicMock:
+    gate = MagicMock()
+    gate.run_id = _RUN_ID
+    gate.gate_id = graph_gate_id
+    gate.pipeline_id = uuid.uuid4()
+    gate.account_id = _USER_ID
+    gate.claimed_at = None
+    gate.expires_at = None
+    gate.decision = None
+    gate.decision_at = None
+    gate.context_json = context
+    return gate
+
+
+def _graph_with_gate(gate_id: str, description: str | None = "Why this gate needs a human decision.") -> dict:
+    from modulo.db.crud.hitl_gate_config import parse_hitl_gate_id
+
+    source, target = parse_hitl_gate_id(gate_id) or ("src-1", "tgt-2")
+    config: dict = {"label": "Review gate"}
+    if description is not None:
+        config["description"] = description
+    return {
+        "nodes": [{"id": source, "label": "Generator"}],
+        "edges": [{"source": source, "target": target, "hitl_gate_config": config}],
+    }
+
+
+def test_list_run_pending_gates_carries_description_and_context(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    graph = _graph_with_gate("hitl_gate_src-1_tgt-2")
+    context = {"trigger": "condition", "condition": "output.severity == 'high'", "pipeline_name": "PR Reviewer"}
+    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
+
+    run = MagicMock()
+    run.snapshot_id = _SNAPSHOT_ID
+    claims_result = MagicMock()
+    claims_result.scalars.return_value = [gate]
+    snapshot = MagicMock()
+    snapshot.graph_json = graph
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one_or_none.return_value = snapshot
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        text = str(stmt)
+        if "hitl_claims" in text:
+            return claims_result
+        return snapshot_result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gate_payload = resp.json()["gates"][0]
+    assert gate_payload["description"] == "Why this gate needs a human decision."
+    assert gate_payload["context"] == context
+
+
+def test_list_org_pending_gates_carries_description_and_context(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context={"trigger": "node", "reason": "two failures"})
+    graph = _graph_with_gate("hitl_gate_src-1_tgt-2", description="Org-level briefing.")
+
+    pipeline_rows = MagicMock()
+    pipeline_rows.all.return_value = [(gate.pipeline_id, "Reviewer Pipeline")]
+    run_rows = MagicMock()
+    run_rows.all.return_value = [(_RUN_ID, _SNAPSHOT_ID)]
+    snapshot_rows = MagicMock()
+    snapshot_rows.all.return_value = [(_SNAPSHOT_ID, graph)]
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        text = str(stmt)
+        if "pipeline_snapshots" in text:
+            return snapshot_rows
+        if "runs" in text:
+            return run_rows
+        return pipeline_rows
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[gate])):
+        resp = http.get("/api/v1/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gate_payload = resp.json()["gates"][0]
+    assert gate_payload["pipeline_name"] == "Reviewer Pipeline"
+    assert gate_payload["description"] == "Org-level briefing."
+    assert gate_payload["context"] == {"trigger": "node", "reason": "two failures"}
+
+
+def test_pending_gate_without_context_or_description_renders_null_fields(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    graph = _graph_with_gate("hitl_gate_src-1_tgt-2", description=None)
+    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=None)
+
+    run = MagicMock()
+    run.snapshot_id = _SNAPSHOT_ID
+    claims_result = MagicMock()
+    claims_result.scalars.return_value = [gate]
+    snapshot = MagicMock()
+    snapshot.graph_json = graph
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one_or_none.return_value = snapshot
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        text = str(stmt)
+        if "hitl_claims" in text:
+            return claims_result
+        return snapshot_result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gate_payload = resp.json()["gates"][0]
+    assert gate_payload["description"] is None
+    assert gate_payload["context"] is None

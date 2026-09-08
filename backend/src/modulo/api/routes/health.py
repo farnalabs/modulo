@@ -102,6 +102,16 @@ _SLOT_RECONCILIATION_STALE_SECONDS = 15 * 60
 _HITL_PARK_SWEEP_STATS_KEY = "saq:cron:stats:hitl_park_sweep"
 _HITL_PARK_SWEEP_STALE_SECONDS = 15 * 60
 
+# runner_workspace_reconcile (FAR-590 D4): the Bundled Runner orphan
+# reconciler runs every 5 min on the system worker and persists its outcome
+# to this Redis key. Same advisory contract as its siblings: the destroy
+# path is soak-gated (RUNNER_RECONCILER_DESTROY_ENABLED defaults False), so
+# a dead sweep cannot wedge anything — but labelled-container leaks would
+# silently stop being even logged, so a missing or >15min-stale key warns
+# without gating readiness.
+_RUNNER_WORKSPACE_RECONCILE_STATS_KEY = "saq:cron:stats:runner_workspace_reconcile"
+_RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS = 15 * 60
+
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
 # 2x the cadence has a silently dead cron scheduler and fails readiness so Fly
@@ -681,6 +691,25 @@ async def _check_hitl_park_sweep() -> CheckResult:
     return await _check_sweep_stats_advisory(_HITL_PARK_SWEEP_STATS_KEY, _HITL_PARK_SWEEP_STALE_SECONDS, "parked")
 
 
+async def _check_runner_workspace_reconcile() -> CheckResult:
+    """ADVISORY — last runner_workspace_reconcile outcome (never gates readiness).
+
+    The FAR-590 D4 Bundled Runner orphan reconciler
+    (``saq_worker.runner_workspace_reconcile``) runs in the SYSTEM WORKER
+    process every 5 min and persists its outcome (``orphans_destroyed`` +
+    ``last_run_at``) to ``saq:cron:stats:runner_workspace_reconcile``. A
+    silently dead sweep stops labelled-container leak repair (and even the
+    log-only soak detection), so a missing or >15min-stale key reports
+    "degraded" to alert operators while the app remains healthy. Fail-open
+    on Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
+        _RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS,
+        "orphans_destroyed",
+    )
+
+
 async def _check_fleet_system_crons() -> CheckResult:
     """Fleet-wide system-cron liveness for ``app`` machines (plan F8, PR dist/separate-workers).
 
@@ -815,6 +844,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         srr_check,
         sr_check,
         hps_check,
+        rwr_check,
     ) = await asyncio.gather(
         _check_database(),
         _check_redis(),
@@ -826,6 +856,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_stale_run_recovery(),
         _check_slot_reconciliation(),
         _check_hitl_park_sweep(),
+        _check_runner_workspace_reconcile(),
     )
     bg_check = _check_break_glass()
 
@@ -853,6 +884,11 @@ async def readiness(response: Response) -> ReadinessResponse:
         # FAR-604 D2 / qa F5: a dead park sweep only delays the "expired —
         # parked" transition (no capacity wedge), so it stays alert-only.
         "hitl_park_sweep": hps_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-590 D4: a dead orphan reconciler stops labelled-container leak
+        # repair (destroy path soak-gated, so no capacity wedge), so it stays
+        # alert-only.
+        "runner_workspace_reconcile": rwr_check,
     }
 
     # Aggregate over the NON-advisory checks only.

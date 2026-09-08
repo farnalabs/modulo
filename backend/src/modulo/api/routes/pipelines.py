@@ -16,7 +16,15 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, ValidationError, WithJsonSchema, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,7 +49,7 @@ from modulo.core.capability_scope import (
     validate_allowed_connectors_subset,
     validate_no_self_tools,
 )
-from modulo.core.graph_validator import GraphValidator
+from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
 from modulo.core.pipeline_engine.scatter_join import (
     FanOutConfig,
     JoinAggregateSpec,
@@ -247,9 +255,18 @@ def _edge_data_to_validator(edge: GraphEdgeData) -> dict[str, Any]:
 
 
 def _reject_graph_validation_issues(issues: list[Any]) -> None:
-    """Raise 422 for graph-save issues that must block authoring."""
+    """Raise 422 for graph-save issues that must block authoring.
+
+    ``HITL_GATE_DESCRIPTION_REQUIRED`` (FAR-613) is hard-blocking on this
+    path: a node's ``hitl_config`` is an unvalidated ``dict[str, Any]`` that
+    bypasses the edge-level ``HitlGateConfig`` Pydantic contract, so the
+    validator issue is the ONLY save-time gate for node-level gate
+    descriptions. It is raised inside ``session.begin()`` so the already-run
+    graph write rolls back with the rejection — without it the node-level
+    check would be advisory-only and the save would succeed.
+    """
     for issue in issues:
-        if issue.code in ("GUARDRAIL_CAP_EXCEEDED", "REDACT_CORRECT_BLOCKED"):
+        if issue.code in ("GUARDRAIL_CAP_EXCEEDED", "REDACT_CORRECT_BLOCKED", "HITL_GATE_DESCRIPTION_REQUIRED"):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=issue.message,
@@ -1045,6 +1062,35 @@ class HitlGateConfig(BaseModel):
         "the gate fires. If false, execution continues without interrupting.",
     )
 
+    @field_validator("description")
+    @classmethod
+    def _description_must_explain_why(cls, v: str, info: ValidationInfo) -> str:
+        """FAR-613: a HITL gate must explain WHY a human must decide on it.
+
+        The description is the reviewer's decision briefing (surfaces in the
+        approve/reject UI and MCP gate resources). A description that is empty
+        or a few characters carries no decision context, so the trimmed length
+        must meet the shared minimum the save-time GraphValidator enforces for
+        node-level ``hitl_config`` gates too (whose config dict bypasses this
+        Pydantic model).
+
+        The minimum is a WRITE-path requirement. ``_graph_response``
+        re-validates STORED edges on every graph READ (GET /graph echoes
+        persisted data), so validating strictly there would 422 every legacy
+        pipeline whose gate description predates this rule — the editor could
+        never open the pipeline to fix it. Reads validate with
+        ``context={"legacy_read": True}``; the next save still enforces the
+        minimum (this validator on the request body + the GraphValidator).
+        """
+        if isinstance(info.context, dict) and info.context.get("legacy_read"):
+            return v
+        if len(v.strip()) < HITL_DESCRIPTION_MIN_LENGTH:
+            raise ValueError(
+                f"HITL gate requires a human-provided description (min {HITL_DESCRIPTION_MIN_LENGTH} chars) "
+                "explaining why this gate exists"
+            )
+        return v
+
 
 class PipelineGraphEdge(BaseModel):
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
@@ -1114,7 +1160,10 @@ def _graph_response(
     try:
         return PipelineGraphResponse(
             nodes=[PipelineGraphNode.model_validate(node) for node in nodes],
-            edges=[PipelineGraphEdge.model_validate(edge) for edge in edges],
+            # Reads re-validate STORED edges, so gate-description enforcement
+            # must stay write-scoped (FAR-613) — legacy pipelines whose gate
+            # descriptions predate the minimum stay readable/editable.
+            edges=[PipelineGraphEdge.model_validate(edge, context={"legacy_read": True}) for edge in edges],
             validation_issues=validation_issues or [],
         )
     except ValidationError as e:

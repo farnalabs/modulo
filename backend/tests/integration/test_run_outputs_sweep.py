@@ -3,7 +3,7 @@
 Drives the sweep leg wired into ``dispatcher_reconcile``'s per-org loop
 (``cron_helpers._run_outputs_sweep_for_org`` — its own session/transaction,
 per-org failure isolation) and the repo backfill helper behind it, against
-the real migration-0190 table on testcontainers Postgres.
+the real migration-0192 table on testcontainers Postgres.
 
 Covers (design §CATCH-UP SWEEP + qa iteration 1):
 
@@ -18,7 +18,7 @@ Covers (design §CATCH-UP SWEEP + qa iteration 1):
 * qa M1 — jsonb-native OBJECT trigger legs (a jsonb array/scalar side is
   never selected on Postgres), sentinel marker keys / anomalies QUARANTINED
   (run_node_outputs_quarantine row + never re-selected);
-* the migration-0190 SQL leg round-trips (qa C1/C2): the backfill legs'
+* the migration-0192 SQL leg round-trips (qa C1/C2): the backfill legs'
   SQL twins — the 1-indexed substr marker parser vs the Python twin, the
   COALESCE'd metadata flags vs the strict meta-shape CHECK, and the
   quarantine leg — executed against real Postgres.
@@ -204,7 +204,7 @@ def _marker_key(run_id: uuid.UUID, node_id: str, suffix: str = "1") -> str:
 
 
 def _load_migration_module() -> ModuleType:
-    """Load migration 0190 by file path (migrations are not a package import
+    """Load migration 0192 by file path (migrations are not a package import
     surface) — the same loader the structural unit tests use."""
     migration_path = (
         Path(__file__).resolve().parents[2]
@@ -213,10 +213,10 @@ def _load_migration_module() -> ModuleType:
         / "db"
         / "migrations"
         / "versions"
-        / "0190_run_node_outputs.py"
+        / "0192_run_node_outputs.py"
     )
     assert migration_path.exists(), f"Migration file missing: {migration_path}"
-    spec = importlib.util.spec_from_file_location("migration_0190_run_node_outputs", migration_path)
+    spec = importlib.util.spec_from_file_location("migration_0192_run_node_outputs", migration_path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -637,7 +637,7 @@ async def test_sentinel_marker_key_run_quarantined_once_never_reselected(
 
 
 # ---------------------------------------------------------------------------
-# qa C1/C2: migration-0190 SQL leg round-trips (real Postgres)
+# qa C1/C2: migration-0192 SQL leg round-trips (real Postgres)
 # ---------------------------------------------------------------------------
 
 

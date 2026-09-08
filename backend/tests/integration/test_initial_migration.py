@@ -174,7 +174,7 @@ _MIGRATION_OWNED_CHECKS: dict[str, frozenset[str]] = {
     "notification_endpoints": frozenset({"ck_notification_endpoint_dead_letter"}),
     "org_daily_run_counts": frozenset({"ck_daily_run_count_run_count"}),
     "run_daily_facts": frozenset({"ck_run_daily_facts_status", "ck_run_daily_facts_trigger_type"}),
-    # 0190: the STRICT dialect-specific meta-shape CHECK (jsonb_typeof on PG /
+    # 0192: the STRICT dialect-specific meta-shape CHECK (jsonb_typeof on PG /
     # json_type on SQLite); the ORM declares the PORTABLE subset with a
     # different name (ck_run_node_outputs_meta_present) — matched below.
     # permanent (documented repo divergence)
@@ -240,7 +240,7 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # The reconciliation chain's raw-SQL run-number counter path; the ORM
         # model was deleted (FAR-253 dead-code cleanup).
         "run_number_counters",
-        # FAR-583 ops/remediation quarantine side table (migration 0190):
+        # FAR-583 ops/remediation quarantine side table (migration 0192):
         # written by migrations + the sweep, read by ops SQL only.
         "run_node_outputs_quarantine",
     }
@@ -312,7 +312,7 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
             known_table == table and col_names == {known_col} for (known_table, known_col) in _NODES_ID_FK_KNOWN_GAPS
         )
     if kind == "remove_constraint":
-        # CHECK guards that exist ONLY in migrations (0157/0165/0190) —
+        # CHECK guards that exist ONLY in migrations (0157/0165/0192) —
         # per-(table, constraint) entries.
         constraint = inner[1]
         table_checks = _MIGRATION_OWNED_CHECKS.get(constraint.table.name, frozenset())

@@ -5,7 +5,7 @@ Drives ``update_run_status`` (ORM branch + fenced branch) and the core
 catch/orchestrate contract (:func:`guard_dual_write`) through a NOBYPASSRLS
 role (the production ``modulo_app`` scenario), so the RLS-scoped dual-write,
 the fail-closed abort, the transient retry, and the separate-session
-terminalization are exercised against the real migration-0190 table.
+terminalization are exercised against the real migration-0192 table.
 
 Each test gets its OWN organisation (and pipeline/snapshot) rather than the
 shared session-scoped ``test_org``: ``runs`` carries

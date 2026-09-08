@@ -30,12 +30,12 @@ re-runnable (release.sh retries migrations 3x).
 
 The terminal-status literal is INLINED (migrations never import app
 constants) and MUST equal ``sorted(db.models.run.TERMINAL_STATUSES)`` — the
-same twin discipline as 0190 (pinned by tests/unit/db/
+same twin discipline as 0192 (pinned by tests/unit/db/
 test_migration_run_node_outputs.py).
 
-REVISION NUMBERING NOTE: this migration consumes revision number 0191 — the
-FAR-583 design doc's planned B2b legacy-column-drop migration becomes **0192**
-and PR C's pointer migration becomes **0193**.
+REVISION NUMBERING NOTE: this migration consumes revision number 0193 — the
+FAR-583 design doc's planned B2b legacy-column-drop migration becomes **0194**
+and PR C's pointer migration becomes **0195**.
 """
 
 from __future__ import annotations
@@ -45,8 +45,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0191_run_node_outputs_sweep_index"
-down_revision: str | None = "0190_run_node_outputs"
+revision: str = "0193_run_node_outputs_sweep_index"
+down_revision: str | None = "0192_run_node_outputs"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

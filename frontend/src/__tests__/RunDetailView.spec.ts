@@ -1443,7 +1443,7 @@ describe('RunDetailView HITL gates', () => {
     const wrapper = await mountAwaiting()
     expect(wrapper.text()).toContain('HITL Gate')
     expect(wrapper.text()).toContain('Review the deploy plan')
-    const claimBtn = wrapper.find('[data-testid="run-detail-claim-gate"]')
+    const claimBtn = wrapper.find('[data-testid="hitl-gate-claim"]')
     expect(claimBtn.exists()).toBe(true)
     expect(claimBtn.text()).toContain('Claim Gate')
     wrapper.unmount()
@@ -1455,7 +1455,7 @@ describe('RunDetailView HITL gates', () => {
     const { api } = await import('../lib/api/client')
     const wrapper = await mountAwaiting()
 
-    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
@@ -1466,9 +1466,9 @@ describe('RunDetailView HITL gates', () => {
       body: { expiry_minutes: 15 },
     })
 
-    expect(wrapper.find('[data-testid="run-detail-approve"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="run-detail-reject"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="run-detail-hitl-notes"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-notes"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -1477,22 +1477,26 @@ describe('RunDetailView HITL gates', () => {
     mockClaimError = { detail: 'gate_already_claimed' }
     const wrapper = await mountAwaiting()
 
-    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
     expect(wrapper.text()).toContain('Claim failed:')
     expect(wrapper.text()).toContain('gate_already_claimed')
     // still claimable
-    expect(wrapper.find('[data-testid="run-detail-claim-gate"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('shows the claimed-by banner when another reviewer holds the gate', async () => {
+  it('shows the re-claim recovery path when another reviewer holds the gate', async () => {
     mockPendingGates = [gate({ claimed_by: 'ops@team' })]
     const wrapper = await mountAwaiting()
-    expect(wrapper.text()).toContain('Claimed by ops@team')
-    expect(wrapper.find('[data-testid="run-detail-claim-gate"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('ops@team')
+    // No token in this browser session: no fresh claim, only the re-claim
+    // recovery path (same-account re-claim succeeds server-side; a 409 means
+    // the gate is held elsewhere).
+    expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="hitl-gate-reclaim"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -1501,12 +1505,12 @@ describe('RunDetailView HITL gates', () => {
     mockClaimResult = { claim_token: 'ct-123' }
     const { api } = await import('../lib/api/client')
     const wrapper = await mountAwaiting()
-    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
-    await wrapper.find('[data-testid="run-detail-hitl-notes"]').setValue('looks good')
-    await wrapper.find('[data-testid="run-detail-approve"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-notes"]').setValue('looks good')
+    await wrapper.find('[data-testid="hitl-gate-approve"]').trigger('click')
     await flushPromises()
     await nextTick()
 
@@ -1531,17 +1535,17 @@ describe('RunDetailView HITL gates', () => {
     mockClaimResult = { claim_token: 'ct-123' }
     mockApproveError = { detail: 'claim_expired' }
     const wrapper = await mountAwaiting()
-    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
-    await wrapper.find('[data-testid="run-detail-approve"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-approve"]').trigger('click')
     await flushPromises()
     await nextTick()
 
     expect(wrapper.text()).toContain('Approve failed:')
     expect(wrapper.text()).toContain('claim_expired')
-    expect(wrapper.find('[data-testid="run-detail-approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="hitl-gate-approve"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -1550,11 +1554,11 @@ describe('RunDetailView HITL gates', () => {
     mockClaimResult = { claim_token: 'ct-123' }
     const { api } = await import('../lib/api/client')
     const wrapper = await mountAwaiting()
-    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
-    await wrapper.find('[data-testid="run-detail-reject"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-reject"]').trigger('click')
     await flushPromises()
     await nextTick()
 
@@ -1575,16 +1579,60 @@ describe('RunDetailView HITL gates', () => {
     mockClaimResult = { claim_token: 'ct-123' }
     mockRejectError = { detail: 'reject_target_missing' }
     const wrapper = await mountAwaiting()
-    await wrapper.find('[data-testid="run-detail-claim-gate"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
     await flushPromises()
     await nextTick()
 
-    await wrapper.find('[data-testid="run-detail-reject"]').trigger('click')
+    await wrapper.find('[data-testid="hitl-gate-reject"]').trigger('click')
     await flushPromises()
     await nextTick()
 
     expect(wrapper.text()).toContain('Reject failed:')
     expect(wrapper.text()).toContain('reject_target_missing')
+    wrapper.unmount()
+  })
+
+  it('shows the decision briefing with the gate description above the controls (FAR-613)', async () => {
+    mockPendingGates = [
+      gate({
+        description: 'Approve only when the generated comments are accurate and safe to post.',
+        context: {
+          description: 'Approve only when the generated comments are accurate and safe to post.',
+          trigger: 'condition',
+          condition: "node_id=='550e8400-e29b-41d4-a716-446655440000'",
+          source_node_id: '550e8400-e29b-41d4-a716-446655440000',
+          source_node_label: 'Comment Generator',
+          artifacts: [{ node_id: '550e8400-e29b-41d4-a716-446655440000', summary: '{"ok":true}' }],
+          pipeline_name: 'PR Reviewer',
+        },
+      }),
+    ]
+    const wrapper = await mountAwaiting()
+    const briefing = wrapper.find('[data-testid="hitl-briefing"]')
+    expect(briefing.exists()).toBe(true)
+    expect(briefing.text()).toContain('Approve only when the generated comments are accurate and safe to post.')
+    // The briefing sits ABOVE the claim control in the gate section.
+    const section = wrapper.find('section')
+    expect(section.text()).toContain('Why this gate needs a decision')
+    // Details are collapsed until toggled.
+    expect(wrapper.find('[data-testid="hitl-briefing-details"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    const details = wrapper.find('[data-testid="hitl-briefing-details"]')
+    expect(details.exists()).toBe(true)
+    expect(details.text()).toContain('Comment Generator')
+    expect(details.text()).toContain('PR Reviewer')
+    wrapper.unmount()
+  })
+
+  it('renders the muted no-description fallback for a legacy gate (FAR-613)', async () => {
+    mockPendingGates = [gate({ description: null, context: null })]
+    const wrapper = await mountAwaiting()
+    const fallback = wrapper.find('[data-testid="hitl-briefing-description-fallback"]')
+    expect(fallback.exists()).toBe(true)
+    expect(fallback.text()).toContain('No description provided for this gate')
+    // The gate stays claimable — the legacy briefing never breaks the flow.
+    // The claim control is the shared HitlGateCard's `hitl-gate-claim` button.
+    expect(wrapper.find('[data-testid="hitl-gate-claim"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

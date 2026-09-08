@@ -289,7 +289,7 @@ __all__ = [
     #     CI test gate and the reset is the signal tests' isolation hook) ---
     "error_code_map_conflicts",
     "_reset_unmapped_code_signal_for_tests",
-    # --- FAR-583: migration-0190 twin parser. The SQL twin (_MARKER_NODE_ID_SQL
+    # --- FAR-583: migration-0192 twin parser. The SQL twin (_MARKER_NODE_ID_SQL
     #     constants) does the real work; this Python twin exists to be pinned by
     #     tests/unit/db/test_migration_run_node_outputs.py (regex equality +
     #     round-trip cases) so the two parsers cannot drift. vulture scans src/
@@ -307,4 +307,10 @@ __all__ = [
     #     single-flight lock between tests). vulture scans src/ only, so it
     #     cannot see the test call sites.
     "_reset_switch_read_cache",
+    # --- HITL manager dynamic dispatch (FAR-686). approve_with_modification is
+    #     invoked via _run_hitl_manager(mgr_method="approve_with_modification")
+    #     in api/routes/hitl.py — a string-keyed dispatch vulture cannot see a
+    #     call site for. The route, request model, and unit/integration tests all
+    #     exercise it, so it is load-bearing, not dead.
+    "approve_with_modification",
 ]

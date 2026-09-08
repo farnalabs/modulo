@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator._types import (
+    ValidationIssue,
     ValidationResult,
     try_parse_uuid,
     try_parse_uuids,
@@ -55,6 +56,13 @@ HITL_GATE_NODE_ID_PREFIX = "hitl_gate_"
 # squatting the namespace would collide with those rows in reassembly (the
 # repo module additionally rejects "__"-prefixed keys on write).
 DB_SENTINEL_NODE_ID_PREFIX = "__"
+# FAR-613: the minimum trimmed length of a HITL gate's human-provided
+# description. The description is the reviewer's decision briefing — a gate
+# must explain WHY a human must decide on it. Shared with the API contract
+# (``api.routes.pipelines.HitlGateConfig`` field validator enforces the same
+# threshold for edge-level gate configs) and the pipeline editor's save
+# validation, so all three surfaces agree.
+HITL_DESCRIPTION_MIN_LENGTH = 20
 _JSON_TYPE_MAP: MappingProxyType[str, type | tuple[type, ...]] = MappingProxyType(
     {
         "string": str,
@@ -1217,6 +1225,10 @@ class GraphValidator:
         """
         result = ValidationResult()
 
+        # FAR-613: gate-description requirement (save-time only — see the
+        # method docstring for the blast-radius scoping).
+        self._check_hitl_gate_descriptions(graph_json, result)
+
         self._check_topology(graph_json, result)
         if not result.is_valid:
             return result
@@ -1623,6 +1635,87 @@ class GraphValidator:
                 f"Edge from '{src}': eval_condition.operator must be one of {valid_ops} (got {operator!r})",
                 node_id=src,
             )
+
+    @staticmethod
+    def _hitl_description_issue(config: Any) -> bool:
+        """True when a gate config dict lacks a usable human description.
+
+        Usable = a string whose TRIMMED length meets
+        :data:`HITL_DESCRIPTION_MIN_LENGTH` — whitespace-only or a few
+        characters carry no decision context for the reviewer (FAR-613).
+        """
+        if not isinstance(config, dict):
+            return True
+        description = config.get("description")
+        if not isinstance(description, str):
+            return True
+        return len(description.strip()) < HITL_DESCRIPTION_MIN_LENGTH
+
+    def _check_hitl_gate_descriptions(self, graph_json: dict[str, Any], result: ValidationResult) -> None:
+        """FAR-613: every HITL gate must carry a human-provided description.
+
+        The description is the reviewer's decision briefing — it surfaces in
+        the approve/reject UI and the MCP gate resource. Both gate shapes are
+        checked:
+
+        * EDGE-level: ``hitl_gate_config`` on an edge. The Pydantic contract
+          (``api.routes.pipelines.HitlGateConfig``) already enforces the same
+          threshold on REST/MCP graph writes; this check is the model-level
+          backstop so validation and the contract cannot drift.
+        * NODE-level (FAR-402): ``hitl_config`` on a ``node_type == "hitl"``
+          node — an unvalidated ``dict[str, Any]`` that bypasses the Pydantic
+          gate-config model entirely, so this is its ONLY save-time gate.
+
+        Save-time only (called from :meth:`validate_definition`, NOT
+        :meth:`validate_for_run`): the forcing function applies to the next
+        SAVE (FAR-613 blast-radius decision) — run-start validation must not
+        brick legacy pipelines whose gates predate the requirement; their
+        briefing UI renders the muted no-description fallback instead.
+        """
+        nodes = graph_json.get("nodes", [])
+        node_type_by_id: dict[str, str] = {}
+        for node in nodes:
+            if isinstance(node, dict) and node.get("id") is not None:
+                node_type_by_id[str(node["id"])] = str(node.get("node_type") or "agent")
+
+        for node in nodes:
+            if not isinstance(node, dict) or node.get("node_type") != "hitl":
+                continue
+            nid = str(node.get("id", ""))
+            if self._hitl_description_issue(node.get("hitl_config")):
+                result.error(
+                    "HITL_GATE_DESCRIPTION_REQUIRED",
+                    f"HITL gate on node '{nid}' requires a human-provided description "
+                    f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
+                    node_id=nid,
+                )
+
+        for edge in graph_json.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            hitl_config = edge.get("hitl_gate_config")
+            if not isinstance(hitl_config, dict):
+                continue
+            source = edge.get("source")
+            if source is None:
+                source = edge.get("source_node_id")
+            target = edge.get("target")
+            if target is None:
+                target = edge.get("target_node_id")
+            if self._hitl_description_issue(hitl_config):
+                # A node-level gate's config is INJECTED onto its outgoing
+                # edges at compile time (graph_cache); in a persisted
+                # definition the node carries it and the edge does not, but a
+                # composite-expanded / compiled graph may present the edge
+                # shape — report it under whichever node type the source is.
+                if str(source) in node_type_by_id and node_type_by_id[str(source)] == "hitl":
+                    continue  # already reported by the node-level pass
+                result.error(
+                    "HITL_GATE_DESCRIPTION_REQUIRED",
+                    f"HITL gate on edge '{source}->{target}' requires a human-provided description "
+                    f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
+                    node_id=_string_or_default(source),
+                )
 
     @staticmethod
     def _check_loop_edges(
@@ -3160,3 +3253,20 @@ def _parallel_write_detail(setters: list[dict[str, Any]]) -> str | None:
     if not common:
         return None
     return f"parallel branches write the same run_context keys: {sorted(common)}"
+
+
+def check_hitl_gate_descriptions(graph_json: dict[str, Any]) -> list[ValidationIssue]:
+    """Run the FAR-613 HITL gate-description check standalone (public seam).
+
+    Single-sourced with the save-time check
+    (:meth:`GraphValidator._check_hitl_gate_descriptions`) so the write
+    surfaces cannot drift. Exists for graph-WRITE surfaces that do not run
+    the full ``validate_definition`` (which needs a session): the MCP
+    ``update_pipeline_graph`` tool bypasses the REST Pydantic contract for
+    node-level ``hitl_config`` and never runs full validation, so it calls
+    this with the submitted ``{"nodes": [...], "edges": [...]}`` shape and
+    rejects on ``HITL_GATE_DESCRIPTION_REQUIRED`` issues.
+    """
+    result = ValidationResult()
+    GraphValidator()._check_hitl_gate_descriptions(graph_json, result)
+    return result.issues

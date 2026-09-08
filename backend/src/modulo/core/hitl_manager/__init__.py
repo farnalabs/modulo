@@ -35,7 +35,7 @@ from typing import Any
 
 from jwt import ExpiredSignatureError
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -134,11 +134,14 @@ class NotTeamMemberError(HITLError, PermissionError):
 
 
 class RunNotAwaitingError(HITLError, RuntimeError):
-    """The gate's run is not in ``awaiting_human`` status, so it cannot be claimed.
+    """The gate's run is not in a claimable status, so it cannot be claimed.
 
     Claiming a gate on a terminal (or still-executing) run would flip that run
     to ``claimed`` via the claim route's ``update_run_status`` -- corrupting a
-    finished run. FAR-612.
+    finished run. FAR-612. A run already in ``claimed`` status is claimable
+    only when the existing gate claim is held by the SAME account (the
+    FAR-686 re-claim/token-recovery arm); every other claimant keeps the
+    strict guard.
     """
 
     def __init__(self, run_id: uuid.UUID, status: str) -> None:
@@ -200,8 +203,18 @@ class HITLManager:
         pipeline_id: uuid.UUID,
         org_id: uuid.UUID,
         required_team_id: uuid.UUID | None = None,
+        context_json: dict[str, Any] | None = None,
     ) -> HitlClaim:
-        """Insert a new unclaimed gate row. Idempotent if called again for same key."""
+        """Insert a new unclaimed gate row. Idempotent if called again for same key.
+
+        ``context_json`` (FAR-613) is the fire-time decision briefing captured
+        by the executor's interrupt handler — the resolved gate description,
+        condition, trigger kind, source node, bounded artifact excerpts, and
+        the raising output's reason. Persisted on the claim row so the
+        reviewer's briefing reflects the graph state at FIRE time. An
+        idempotent re-entry (existing row) leaves the original context
+        untouched — a replay must never overwrite the first fire's briefing.
+        """
         # Check for existing row first (unique constraint: run_id + gate_id).
         # Race: a concurrent caller may insert between our check and flush.
         # Handle IntegrityError gracefully by fetching the existing row.
@@ -215,6 +228,7 @@ class HITLManager:
             pipeline_id=pipeline_id,
             required_team_id=required_team_id,
             expires_at=datetime.now(UTC) + timedelta(minutes=_DEFAULT_EXPIRY_MINUTES),
+            context_json=context_json,
         )
         session.add(gate)
         try:
@@ -283,7 +297,11 @@ class HITLManager:
             raise GateNotFoundError(run_id, gate_id)
         if gate_check.decision is not None:
             raise GateAlreadyDecidedError(run_id, gate_id)
-        if gate_check.account_id is not None:
+        # Same-account re-claim (FAR-686): a reviewer who reloaded the page
+        # lost their claim token (it lives only in frontend state). Allow the
+        # SAME account to re-claim (re-issuing a fresh token); raise only when
+        # ANOTHER account holds the claim.
+        if gate_check.account_id is not None and gate_check.account_id != claimant_id:
             raise AlreadyClaimedError(run_id, gate_id)
         # FAR-612: the run itself must be waiting for a human (or parked on a
         # human decision). An undecided gate on any other status is data rot
@@ -294,11 +312,20 @@ class HITLManager:
         # decide) until a decision un-parks it, so a parked run must remain
         # claimable. Org-scoped so a foreign run id can never be probed
         # through this check.
+        # FAR-686: a same-account re-claim targets a run the claim itself
+        # flipped to "claimed" (the claim route's update_run_status), so the
+        # strict awaiting_human/hitl_parked guard would make token recovery
+        # impossible during the claimed-but-undecided window. ``claimed`` is
+        # accepted ONLY for the SAME-account re-claim arm; fresh and
+        # cross-account claims keep the FAR-612 data-rot guard as shipped.
         run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
         run = run_result.scalar_one_or_none()
         if run is None:
             raise GateNotFoundError(run_id, gate_id)
-        if run.status not in ("awaiting_human", "hitl_parked"):
+        allowed_statuses: tuple[str, ...] = ("awaiting_human", "hitl_parked")
+        if gate_check.account_id == claimant_id:
+            allowed_statuses = ("awaiting_human", "hitl_parked", "claimed")
+        if run.status not in allowed_statuses:
             raise RunNotAwaitingError(run_id, run.status)
         if gate_check.required_team_id is not None:
             # Lock the gate row so the team check is serialised with the UPDATE.
@@ -310,7 +337,7 @@ class HITLManager:
                 raise GateNotFoundError(run_id, gate_id)
             if locked_gate.decision is not None:
                 raise GateAlreadyDecidedError(run_id, gate_id)
-            if locked_gate.account_id is not None:
+            if locked_gate.account_id is not None and locked_gate.account_id != claimant_id:
                 raise AlreadyClaimedError(run_id, gate_id)
             tm_result = await session.execute(
                 select(TeamMembership).where(
@@ -347,7 +374,10 @@ class HITLManager:
                 HitlClaim.run_id == run_id,
                 HitlClaim.gate_id == gate_id,
                 HitlClaim.organisation_id == org_id,
-                HitlClaim.account_id.is_(None),
+                # Unclaimed OR held by the same account (re-claim re-issues a
+                # fresh token and resets the overdue-notification clock — the
+                # claimed_at restart is accepted).
+                or_(HitlClaim.account_id.is_(None), HitlClaim.account_id == claimant_id),
                 HitlClaim.decision.is_(None),
             )
             .values(
@@ -655,6 +685,8 @@ class HITLManager:
         self,
         session: AsyncSession,
         org_id: uuid.UUID,
+        *,
+        include_claimed: bool = True,
     ) -> list[HitlClaim]:
         """All undecided gates for the org whose run is still actionable.
 
@@ -664,16 +696,20 @@ class HITLManager:
         rows left by the since-fixed auto-approve bug), not pending work.
         Held (claimed) gates are included so consumers can render the
         claimed state; parked runs' gates stay listed so they are not lost.
+
+        Claimed-but-undecided gates are included by default (FAR-686: the
+        org review endpoint passes this through so a claimed gate stays
+        visible and actionable instead of vanishing on refresh); pass
+        ``include_claimed=False`` to restrict to UNCLAIMED gates only.
         """
-        result = await session.execute(
-            select(HitlClaim)
-            .join(Run, HitlClaim.run_id == Run.id)
-            .where(
-                HitlClaim.organisation_id == org_id,
-                HitlClaim.decision.is_(None),
-                Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
-            )
-        )
+        filters: list[Any] = [
+            HitlClaim.organisation_id == org_id,
+            HitlClaim.decision.is_(None),
+            Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
+        ]
+        if not include_claimed:
+            filters.append(HitlClaim.account_id.is_(None))
+        result = await session.execute(select(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*filters))
         return list(result.scalars())
 
     async def list_overdue(

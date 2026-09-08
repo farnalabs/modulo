@@ -168,7 +168,7 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
             # could be satisfied; every access path scopes by organisation
             # explicitly instead (see the 0177 docstring's RLS NOTE).
             "invitations",
-            # Ops/remediation evidence table (FAR-583, migration 0190): written
+            # Ops/remediation evidence table (FAR-583, migration 0192): written
             # by migrations and read by ops SQL only — no app-role grant and
             # deliberately NO RLS policy, so quarantined sentinel rows stay
             # visible for remediation regardless of org context.
@@ -591,7 +591,7 @@ async def test_run_node_outputs_rls_strict_fail_closed(
 ) -> None:
     """run_node_outputs is strict fail-closed: org-filtered, NO null-context branch.
 
-    Migration 0190 gives the table ENABLE + FORCE RLS + the 0162/0163-style
+    Migration 0192 gives the table ENABLE + FORCE RLS + the 0162/0163-style
     strict policy (``organisation_id = nullif(current_setting(
     'app.organisation_id', true), '')::uuid``). As a non-superuser (so RLS
     applies): the owning org sees its row, a sibling org sees none, and an

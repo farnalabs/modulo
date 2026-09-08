@@ -1,7 +1,7 @@
 """run_node_outputs — per-node outputs/telemetry/markers store (FAR-583).
 
-Revision ID: 0190_run_node_outputs
-Revises: 0189_agent_runner_bindings
+Revision ID: 0192_run_node_outputs
+Revises: 0191_bundled_runner_seed_backfill
 Create Date: 2026-09-04
 
 Extracts the three whole-run JSON blobs on ``runs`` (``outputs_json`` /
@@ -30,7 +30,8 @@ table, ``run_node_outputs`` — one row per ``(run_id, node_id, attempt_key)``:
 REVISION CHAIN NOTE: ``0175_dedupe_soft_delete_names`` is SPLICED mid-chain
 (0155 -> 0175 -> 0156), so the linear chain runs 0155 -> 0175 -> 0156 -> ...
 -> 0174 -> 0176_trigger_event_validation_results -> ... ->
-0189_agent_runner_bindings — this revision chains onto THAT tip.
+0189_agent_runner_bindings -> 0190_hitl_claim_context_json ->
+0191_bundled_runner_seed_backfill — this revision chains onto THAT tip.
 
 ROLE WIRING (the 0066 ceremony, verbatim from 0131/0137): the migration
 connects via ``DATABASE_ADMIN_URL`` (the superuser/owner URL).
@@ -138,8 +139,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0190_run_node_outputs"
-down_revision: str | None = "0189_agent_runner_bindings"
+revision: str = "0192_run_node_outputs"
+down_revision: str | None = "0191_bundled_runner_seed_backfill"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

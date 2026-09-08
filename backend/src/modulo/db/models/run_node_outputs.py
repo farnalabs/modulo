@@ -43,7 +43,7 @@ Deliberate deviations from the ``RunEvidence`` precedent:
   JSON-serialisable values (dicts today, strings historically).
 
 The model keeps generic ``JSON`` columns (the repo parity rule: JSONB lives
-only in migrations — migration 0190 promotes the three blob columns to JSONB
+only in migrations — migration 0192 promotes the three blob columns to JSONB
 on Postgres and adds the STRICT sentinel-shape CHECKs there; the model carries
 the portable subset). Sentinel constants live here (the DB layer) because
 core imports db freely and the reverse is forbidden by importlinter.
@@ -93,7 +93,7 @@ class RunNodeOutput(Base, TimestampMixin):
     natural key IS the identity, matching ``RunEvidence``). ``run_id`` needs
     no separate index: it is the PK prefix. ``organisation_id`` is the tenant
     anchor (FK -> organisations, CASCADE) and carries the one explicit index;
-    the ``rls_org_isolation`` policy (migration 0190) scopes every command to
+    the ``rls_org_isolation`` policy (migration 0192) scopes every command to
     it, and FORCE RLS means even the owner cannot bypass the policy.
     """
 
@@ -109,7 +109,7 @@ class RunNodeOutput(Base, TimestampMixin):
         ),
         # Portable subset of the metadata sentinel guard: the metadata row
         # always carries its flags payload. The STRICT shape CHECK (object
-        # with EXACTLY the two boolean keys) lives in migration 0190, because
+        # with EXACTLY the two boolean keys) lives in migration 0192, because
         # it needs jsonb_typeof (Postgres) / json_type (SQLite) — JSONB-only
         # SQL never belongs in the ORM model (repo parity rule).
         CheckConstraint(

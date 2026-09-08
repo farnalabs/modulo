@@ -1436,7 +1436,9 @@ describe('PipelineEditorView — edge properties panel', () => {
   })
 
   it('saves the edge config and reloads the graph', async () => {
-    const wrapper = await mountWithEdge(edgeFixture({ hitl_gate_config: { label: 'Review gate' } }))
+    const wrapper = await mountWithEdge(edgeFixture({
+      hitl_gate_config: { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }))
 
     const saveEdge = wrapper.find('[data-testid="pipeline-editor-save-edge"]')
     await saveEdge.trigger('click')
@@ -1451,8 +1453,38 @@ describe('PipelineEditorView — edge properties panel', () => {
     wrapper.unmount()
   })
 
-  it('shows an edge save failure inline', async () => {
+  it('blocks the edge save when the HITL gate has no description (FAR-613)', async () => {
     const wrapper = await mountWithEdge(edgeFixture({ hitl_gate_config: { label: 'Review gate' } }))
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
+
+    await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('HITL gate requires a description')
+    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('blocks the edge save when the HITL gate description is shorter than 20 chars (FAR-613)', async () => {
+    const wrapper = await mountWithEdge(edgeFixture({
+      hitl_gate_config: { label: 'Review gate', description: 'too short' },
+    }))
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
+
+    await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('HITL gate requires a description')
+    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('shows an edge save failure inline', async () => {
+    const wrapper = await mountWithEdge(edgeFixture({
+      hitl_gate_config: { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }))
     ;(api.PATCH as ReturnType<typeof vi.fn>).mockImplementationOnce(() => Promise.reject(new Error('edge_rejected')))
     await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
     await flushPromises()

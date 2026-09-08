@@ -1150,6 +1150,13 @@ HITL_PARK_SWEEP_STATS_KEY = "saq:cron:stats:hitl_park_sweep"
 HITL_PARK_SWEEP_STALE_SECONDS = 15 * 60
 HITL_PARK_SWEEP_STATS_TTL_SECONDS = HITL_PARK_SWEEP_STALE_SECONDS + 60
 
+# Cross-process stats key for the FAR-590 D4 Bundled Runner orphan reconciler
+# (same contract as the sibling sweeps: the 5-min cron persists its outcome
+# and /healthz/ready reads it to detect a silently dead sweep).
+RUNNER_WORKSPACE_RECONCILE_STATS_KEY = "saq:cron:stats:runner_workspace_reconcile"
+RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS = 15 * 60
+RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS = RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS + 60
+
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
     """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
@@ -1276,6 +1283,50 @@ async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
             "parked": result["parked"],
         },
         HITL_PARK_SWEEP_STATS_TTL_SECONDS,
+    )
+    return result
+
+
+async def runner_workspace_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-590 D4 Bundled Runner orphan reconciler (every 5 min).
+
+    Lists labelled workspace containers, cross-references ACTIVE runs, and
+    destroys orphans past the grace period (LOG-ONLY soak mode first —
+    settings ``RUNNER_RECONCILER_DESTROY_ENABLED`` defaults False).
+    Fail-safe: any cross-reference query error aborts the sweep, destroys
+    nothing, and persists the partial counts before re-raising so SAQ's
+    ``retries=2`` engages.
+
+    Liveness contract (sibling sweeps): the outcome (last_run_at + scanned +
+    orphans_destroyed) is persisted to the shared Redis key every tick.
+    """
+    from modulo.core.bundled_runner.runner_reconciler import (
+        ReconcilerSweepError,
+        reconcile_runner_workspaces,
+    )
+
+    try:
+        result = await reconcile_runner_workspaces(_get_async_engine())
+    except ReconcilerSweepError as exc:
+        await _persist_sweep_stats(
+            RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "scanned": exc.scanned,
+                "orphans_destroyed": exc.destroyed,
+                "error": "sweep_failed",
+            },
+            RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS,
+        )
+        raise
+    await _persist_sweep_stats(
+        RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "scanned": result["scanned"],
+            "orphans_destroyed": result["orphans_destroyed"],
+        },
+        RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS,
     )
     return result
 
@@ -1569,6 +1620,7 @@ def _system_functions() -> list[Any]:
         stale_run_recovery,
         slot_reconciliation,
         hitl_park_sweep,
+        runner_workspace_reconcile,
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
@@ -1709,6 +1761,19 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # idempotent regardless). Failures RAISE (retries=2 engages).
         CronJob(
             hitl_park_sweep,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # runner_workspace_reconcile: every 5 min (FAR-590 D4) — destroys
+        # (or, in soak mode, logs) labelled workspace orphans past the grace
+        # period; fail-safe, so any cross-reference failure persists the
+        # partial counts and re-raises (retries=2 engages).
+        CronJob(
+            runner_workspace_reconcile,
             cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=120,

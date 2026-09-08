@@ -767,8 +767,8 @@ def test_single_migration_head() -> None:
     # trigger_type CHECK) chains off 0183.
     chaining_off_0183 = [p for p in revisions if parents[p] == "0183_triggers_add_polling_ongoing_agent_signal_indexes"]
     assert [_basename(p) for p in chaining_off_0183] == ["0184_trigger_events_indexes_and_type_check.py"]
-    # 0185_error_events_indexes_jsonb (main's error_events index + JSONB sweep) chains
-    # off 0184_trigger_events_indexes_and_type_check.
+    # 0185_error_events_indexes_jsonb (error_events status/level partial indexes)
+    # chains off 0184.
     chaining_off_0184 = [p for p in revisions if parents[p] == "0184_trigger_events_indexes_and_type_check"]
     assert [_basename(p) for p in chaining_off_0184] == ["0185_error_events_indexes_jsonb.py"]
     # 0186_pipeline_check_constraints_deleted_by (improve-database FK/check sweep) chains
@@ -778,26 +778,34 @@ def test_single_migration_head() -> None:
     # 0187_pipeline_performance_indexes (improve-database index sweep) chains off 0186.
     chaining_off_0186 = [p for p in revisions if parents[p] == "0186_pipeline_check_constraints_deleted_by"]
     assert [_basename(p) for p in chaining_off_0186] == ["0187_pipeline_performance_indexes.py"]
-    # 0189_agent_runner_bindings (this PR, FAR-592 / D6; renumbered from 0188 to avoid the
-    # collision with main's 0188_pipeline_run_context_defaults_default, which chains off
-    # 0187 and is now the penultimate link) chains off 0188.
+    # 0188_pipeline_run_context_defaults_default (main's server_default sweep) chains off 0187.
     chaining_off_0187 = [p for p in revisions if parents[p] == "0187_pipeline_performance_indexes"]
     assert [_basename(p) for p in chaining_off_0187] == ["0188_pipeline_run_context_defaults_default.py"]
-    # 0189_agent_runner_bindings re-parents onto 0188_pipeline_run_context_defaults_default.
+    # 0189_agent_runner_bindings (main's D6 runner-bindings migration) chains off 0188 and is
+    # now the penultimate link.
     chaining_off_0188 = [p for p in revisions if parents[p] == "0188_pipeline_run_context_defaults_default"]
     assert [_basename(p) for p in chaining_off_0188] == ["0189_agent_runner_bindings.py"]
-    # 0190_run_node_outputs (FAR-583 per-node blob store) chains off
-    # 0189_agent_runner_bindings — 0175_dedupe_soft_delete_names is spliced
-    # mid-chain (0155 -> 0175 -> 0156).
+    # 0190_hitl_claim_context_json (FAR-613, already merged to main) chains off
+    # 0189_agent_runner_bindings (it renumbered past main's 0182 head to avoid a collision).
     chaining_off_0189 = [p for p in revisions if parents[p] == "0189_agent_runner_bindings"]
-    assert [_basename(p) for p in chaining_off_0189] == ["0190_run_node_outputs.py"]
-    # 0191_run_node_outputs_sweep_index (FAR-583 qa iteration 2, the sweep's
-    # partial index) chains off 0190 and is the single head.
-    chaining_off_0190 = [p for p in revisions if parents[p] == "0190_run_node_outputs"]
-    assert [_basename(p) for p in chaining_off_0190] == ["0191_run_node_outputs_sweep_index.py"]
-    # Nothing chains off 0191 -> it is the single head.
-    chaining_off_0191 = [p for p in revisions if parents[p] == "0191_run_node_outputs_sweep_index"]
-    assert chaining_off_0191 == []
+    assert [_basename(p) for p in chaining_off_0189] == ["0190_hitl_claim_context_json.py"]
+    # 0191_bundled_runner_seed_backfill (FAR-590 D4 Bundled Runner seed backfill,
+    # renumbered from 0190 to avoid the collision with main's 0190_hitl_claim_context_json and
+    # re-parented onto 0190_hitl_claim_context_json) chains off 0190.
+    chaining_off_0190 = [p for p in revisions if parents[p] == "0190_hitl_claim_context_json"]
+    assert [_basename(p) for p in chaining_off_0190] == ["0191_bundled_runner_seed_backfill.py"]
+    # 0192_run_node_outputs (FAR-583 per-node blob store) chains off
+    # 0191_bundled_runner_seed_backfill — 0175_dedupe_soft_delete_names is spliced
+    # mid-chain (0155 -> 0175 -> 0156).
+    chaining_off_0191 = [p for p in revisions if parents[p] == "0191_bundled_runner_seed_backfill"]
+    assert [_basename(p) for p in chaining_off_0191] == ["0192_run_node_outputs.py"]
+    # 0193_run_node_outputs_sweep_index (FAR-583 qa iteration 2, the sweep's
+    # partial index) chains off 0192 and is the single head.
+    chaining_off_0192 = [p for p in revisions if parents[p] == "0192_run_node_outputs"]
+    assert [_basename(p) for p in chaining_off_0192] == ["0193_run_node_outputs_sweep_index.py"]
+    # Nothing chains off 0193 -> it is the single head.
+    chaining_off_0193 = [p for p in revisions if parents[p] == "0193_run_node_outputs_sweep_index"]
+    assert chaining_off_0193 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

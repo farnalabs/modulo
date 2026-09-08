@@ -500,6 +500,7 @@ markers = [
     "connector_conformance: connector contract conformance suite — every ConnectorType must pass",
     "breakglass_gate: break-glass admin recovery deploy-gate regression (boot allow-list posture + connectivity smoke)",
     "real_ssrf_dns: opt out of the autouse SSRF DNS shim so the real fail-closed guard runs",
+    "docker: marks tests that require a live Docker engine (excluded from default CI lanes; run explicitly via -m docker)",
 ]
 
 [tool.coverage.run]
