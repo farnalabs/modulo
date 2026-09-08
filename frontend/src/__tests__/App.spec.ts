@@ -29,6 +29,7 @@ vi.mock('vue-router', () => ({
 }))
 
 vi.mock('@/lib/api/client', () => ({
+  api: { GET: vi.fn(async () => ({ data: undefined, error: undefined })) },
   getAccessToken: vi.fn(() => 'test-token'),
   setAccessToken: vi.fn(),
   setRefreshToken: vi.fn(),
