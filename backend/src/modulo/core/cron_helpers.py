@@ -56,7 +56,13 @@ from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.trigger_streak import (
     enforce_no_delivery_streaks,
 )
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, ONGOING_ACTIVE_STATUSES, Run
+from modulo.db.models.run import (
+    ACTIVE_RUN_STATUSES,
+    AWAITING_HUMAN_STATUS,
+    ONGOING_ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
+    Run,
+)
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
 
@@ -228,6 +234,19 @@ _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure
 _MID_GRAPH_WEDGE_MAX_AGE_MINUTES = max(SAQ_RUN_TIMEOUT // 60, 120) + 15
 _EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
 
+# ---------------------------------------------------------------------------
+# FAR-648 HITL-gate-expiry terminalizer. An ``awaiting_human`` run whose open
+# gate expired UNCLAIMED and UNDECIDED past the configurable grace (settings
+# ``hitl_gate_cancel_grace_seconds``, default 60 min) is a zombie: nobody ever
+# claimed the gate, so a decision will never arrive, yet the run keeps holding
+# an org-level concurrency slot (the org gate counts human-waiting runs,
+# FAR-604 D1). It is terminalized ``cancelled`` — NOT ``failed``: the human
+# simply never answered, and classify.py buckets ``cancelled`` as
+# ``operator_or_hitl_cancelled`` (excluded from delivery streaks).
+# ---------------------------------------------------------------------------
+_HITL_GATE_EXPIRED_ERROR_CODE = "hitl_gate_expired"
+_HITL_GATE_EXPIRED_ERROR_DETAIL = "HITL gate expired unanswered; run cancelled to release its concurrency slot."
+
 # Exported reconciliation stats for /healthz/ready (PR D — hitl-health-obs).
 # The ``age_terminalized`` / ``enqueue_failed_ttl_terminalized`` keys are
 # semantic aliases of the executor-superseded (age-bound wedge) and
@@ -246,6 +265,7 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "claim_cap_terminalized": 0,
     "mid_graph_wedge_terminalized": 0,
     "age_terminalized": 0,
+    "hitl_gate_expired_terminalized": 0,
     "dispatch_failed_terminalized": 0,
     "enqueue_failed_ttl_terminalized": 0,
     "enqueue_failed_redispatched": 0,
@@ -278,6 +298,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["claim_cap_terminalized"] = stats.get("claim_cap_terminalized", 0)
     _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
     _dispatcher_reconcile_stats["age_terminalized"] = stats.get("age_terminalized", 0)
+    _dispatcher_reconcile_stats["hitl_gate_expired_terminalized"] = stats.get("hitl_gate_expired_terminalized", 0)
     _dispatcher_reconcile_stats["dispatch_failed_terminalized"] = stats.get("dispatch_failed_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_ttl_terminalized"] = stats.get("enqueue_failed_ttl_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_redispatched"] = stats.get("enqueue_failed_redispatched", 0)
@@ -4565,6 +4586,81 @@ async def _terminalize_claim_cap_exhausted(
     return [run_id for (run_id,) in rows]
 
 
+async def _terminalize_expired_hitl_gates(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    grace_seconds: int,
+) -> list[uuid.UUID]:
+    """Terminalize ``awaiting_human`` runs whose HITL gate expired unanswered (FAR-648).
+
+    DB-only, org-scoped. A run parked at ``awaiting_human`` whose open gate is
+    UNCLAIMED (``hitl_claims.account_id IS NULL`` — the same predicate the
+    claim surfaces use) and UNDECIDED (``decision IS NULL``) past
+    ``expires_at + grace_seconds`` is a zombie: the F6a recovery never resumes
+    it (no committed decision — FAR-541 auto-approve guard) and nobody who
+    never claimed the gate will decide it, yet the run keeps holding an
+    org-level concurrency slot. Terminalizing ``cancelled`` with
+    ``hitl_gate_expired`` releases the slot (the terminalizer writes raw
+    UPDATEs and never runs ``finalize_cost``, so the caller records the
+    compensating daily fact — P6', FAR-162).
+
+    Multi-gate safety (mirrors ``run_admission._PARK_RUNS_SQL``): the run is
+    only terminalized when EVERY one of its undecided gates is
+    expired-unclaimed past the grace — a run with any CLAIMED or in-grace
+    undecided gate still has live human work attached and is left alone.
+
+    TOCTOU-safe by construction: there is no separate select — the single
+    guarded UPDATE re-validates the whole predicate (source status, the
+    cancel-wins guard, and the gate state) at execution time inside the org
+    transaction, so a gate claimed between the reconcile tick's read and this
+    write no longer matches and the row is skipped (rowcount 0).
+    ``cancellation_requested = false`` keeps CANCEL-WINS precedence intact:
+    a cancellation-requested run is owned by the cancel path.
+    ``expires_at``/``account_id``/``decision`` already exist on
+    ``hitl_claims`` — DB-only, no migration.
+    """
+    result = await session.execute(
+        text(
+            "UPDATE runs SET status='cancelled', error_code=:code, "
+            "error_detail=:detail, completed_at=now() "
+            "WHERE organisation_id=:oid AND status=:awaiting_status "
+            "AND cancellation_requested=false "
+            "AND EXISTS ("
+            "  SELECT 1 FROM hitl_claims hc "
+            "  WHERE hc.organisation_id = runs.organisation_id "
+            "  AND hc.run_id = runs.id "
+            "  AND hc.decision IS NULL "
+            "  AND hc.account_id IS NULL "
+            "  AND hc.expires_at < now() - (:grace_seconds * interval '1 second')) "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM hitl_claims hc2 "
+            "  WHERE hc2.organisation_id = runs.organisation_id "
+            "  AND hc2.run_id = runs.id "
+            "  AND hc2.decision IS NULL "
+            "  AND (hc2.account_id IS NOT NULL "
+            "       OR hc2.expires_at >= now() - (:grace_seconds * interval '1 second'))) "
+            "RETURNING id"
+        ),
+        {
+            "oid": str(org_id),
+            "code": _HITL_GATE_EXPIRED_ERROR_CODE,
+            "detail": _HITL_GATE_EXPIRED_ERROR_DETAIL,
+            "grace_seconds": grace_seconds,
+            "awaiting_status": AWAITING_HUMAN_STATUS,
+        },
+    )
+    rows = result.all()
+    for (run_id,) in rows:
+        _log.warning(
+            "dispatcher_reconcile: expired-HITL-gate zombie terminalized %s "
+            "(gate unclaimed + undecided past %ds grace)",
+            run_id,
+            grace_seconds,
+        )
+    return [run_id for (run_id,) in rows]
+
+
 async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
     """Terminal-fail an enqueue-failed run past the TTL backstop.
 
@@ -4595,6 +4691,11 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
     context, re-selects the Run ORM (a pre-write entity would record
     ``status='running'`` with a NULL ``completed_at``), and records the daily
     fact via the shared ``record_fact_for_terminal_failed_run`` wrapper.
+    Phantom-fact guard: the terminalized ids are collected BEFORE the org
+    transaction commits — if that transaction later rolled back, the run is
+    NOT terminal and the fact would be a lie. The re-selected run's status is
+    re-checked against ``TERMINAL_STATUSES`` and any non-terminal run is
+    skipped (logged), for every terminalizer, not just the FAR-648 one.
     None-guarded and fail-open: a facts-write failure is logged and swallowed —
     it must never fail the reconcile tick or roll back the already-committed
     terminal write.
@@ -4608,6 +4709,16 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
             run = await get_run(session, run_id)
             if run is None:
                 _log.warning("cron_helpers.terminalized_facts_run_missing run=%s", run_id)
+                return
+            if run.status not in TERMINAL_STATUSES:
+                # The org transaction holding the terminalizer UPDATE rolled
+                # back after the id was collected — the run is not terminal,
+                # so recording a compensating fact would be a phantom fact.
+                _log.warning(
+                    "cron_helpers.terminalized_facts_run_not_terminal run=%s status=%s",
+                    run_id,
+                    run.status,
+                )
                 return
             await record_fact_for_terminal_failed_run(session, run)
     except asyncio.CancelledError:
@@ -4733,6 +4844,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         selected INDEPENDENTLY of the reconcile predicates so a capped
         fresh-heartbeat run with checkpoints is still caught once its heartbeat
         goes stale, while a LIVE run on its final claim is never killed.
+      * FAR-648 gate-expiry: any ``awaiting_human`` row whose every undecided
+        gate is UNCLAIMED and past ``expires_at`` +
+        ``hitl_gate_cancel_grace_seconds`` (default 60m) is terminalized
+        ``cancelled`` (``hitl_gate_expired``) — a zombie holding an org-level
+        concurrency slot that no human will ever release.
 
     On match: verify the Redis read, RE-CHECK ``q.job()`` AFTER the decision
     and immediately before enqueue (skip if a job now exists — a concurrent
@@ -4747,10 +4863,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     only when their pipeline has free capacity.
 
     Every run terminalised this tick (``executor_superseded`` /
-    ``claim_cap_exhausted`` / ``dispatch_failed``) gets a compensating
-    ``run_daily_facts`` row (FAR-162, P6') written after the per-org
-    transactions commit — the terminalizers never run ``finalize_cost``, so
-    without this the failed runs would be invisible to analytics.
+    ``claim_cap_exhausted`` / ``dispatch_failed`` / ``hitl_gate_expired``) gets
+    a compensating ``run_daily_facts`` row (FAR-162, P6') written after the
+    per-org transactions commit — the terminalizers never run
+    ``finalize_cost``, so without this the terminalised runs would be
+    invisible to analytics.
     """
     from sqlalchemy import or_
 
@@ -4762,6 +4879,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
+    hitl_gate_cancel_grace = int(settings.hitl_gate_cancel_grace_seconds)
     factory = _open_system_factory()
     summary = _dispatcher_summary()
     # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
@@ -4822,13 +4940,15 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                 enqueue_failed_redispatched,
                 summary,
                 terminalized_run_ids,
+                hitl_gate_cancel_grace,
             )
         # FAR-162 (P6') — record a daily fact for every run terminalised this
-        # tick (executor_superseded / claim_cap_exhausted / dispatch_failed):
-        # the terminalizers write raw UPDATEs and never run finalize_cost, so
-        # without this the failed runs would be invisible to the analytics
-        # failure/stall dimensions. All per-org terminalizer transactions have
-        # committed by now; each facts write opens its own RLS-scoped session.
+        # tick (executor_superseded / claim_cap_exhausted / dispatch_failed /
+        # hitl_gate_expired): the terminalizers write raw UPDATEs and never
+        # run finalize_cost, so without this the terminalised runs would be
+        # invisible to the analytics failure/stall dimensions. All per-org
+        # terminalizer transactions have committed by now; each facts write
+        # opens its own RLS-scoped session.
         for run_id, run_org_id in terminalized_run_ids:
             await _record_fact_for_terminalized_run(run_id, run_org_id)
         await _run_reconcile_sweeps(redis_client, summary)
@@ -4857,6 +4977,7 @@ def _dispatcher_summary() -> dict[str, Any]:
         "claim_cap_terminalized": 0,
         "mid_graph_wedge_terminalized": 0,
         "age_terminalized": 0,
+        "hitl_gate_expired_terminalized": 0,
         "dispatch_failed_terminalized": 0,
         "enqueue_failed_ttl_terminalized": 0,
         "enqueue_failed_redispatched": 0,
@@ -4887,6 +5008,7 @@ async def _reconcile_org(
     enqueue_failed_redispatched: int,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    hitl_gate_cancel_grace_seconds: int,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop)."""
     from modulo.db.models.pipeline import Pipeline
@@ -4912,6 +5034,16 @@ async def _reconcile_org(
             )
             summary["claim_cap_terminalized"] += len(capped)
             terminalized_run_ids.extend((run_id, org_id) for run_id in capped)
+            # FAR-648: expired-HITL-gate terminalizer — an awaiting_human run
+            # whose every undecided gate is unclaimed and past
+            # expires_at + grace is a zombie holding an org slot; terminalize
+            # it cancelled BEFORE the row select so it is excluded from the
+            # re-dispatch scan.
+            expired_gates = await _terminalize_expired_hitl_gates(
+                session, org_id, grace_seconds=hitl_gate_cancel_grace_seconds
+            )
+            summary["hitl_gate_expired_terminalized"] += len(expired_gates)
+            terminalized_run_ids.extend((run_id, org_id) for run_id in expired_gates)
             rows = (
                 await session.execute(
                     select(
@@ -5056,6 +5188,8 @@ async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
             record_stall_reason("executor_superseded", summary["mid_graph_wedge_terminalized"])
         if summary["dispatch_failed_terminalized"]:
             record_stall_reason("dispatch_failed", summary["dispatch_failed_terminalized"])
+        if summary["hitl_gate_expired_terminalized"]:
+            record_stall_reason("hitl_gate_expired", summary["hitl_gate_expired_terminalized"])
     except asyncio.CancelledError:
         raise
     except Exception:

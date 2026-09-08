@@ -1594,7 +1594,10 @@ async def test_fail_nodeless_run_noop_when_run_missing_or_not_running():
 
 async def test_record_fact_for_terminalized_run_success():
     session = _MockSession()
-    run = SimpleNamespace(id=uuid.uuid4())
+    # FAR-648 phantom-fact guard: the recorder only writes for a TERMINAL run,
+    # so the re-selected mock must carry one (cancelled = the terminalizer's
+    # own write).
+    run = SimpleNamespace(id=uuid.uuid4(), status="cancelled")
     fact = AsyncMock()
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
@@ -1634,7 +1637,11 @@ async def test_record_fact_for_terminalized_run_swallows_failure(caplog):
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=SimpleNamespace(id=uuid.uuid4())),
+        patch(
+            "modulo.db.crud.run.get_run",
+            new_callable=AsyncMock,
+            return_value=SimpleNamespace(id=uuid.uuid4(), status="cancelled"),
+        ),
         patch(
             "modulo.core.analytics.record_fact_for_terminal_failed_run",
             new_callable=AsyncMock,
@@ -1648,7 +1655,12 @@ async def test_record_fact_for_terminalized_run_swallows_failure(caplog):
 
 async def test_reconcile_org_read_failure_returns(caplog):
     session = _MockSession()
-    summary: dict[str, Any] = {"mid_graph_wedge_terminalized": 0, "claim_cap_terminalized": 0, "scanned": 0}
+    summary: dict[str, Any] = {
+        "mid_graph_wedge_terminalized": 0,
+        "claim_cap_terminalized": 0,
+        "hitl_gate_expired_terminalized": 0,
+        "scanned": 0,
+    }
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, side_effect=RuntimeError("db down")),
@@ -1668,6 +1680,7 @@ async def test_reconcile_org_read_failure_returns(caplog):
             0,
             summary,
             [],
+            3600,
         )
     assert got == 0
     assert any("read failed" in m for m in caplog.messages)
@@ -1675,11 +1688,17 @@ async def test_reconcile_org_read_failure_returns(caplog):
 
 async def test_reconcile_org_processes_rows():
     session = _MockSession([_mock_result(all=[]), _mock_result(all=[])])
-    summary: dict[str, Any] = {"mid_graph_wedge_terminalized": 0, "claim_cap_terminalized": 0, "scanned": 0}
+    summary: dict[str, Any] = {
+        "mid_graph_wedge_terminalized": 0,
+        "claim_cap_terminalized": 0,
+        "hitl_gate_expired_terminalized": 0,
+        "scanned": 0,
+    }
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, return_value=[]),
         patch.object(ch, "_terminalize_claim_cap_exhausted", new_callable=AsyncMock, return_value=[uuid.uuid4()]),
+        patch.object(ch, "_terminalize_expired_hitl_gates", new_callable=AsyncMock, return_value=[]),
         patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, return_value=0) as one_row,
     ):
         got = await ch._reconcile_org(
@@ -1696,6 +1715,7 @@ async def test_reconcile_org_processes_rows():
             0,
             summary,
             [],
+            3600,
         )
     assert got == 0
     assert summary["claim_cap_terminalized"] == 1
@@ -2158,14 +2178,32 @@ async def test_committed_decision_resume_data_unstamped_payload_gets_row_gate():
 
 async def test_reconcile_org_reraises_cancellation():
     session = _MockSession()
-    summary: dict[str, Any] = {"mid_graph_wedge_terminalized": 0, "claim_cap_terminalized": 0, "scanned": 0}
+    summary: dict[str, Any] = {
+        "mid_graph_wedge_terminalized": 0,
+        "claim_cap_terminalized": 0,
+        "hitl_gate_expired_terminalized": 0,
+        "scanned": 0,
+    }
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
         await ch._reconcile_org(
-            _factory_for(session), MagicMock(), _redis(), ORG, ch.text("1 = 1"), 20, 60, 3, 600, 120, 0, summary, []
+            _factory_for(session),
+            MagicMock(),
+            _redis(),
+            ORG,
+            ch.text("1 = 1"),
+            20,
+            60,
+            3,
+            600,
+            120,
+            0,
+            summary,
+            [],
+            3600,
         )
 
 
