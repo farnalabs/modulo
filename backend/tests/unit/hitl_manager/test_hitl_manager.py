@@ -398,6 +398,129 @@ async def test_claim_gate_not_found_raises():
         await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
 
 
+def _session_race(
+    *,
+    pre_check_gate: HitlClaim | None,
+    race_gate: HitlClaim | None,
+    pre_check_run_status: str = "awaiting_human",
+    race_run_status: str = "awaiting_human",
+    update_rows: int = 0,
+) -> AsyncMock:
+    """Session mock for claim()'s race-window re-read (FAR-645).
+
+    Simulates a claim where the atomic UPDATE matched 0 rows (``update_rows=0``)
+    and the manager re-reads the run and the gate to name the real cause. The
+    pre-check run-status SELECT and the race-window run SELECT can differ, so
+    the pre-check can pass on an ``awaiting_human`` run while the re-read sees a
+    terminal run that the EXISTS predicate refused to claim.
+    """
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = uuid.uuid4() if update_rows > 0 else None
+
+    pre_check_result = MagicMock()
+    pre_check_result.scalar_one_or_none.return_value = pre_check_gate
+
+    pre_check_run_result = MagicMock()
+    pre_check_run_result.scalar_one_or_none.return_value = _run_mock(pre_check_run_status)
+
+    race_run_result = MagicMock()
+    race_run_result.scalar_one_or_none.return_value = _run_mock(race_run_status)
+
+    race_gate_result = MagicMock()
+    race_gate_result.scalar_one_or_none.return_value = race_gate
+
+    runs_calls = 0
+    gate_calls = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal runs_calls, gate_calls
+        if _is_runs_select(stmt):
+            runs_calls += 1
+            return pre_check_run_result if runs_calls == 1 else race_run_result
+        gate_calls += 1
+        if gate_calls == 1:
+            return pre_check_result
+        if gate_calls == 2:
+            return update_result
+        return race_gate_result
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=race_gate or pre_check_gate)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    return session
+
+
+async def test_claim_race_run_went_terminal_raises_run_not_awaiting():
+    """FAR-645: UPDATE matched 0 rows because the run went terminal in the
+    window; the re-read must distinguish this from a generic already-claimed and
+    raise RunNotAwaitingError naming the terminal status."""
+    pre_check = _gate(account_id=None)
+    session = _session_race(
+        pre_check_gate=pre_check,
+        race_gate=pre_check,
+        pre_check_run_status="awaiting_human",
+        race_run_status="completed",
+    )
+    mgr = HITLManager()
+    with pytest.raises(RunNotAwaitingError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_race_gate_decided_raises_gate_already_decided():
+    """UPDATE matched 0 rows because the gate was DECIDED in the window; the
+    re-read must raise GateAlreadyDecidedError (not AlreadyClaimedError)."""
+    pre_check = _gate(account_id=None)
+    decided_gate = _gate(account_id=None, decision="approved")
+    session = _session_race(
+        pre_check_gate=pre_check,
+        race_gate=decided_gate,
+        pre_check_run_status="awaiting_human",
+        race_run_status="awaiting_human",
+    )
+    mgr = HITLManager()
+    with pytest.raises(GateAlreadyDecidedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_race_another_account_claimed_raises_already_claimed():
+    """UPDATE matched 0 rows because another operator claimed the gate; the
+    re-read must raise AlreadyClaimedError (the pre-check passed because at
+    pre-check time the gate was still unclaimed)."""
+    pre_check = _gate(account_id=None)
+    other_claimed = _gate(account_id=uuid.uuid4())
+    session = _session_race(
+        pre_check_gate=pre_check,
+        race_gate=other_claimed,
+        pre_check_run_status="awaiting_human",
+        race_run_status="awaiting_human",
+    )
+    mgr = HITLManager()
+    with pytest.raises(AlreadyClaimedError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
+async def test_claim_race_gate_vanished_raises_gate_not_found():
+    """UPDATE matched 0 rows because the gate row disappeared in the window;
+    the re-read must raise GateNotFoundError."""
+    pre_check = _gate(account_id=None)
+    session = _session_race(
+        pre_check_gate=pre_check,
+        race_gate=None,
+        pre_check_run_status="awaiting_human",
+        race_run_status="awaiting_human",
+    )
+    mgr = HITLManager()
+    with pytest.raises(GateNotFoundError):
+        await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+
 async def test_claim_custom_expiry_minutes_is_applied():
     """claim() with custom expiry_minutes binds a matching expires_at to the UPDATE."""
     pre_check = _gate(account_id=None)
