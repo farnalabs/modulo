@@ -169,63 +169,68 @@ class DockerRuntimeProvider(RuntimeProvider):
     # RuntimeProvider interface
     # ------------------------------------------------------------------
 
-    async def create_workspace(self, spec: WorkspaceSpec) -> str:
-        """Create a hardened Docker container as the workspace.
-
-        The container runs ``sleep infinity`` so it stays alive for
-        subsequent ``exec_command`` calls. Auto-removal is enabled.
-
-        Hardening defaults (FAR-590 D4 / ADR 029 — applied at provision):
-        non-root user (runner uid 1001 on modulo-runner images), read-only
-        rootfs + tmpfs workdir/tmp with adequate sizing, dropped caps +
-        no-new-privileges, 1.0 CPU / 1 GiB resources, dedicated workspace
-        bridge network (``none`` opt-in per profile), structured labels from
-        ``spec.workspace_metadata`` + the machine deployment-identity label.
-        """
-        client = await self._get_client()
-        image = spec.image_ref.strip() if spec.image_ref else self._default_image
-        ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
-        raw_memory = spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB)
+    @staticmethod
+    def _resolve_memory_mb(raw_memory: Any) -> int:
+        """Parse and clamp the spec's ``memory_mb`` limit (D4: 4 MiB floor, 128 GiB ceiling)."""
         try:
             memory_mb = int(raw_memory)
         except (ValueError, TypeError):
             memory_mb = _DEFAULT_MEMORY_MB
-        memory_mb = max(4, min(memory_mb, 131072))
-        container_name = f"{_WORKSPACE_PREFIX}{ref}"
+        return max(4, min(memory_mb, 131072))
 
-        # spec.labels maps to container Env (env-var injection). Docker is the
-        # ONLY provider consuming spec.labels (FAR-595 contract): E2B/Local
-        # ignore it — clone inputs ride the first-class spec.repo_url /
-        # spec.repo_ref fields, which this provider does not act on (the
-        # bundled runner image handles code sync).
+    @staticmethod
+    def _build_container_env(labels: dict[str, str] | None) -> list[str]:
+        """Map ``spec.labels`` to container Env entries (env-var injection).
+
+        Docker is the ONLY provider consuming spec.labels (FAR-595 contract):
+        E2B/Local ignore it — clone inputs ride the first-class
+        spec.repo_url / spec.repo_ref fields, which this provider does not
+        act on (the bundled runner image handles code sync).
+        """
         env = []
-        for k, v in (spec.labels or {}).items():
+        for k, v in (labels or {}).items():
             entry = f"{k}={v}"
             if any(c in entry for c in ("\n", "\r", "\0")):
                 _log.warning("Skipping env entry with control characters: %s", k)
             else:
                 env.append(entry)
+        return env
 
-        # Provider-neutral workspace metadata maps to container Labels
-        # (deployment-identity / org / run correlation, ADR 029). This is
-        # separate from ``spec.labels`` (Env injection) and from
-        # ``repo_url``/``repo_ref`` (clone semantics, unused here).
+    def _build_workspace_labels(self, spec: WorkspaceSpec) -> dict[str, str]:
+        """Map provider-neutral workspace metadata to container Labels.
+
+        (deployment-identity / org / run correlation, ADR 029). This is
+        separate from ``spec.labels`` (Env injection) and from
+        ``repo_url``/``repo_ref`` (clone semantics, unused here).
+        """
         workspace_labels = dict(spec.workspace_metadata or {})
         # Deployment-identity label: machine-scoped reconciler filters ride
         # on it (two deployments sharing one engine never destroy each
         # other's workspaces). The creation marker drives reconciler ages.
         workspace_labels.setdefault(_DEPLOYMENT_IDENTITY_LABEL, self._deployment_identity())
         workspace_labels.setdefault("modulo.created_at", str(int(time.time())))
+        return workspace_labels
 
-        # Network policy: `none` opt-in per profile; the default (outbound
-        # permitted — the tier's purpose) attaches the dedicated workspace
-        # bridge, never the compose/backend network that hosts the
-        # Docker endpoint.
+    def _resolve_network_mode(self, spec: WorkspaceSpec) -> str:
+        """Resolve the container network mode from the spec's egress policy.
+
+        ``none`` is opt-in per profile; the default (outbound permitted —
+        the tier's purpose) attaches the dedicated workspace bridge, never
+        the compose/backend network that hosts the Docker endpoint.
+        """
         if (spec.egress_policy or "").strip().lower() == "none":
-            network_mode = "none"
-        else:
-            network_mode = spec.workspace_network or self._workspace_network
+            return "none"
+        return spec.workspace_network or self._workspace_network
 
+    @staticmethod
+    def _build_container_config(
+        image: str,
+        memory_mb: int,
+        env: list[str],
+        network_mode: str,
+        workspace_labels: dict[str, str],
+    ) -> dict[str, Any]:
+        """Build the container create config (D4 hardening defaults, ADR 029)."""
         host_config: dict[str, Any] = {
             "AutoRemove": True,
             "Memory": memory_mb * 1024 * 1024,
@@ -252,28 +257,67 @@ class DockerRuntimeProvider(RuntimeProvider):
         # images (generic base images carry no runner user).
         if any(marker in image.lower() for marker in _IMAGES_WITH_RUNNER_USER):
             config["User"] = _RUNNER_USER
+        return config
+
+    async def _pull_image_best_effort(self, client: aiodocker.Docker, image: str) -> None:
+        """Best-effort provision pull: ensure the image exists before create.
+
+        POST /images/create is in the allowlist; a pull failure surfaces on
+        container create for unreachable refs.
+        """
+        try:
+            pull = client.images.pull(image)
+            if asyncio.iscoroutine(pull):
+                await pull
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info("workspace image pull skipped/failed (best-effort): %s", image, exc_info=True)
+
+    async def _create_and_start_container(
+        self,
+        client: aiodocker.Docker,
+        config: dict[str, Any],
+        container_name: str,
+    ) -> Any:
+        """Create the workspace container and start it (bounded waits)."""
+        container = await asyncio.wait_for(
+            client.containers.create(
+                config=config,
+                name=container_name,
+            ),
+            timeout=self._create_timeout,
+        )
+        await asyncio.wait_for(container.start(), timeout=self._start_timeout)
+        return container
+
+    async def create_workspace(self, spec: WorkspaceSpec) -> str:
+        """Create a hardened Docker container as the workspace.
+
+        The container runs ``sleep infinity`` so it stays alive for
+        subsequent ``exec_command`` calls. Auto-removal is enabled.
+
+        Hardening defaults (FAR-590 D4 / ADR 029 — applied at provision):
+        non-root user (runner uid 1001 on modulo-runner images), read-only
+        rootfs + tmpfs workdir/tmp with adequate sizing, dropped caps +
+        no-new-privileges, 1.0 CPU / 1 GiB resources, dedicated workspace
+        bridge network (``none`` opt-in per profile), structured labels from
+        ``spec.workspace_metadata`` + the machine deployment-identity label.
+        """
+        client = await self._get_client()
+        image = spec.image_ref.strip() if spec.image_ref else self._default_image
+        ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
+        memory_mb = self._resolve_memory_mb(spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB))
+        container_name = f"{_WORKSPACE_PREFIX}{ref}"
+
+        env = self._build_container_env(spec.labels)
+        workspace_labels = self._build_workspace_labels(spec)
+        network_mode = self._resolve_network_mode(spec)
+        config = self._build_container_config(image, memory_mb, env, network_mode, workspace_labels)
 
         try:
-            # Provision pulls: ensure the image exists before create
-            # (POST /images/create is in the allowlist; best-effort — a pull
-            # failure surfaces on container create for unreachable refs).
-            try:
-                pull = client.images.pull(image)
-                if asyncio.iscoroutine(pull):
-                    await pull
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.info("workspace image pull skipped/failed (best-effort): %s", image, exc_info=True)
-
-            container = await asyncio.wait_for(
-                client.containers.create(
-                    config=config,
-                    name=container_name,
-                ),
-                timeout=self._create_timeout,
-            )
-            await asyncio.wait_for(container.start(), timeout=self._start_timeout)
+            await self._pull_image_best_effort(client, image)
+            container = await self._create_and_start_container(client, config, container_name)
         except asyncio.CancelledError:
             raise
         except OSError as exc:
