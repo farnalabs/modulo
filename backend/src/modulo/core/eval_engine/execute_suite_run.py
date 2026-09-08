@@ -389,6 +389,105 @@ async def _claim_case_cost(session: AsyncSession, run: SuiteRun, cost: Decimal, 
         raise SuiteRunSpendExceededError(f"suite cumulative cost ceiling exceeded (claimed: {new_total})")
 
 
+def _resolve_suite_ceiling(run: SuiteRun, suite_ceiling: Decimal | None) -> Decimal | None:
+    """Resolve the per-suite cumulative cost ceiling.
+
+    An explicit *suite_ceiling* argument wins; otherwise the ceiling is read
+    from ``run.extra['suite_ceiling']`` (string → ``Decimal`` directly, any
+    other non-None value via ``str``).
+    """
+    if suite_ceiling is not None or not run.extra:
+        return suite_ceiling
+    raw = run.extra.get("suite_ceiling")
+    if isinstance(raw, str):
+        return Decimal(raw)
+    if raw is not None:
+        return Decimal(str(raw))
+    return None
+
+
+async def _load_suite_defs_and_cases(
+    session: AsyncSession, run: SuiteRun
+) -> tuple[list[EvalDefinitionRow], list[EvalCase]]:
+    """Load the suite's eval definitions and active cases, raising the typed errors when either is empty."""
+    definitions = await load_suite_definitions(session, run.organisation_id, run.suite_id)
+    if not definitions:
+        raise SuiteRunExecutionError(f"suite {run.suite_id} has no active eval definitions")
+
+    cases = await load_active_cases(session, run.organisation_id, run.dataset_id)
+    if not cases:
+        raise SuiteRunEmptyDatasetError(f"dataset {run.dataset_id} has no active cases")
+    return definitions, cases
+
+
+async def _run_suite_cases(
+    session: AsyncSession,
+    run: SuiteRun,
+    *,
+    cases: list[EvalCase],
+    suite_defs: list[EvalDefinition],
+    engine: EvalEngine,
+    llm_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+    eval_definition_version: int,
+    claims_llm: bool,
+    suite_ceiling: Decimal | None,
+    cost_per_llm_case: Decimal,
+) -> tuple[int, int, int]:
+    """Score every active case against the suite's definitions.
+
+    Returns ``(passed, failed, excluded)``. Each judge-callable case first
+    claims its cost against the cumulative ledger; a non-LLM run initialises
+    the ledger to zero so the mirror read below never sees ``None``.
+    """
+    passed = 0
+    failed = 0
+    excluded = 0
+    for case in cases:
+        if claims_llm:
+            await _claim_case_cost(session, run, cost_per_llm_case, suite_ceiling)
+        elif run.claimed_cost is None:
+            run.claimed_cost = Decimal(0)
+
+        results, errored = _case_results(
+            run,
+            case,
+            suite_defs,
+            engine,
+            llm_judge_callable,
+            scenario_inputs,
+            eval_definition_version=eval_definition_version,
+        )
+        for result in results:
+            session.add(result)
+
+        # ``all(passed_flags)`` is only reached when ``passed_flags`` is
+        # non-empty (guarded by ``bool``) — a case that resolved to zero
+        # results is never a silent pass. The flags are collected first so
+        # the ``all`` is evaluated on a concrete list, never an empty one.
+        passed_flags = [r.passed for r in results]
+        case_passed = errored == 0 and len(results) == len(suite_defs) and bool(passed_flags) and all(passed_flags)
+        if errored:
+            excluded += 1
+        elif case_passed:
+            passed += 1
+        else:
+            failed += 1
+    return passed, failed, excluded
+
+
+def _suite_run_stats(run: SuiteRun, target: SuiteRunState) -> dict[str, Any]:
+    """Build the runner's return-stats dict for a terminalised run."""
+    return {
+        "state": target.value,
+        "total_cases": run.total_cases,
+        "passed_cases": run.passed_cases,
+        "failed_cases": run.failed_cases,
+        "excluded_case_count": run.excluded_case_count,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+
 async def execute_suite_run(
     session: AsyncSession,
     run: SuiteRun,
@@ -411,12 +510,7 @@ async def execute_suite_run(
 
     Returns a stats dict. The caller owns the transaction.
     """
-    if suite_ceiling is None and run.extra:
-        raw = run.extra.get("suite_ceiling")
-        if isinstance(raw, str):
-            suite_ceiling = Decimal(raw)
-        elif raw is not None:
-            suite_ceiling = Decimal(str(raw))
+    suite_ceiling = _resolve_suite_ceiling(run, suite_ceiling)
     try:
         # The SAQ ``execute_suite_run`` job hands a run straight from
         # ``build_suite_run`` (via ``fire_suite_run_trigger``) — a ``pending``
@@ -429,14 +523,7 @@ async def execute_suite_run(
             await _suite_run_transition(session, run, SuiteRunState.RUNNING)
             await session.flush()
 
-        definitions = await load_suite_definitions(session, run.organisation_id, run.suite_id)
-        if not definitions:
-            raise SuiteRunExecutionError(f"suite {run.suite_id} has no active eval definitions")
-
-        cases = await load_active_cases(session, run.organisation_id, run.dataset_id)
-        if not cases:
-            raise SuiteRunEmptyDatasetError(f"dataset {run.dataset_id} has no active cases")
-
+        definitions, cases = await _load_suite_defs_and_cases(session, run)
         suite_defs = [_definition_dto(r, run.organisation_id) for r in definitions]
         engine = EvalEngine()
         if _has_llm_judge(suite_defs) and llm_judge_callable is None:
@@ -445,44 +532,22 @@ async def execute_suite_run(
                 "(wire a ModelBackendHub-backed callable — deterministic evals need none)"
             )
 
-        total_cases = len(cases)
-        passed = 0
-        failed = 0
-        excluded = 0
         claims_llm = _has_llm_judge(suite_defs)
+        passed, failed, excluded = await _run_suite_cases(
+            session,
+            run,
+            cases=cases,
+            suite_defs=suite_defs,
+            engine=engine,
+            llm_judge_callable=llm_judge_callable,
+            scenario_inputs=scenario_inputs,
+            eval_definition_version=eval_definition_version,
+            claims_llm=claims_llm,
+            suite_ceiling=suite_ceiling,
+            cost_per_llm_case=cost_per_llm_case,
+        )
 
-        for case in cases:
-            if claims_llm:
-                await _claim_case_cost(session, run, cost_per_llm_case, suite_ceiling)
-            elif run.claimed_cost is None:
-                run.claimed_cost = Decimal(0)
-
-            results, errored = _case_results(
-                run,
-                case,
-                suite_defs,
-                engine,
-                llm_judge_callable,
-                scenario_inputs,
-                eval_definition_version=eval_definition_version,
-            )
-            for result in results:
-                session.add(result)
-
-            # ``all(passed_flags)`` is only reached when ``passed_flags`` is
-            # non-empty (guarded by ``bool``) — a case that resolved to zero
-            # results is never a silent pass. The flags are collected first so
-            # the ``all`` is evaluated on a concrete list, never an empty one.
-            passed_flags = [r.passed for r in results]
-            case_passed = errored == 0 and len(results) == len(suite_defs) and bool(passed_flags) and all(passed_flags)
-            if errored:
-                excluded += 1
-            elif case_passed:
-                passed += 1
-            else:
-                failed += 1
-
-        run.total_cases = total_cases
+        run.total_cases = len(cases)
         run.passed_cases = passed
         run.failed_cases = failed
         run.excluded_case_count = excluded
@@ -507,14 +572,7 @@ async def execute_suite_run(
         if target == SuiteRunState.COMPLETED:
             await record_completion(session, run, entity_thresholds or {})
 
-        return {
-            "state": target.value,
-            "total_cases": run.total_cases,
-            "passed_cases": run.passed_cases,
-            "failed_cases": run.failed_cases,
-            "excluded_case_count": run.excluded_case_count,
-            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-        }
+        return _suite_run_stats(run, target)
     except SuiteRunExecutionError as exc:
         await _fail_run(session, run, str(exc))
         raise
