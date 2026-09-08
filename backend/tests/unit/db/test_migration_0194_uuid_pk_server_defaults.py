@@ -1,4 +1,4 @@
-"""Structural tests for migration 0192_uuid_pk_server_defaults (FAR-718).
+"""Structural tests for migration 0194_uuid_pk_server_defaults (FAR-718).
 
 Source-only (no database): the migration's statement list must be FROZEN —
 enumerated from the SQLAlchemy metadata at authoring time and committed as
@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import UUID as POSTGRES_UUID
 from modulo.db.models import Base
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0192_uuid_pk_server_defaults"
+_MIGRATION_NAME = "0194_uuid_pk_server_defaults"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 _EXPECTED_COUNT = 82
@@ -66,7 +66,7 @@ def _metadata_uuid_pk_pairs() -> set[tuple[str, str]]:
 def test_metadata_pins_chain() -> None:
     module = _load_migration()
     assert module.revision == _MIGRATION_NAME
-    assert module.down_revision == "0191_bundled_runner_seed_backfill"
+    assert module.down_revision == "0193_run_node_outputs_sweep_index"
     assert module.branch_labels is None
     assert module.depends_on is None
 

@@ -2901,6 +2901,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/hitl/gates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Org Gates
+         * @description Paginated org-wide gate listing including DECIDED gates (FAR-692).
+         *
+         *     The review page's status filter was a no-op for approved/rejected because
+         *     ``GET /api/v1/hitl/pending`` only ever returns undecided gates. This
+         *     endpoint lists gates in EVERY state:
+         *
+         *     - ``undecided`` (DEFAULT): ``decision IS NULL`` — pending AND claimed.
+         *     - ``pending``: undecided and unclaimed.
+         *     - ``claimed``: undecided and claimed.
+         *     - ``approved`` / ``rejected``: the decided history.
+         *     - ``all``: everything.
+         *
+         *     The data-rot fence (FAR-612/FAR-604) applies ONLY to the pending-work
+         *     statuses — ``undecided``/``pending``/``claimed`` join ``runs`` and keep
+         *     only gates whose run is still in ``HITL_ACTIONABLE_RUN_STATUSES``
+         *     (``awaiting_human``/``claimed``/``hitl_parked``), exactly like
+         *     ``HITLManager.list_pending``: an undecided gate on any other run status
+         *     is orphaned data rot (e.g. rows left by the since-fixed auto-approve
+         *     bug), not pending work. History views (``approved``/``rejected``) and
+         *     the ``all`` audit view are deliberately UNFENCED: a decided gate's run
+         *     has legitimately moved past ``awaiting_human``, and the audit view must
+         *     surface data-rot rows.
+         *
+         *     ``/api/v1/hitl/pending`` is deliberately UNCHANGED (API stability — other
+         *     consumers depend on its undecided-only shape). The response envelope
+         *     mirrors the repo's standard list convention (items/total/page/page_size,
+         *     as the runs list uses) with the existing ``GateResponse`` items.
+         */
+        get: operations["list_org_gates_api_v1_hitl_gates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/schemas": {
         parameters: {
             query?: never;
@@ -11203,6 +11249,20 @@ export interface components {
             agent_count: number;
             /** Edge Count */
             edge_count: number;
+        };
+        /**
+         * GateListResponse
+         * @description Paginated org gate listing (FAR-692) — the repo's standard list envelope.
+         */
+        GateListResponse: {
+            /** Items */
+            items: components["schemas"]["GateResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
         };
         /** GateResponse */
         GateResponse: {
@@ -24317,6 +24377,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PendingGatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_org_gates_api_v1_hitl_gates_get: {
+        parameters: {
+            query?: {
+                status?: "undecided" | "pending" | "claimed" | "approved" | "rejected" | "all";
+                page?: number;
+                page_size?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateListResponse"];
                 };
             };
             /** @description Validation Error */

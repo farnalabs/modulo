@@ -109,16 +109,23 @@ def upgrade() -> None:
 
     # 1. Per-org backfill: orgs WITHOUT a live runner_docker profile get one
     #    seeded from the shipped template (idempotent under re-runs).
+    #    `id` must be supplied explicitly: the legacy-baseline
+    #    environment_profiles table has NO server default on its uuid PK, so a
+    #    raw-SQL INSERT without id raises NotNullViolation on real deployments
+    #    (the ORM always supplies ids client-side; only raw SQL is affected).
+    #    gen_random_uuid() is a PG13+ built-in (no extension needed; repo
+    #    pattern: migration 0108).
     bind.execute(
         _sql(
             """
             INSERT INTO environment_profiles (
-                organisation_id, account_id, name, description, provider_type,
+                id, organisation_id, account_id, name, description, provider_type,
                 image_ref, capabilities_json, config_json, network_policy,
                 initialisation_strategy, secret_refs_json, persistence_policy,
                 status, visibility, created_at, updated_at
             )
-            SELECT o.id,
+            SELECT gen_random_uuid(),
+                   o.id,
                    COALESCE(
                        (SELECT om.account_id FROM org_memberships om
                         WHERE om.organisation_id = o.id AND om.role = 'admin'

@@ -1,7 +1,7 @@
 """Server-side gen_random_uuid() defaults on every uuid primary key (FAR-718).
 
-Revision ID: 0192_uuid_pk_server_defaults
-Revises: 0191_bundled_runner_seed_backfill
+Revision ID: 0194_uuid_pk_server_defaults
+Revises: 0193_run_node_outputs_sweep_index
 Create Date: 2026-09-08
 
 Purpose and outage context
@@ -30,7 +30,7 @@ composite-PK columns that are also foreign keys (``run_evidence.run_id`` /
 ``run_evidence.node_id``), and ``alembic_version``.
 
 Downgrade mirrors the list exactly, dropping every default (restoring the
-pre-0192 state where raw inserts without id fail again).
+pre-0194 state where raw inserts without id fail again).
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ from __future__ import annotations
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0192_uuid_pk_server_defaults"
-down_revision: str | None = "0191_bundled_runner_seed_backfill"
+revision: str = "0194_uuid_pk_server_defaults"
+down_revision: str | None = "0193_run_node_outputs_sweep_index"
 branch_labels: str | None = None
 depends_on: str | None = None
 

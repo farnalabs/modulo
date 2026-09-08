@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.eval_engine import EvalEngine
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.run import create_run, get_run
+from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
@@ -1276,7 +1277,14 @@ class FeedbackManager:
             )
 
         engine = eval_engine or EvalEngine()
-        raw_output = correction_run.outputs_json
+        # FAR-583 read-switch: the blobs reassemble from run_node_outputs (with
+        # the legacy fallback) in the SAME transaction that loaded the run.
+        blobs = await read_run_blobs_with_fallback(
+            self._session,
+            run_id=record.correction_run_id,
+            organisation_id=correction_run.organisation_id,
+        )
+        raw_output = blobs.outputs
         if not raw_output:
             await self._escalate_record(
                 record_id,
@@ -1288,7 +1296,7 @@ class FeedbackManager:
                 "score": 0.0,
                 "needs_human_review": True,
             }
-        telemetry = correction_run.node_telemetry_json
+        telemetry = blobs.telemetry
         output = {nid: node_return(raw_output, telemetry, nid) for nid in raw_output}
 
         result = await self._run_post_correction_evaluate(

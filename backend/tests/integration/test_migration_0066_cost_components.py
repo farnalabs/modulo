@@ -11,8 +11,11 @@ re-owns the table to ``modulo_migrate``.
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+pytestmark = pytest.mark.integration
 
 
 async def _columns(db_engine: AsyncEngine, table: str) -> set[str]:

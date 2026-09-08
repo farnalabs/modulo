@@ -39,10 +39,13 @@ def _redis_reachable() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _redis_reachable(),
-    reason="REDIS_URL not set or Redis port unreachable (required by app lifespan)",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _redis_reachable(),
+        reason="REDIS_URL not set or Redis port unreachable (required by app lifespan)",
+    ),
+]
 
 
 # E402: the import must come AFTER the skipif marker is evaluated — importing

@@ -28,6 +28,7 @@ from modulo.api.routes.admin import _extract_bg_pgcode
 from modulo.db.crud.org_membership import resolve_role_from_membership
 from modulo.db.rls import set_rls_org
 
+pytestmark = pytest.mark.integration
 # ── helpers ──────────────────────────────────────────────────────────
 
 

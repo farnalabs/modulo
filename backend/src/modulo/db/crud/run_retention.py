@@ -49,8 +49,20 @@ from typing import Any
 from sqlalchemy import bindparam, delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.run_node_outputs import (
+    QUARANTINE_TABLE,  # NOTE: remove when the quarantine table drops (B2b+)
+    RunBlobs,
+    read_node_output_blob_bytes,
+    read_run_blobs_with_fallback,
+)
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+
+# qa rider (FAR-583): the byte-size estimator was duplicated here and in the
+# run_node_outputs repo module — the single shared copy now lives on the leaf
+# model module; imported under the historical private name so existing
+# callers/tests are untouched.
+from modulo.db.models.run_node_outputs import json_bytes as _json_bytes
 from modulo.db.models.trigger_event import TriggerEvent
 
 _log = logging.getLogger(__name__)
@@ -111,26 +123,21 @@ _CHECKPOINT_DELETE_SQL: dict[str, str] = {
 _ORG_CLAUSE = " AND organisation_id = :org"
 
 
-def _json_bytes(value: Any) -> int:
-    """Approximate byte size of a JSON-serialisable column value."""
+def _run_row_bytes(run: Run, node_output_bytes: int = 0) -> int:
+    """Estimated bytes a single ``runs`` row contributes to the DB.
 
-    if value is None:
-        return 0
-    try:
-        return len(json.dumps(value, default=str))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _run_row_bytes(run: Run) -> int:
-    """Estimated bytes a single ``runs`` row contributes to the DB."""
+    FAR-583: the per-node blobs (outputs / telemetry / markers) are counted
+    from the ``run_node_outputs`` store (metadata rows EXCLUDED — the flags
+    payload overhead would skew the accounting), passed in as
+    *node_output_bytes* by the caller (batched via
+    ``read_node_output_blob_bytes``); the legacy ``runs`` blob columns are no
+    longer summed here. The remaining columns are still run-row payloads.
+    """
 
     return (
-        _json_bytes(run.outputs_json)
-        + _json_bytes(run.node_telemetry_json)
+        node_output_bytes
         + _json_bytes(run.cost_breakdown)
         + _json_bytes(run.input_payload)
-        + _json_bytes(run.raw_output_markers)
         + _json_bytes(run.run_classification)
     )
 
@@ -174,8 +181,14 @@ def _retention_conditions(
     return conditions
 
 
-def _serialize_run(run: Run, *, checkpoint_count: int, checkpoint_bytes: int) -> dict[str, Any]:
-    """Serialise a run row for the export stream."""
+def _serialize_run(run: Run, *, checkpoint_count: int, checkpoint_bytes: int, blobs: RunBlobs) -> dict[str, Any]:
+    """Serialise a run row for the export stream.
+
+    FAR-583: the three blob fields are the REASSEMBLED legacy-dict shapes
+    from the ``run_node_outputs`` store (repo reader with the EMPTY/MISMATCH
+    fallback to the legacy columns), so the export keeps serving the exact
+    pre-FAR-583 payload across the backfill window.
+    """
 
     return {
         "id": str(run.id),
@@ -193,9 +206,9 @@ def _serialize_run(run: Run, *, checkpoint_count: int, checkpoint_bytes: int) ->
         "total_cost_usd": str(run.total_cost_usd) if run.total_cost_usd is not None else None,
         "cost_breakdown": run.cost_breakdown,
         "input_payload": run.input_payload,
-        "outputs_json": run.outputs_json,
-        "node_telemetry_json": run.node_telemetry_json,
-        "raw_output_markers": run.raw_output_markers,
+        "outputs_json": blobs.outputs,
+        "node_telemetry_json": blobs.telemetry,
+        "raw_output_markers": blobs.markers,
         "run_classification": run.run_classification,
         "error_code": run.error_code,
         "error_detail": run.error_detail,
@@ -327,10 +340,13 @@ async def list_retention_candidates(
     )
 
     bytes_by_thread, _count_by_thread = await _checkpoint_detail(session, [r.langgraph_thread_id for r in page], org_id)
+    node_bytes_by_run = await read_node_output_blob_bytes(session, [r.id for r in page])
 
     runs_out: list[dict[str, Any]] = []
     for run in page:
-        est = _run_row_bytes(run) + int(bytes_by_thread.get(run.langgraph_thread_id, 0))
+        est = _run_row_bytes(run, node_bytes_by_run.get(run.id, 0)) + int(
+            bytes_by_thread.get(run.langgraph_thread_id, 0)
+        )
         runs_out.append(
             {
                 "id": str(run.id),
@@ -434,7 +450,8 @@ async def _estimate_total_bytes(
             break
         threads = [r.langgraph_thread_id for r in page]
         bytes_by_thread, _counts = await _checkpoint_detail(session, threads, org_id)
-        total += sum(_run_row_bytes(r) for r in page) + sum(bytes_by_thread.values())
+        node_bytes_by_run = await read_node_output_blob_bytes(session, [r.id for r in page])
+        total += sum(_run_row_bytes(r, node_bytes_by_run.get(r.id, 0)) for r in page) + sum(bytes_by_thread.values())
         offset += len(page)
         if len(page) < page_size:
             break
@@ -479,12 +496,14 @@ async def iter_run_export(
             session, [r.langgraph_thread_id for r in page], org_id
         )
         for run in page:
+            blobs = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=org_id)
             yield (
                 json.dumps(
                     _serialize_run(
                         run,
                         checkpoint_count=int(count_by_thread.get(run.langgraph_thread_id, 0)),
                         checkpoint_bytes=int(bytes_by_thread.get(run.langgraph_thread_id, 0)),
+                        blobs=blobs,
                     ),
                     default=str,
                 )
@@ -522,7 +541,11 @@ async def purge_terminal_runs(
       ``notification_delivery_log``) are deleted before the runs themselves.
       FK CASCADE tables (``eval_results``, ``hitl_claims``,
       ``node_observations``, ``feedback_records``, ``run_evidence``) are
-      cleaned up by the database.
+      cleaned up by the database. The ``run_node_outputs_quarantine`` rows
+      for the batch's run ids are deleted too (qa Major 3a — best-effort, see
+      :func:`_delete_quarantine_rows`: the table deliberately has no FK, so
+      without an explicit delete every purged run would leave a permanent
+      orphaned blob copy).
     * Idempotent: re-running produces zero because the runs no longer match.
 
     Returns ``{purged_runs, purged_checkpoints, freed_estimated_bytes}``.
@@ -555,11 +578,15 @@ async def purge_terminal_runs(
         ids = [r.id for r in batch]
         thread_ids = [r.langgraph_thread_id for r in batch]
         checkpoint_bytes, checkpoint_counts = await _checkpoint_detail(session, thread_ids, org_id)
-        batch_freed = sum(_run_row_bytes(r) for r in batch) + sum(checkpoint_bytes.values())
+        node_bytes_by_run = await read_node_output_blob_bytes(session, ids)
+        batch_freed = sum(_run_row_bytes(r, node_bytes_by_run.get(r.id, 0)) for r in batch) + sum(
+            checkpoint_bytes.values()
+        )
 
         try:
             async with session.begin_nested():
                 await _delete_checkpoints(session, thread_ids, org_id)
+                await _delete_quarantine_rows(session, ids)
                 await _delete_run_id_rows(session, ids)
                 await session.execute(
                     text("DELETE FROM runs WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
@@ -720,3 +747,39 @@ async def _delete_run_id_rows(session: AsyncSession, run_ids: list[Any]) -> None
     # rows even when the run_id list accidentally overlaps.
     await session.execute(delete(NotificationDeliveryLog).where(NotificationDeliveryLog.run_id.in_(run_ids)))
     await session.execute(delete(TriggerEvent).where(TriggerEvent.run_id.in_(run_ids)))
+
+
+async def _delete_quarantine_rows(session: AsyncSession, run_ids: list[Any]) -> None:
+    """Best-effort DELETE of the batch's ``run_node_outputs_quarantine`` rows
+    (qa Major 3a).
+
+    The quarantine table deliberately has NO foreign key to ``runs``
+    (migration 0192), so purged runs leave their quarantined blob copies
+    orphaned forever unless the purge deletes them explicitly. Its privileges
+    are explicit on Postgres (qa iteration 2, Major 5 — migration 0192 grants
+    ``SELECT, DELETE`` to ``modulo_app``, the role this purge runs on via the
+    admin run-retention route; ``SELECT, INSERT, DELETE`` to the system role
+    the catch-up sweep runs on) and it has no ORM mapping, so the delete
+    still mirrors the :func:`_delete_checkpoints` best-effort pattern rather
+    than the hard ``_delete_run_id_rows`` one: it runs in its OWN savepoint,
+    and a missing-table / ungranted-env failure is logged and swallowed —
+    the run purge must never abort because the evidence copy could not be
+    reclaimed. The run_ids come from the org-scoped terminal batch, so the
+    delete cannot leak across orgs regardless of the table's missing RLS
+    policy.
+
+    NOTE: remove this helper (and the ``QUARANTINE_TABLE`` import) when the
+    quarantine table itself drops (B2b+).
+    """
+
+    if not run_ids:
+        return
+    try:
+        async with session.begin_nested():
+            await session.execute(delete(QUARANTINE_TABLE).where(QUARANTINE_TABLE.c.run_id.in_(run_ids)))
+    except Exception:
+        _log.warning(
+            "run_retention.quarantine_delete_unavailable",
+            exc_info=True,
+            extra={"batch_runs": len(run_ids)},
+        )

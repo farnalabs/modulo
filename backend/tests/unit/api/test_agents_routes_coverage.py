@@ -434,7 +434,7 @@ def test_delete_agent_returns_false_maps_404(client: tuple[TestClient, AsyncMock
 
 
 # ---------------------------------------------------------------------------
-# optimize_prompt â€” error blocks and failure surfaces
+# optimize_prompt — error blocks and failure surfaces
 # ---------------------------------------------------------------------------
 
 

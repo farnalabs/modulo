@@ -27,6 +27,27 @@ _GUARDRAIL_ROWS_SNIPPET = "FROM eval_definitions"
 # SET-LOCAL equivalent.
 _RLS_SET_CONFIG_SNIPPET = "set_config"
 
+# FAR-583: the run-blob reads go through the run_node_outputs repo reader,
+# which issues TWO queries per read — the new-table rows page and the legacy
+# fallback SELECT of the three ``runs`` blob columns. The strict mock serves
+# an EMPTY new table and a legacy row with no dicts ("no blobs stored")
+# unless the test stubs the reader itself. The census snippet is matched
+# FIRST: its column list also contains the legacy column names.
+_RUN_NODE_OUTPUTS_SNIPPET = "FROM run_node_outputs"
+_RUNS_LEGACY_BLOBS_SNIPPET = "runs.outputs_json, runs.node_telemetry_json, runs.raw_output_markers"
+
+
+def _is_run_node_outputs_query(stmt: Any) -> bool:
+    if not isinstance(stmt, Select):
+        return False
+    return _RUN_NODE_OUTPUTS_SNIPPET in str(stmt)
+
+
+def _is_runs_legacy_blobs_query(stmt: Any) -> bool:
+    if not isinstance(stmt, Select):
+        return False
+    return _RUNS_LEGACY_BLOBS_SNIPPET in str(stmt)
+
 
 def _is_authz_enforce_query(stmt: Any) -> bool:
     if not isinstance(stmt, Select):
@@ -86,6 +107,14 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
                 rls_result = MagicMock()
                 rls_result.scalar.return_value = None
                 return rls_result
+            if _is_run_node_outputs_query(args[0] if args else None):
+                rows_result = MagicMock()
+                rows_result.all.return_value = []
+                return rows_result
+            if _is_runs_legacy_blobs_query(args[0] if args else None):
+                legacy_result = MagicMock()
+                legacy_result.first.return_value = None
+                return legacy_result
             raise AssertionError(
                 "Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True"
             )

@@ -36,6 +36,14 @@ from pathlib import Path
 
 import yaml
 
+try:
+    # libyaml bindings: ~20x faster than the pure-Python SafeLoader on the
+    # 128KB manifest these tests re-parse per assertion (the elements loop
+    # alone parsed it once per route — ~60s of pure-Python scanning).
+    from yaml import CSafeLoader as _SafeLoader
+except ImportError:  # pragma: no cover - pure-Python PyYAML fallback
+    from yaml import SafeLoader as _SafeLoader
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 MANIFEST_PATH = REPO_ROOT / "frontend" / "src" / "manifest.yaml"
 ROUTER_PATH = REPO_ROOT / "frontend" / "src" / "router" / "index.ts"
@@ -87,7 +95,7 @@ def _named_routes() -> dict[str, dict[str, bool]]:
 
 def _load_manifest() -> dict:
     with MANIFEST_PATH.open() as handle:
-        data = yaml.safe_load(handle)
+        data = yaml.load(handle, Loader=_SafeLoader)
     if not isinstance(data, dict):
         raise AssertionError("manifest.yaml root must be a mapping")
     if not isinstance(data.get("routes"), dict):

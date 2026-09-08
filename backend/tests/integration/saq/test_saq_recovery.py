@@ -31,6 +31,7 @@ from sqlalchemy.dialects import postgresql
 import modulo.core.pipeline_execution as pe
 from modulo.core import cron_helpers as ch
 
+pytestmark = pytest.mark.integration
 _ORG = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
 
@@ -171,6 +172,17 @@ class TestNoSaqEvictionRedispatch:
                 ),
             ),
             patch.object(ch, "_open_factory", return_value=_FakeFactory([row])),
+            # dispatcher_reconcile resolves its own cross-org SYSTEM factory
+            # (org collection, per-org reconcile and the FAR-583 catch-up
+            # sweep all run through _open_system_factory, never
+            # _open_factory). Fake it with the same deterministic session:
+            # exactly one seeded org + one seeded row, so the tick repairs
+            # exactly one job regardless of what other integration tests left
+            # in the shared testcontainer DB (real orgs/runs would inflate
+            # `repaired` and real sweeps would run unbound), and the test
+            # stays hermetic when no DB fixture has run (the system engine is
+            # never constructed).
+            patch.object(ch, "_open_system_factory", return_value=_FakeFactory([row])),
             patch.object(ch, "_set_rls_org", AsyncMock()),
             patch.object(ch.AsyncRedis, "from_url", return_value=redis),
             patch.object(ch, "RedisQueue", return_value=q),

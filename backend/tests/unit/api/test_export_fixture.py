@@ -58,6 +58,37 @@ def _make_snapshot(graph_json: dict[str, Any] | None = None) -> MagicMock:
     return s
 
 
+@pytest.fixture(autouse=True)
+def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-583: record the run the (session-driven) get_run returns and stub
+    the repo blob readers to reassemble from it — the mocked session cannot
+    serve the real run_node_outputs queries."""
+    import modulo.api.routes.runs as runs_module
+    from modulo.db.crud.run_node_outputs import RunBlobs
+
+    holder: dict[str, Any] = {}
+    real_get_run = runs_module.get_run
+
+    async def _recording_get_run(session: Any, run_id: Any, **kwargs: Any) -> Any:
+        run = await real_get_run(session, run_id, **kwargs)
+        holder["run"] = run
+        return run
+
+    async def _stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        run = holder.get("run")
+        outputs = run.outputs_json if run is not None and isinstance(run.outputs_json, dict) else {}
+        telemetry = run.node_telemetry_json if run is not None and isinstance(run.node_telemetry_json, dict) else {}
+        return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
+
+    async def _markers_stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        blobs = await _stub(session, run_id=run_id, organisation_id=organisation_id)
+        return blobs.markers
+
+    monkeypatch.setattr(runs_module, "get_run", _recording_get_run)
+    monkeypatch.setattr(runs_module, "read_run_blobs_with_fallback", _stub)
+    monkeypatch.setattr(runs_module, "read_run_markers_with_fallback", _markers_stub)
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()

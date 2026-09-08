@@ -740,3 +740,317 @@ def test_pending_gate_without_context_or_description_renders_null_fields(client:
     gate_payload = resp.json()["gates"][0]
     assert gate_payload["description"] is None
     assert gate_payload["context"] is None
+
+
+# ---------------------------------------------------------------------------
+# GET /hitl/gates — paginated org gate listing incl. decided gates (FAR-692)
+# ---------------------------------------------------------------------------
+
+
+def _decided_gate(*, decision: str = "approved", account_id: uuid.UUID | None = _USER_ID) -> MagicMock:
+    gate = _org_gate()
+    gate.decision = decision
+    gate.decision_at = datetime.now(UTC) - timedelta(hours=1)
+    gate.account_id = account_id
+    gate.claimed_at = datetime.now(UTC) - timedelta(hours=2)
+    return gate
+
+
+def _capture_gates_execute(session: AsyncMock, *, gates: list[MagicMock], total: int | None = None) -> list[object]:
+    """Wire session.execute to a statement-shape dispatch for /hitl/gates.
+
+    The endpoint issues a count() over hitl_claims, then (when total > 0) the
+    page query, plus pipeline / run / snapshot / account enrichment selects
+    and the RLS set_config plumbing. Returns the captured statements so tests
+    can assert on the compiled WHERE / LIMIT / OFFSET.
+    """
+    captured: list[object] = []
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        captured.append(stmt)
+        text = str(stmt)
+        # NB: dispatch on "count(*)", never bare "count" — "account_id"
+        # contains "count" as a substring.
+        if "count(*)" in text:
+            result = MagicMock()
+            result.scalar_one.return_value = total if total is not None else len(gates)
+            return result
+        if "hitl_claims" in text:
+            result = MagicMock()
+            result.scalars.return_value = list(gates)
+            return result
+        # runs / pipeline_snapshots / accounts / RLS set_config — benign empty
+        result = MagicMock()
+        result.scalar.return_value = None
+        result.scalar_one_or_none.return_value = None
+        result.all.return_value = []
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return captured
+
+
+def _where_sql(stmt: object) -> str:
+    """The statement's WHERE clause compiled with inlined literals."""
+    whereclause = getattr(stmt, "whereclause", None)
+    if whereclause is None:
+        return ""
+    return str(whereclause.compile(compile_kwargs={"literal_binds": True}))
+
+
+def _page_statements(captured: list[object]) -> list[object]:
+    """The non-count hitl_claims page statements captured by the mock."""
+    return [s for s in captured if "hitl_claims" in str(s) and "count(*)" not in str(s)]
+
+
+def _compiled_sql(stmts: list[object]) -> str:
+    """Statements compiled with inlined literals, joined for substring asserts."""
+    return " ".join(str(s.compile(compile_kwargs={"literal_binds": True})) for s in stmts)
+
+
+def test_list_org_gates_default_status_is_undecided(client: tuple[TestClient, AsyncMock]) -> None:
+    """No status param → the undecided queue (decision IS NULL), the same
+    view the pending endpoint serves — the review page's default."""
+    http, session = client
+    captured = _capture_gates_execute(session, gates=[_org_gate()])
+
+    resp = http.get("/api/v1/hitl/gates")
+
+    assert resp.status_code == 200, resp.text
+    where = " ".join(_where_sql(s) for s in captured)
+    assert "decision IS NULL" in where
+    # Default view is pending work — fenced to actionable runs (FAR-612/FAR-604).
+    assert "runs.status IN" in where
+    assert "JOIN runs ON hitl_claims.run_id = runs.id" in _compiled_sql(_page_statements(captured))
+    assert "approved" not in where
+    body = resp.json()
+    assert body["page"] == 1
+    assert body["page_size"] == 25
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("status_param", "expected_fragments"),
+    [
+        ("undecided", ["decision IS NULL", "runs.status IN"]),
+        ("pending", ["decision IS NULL", "account_id IS NULL", "runs.status IN"]),
+        ("claimed", ["decision IS NULL", "account_id IS NOT NULL", "runs.status IN"]),
+        ("approved", ["decision = 'approved'"]),
+        ("rejected", ["decision = 'rejected'"]),
+    ],
+    ids=["undecided", "pending", "claimed", "approved", "rejected"],
+)
+def test_list_org_gates_status_filter_compiles_the_right_where(
+    client: tuple[TestClient, AsyncMock],
+    status_param: str,
+    expected_fragments: list[str],
+) -> None:
+    """Each status param narrows to exactly the intended gate subset — asserted
+    on the compiled SQL the endpoint actually issues (the filter is
+    server-side; a mocked session cannot re-implement it)."""
+    http, session = client
+    # total > 0 so the endpoint actually issues the page query to inspect.
+    captured = _capture_gates_execute(session, gates=[], total=1)
+
+    resp = http.get(f"/api/v1/hitl/gates?status={status_param}")
+
+    assert resp.status_code == 200, resp.text
+    page_stmts = _page_statements(captured)
+    assert page_stmts
+    where = " ".join(_where_sql(s) for s in page_stmts)
+    for fragment in expected_fragments:
+        assert fragment in where, f"{status_param}: {fragment!r} not in {where!r}"
+
+
+@pytest.mark.parametrize("status_param", ["undecided", "pending", "claimed"])
+def test_list_org_gates_pending_work_statuses_join_and_fence_to_actionable_runs(
+    client: tuple[TestClient, AsyncMock], status_param: str
+) -> None:
+    """Pending-work statuses are fenced like HITLManager.list_pending
+    (FAR-612/FAR-604): joined to runs and restricted to actionable run
+    statuses, so orphaned undecided gates on terminal runs never surface —
+    on BOTH the page query and the count (the count must match the page)."""
+    http, session = client
+    # total > 0 so the endpoint actually issues the page query to inspect.
+    captured = _capture_gates_execute(session, gates=[], total=1)
+
+    resp = http.get(f"/api/v1/hitl/gates?status={status_param}")
+
+    assert resp.status_code == 200, resp.text
+    page_stmts = _page_statements(captured)
+    assert page_stmts
+    page_sql = _compiled_sql(page_stmts)
+    assert "JOIN runs ON hitl_claims.run_id = runs.id" in page_sql
+    assert "runs.status IN" in _where_sql(page_stmts[0])
+    count_stmts = [s for s in captured if "count(*)" in str(s)]
+    assert len(count_stmts) == 1
+    count_sql = str(count_stmts[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "JOIN runs ON hitl_claims.run_id = runs.id" in count_sql
+    assert "runs.status IN" in count_sql
+
+
+@pytest.mark.parametrize("status_param", ["approved", "rejected", "all"])
+def test_list_org_gates_history_statuses_are_not_run_fenced(
+    client: tuple[TestClient, AsyncMock], status_param: str
+) -> None:
+    """Decided history (approved/rejected) and the `all` audit view are
+    deliberately unfenced: a decided gate's run has legitimately moved past
+    awaiting_human, and the audit view must surface data-rot rows."""
+    http, session = client
+    captured = _capture_gates_execute(session, gates=[], total=1)
+
+    resp = http.get(f"/api/v1/hitl/gates?status={status_param}")
+
+    assert resp.status_code == 200, resp.text
+    page_stmts = _page_statements(captured)
+    assert page_stmts
+    page_sql = _compiled_sql(page_stmts)
+    assert "JOIN runs" not in page_sql
+    assert "runs.status IN" not in page_sql
+    count_stmts = [s for s in captured if "count(*)" in str(s)]
+    assert len(count_stmts) == 1
+    count_sql = str(count_stmts[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "JOIN runs" not in count_sql
+    assert "runs.status IN" not in count_sql
+
+
+def test_list_org_gates_status_all_skips_the_decision_filter(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    captured = _capture_gates_execute(session, gates=[_org_gate()])
+
+    resp = http.get("/api/v1/hitl/gates?status=all")
+
+    assert resp.status_code == 200, resp.text
+    page_stmts = _page_statements(captured)
+    assert page_stmts
+    assert not _where_sql(page_stmts[0])
+    assert resp.json()["total"] == 1
+
+
+def test_list_org_gates_invalid_status_returns_422(client: tuple[TestClient, AsyncMock]) -> None:
+    """The Literal-typed param gets 422 validation for free — no hand-rolled
+    check in the handler."""
+    http, _session = client
+
+    resp = http.get("/api/v1/hitl/gates?status=bogus")
+
+    assert resp.status_code == 422, resp.text
+
+
+def test_list_org_gates_pagination_respected(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    captured = _capture_gates_execute(session, gates=[_org_gate()], total=42)
+
+    resp = http.get("/api/v1/hitl/gates?page=3&page_size=10")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 42
+    assert body["page"] == 3
+    assert body["page_size"] == 10
+    page_sql = _compiled_sql(_page_statements(captured))
+    assert "LIMIT 10" in page_sql
+    assert "OFFSET 20" in page_sql
+    # Newest activity first, stable id tiebreaker.
+    assert "decision_at DESC NULLS LAST" in page_sql
+    assert "claimed_at DESC NULLS LAST" in page_sql
+    assert "id DESC" in page_sql
+
+
+def test_list_org_gates_page_size_clamped_at_100(client: tuple[TestClient, AsyncMock]) -> None:
+    """Oversized page_size clamps to the ceiling (200 here) instead of 422 —
+    the response echoes the effective page size and the LIMIT matches."""
+    http, session = client
+    captured = _capture_gates_execute(session, gates=[_org_gate()])
+
+    resp = http.get("/api/v1/hitl/gates?page_size=500")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["page_size"] == 100
+    page_sql = _compiled_sql(_page_statements(captured))
+    assert "LIMIT 100" in page_sql
+
+
+def test_list_org_gates_zero_total_skips_the_page_query(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    captured = _capture_gates_execute(session, gates=[], total=0)
+
+    resp = http.get("/api/v1/hitl/gates")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 0
+    assert not body["items"]
+    assert not _page_statements(captured)
+
+
+def test_list_org_gates_decided_gates_carry_label_claimant_and_me(client: tuple[TestClient, AsyncMock]) -> None:
+    """A decided gate renders through the same GateResponse contract as the
+    pending queue: snapshot label (FAR-686), claimant display name + the
+    caller-owns stamp (FAR-691), decision + decision_at."""
+    http, session = client
+    snap_id = uuid.uuid4()
+    decided = _decided_gate()
+    decided.gate_id = "hitl_gate_planner_deploy"  # matches the graph edge's derived gate id
+    graph_json = {
+        "edges": [
+            {
+                "source": "planner",
+                "target": "deploy",
+                "hitl_gate_config": {"label": "Deploy gate"},
+            }
+        ]
+    }
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        text = str(stmt)
+        result = MagicMock()
+        if "count(*)" in text:
+            result.scalar_one.return_value = 1
+            return result
+        if "hitl_claims" in text:
+            result.scalars.return_value = [decided]
+            return result
+        if "pipeline_snapshots" in text:
+            result.all.return_value = [(snap_id, graph_json)]
+            return result
+        if "FROM runs" in text:
+            result.all.return_value = [(decided.run_id, snap_id)]
+            return result
+        if "pipelines" in text:
+            result.all.return_value = [(decided.pipeline_id, "Reviewer Pipeline")]
+            return result
+        if "accounts" in text:
+            result.all.return_value = [(_USER_ID, "Alice Reviewer", "alice@test")]
+            return result
+        result.scalar.return_value = None
+        result.scalar_one_or_none.return_value = None
+        result.all.return_value = []
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with patch("modulo.api.routes.hitl.resolve_gate_descriptions", new=AsyncMock(return_value={})):
+        resp = http.get("/api/v1/hitl/gates?status=approved")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["decision"] == "approved"
+    assert item["decision_at"] is not None
+    assert item["label"] == "Deploy gate"
+    assert item["pipeline_name"] == "Reviewer Pipeline"
+    assert item["claimed_by_name"] == "Alice Reviewer"
+    assert item["claimed_by_me"] is True
+
+
+@pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (_SQL, 503), (RuntimeError("kaboom"), 500)])
+def test_list_org_gates_error_mapping(client: tuple[TestClient, AsyncMock], exc: Exception, expected: int) -> None:
+    http, session = client
+    session.execute = AsyncMock(side_effect=exc)
+    resp = http.get("/api/v1/hitl/gates")
+
+    assert resp.status_code == expected, resp.text

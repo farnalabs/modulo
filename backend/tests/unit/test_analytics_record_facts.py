@@ -1,18 +1,28 @@
 """Unit tests for the analytics facts enrichment helpers (FAR-102, ADR 020).
 
-``record_run_facts`` is DB-bound, but the derived values it snapshots are pure
-functions: UTC day attribution, duration/queue-wait/final-idle timing math,
-output-size measurement, and the NULL-safe graph-dimension derivation. These
-tests pin that logic without a database — the integration suite covers the
-write path itself.
+``record_run_facts`` is DB-bound, but the derived values it snapshots are
+small computations over the run row: UTC day attribution, duration/queue-wait/
+final-idle timing math, output-size measurement, and the NULL-safe
+graph-dimension derivation. These pin that logic; since FAR-583 the output/
+telemetry byte facts reassemble the payload through the run_node_outputs repo
+reader — qa M14 collapsed the two per-side reads into ONE
+``_fact_run_blobs`` call (rows fetch + RLS probe + legacy fallback) whose
+blobs feed the PURE ``_fact_output_bytes`` / ``_fact_telemetry_bytes``
+helpers, so the byte helpers are pinned dict-in/dict-out and the single-read
+fallback/failure semantics are pinned against a real in-memory SQLite
+database. The integration suite covers the write path itself.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, date, datetime, timedelta, timezone
 from types import SimpleNamespace
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.analytics import (
     _derive_graph_dimensions,
@@ -20,10 +30,53 @@ from modulo.core.analytics import (
     _fact_final_idle_ms,
     _fact_output_bytes,
     _fact_queue_wait_ms,
+    _fact_run_blobs,
     _fact_run_date,
     _fact_telemetry_bytes,
     _fact_total_queue_wait_ms,
 )
+from modulo.db.crud.run_node_outputs import RunBlobs
+from modulo.db.models.base import Base
+from modulo.db.models.run import Run
+
+_TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
+
+
+@pytest.fixture
+async def engine() -> AsyncGenerator[AsyncEngine, None]:
+    eng = create_async_engine("sqlite+aiosqlite://", echo=False)
+    async with eng.begin() as conn:
+        tables = [t for t in Base.metadata.sorted_tables if t.name in _TABLE_NAMES]
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+async def db_session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        yield session
+
+
+async def _seed_run(session: AsyncSession, **blob_overrides: object) -> Run:
+    values: dict = {
+        "organisation_id": uuid.uuid4(),
+        "pipeline_id": uuid.uuid4(),
+        "snapshot_id": uuid.uuid4(),
+        "trigger_type": "manual",
+        "run_number": 1,
+        "input_hash": "a" * 64,
+        "langgraph_thread_id": "t-" + uuid.uuid4().hex,
+        "status": "complete",
+    }
+    values.update(blob_overrides)
+    run = Run(**values)
+    async with session.begin():
+        session.add(run)
+        await session.flush()
+    return run
 
 
 def _run(**overrides) -> SimpleNamespace:
@@ -120,40 +173,69 @@ class TestFactTimingMs:
         assert _fact_final_idle_ms(run) is None, "a completed run with no heartbeat leaves the window unknowable"
 
 
-class TestFactOutputBytes:
+class TestFactByteHelpers:
+    """qa M14: the byte facts are PURE computations over the ONE blobs read —
+    the reader's fallback/failure semantics are pinned separately
+    (TestFactRunBlobs); here only the dict-to-bytes mapping is."""
+
     def test_output_bytes_is_json_dumps_length(self) -> None:
-        run = _run(outputs_json={"node_a": {"result": "ok"}})
-        assert _fact_output_bytes(run) == len('{"node_a": {"result": "ok"}}')
+        blobs = RunBlobs(outputs={"node_a": {"result": "ok"}}, telemetry=None, markers=None)
+        assert _fact_output_bytes(blobs) == len('{"node_a": {"result": "ok"}}')
 
     def test_output_bytes_is_pure_return_size_since_p1(self) -> None:
-        # Since FAR-125 P1 outputs_json holds PURE returns (telemetry excluded),
-        # so the fact measures the pure-return size — smaller than the old
+        # Since FAR-125 P1 outputs hold PURE returns (telemetry excluded), so
+        # the fact measures the pure-return size — smaller than the old
         # envelope that carried agent_stdout inline.
         pure_return = {"result": "ok"}
-        run = _run(outputs_json=pure_return, node_telemetry_json={"agent_stdout": "installing deps...\n"})
+        blobs = RunBlobs(
+            outputs=pure_return,
+            telemetry={"agent_stdout": "installing deps...\n"},
+            markers=None,
+        )
         envelope = {**pure_return, "agent_stdout": "installing deps...\n"}
-        assert _fact_output_bytes(run) == len(json.dumps(pure_return))
-        assert _fact_output_bytes(run) < len(json.dumps(envelope))
+        measured = _fact_output_bytes(blobs)
+        assert measured == len(json.dumps(pure_return, default=str))
+        assert measured < len(json.dumps(envelope, default=str))
+        assert _fact_telemetry_bytes(blobs) == len(json.dumps({"agent_stdout": "installing deps...\n"}, default=str))
 
-    def test_none_outputs_returns_none(self) -> None:
-        assert _fact_output_bytes(_run(outputs_json=None)) is None
+    def test_none_side_returns_none(self) -> None:
+        blobs = RunBlobs(outputs=None, telemetry=None, markers=None)
+        assert _fact_output_bytes(blobs) is None
+        assert _fact_telemetry_bytes(blobs) is None
 
-    def test_non_serialisable_outputs_returns_none(self) -> None:
-        run = _run(outputs_json={"node": object()})
-        assert _fact_output_bytes(run) is None, "json.dumps failure must degrade to NULL, never raise"
+    def test_failed_read_returns_none_for_both_facts(self) -> None:
+        # One read feeds both facts: a read failure (blobs=None) degrades BOTH
+        # byte facts to NULL — they share the data source by design.
+        assert _fact_output_bytes(None) is None
+        assert _fact_telemetry_bytes(None) is None
 
 
-class TestFactTelemetryBytes:
-    def test_telemetry_bytes_is_json_dumps_length(self) -> None:
-        run = _run(node_telemetry_json={"agent_stdout": "installing deps...\n"})
-        assert _fact_telemetry_bytes(run) == len('{"agent_stdout": "installing deps...\\n"}')
+class TestFactRunBlobs:
+    """qa M14: ONE read_run_blobs_with_fallback call serves BOTH byte facts —
+    the EMPTY fallback (legacy column when the new table has no rows) and the
+    fail-open read-failure degrade are pinned against real SQLite."""
 
-    def test_none_telemetry_returns_none(self) -> None:
-        assert _fact_telemetry_bytes(_run(node_telemetry_json=None)) is None
+    async def test_legacy_column_served_when_new_table_is_empty(self, db_session: AsyncSession) -> None:
+        run = await _seed_run(db_session, outputs_json={"node_a": {"result": "ok"}})
+        blobs = await _fact_run_blobs(db_session, run)
+        assert blobs is not None
+        assert _fact_output_bytes(blobs) == len('{"node_a": {"result": "ok"}}')
+        assert _fact_telemetry_bytes(blobs) is None
 
-    def test_non_serialisable_telemetry_returns_none(self) -> None:
-        run = _run(node_telemetry_json={"node": object()})
-        assert _fact_telemetry_bytes(run) is None, "json.dumps failure must degrade to NULL, never raise"
+    async def test_none_outputs_serves_none(self, db_session: AsyncSession) -> None:
+        run = await _seed_run(db_session)
+        blobs = await _fact_run_blobs(db_session, run)
+        assert blobs is not None
+        assert blobs.outputs is None
+        assert _fact_output_bytes(blobs) is None
+
+    async def test_read_failure_degrades_to_none(self, db_session: AsyncSession, engine: AsyncEngine) -> None:
+        """A reader failure (dead connection) must degrade to NULL with a
+        logged warning — the blobs read is best-effort inside the fail-open
+        facts writer and must never be what fails a fact write."""
+        run = await _seed_run(db_session, outputs_json={"node_a": {"result": "ok"}})
+        await engine.dispose()
+        assert await _fact_run_blobs(db_session, run) is None
 
 
 class TestDeriveGraphDimensions:

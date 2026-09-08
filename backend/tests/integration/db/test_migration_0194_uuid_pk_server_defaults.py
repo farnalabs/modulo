@@ -1,12 +1,12 @@
-"""Integration test for migration 0192_uuid_pk_server_defaults (FAR-718).
+"""Integration test for migration 0194_uuid_pk_server_defaults (FAR-718).
 
 Migration 0191 froze all deploys because a raw-SQL INSERT omitted ``id`` and
 the table's uuid PK had no DB server default (the ORM always supplies ids
-client-side, so only raw-SQL migrations hit this). 0192 adds a
+client-side, so only raw-SQL migrations hit this). 0194 adds a
 ``gen_random_uuid()`` server default to EVERY uuid primary key, killing the
 whole bug class.
 
-Runs the real Alembic ``upgrade`` chain up to ``0192_uuid_pk_server_defaults``
+Runs the real Alembic ``upgrade`` chain up to ``0194_uuid_pk_server_defaults``
 against a *fresh* live Postgres (its own testcontainer, built from scratch)
 and proves:
 
@@ -41,8 +41,8 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-_HEAD = "0192_uuid_pk_server_defaults"
-_PRE_HEAD = "0191_bundled_runner_seed_backfill"
+_HEAD = "0194_uuid_pk_server_defaults"
+_PRE_HEAD = "0193_run_node_outputs_sweep_index"
 
 
 def _uuid_pk_pairs() -> set[tuple[str, str]]:
@@ -160,7 +160,7 @@ async def test_every_uuid_pk_has_gen_random_uuid_default(fresh_migration_db) -> 
 async def test_raw_insert_without_id_gets_server_generated_uuid(fresh_migration_db) -> None:
     """The outage-class proof (FAR-701/702): raw INSERT omitting id SUCCEEDS.
 
-    Pre-0192 this exact statement shape failed with a NOT NULL violation on
+    Pre-0194 this exact statement shape failed with a NOT NULL violation on
     the id column and froze the migration chain. system_config has the minimum
     NOT NULL set (key, value; updated_at has its own server default) so the
     insert exercises the id default in isolation.
@@ -182,7 +182,7 @@ async def test_raw_insert_without_id_gets_server_generated_uuid(fresh_migration_
     finally:
         await engine.dispose()
 
-    assert generated is not None, "raw INSERT without id must succeed post-0192"
+    assert generated is not None, "raw INSERT without id must succeed post-0194"
     parsed = uuid.UUID(str(generated))
     assert parsed != uuid.UUID(int=0), "server default must generate a real uuid, not the nil uuid"
     assert parsed.version == 4, f"gen_random_uuid() yields v4, got version {parsed.version}"

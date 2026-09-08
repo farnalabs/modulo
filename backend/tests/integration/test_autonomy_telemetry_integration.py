@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from modulo.core.run_context import autonomy_telemetry as at
 from modulo.db.rls import set_rls_org
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.mark.asyncio
 async def test_emit_autonomy_telemetry_persists_row(app_engine: object, test_org: uuid.UUID) -> None:

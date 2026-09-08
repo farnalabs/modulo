@@ -111,6 +111,32 @@ def _make_session(snapshot: MagicMock, statements: list[str] | None = None) -> A
     return session
 
 
+@pytest.fixture(autouse=True)
+def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-583: the executor's blob reads go through the run_node_outputs repo
+    readers — the mocked session cannot serve the real repo queries, so the
+    stub reassembles from whatever the (per-test mocked) ``get_run`` returns,
+    exactly as the real reader serves the reassembled legacy shapes."""
+    import modulo.core.pipeline_engine.executor as executor_module
+    from modulo.db.crud.run_node_outputs import RunBlobs
+
+    async def _blobs(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        run = getattr(executor_module.get_run, "return_value", None)
+        if run is None or isinstance(run, Exception):
+            return RunBlobs(outputs=None, telemetry=None, markers=None)
+        outputs = run.outputs_json if isinstance(run.outputs_json, dict) else {}
+        telemetry = run.node_telemetry_json if isinstance(run.node_telemetry_json, dict) else {}
+        markers = run.raw_output_markers if isinstance(run.raw_output_markers, dict) else None
+        return RunBlobs(outputs=outputs, telemetry=telemetry, markers=markers)
+
+    async def _markers(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        blobs = await _blobs(session, run_id=run_id, organisation_id=organisation_id)
+        return blobs.markers
+
+    monkeypatch.setattr(executor_module, "read_run_blobs_with_fallback", _blobs)
+    monkeypatch.setattr(executor_module, "read_run_markers_with_fallback", _markers)
+
+
 def _make_session_factory(session: AsyncMock) -> MagicMock:
     @asynccontextmanager
     async def _ctx():

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import uuid
 from typing import Any
@@ -31,6 +32,31 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from modulo.version import get_version
 
 _log = logging.getLogger(__name__)
+
+# Internal error_code marker grammar for ``_mark_run_failed`` (the primitive's
+# error_code is a code-owned constant — validated before it is inlined into
+# the raw SQL so no caller can smuggle SQL through it).
+_MARKER_ERROR_CODE_RE = re.compile(r"[a-z_]{1,64}")
+
+# ``_mark_run_failed``'s SQL template. __ERROR_CODE__ / __TERMINAL_LIST__ /
+# __CLAIM_FENCE__ are substituted with code-owned constants only (see the
+# function body); :rid/:oid/:detail/:tok stay bound parameters.
+_MARK_RUN_FAILED_SQL_TEMPLATE = (
+    "UPDATE runs SET status='failed', error_code='__ERROR_CODE__', "
+    "error_detail=:detail, completed_at=now() "
+    "WHERE id=:rid AND organisation_id=:oid "
+    "AND status NOT IN (__TERMINAL_LIST__) "
+    "AND status <> 'unknown' "
+    "AND cancellation_requested = false "
+    "__CLAIM_FENCE__"
+)
+
+# ``SET LOCAL lock_timeout`` (FAR-583): utility commands do not accept bind
+# parameters (asyncpg rewrites :lt to $1 → "syntax error at or near $1"), so
+# the value is inlined via the same __PLACEHOLDER__ + str.replace pattern as
+# the template above. int() validation precedes stringification — only digits
+# can reach the statement, never caller data.
+_SET_LOCK_TIMEOUT_SQL_TEMPLATE = "SET LOCAL lock_timeout = __LOCK_TIMEOUT_MS__"
 
 _ENGINE: AsyncEngine | None = None
 _ENGINE_LOCK = threading.Lock()
@@ -129,8 +155,11 @@ async def _mark_run_failed(
     org_id: str,
     claim_token: str | None = None,
     error_detail: str | None = None,
+    *,
+    error_code: str = "task_failure",
+    lock_timeout_ms: int | None = None,
 ) -> int:
-    """Mark a run failed task_failure — guarded NOT IN terminal states (F3d).
+    """Mark a run failed — guarded NOT IN any terminal state + not 'unknown'.
 
     FENCED by *claim_token* (dist/runtime-core A1): when the failed job stamped
     its claim token (saq_worker.execute_run / pipeline_execution.resume_run),
@@ -138,13 +167,33 @@ async def _mark_run_failed(
     task_failure a run that a successor already re-claimed. CANCEL-WINS:
     ``cancellation_requested = false``.
 
+    The status guard is the FULL ``TERMINAL_STATUSES`` frozenset
+    (db/models/run.py — the 9-state terminal vocabulary) plus an EXPLICIT
+    ``'unknown'`` exclusion (FAR-583): an ``unknown``-status run (FAR-410,
+    non-terminal recovery state) is NEVER transitioned by this primitive —
+    callers that must surface a failure for an unknown run emit the event
+    only (rowcount 0) and leave the row for operator reconciliation.
+
+    *error_code* is the failure marker written to ``runs.error_code``
+    (default ``task_failure``; the FAR-583 dual-write orchestration passes
+    ``dual_write_failed``). It is validated against the internal marker
+    grammar before being inlined — it is a code-owned constant, never user
+    input.
+
     *error_detail* is sanitized (secret-pattern redaction) and truncated to
     5000 code points BEFORE the UPDATE — ``runs.error_detail`` is String(5000);
     an untruncated detail raises DataError, which the generic except in
     :func:`after_process` would swallow and the run would NEVER be marked
-    failed (the exact failure this fix exists to prevent).     ``None`` is written
+    failed (the exact failure this fix exists to prevent). ``None`` is written
     when the detail is falsy — never ``""`` (an empty-string detail flips the
     daily-watcher detail_available flag; NULL does not).
+
+    *lock_timeout_ms* (FAR-583): when set (Postgres only), a
+    ``SET LOCAL lock_timeout`` precedes the UPDATE so a lock collision with a
+    concurrent writer degrades to a bounded query-cancellation (rowcount 0)
+    instead of hanging the abort path. The caller opens its OWN session via
+    ``_open_factory``; the SET LOCAL is transaction-local and rolls back with
+    it.
 
     FAR-224 decision — SWEEP-ONLY, not inline: this raw-SQL write deliberately
     does NOT call the classification hook inline (unlike the fenced
@@ -161,18 +210,26 @@ async def _mark_run_failed(
     if a synchronous terminalization-time consumer appears.
 
     Returns the number of rows updated — 0 means the guards rejected the write
-    (superseded / already terminal / cancellation requested).
+    (superseded / already terminal / cancellation requested / lock timeout).
     """
-    clauses = [
-        "UPDATE runs SET status='failed', error_code='task_failure', error_detail=:detail, completed_at=now() ",
-        "WHERE id=:rid AND organisation_id=:oid ",
-        "AND status NOT IN ('complete', 'cancelled', 'failed') ",
-        "AND cancellation_requested = false ",
-    ]
+    from modulo.db.models.run import TERMINAL_STATUSES
+
+    if not _MARKER_ERROR_CODE_RE.fullmatch(error_code):
+        raise ValueError(f"invalid error_code marker: {error_code!r}")
+    # Dynamic SQL via the __PLACEHOLDER__ + str.replace pattern (the
+    # trigger_streak precedent): bandit/ruff S608 flag f-stringed text(), and
+    # the only interpolated values here are code-owned constants (the
+    # validated error_code marker + the fixed TERMINAL_STATUSES vocabulary) —
+    # never caller data. Bind params (:rid/:oid/:detail/:tok) stay bound.
+    terminal_list = ", ".join("'" + status + "'" for status in sorted(TERMINAL_STATUSES))
+    statement = _MARK_RUN_FAILED_SQL_TEMPLATE.replace("__ERROR_CODE__", error_code)
+    statement = statement.replace("__TERMINAL_LIST__", terminal_list)
     params: dict[str, Any] = {"rid": run_id, "oid": org_id}
     if claim_token is not None:
-        clauses.append("AND claim_token = CAST(:tok AS text)")
+        statement = statement.replace("__CLAIM_FENCE__", "AND claim_token = CAST(:tok AS text) ")
         params["tok"] = claim_token
+    else:
+        statement = statement.replace("__CLAIM_FENCE__", "")
 
     from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 
@@ -185,8 +242,22 @@ async def _mark_run_failed(
         from modulo.db.rls import set_rls_org
 
         await set_rls_org(session, uuid.UUID(org_id))
+        if lock_timeout_ms is not None:
+            bind = session.get_bind()
+            if asyncio.iscoroutine(bind):
+                bind = await bind
+            if bind.dialect.name == "postgresql":
+                # Utility commands do not accept bind parameters (asyncpg
+                # rewrites :lt to $1 → "syntax error at or near $1"), so the
+                # validated integer is inlined via the __PLACEHOLDER__ +
+                # str.replace pattern (see _SET_LOCK_TIMEOUT_SQL_TEMPLATE) —
+                # an f-stringed text() violates the raw-SQL architecture rule.
+                lock_timeout_statement = _SET_LOCK_TIMEOUT_SQL_TEMPLATE.replace(
+                    "__LOCK_TIMEOUT_MS__", str(int(lock_timeout_ms))
+                )
+                await session.execute(text(lock_timeout_statement))
         result = await session.execute(
-            text("".join(clauses)),
+            text(statement),
             params,
         )
         return int(result.rowcount)

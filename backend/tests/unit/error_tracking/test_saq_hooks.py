@@ -138,7 +138,12 @@ class TestAfterProcess:
         assert mark_session.execute.await_count == 1
         stmt, params = mark_session.execute.await_args.args
         assert "task_failure" in str(stmt)
-        assert "NOT IN ('complete', 'cancelled', 'failed')" in str(stmt)
+        # FAR-583: the guard is the FULL terminal vocabulary + the explicit
+        # 'unknown' exclusion (an unknown run is never transitioned here).
+        assert "status <> 'unknown'" in str(stmt)
+        assert "'complete'" in str(stmt)
+        assert "'eval_failed'" in str(stmt)
+        assert "'stalled'" in str(stmt)
         assert params == {"rid": RUN_ID, "oid": ORG_ID, "detail": "boom"}
         # rowcount == 1 → the compensating analytics fact is recorded.
         get_run.assert_awaited_once()

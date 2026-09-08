@@ -514,6 +514,7 @@ def build_default_evidence_provider(
 
     async def _load_output_json(run_id: UUID, node_id: str) -> dict[str, Any] | None:
         from modulo.db.crud.run import get_run
+        from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
         from modulo.db.rls import set_rls_org
 
         async with session_factory() as session, session.begin():
@@ -521,7 +522,11 @@ def build_default_evidence_provider(
             run = await get_run(session, run_id)
             if run is None:
                 return None
-            return extract_stored_output_json(run.outputs_json, run.node_telemetry_json, node_id)
+            # FAR-583 read-switch: the blobs reassemble from run_node_outputs
+            # (with the empty/mismatch legacy fallback) in this SAME
+            # transaction — one batched repo query.
+            blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=org_id)
+            return extract_stored_output_json(blobs.outputs, blobs.telemetry, node_id)
 
     return SandboxEvidenceProvider(
         sandbox_id_resolver=_resolve_sandbox_id,
@@ -778,12 +783,23 @@ async def reconcile_noop_evidence(
                 select(RunEvidence.run_id, RunEvidence.node_id).where(RunEvidence.run_id.in_([run.id for run in runs]))
             )
             existing = {(row.run_id, str(row.node_id)) for row in evidence_rows.all()}
+        # FAR-583 read-switch: the blobs reassemble from run_node_outputs (with
+        # the legacy fallback) INSIDE this transaction — one batched repo read
+        # per scanned run (bounded by max_runs), because the probe loop below
+        # runs after the transaction closes.
+        from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+
+        blobs_by_run = {
+            run.id: await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+            for run in runs
+        }
 
     for run in runs:
         summary["scanned"] += 1
         if time.monotonic() > deadline:
             break
-        for node_id in _declared_success_nodes(run.outputs_json, run.node_telemetry_json):
+        blobs = blobs_by_run[run.id]
+        for node_id in _declared_success_nodes(blobs.outputs, blobs.telemetry):
             if (run.id, node_id) in existing:
                 continue
             summary["probed"] += 1
