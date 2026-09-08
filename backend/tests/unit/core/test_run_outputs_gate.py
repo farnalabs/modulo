@@ -574,7 +574,10 @@ _UNGUARDED_SITES: set[tuple[str, str]] = {
     ("core/pipeline_engine/executor.py", "_claim_run_and_audit"),
     ("core/pipeline_engine/executor.py", "resume"),
     ("core/dispatch.py", "_org_capacity_deferred"),
-    ("api/routes/hitl.py", "claim_gate"),
+    # ('api/routes/hitl.py', 'claim_gate') removed post-rebase: main's FAR-612
+    # refactored the claim status flip to the fenced ``transition_run`` helper,
+    # which carries NO outputs/telemetry kwargs — the site no longer calls
+    # ``update_run_status`` at all, so there is nothing to guard there.
 }
 
 
