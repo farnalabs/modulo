@@ -77,8 +77,26 @@ async function runAutoLogin(navigateHome = false): Promise<boolean> {
         })
       }
     } else {
-      console.warn('[App.vue] Login response has no user field — skipping error tracker setUser')
-      // TODO: fetch /me after login to set user info on error tracker
+      // Fetch /me to populate error tracker user context when login response
+      // lacks the user field (e.g. auto-login with minimal response).
+      try {
+        const meRes = await fetch('/api/v1/auth/me', {
+          headers: { Authorization: `Bearer ${data.access_token}` },
+        })
+        if (meRes.ok) {
+          const meData = await meRes.json()
+          const tracker = getErrorTracker()
+          if (tracker && meData) {
+            tracker.setUser({
+              id: meData.id,
+              email: meData.email,
+              name: meData.name,
+            })
+          }
+        }
+      } catch {
+        // Non-critical: error tracker user context is best-effort
+      }
     }
     if (navigateHome) router.push('/')
     return true
