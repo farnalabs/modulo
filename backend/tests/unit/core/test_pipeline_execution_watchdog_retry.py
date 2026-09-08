@@ -820,14 +820,15 @@ async def _run_sweep_capture_capacity_stmt(budget: int) -> tuple[str, dict[str, 
 
 @pytest.mark.parametrize("budget", [0, 3, 7])
 async def test_sweep_capacity_timeout_guards_on_capacity_retry_budget(budget: int):
-    """FAR-705: the capacity_timeout terminalisation only fires PAST the
+    """FAR-705: the capacity_timeout terminalisation gates CLAIMED runs on the
     per-run capacity-retry budget — the loop-cap that keeps the retryable
-    capacity.* class from resurrecting a run forever — OR via the backstop
-    (never claimed / claim heartbeat itself older than the TTL)."""
+    capacity.* class from resurrecting a run forever — while NEVER-CLAIMED
+    rows (claim_count = 0) terminalize at the TTL via their own disjunct and
+    the claim-heartbeat staleness backstop covers a stale last claim."""
     sql, bound = await _run_sweep_capture_capacity_stmt(budget)
     assert (
-        "AND (claim_count > :capacity_retry_budget "
-        "OR heartbeat_at IS NULL "
+        "AND (claim_count = 0 "
+        "OR claim_count > :capacity_retry_budget "
         "OR heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
     )
     assert bound["capacity_retry_budget"] == budget
@@ -835,35 +836,38 @@ async def test_sweep_capacity_timeout_guards_on_capacity_retry_budget(budget: in
 
 @pytest.mark.parametrize("budget", [0, 3, 20])
 async def test_sweep_capacity_backstop_restores_termination_guarantee(budget: int):
-    """FAR-705 fix: the budget gate alone can never terminalize (a) a
-    NEVER-CLAIMED row — the dominant capacity path is dispatch-time deferral
-    WITHOUT a claim, so claim_count stays 0 and ``0 > budget`` is false for
-    every allowed budget — nor (b) a budget >= SAQ_RUN_CLAIM_CAP config
-    (claims are refused at claim_count >= the cap, so the comparison is
-    unsatisfiable for budget=20). The backstop OR-terms restore the
-    termination guarantee: a row with no claim heartbeat at all, or whose
-    last claim heartbeat is itself older than the TTL, terminal-fails
-    regardless of claim_count. The backstop age is the TTL itself (NOT a
-    larger multiple) — the pinned integration behaviour
-    (test_org_sandbox_capacity.py) terminalizes claim_count=0 rows with NULL
-    and TTL+30min-stale heartbeats, which any larger age would strand."""
+    """FAR-705 fix: the budget gate alone can never terminalize a budget >=
+    SAQ_RUN_CLAIM_CAP config (claims are refused at claim_count >= the cap,
+    so the comparison is unsatisfiable for budget=20), and a heartbeat-age
+    test can never terminalize a NEVER-CLAIMED row — the dominant capacity
+    path is dispatch-time deferral WITHOUT a claim, so claim_count stays 0,
+    and the stranded-refresh UPDATE restamps the row's heartbeat while it is
+    inside the TTL window, so past the crossing the refreshed heartbeat would
+    age a further full TTL (terminalising at ~2xTTL with the budget having no
+    effect). The ``claim_count = 0`` disjunct fires at the TTL crossing for
+    never-claimed rows, and the heartbeat-staleness backstop restores the
+    guarantee for CLAIMED rows: a row whose last claim heartbeat is itself
+    older than the TTL terminal-fails regardless of claim_count. The backstop
+    age is the TTL itself (NOT a larger multiple)."""
     sql, bound = await _run_sweep_capture_capacity_stmt(budget)
-    assert "OR heartbeat_at IS NULL" in sql
+    assert "claim_count = 0" in sql
+    assert "heartbeat_at IS NULL" not in sql
     assert "OR heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
     assert "hard_cap_ttl" not in bound
 
 
 async def test_sweep_capacity_within_budget_row_stays_pending():
-    """FAR-705 fix: a within-budget row with a claim heartbeat inside the TTL
-    window matches NONE of the terminalisation disjuncts — the budget
-    disjunct is strict (a claim_count == budget row does not fire it), the
-    NULL-heartbeat disjunct requires no claim at all, and the age disjunct
-    requires the last claim heartbeat to be itself older than the TTL — so
-    it keeps the pending/re-dispatch behaviour."""
+    """FAR-705 fix: a within-budget CLAIMED row with a claim heartbeat inside
+    the TTL window matches NONE of the terminalisation disjuncts — the
+    claim_count = 0 disjunct requires no claim at all, the budget disjunct is
+    strict (a claim_count == budget row does not fire it), and the age
+    disjunct requires the last claim heartbeat to be itself older than the
+    TTL — so it keeps the pending/re-dispatch behaviour."""
     sql, bound = await _run_sweep_capture_capacity_stmt(3)
+    assert "claim_count = 0" in sql
     assert "claim_count > :capacity_retry_budget" in sql
     assert "claim_count >= :capacity_retry_budget" not in sql
-    assert "heartbeat_at IS NULL" in sql
+    assert "heartbeat_at IS NULL" not in sql
     assert "heartbeat_at < now() - (:ttl * interval '1 minute'))" in sql
     assert bound["capacity_retry_budget"] == 3
 
