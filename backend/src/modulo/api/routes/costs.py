@@ -6,7 +6,7 @@ import io
 import logging
 import math
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -37,7 +37,7 @@ from modulo.db.crud.scheduled_report import (
     delete_scheduled_report,
     list_scheduled_reports,
 )
-from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
+from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies, record_or_get_anomaly
 from modulo.db.crud.team import get_team, list_teams
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.organisation import Organisation
@@ -1095,8 +1095,15 @@ def _build_rolling_anomalies(daily_spends: list[tuple[Any, float]]) -> list[dict
 
 
 def _merge_anomalies(anomalies: list[dict[str, Any]], stored: Any) -> list[dict[str, Any]]:
-    """Merge freshly detected anomalies with previously stored ones, keeping stored dismissals."""
-    stored_dict: dict[str, Any] = {}
+    """Merge freshly detected anomalies with persisted rows, keeping dismissals.
+
+    ``stored`` carries every persisted anomaly for the org (dismissed rows
+    included). A detected date adopts the stored row's ``dismissed`` state on
+    the next read, so a dismissal survives re-detection; a stored date that is
+    no longer detected is only re-shown while it is still flagged. Dismissed
+    rows whose detection condition has lapsed stay hidden.
+    """
+    stored_dict: dict[str, dict[str, Any]] = {}
     for a in stored:
         key = str(a.anomaly_date)
         if key not in stored_dict:
@@ -1117,7 +1124,7 @@ def _merge_anomalies(anomalies: list[dict[str, Any]], stored: Any) -> list[dict[
 
     seen_dates = {a["anomaly_date"] for a in anomalies}
     for key, sa in stored_dict.items():
-        if key not in seen_dates:
+        if key not in seen_dates and not sa["dismissed"]:
             anomalies.append(sa)
     return anomalies
 
@@ -1158,9 +1165,30 @@ async def get_anomalies(
 
             detected = _build_rolling_anomalies(daily_spends)
 
-            # Also merge previously stored anomalies (keeper of dismissals)
-            stored = await list_anomalies(session, organisation_id=current_user.organisation_id, dismissed=False)
-            return [AnomalyResponse(**a) for a in _merge_anomalies(detected, stored)]
+            # Persist every org-level detection on first sight so it can be
+            # dismissed: a fresh detection only lives in memory with an empty
+            # ``id`` and could never be targeted by POST /anomalies/dismiss/{id}.
+            # Load the full stored set (dismissed rows included) so a repeat
+            # detection inherits the saved dismissal state instead of surfacing
+            # as a new flagged anomaly.
+            stored = await list_anomalies(session, organisation_id=current_user.organisation_id)
+            stored_by_date = {str(a.anomaly_date): a for a in stored}
+            for a in detected:
+                row = stored_by_date.get(a["anomaly_date"])
+                if row is None:
+                    row = await record_or_get_anomaly(
+                        session,
+                        organisation_id=current_user.organisation_id,
+                        anomaly_date=date.fromisoformat(a["anomaly_date"]),
+                        amount=Decimal(str(a["amount"])),
+                        baseline=Decimal(str(a["baseline"])),
+                        percent_above=Decimal(str(a["percent_above"])),
+                    )
+                    stored_by_date[a["anomaly_date"]] = row
+                a["id"] = str(row.id)
+                a["dismissed"] = bool(row.dismissed)
+
+            return [AnomalyResponse(**a) for a in _merge_anomalies(detected, stored_by_date.values())]
     except ProgrammingError:
         _log.exception("get_anomalies ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
