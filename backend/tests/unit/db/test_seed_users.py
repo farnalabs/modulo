@@ -5,29 +5,37 @@
 ``modulo.api.main``); the API keeps thin aliases as its boot-path/test seam.
 These tests exercise the promoted functions directly through the
 ``modulo.api.dependencies`` seams — the same seam shape the pre-promotion
-tests patched.
+tests patched. ``modulo.api.main`` is imported lazily inside the tests that
+need it (Settings is constructed at import time): the minimal env is provided
+by an autouse monkeypatch fixture, so the mutation is scoped to each test and
+reverted instead of leaking into the whole pytest process.
 """
 
-import os
 import uuid
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-# Minimal env so importing ``modulo.api.main`` (which builds the lazy engine
-# from Settings at import time) works outside the tests/unit/api conftest.
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-os.environ.setdefault("SECRET_KEY", "a" * 32)
-os.environ.setdefault("FERNET_KEY", "a" * 32)
-
 import pytest
 
-import modulo.api.main as main_module
 from modulo.db.seed import rehash_existing_user, seed_modulo_user, seed_modulo_users
 from modulo.settings import Settings
 
 _VALID_32 = "a" * 32
 _FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+
+@pytest.fixture(autouse=True)
+def _scoped_bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Minimal env so a lazy ``modulo.api.main`` import can build Settings.
+
+    Scoped + reverted per test (the former module-level
+    ``os.environ.setdefault`` leaked a synthetic DATABASE_URL into every test
+    in the process).
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+    monkeypatch.setenv("SECRET_KEY", _VALID_32)
+    monkeypatch.setenv("FERNET_KEY", "a" * 32)
 
 
 def _make_settings(**overrides: object) -> Settings:
@@ -228,6 +236,8 @@ async def test_rehash_existing_user_keeps_runner_role() -> None:
 
 def test_main_seam_aliases_are_the_promoted_functions() -> None:
     """The API wrappers are the promoted functions themselves (zero drift)."""
+    import modulo.api.main as main_module
+
     assert main_module._seed_modulo_user is seed_modulo_user
     assert main_module._rehash_existing_user is rehash_existing_user
 
@@ -235,6 +245,8 @@ def test_main_seam_aliases_are_the_promoted_functions() -> None:
 @pytest.mark.anyio
 async def test_main_users_wrapper_resolves_factory_and_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
     """main._seed_modulo_users resolves the API-layer factory and delegates."""
+    import modulo.api.main as main_module
+
     called: dict[str, Any] = {}
 
     async def _fake_seeder(factory: Any, modulo_users: str) -> None:
@@ -255,6 +267,7 @@ async def test_main_users_wrapper_skips_empty_users_without_seams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Empty MODULO_USERS returns before any engine/factory resolution."""
+    import modulo.api.main as main_module
 
     async def _fail(*_a: object, **_kw: object) -> None:
         raise AssertionError("seeder must not run for an empty MODULO_USERS")

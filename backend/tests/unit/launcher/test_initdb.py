@@ -82,6 +82,15 @@ def test_validate_target_refuses_plain_file(tmp_path: Path) -> None:
         validate_target_dir(target)
 
 
+def test_validate_target_refuses_dotfiles_only_dir(tmp_path: Path) -> None:
+    # Hidden/dot entries count as content — a dotfiles-only dir is NOT empty.
+    target = tmp_path / "pgdata"
+    target.mkdir()
+    (target / ".stray-dotfile").write_text("x")
+    with pytest.raises(InitdbError, match="corrupt or interrupted"):
+        validate_target_dir(target)
+
+
 def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     tmp_pgdata = tmp_path / "tmp"
     pwfile = tmp_path / "pw"
@@ -197,6 +206,45 @@ def test_bootstrap_sweeps_stale_temp_dirs_from_killed_attempt(
     assert (pgdata / "PG_VERSION").exists()
 
 
+def test_bootstrap_sweeps_stale_pwfiles_from_killed_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A SIGKILLed attempt leaves the plaintext --pwfile behind; the next run
+    # must sweep it (a surviving bootstrap password on disk is unacceptable).
+    pgdata = tmp_path / "pgdata"
+    stale_pwfile = tmp_path / ".initdb-pwfile-deadbeef"
+    stale_pwfile.write_text("leaked-bootstrap-password\n")
+    monkeypatch.setattr(initdb_module, "_run_command", _fake_initdb_writes_pg_version)
+    bootstrap_pgdata(pgdata, password="pw")
+    assert stale_pwfile.exists() is False
+
+
+def test_bootstrap_refuses_unknown_pause_gate_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MODULO_TEST_PAUSE_AT is a test-only seam: an unknown value (a stale leak
+    # from a developer shell) must fail the bootstrap loudly, never silently.
+    monkeypatch.setenv("MODULO_TEST_PAUSE_AT", "not_a_registered_gate")
+    called: list[list[str]] = []
+    monkeypatch.setattr(initdb_module, "_run_command", lambda argv: called.append(argv))
+    with pytest.raises(InitdbError, match="not a registered pause gate"):
+        bootstrap_pgdata(tmp_path / "pgdata", password="pw")
+    assert not called  # initdb never ran under a broken pause seam
+
+
+def test_run_command_wraps_nonzero_exit_as_initdb_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess as subprocess_module
+
+    def _failing_run(*_a: object, **_kw: object) -> None:
+        raise subprocess_module.CalledProcessError(returncode=3, cmd=["initdb"])
+
+    monkeypatch.setattr(initdb_module.subprocess, "run", _failing_run)
+    with pytest.raises(InitdbError, match="exit code 3"):
+        initdb_module._run_command(["initdb", "--pgdata", "x"])
+
+
 def test_bootstrap_refuses_promotion_when_pg_version_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -252,13 +300,18 @@ def test_sigkill_mid_bootstrap_leaves_no_partial_pgdata(tmp_path: Path) -> None:
         proc.kill()
         _ = proc.wait(timeout=30)
         assert pgdata.exists() is False
+        # The SIGKILL orphaned the plaintext --pwfile (the driver was past
+        # pwfile creation and before the finally-cleanup rename).
+        leftover_pwfiles = list(tmp_path.glob(".initdb-pwfile-*"))
+        assert leftover_pwfiles
     finally:
         if proc.stdout:
             proc.stdout.close()
         if proc.stderr:
             proc.stderr.close()
     # Self-healing: a fresh bootstrap on the same data dir succeeds (stale
-    # temp dirs swept) — in-process with a fake runner.
+    # temp dirs AND the leftover plaintext pwfile swept) — in-process with a
+    # fake runner.
     monkeypatch = pytest.MonkeyPatch()
     try:
         monkeypatch.setattr(initdb_module, "_run_command", _fake_initdb_writes_pg_version)
@@ -266,6 +319,8 @@ def test_sigkill_mid_bootstrap_leaves_no_partial_pgdata(tmp_path: Path) -> None:
     finally:
         monkeypatch.undo()
     assert (pgdata / "PG_VERSION").exists()
+    swept_pwfiles = list(tmp_path.glob(".initdb-pwfile-*"))
+    assert not swept_pwfiles
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="bundled-postgres bootstrap refuses Windows (TODO(P3))")

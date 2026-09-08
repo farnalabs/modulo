@@ -15,7 +15,11 @@ Contract, all locked by tests:
   no migration shims in v1.
 * Ports are NON-DEFAULT high ports (bundled services must never collide with
   a developer's own Postgres/Redis), scanned for availability at first boot
-  and persisted.
+  and persisted, with earlier allocations excluded from later scans so the
+  three bundled services can never collide with each other.
+* Written 0o600 on POSIX. TODO(P3): on Windows the 0o600 mode is a silent
+  no-op (default ACLs apply) — acceptable here because the payload is
+  credential-free, and the secrets file next to it refuses Windows loudly.
 """
 
 import hashlib
@@ -116,14 +120,20 @@ def _mac_for(payload: dict[str, Any], hmac_key: bytes) -> str:
     return hmac.new(hmac_key, _canonical_json(payload), hashlib.sha256).hexdigest()
 
 
-def find_free_port(preferred: int) -> int:
-    """Return *preferred* if bindable, else the next free port above it.
+def find_free_port(preferred: int, exclude: set[int] | frozenset[int] | None = None) -> int:
+    """Return *preferred* if bindable and not excluded, else the next free port above it.
 
     Scans upward from the non-default high port so two bundled services never
-    collide with each other or with a developer's own listeners.
+    collide with each other or with a developer's own listeners. *exclude*
+    lets :func:`initial_state` keep sibling allocations distinct when a bump
+    lands one service on another's preferred port.
     """
+    excluded = exclude if exclude is not None else frozenset()
     candidate = max(preferred, _MIN_PORT)
     while candidate <= _MAX_PORT:
+        if candidate in excluded:
+            candidate += 1
+            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             try:
                 sock.bind(("127.0.0.1", candidate))
@@ -135,12 +145,15 @@ def find_free_port(preferred: int) -> int:
 
 
 def initial_state() -> LauncherState:
-    """Build the first-boot state: non-default high ports, availability-scanned."""
-    return LauncherState(
-        postgres_port=find_free_port(DEFAULT_POSTGRES_PORT),
-        redis_port=find_free_port(DEFAULT_REDIS_PORT),
-        api_port=find_free_port(DEFAULT_API_PORT),
-    )
+    """Build the first-boot state: non-default high ports, availability-scanned.
+
+    Each allocation excludes the previous ones, so a bump that lands Postgres
+    on (say) 16379 can never make Redis pick the same port.
+    """
+    postgres_port = find_free_port(DEFAULT_POSTGRES_PORT)
+    redis_port = find_free_port(DEFAULT_REDIS_PORT, exclude={postgres_port})
+    api_port = find_free_port(DEFAULT_API_PORT, exclude={postgres_port, redis_port})
+    return LauncherState(postgres_port=postgres_port, redis_port=redis_port, api_port=api_port)
 
 
 def save_state(state: LauncherState, path: Path, hmac_key: bytes) -> None:
@@ -171,7 +184,9 @@ def load_state(path: Path, hmac_key: bytes) -> LauncherState:
     """Load and verify state.json (HMAC + schema version + structure)."""
     try:
         envelope = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
+        # ValueError covers both json.JSONDecodeError and UnicodeDecodeError
+        # (a truncated/torn binary write must refuse cleanly, not crash).
         raise StateIntegrityError(f"state.json at {path} is unreadable: {exc}") from exc
     if not isinstance(envelope, dict) or _ENVELOPE_PAYLOAD_KEY not in envelope or _ENVELOPE_MAC_KEY not in envelope:
         raise StateIntegrityError(f"state.json at {path} is not a valid HMAC envelope")

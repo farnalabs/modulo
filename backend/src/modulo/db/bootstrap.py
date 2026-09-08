@@ -19,13 +19,17 @@ contract - importable WITHOUT SQLAlchemy/models; asyncpg-level only.
 
 import asyncio
 import os
+import secrets as _secrets
 import sys
+from pathlib import Path
 
 import asyncpg
 
 from modulo.db.url_utils import derive_system_database_url, fix_database_url
 
 __all__ = ["main"]
+
+_TMP_NAME_ATTEMPTS = 8
 
 
 def _write_env_file(path: str, content: str) -> None:
@@ -35,12 +39,36 @@ def _write_env_file(path: str, content: str) -> None:
     world-/group-readable even though they live in the world-writable ``/tmp``
     directory (S5443). The consuming shell scripts run as the same user, so the
     restrictive mode does not break them.
+
+    The fixed *path* is a predictable name in a world-writable directory, so a
+    plain create/truncate would let an attacker pre-create (or symlink) it and
+    read the credentials. Instead the content is written to a RANDOM-named
+    sibling created with ``O_CREAT|O_EXCL|O_NOFOLLOW`` (a pre-created or
+    symlinked temp name can never be adopted or followed), fsynced, and then
+    atomically renamed over the contract path — the renamed inode carries the
+    0600 mode and replaces whatever (file or symlink) squatted there. A symlink
+    on the contract path is rejected loudly rather than followed.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, content.encode())
-    finally:
-        os.close(fd)
+    target = Path(path)
+    last_error: OSError | None = None
+    for _ in range(_TMP_NAME_ATTEMPTS):
+        tmp_path = target.parent / f"{target.name}.tmp-{_secrets.token_hex(8)}"
+        try:
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except FileExistsError as exc:
+            last_error = exc  # virtually impossible random-name collision; retry
+            continue
+        try:
+            os.write(fd, content.encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        if target.is_symlink():
+            tmp_path.unlink(missing_ok=True)
+            raise RuntimeError(f"refusing to write {path}: a symlink squats on the contract path")
+        tmp_path.replace(target)
+        return
+    raise RuntimeError(f"could not secure a private temp file next to {path}") from last_error
 
 
 def main() -> None:
@@ -82,7 +110,11 @@ def main() -> None:
 
     # Step 3: Write the fixed URLs to files for the shell (credentials - 0o600)
     # The /tmp paths are the container-entrypoint contract (consumed by the
-    # shell scripts); each file is written 0o600 via _write_env_file.
+    # shell scripts). The predictable-name hazards of a world-writable /tmp
+    # are mitigated inside _write_env_file: exclusive-create random temp
+    # sibling (O_CREAT|O_EXCL|O_NOFOLLOW, 0600) atomically renamed over the
+    # contract path, symlinked contract paths rejected. The /tmp prefix here
+    # is the deployment contract, not an unchecked temp usage.
     _write_env_file("/tmp/database_url.env", runtime_url)  # nosec B108  # noqa: S108
     _write_env_file("/tmp/database_admin_url.env", admin_url)  # nosec B108  # noqa: S108
 

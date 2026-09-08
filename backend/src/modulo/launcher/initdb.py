@@ -22,7 +22,8 @@ Rules enforced here, all locked by tests:
 Deterministic test seam: setting ``MODULO_TEST_PAUSE_AT`` to a registered
 gate name makes :func:`bootstrap_pgdata` print ``PAUSED:<gate>`` to stdout
 and block reading stdin. Tests SIGKILL or resume the process from that exact
-point — no timing-based kills.
+point — no timing-based kills. A value that is not a registered gate name
+refuses the bootstrap (the seam must never fire by accident).
 """
 
 import os
@@ -44,6 +45,10 @@ _TMP_DIR_PREFIX = ".initdb-tmp-"
 _PWFILE_PREFIX = ".initdb-pwfile-"
 
 _PAUSE_ENV_VAR = "MODULO_TEST_PAUSE_AT"
+
+# Registered pause gates: MODULO_TEST_PAUSE_AT is a test-only seam; any other
+# value is a stale leak from a developer shell and must fail the boot loudly.
+_REGISTERED_GATES = frozenset({GATE_INITDB_PRE_RENAME})
 
 # The launcher-owned public surface (bootstrap_pgdata + the argv builders are
 # consumed by the slice-2 serving step; vulture's dead-code gate special-cases
@@ -77,8 +82,13 @@ def _run_command(argv: list[str]) -> None:
 
     Kept module-level so tests (and the subprocess-based SIGKILL test
     driver) can substitute a recorder without executing real binaries.
+    A non-zero exit is surfaced as :class:`InitdbError` carrying the exit
+    code (never a bare CalledProcessError leaking past the launcher).
     """
-    subprocess.run(argv, check=True)  # noqa: S603 — argv is fully constructed here
+    try:
+        subprocess.run(argv, check=True)  # noqa: S603 — argv is fully constructed here
+    except subprocess.CalledProcessError as exc:
+        raise InitdbError(f"bundled binary {argv[0]} failed with exit code {exc.returncode}") from exc
 
 
 def _pause_at(gate: str) -> None:
@@ -104,12 +114,16 @@ def validate_target_dir(pgdata: Path) -> None:
       re-initdb over it is forbidden (ADR 031 Decision 8).
     * existing NON-EMPTY dir WITHOUT ``PG_VERSION`` → corrupt/interrupted
       content; refuse with a clear error instead of guessing.
+
+    Hidden/dot entries count as content — a dotfiles-only directory is NOT
+    empty (the sweep prefixes live in the parent, so nothing legitimate
+    ever leaves a dot entry inside a fresh pgdata target).
     """
     if not pgdata.exists():
         return
     if not pgdata.is_dir():
         raise InitdbError(f"Refusing to initdb: {pgdata} exists and is not a directory")
-    entries = [entry for entry in pgdata.iterdir() if not entry.name.startswith(".")]
+    entries = list(pgdata.iterdir())
     if not entries:
         return
     if (pgdata / PG_VERSION_FILE).exists():
@@ -160,15 +174,35 @@ def postgres_server_argv(pgdata: Path, host: str, port: int, bin_dir: Path) -> l
 
 
 def _sweep_stale_tmp_dirs(parent: Path) -> None:
-    """Remove temp dirs left behind by a killed previous attempt.
+    """Remove temp dirs AND plaintext pwfiles left by a killed previous attempt.
 
-    Safe under single-launcher ownership (the launcher holds the exclusive
-    data-dir lock, ADR 031 Decision 5); a concurrent bootstrap would never
-    share this parent dir.
+    Both the ``.initdb-tmp-*`` cluster dirs and the ``.initdb-pwfile-*``
+    credential files are SIGKILL debris — a surviving pwfile is a plaintext
+    bootstrap password sitting on disk and must never outlive the next run.
+    Safe under single-launcher ownership (slice 2 adds the exclusive data-dir
+    lock, ADR 031 Decision 5; until then a concurrent bootstrap sharing this
+    parent dir is unsupported).
     """
     for entry in parent.glob(f"{_TMP_DIR_PREFIX}*"):
         if entry.is_dir():
             shutil.rmtree(entry, ignore_errors=True)
+    for entry in parent.glob(f"{_PWFILE_PREFIX}*"):
+        if entry.is_file():
+            entry.unlink(missing_ok=True)
+
+
+def _validate_pause_env() -> None:
+    """Fail fast when ``MODULO_TEST_PAUSE_AT`` names an unregistered gate.
+
+    The variable is a test-only seam; a stale value inherited from a
+    developer shell would silently block a production bootstrap mid-run.
+    """
+    value = os.environ.get(_PAUSE_ENV_VAR)
+    if value is not None and value not in _REGISTERED_GATES:
+        raise InitdbError(
+            f"{_PAUSE_ENV_VAR}={value!r} is not a registered pause gate "
+            f"(registered: {sorted(_REGISTERED_GATES)}) — refusing to bootstrap"
+        )
 
 
 def assert_supported_platform() -> None:
@@ -201,6 +235,7 @@ def bootstrap_pgdata(
     hardcoded here). The pwfile is removed afterwards.
     """
     assert_supported_platform()
+    _validate_pause_env()
     if not pgdata.parent.exists():
         pgdata.parent.mkdir(parents=True)
     validate_target_dir(pgdata)

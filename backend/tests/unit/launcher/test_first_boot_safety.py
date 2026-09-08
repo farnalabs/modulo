@@ -115,6 +115,49 @@ def test_first_boot_guard_passes_when_state_exists(
     assert settings.database_url == "postgresql+asyncpg://localhost/test"
 
 
+def test_first_boot_guard_refuses_ambient_url_from_pinned_env_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DATABASE_URL injected only through the pinned env file must refuse.
+
+    The dotenv source never appears in os.environ — the guard must inspect
+    the same env_file the Settings construction will read (the pinned config).
+    """
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    pinned = tmp_path / "config.env"
+    pinned.write_text("DATABASE_URL=postgres://foreign-from-dotenv/db\n")
+    pin_env_file(pinned)
+    set_first_boot_guard(make_first_boot_guard(tmp_path / "data", env_file=pinned))
+    with pytest.raises(AmbientEnvironmentError, match="DATABASE_URL"):
+        Settings(**_settings_kwargs())  # type: ignore[arg-type]
+
+
+def test_first_boot_guard_passes_dotenv_urls_when_state_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_dir = tmp_path / "data"
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text("{}")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    pinned = tmp_path / "config.env"
+    pinned.write_text("DATABASE_URL=postgres://foreign-from-dotenv/db\n")
+    pin_env_file(pinned)
+    set_first_boot_guard(make_first_boot_guard(state_dir, env_file=pinned))
+    # No explicit database_url kwarg: explicit kwargs outrank env sources in
+    # pydantic-settings, and this test proves the DOTENV value is what the
+    # guard (and Settings) see. `_env_file=pinned` mirrors exactly what
+    # get_settings() passes when the pin is active.
+    kwargs = {key: value for key, value in _settings_kwargs().items() if key != "database_url"}
+    settings = Settings(_env_file=pinned, **kwargs)  # type: ignore[arg-type]
+    # Post-bootstrap, an explicit URL is an operator override path (and the
+    # Settings validator still fixes the scheme).
+    assert settings.database_url == "postgresql+asyncpg://foreign-from-dotenv/db"
+
+
 def test_no_guard_installed_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgres://foreign/db")
     settings = Settings(**_settings_kwargs())  # type: ignore[arg-type]

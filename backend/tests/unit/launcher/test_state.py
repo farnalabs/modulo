@@ -142,6 +142,15 @@ def test_corrupt_json_refused(tmp_path: Path) -> None:
         load_state(path, _key())
 
 
+def test_non_utf8_bytes_refused_as_unreadable(tmp_path: Path) -> None:
+    # A torn/binary write must refuse cleanly (UnicodeDecodeError is a
+    # ValueError and lands in the same refuse path as corrupt JSON).
+    path = tmp_path / "state.json"
+    path.write_bytes(b"\xff\xfe\x00not-utf8")
+    with pytest.raises(StateIntegrityError, match="unreadable"):
+        load_state(path, _key())
+
+
 def test_invalid_port_refused(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     payload = _state().to_payload()
@@ -197,6 +206,35 @@ def test_initial_state_uses_non_default_high_ports() -> None:
     assert DEFAULT_POSTGRES_PORT != 5432
     assert DEFAULT_REDIS_PORT != 6379
     assert DEFAULT_API_PORT != 8000
+    ports = {state.postgres_port, state.redis_port, state.api_port}
+    assert len(ports) == 3  # the three allocations can never collide
+
+
+def test_initial_state_excludes_previous_allocations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bump that lands Postgres on Redis' preferred port must push Redis on."""
+    import modulo.launcher.state as state_module
+
+    class _FakeSocket:
+        def __init__(self, _family: int, _type: int) -> None:
+            pass
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def bind(self, addr: tuple[str, int]) -> None:
+            if addr[1] < DEFAULT_REDIS_PORT:
+                raise OSError("address already in use")
+
+    monkeypatch.setattr(state_module.socket, "socket", _FakeSocket)
+    state = initial_state()
+    # Everything below 16379 is taken: Postgres bumps to 16379, and Redis must
+    # NOT pick 16379 again (it is excluded) — it takes 16380.
+    assert state.postgres_port == DEFAULT_REDIS_PORT
+    assert state.redis_port == DEFAULT_REDIS_PORT + 1
+    assert state.api_port == DEFAULT_API_PORT
 
 
 def test_find_free_port_bumps_when_taken(monkeypatch: pytest.MonkeyPatch) -> None:
