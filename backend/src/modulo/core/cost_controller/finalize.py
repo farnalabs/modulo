@@ -1525,6 +1525,117 @@ def _log_union_size_guardrail(enriched: dict[str, dict[str, Any]], run_id: uuid.
         )
 
 
+async def _fallback_finalize(
+    session: AsyncSession,
+    run: Run,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    status: str,
+    error_code: str | None,
+    error_detail: str | None,
+    merged_usage: dict[str, Any],
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    is_terminal: bool,
+    session_factory: Callable[[], Any] | None,
+    claim_token: str | None,
+) -> None:
+    """The LEGACY FALLBACK write (§1.5) — runs when the component build failed."""
+    _log.exception("cost_component_finalize_failed", extra={"run_id": str(run_id)})
+    record_fallback_legacy()
+    # FAR-104 — the budget check is FAIL-OPEN (never raises), so it is safe
+    # inside the never-fail fallback envelope: an agent-budget breach still
+    # terminalizes ``budget_exceeded`` even when the component build failed.
+    status, error_code, error_detail = await _apply_agent_budget_override(
+        session, run, merged_usage, is_terminal, status, error_code, error_detail
+    )
+    fallback_total = await _fallback_write(
+        session,
+        run_id,
+        status,
+        _MergedSets(merged_usage, merged_outputs, merged_telemetry),
+        error_code,
+        error_detail,
+        is_terminal=is_terminal,
+        claim_token=claim_token,
+    )
+    # FAR-391 — the never-fail fallback MUST still run the terminal ledger
+    # block so the spend-ceiling gate refuses the ledger and the org's
+    # consumed total is accrued. Otherwise a breached ceiling is silently
+    # skipped on the legacy path. Keep it inside the never-fail envelope:
+    # a ledger failure here must never resurrect the original exception.
+    if is_terminal:
+        run_date = _ledger_run_date(is_terminal, fallback_total, run)
+        if run_date is not None:
+            try:
+                await _ledger_block(
+                    session,
+                    run_id=run_id,
+                    org_id=org_id,
+                    status=status,
+                    total=fallback_total,
+                    owner_team_id=run.owner_team_id,
+                    run_date=run_date,
+                    finalize_fields={
+                        "error_code": error_code,
+                        "error_detail": error_detail,
+                        "total_cost_usd": fallback_total,
+                    },
+                    session_factory=session_factory,
+                    claim_token=claim_token,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "cost_ledger.fallback_block_failed",
+                    extra={"run_id": str(run_id)},
+                )
+
+
+async def _terminal_ledger_block(
+    session: AsyncSession,
+    *,
+    run: Run,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    status: str,
+    total: Decimal,
+    built: _BuiltCost,
+    merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
+    error_code: str | None,
+    error_detail: str | None,
+    is_terminal: bool,
+    session_factory: Callable[[], Any] | None,
+    claim_token: str | None,
+) -> None:
+    """The ledger block — terminal only, guarded, converged (§4.2/§4.6)."""
+    run_date = _ledger_run_date(is_terminal, total, run)
+    if run_date is not None:
+        await _ledger_block(
+            session,
+            run_id=run_id,
+            org_id=org_id,
+            status=status,
+            total=total,
+            owner_team_id=run.owner_team_id,
+            run_date=run_date,
+            finalize_fields={
+                "error_code": error_code,
+                "error_detail": error_detail,
+                "total_cost_usd": total,
+                "cost_breakdown": built.breakdown,
+                "node_token_usage": built.enriched,
+                "outputs_json": merged_outputs,
+                "node_telemetry_json": merged_telemetry,
+                "total_tokens": built.total_tokens,
+            },
+            session_factory=session_factory,
+            claim_token=claim_token,
+        )
+
+
 async def finalize_cost(
     session: AsyncSession,
     *,
@@ -1630,82 +1741,40 @@ async def finalize_cost(
         # cleanly.
         raise
     except Exception:
-        _log.exception("cost_component_finalize_failed", extra={"run_id": str(run_id)})
-        record_fallback_legacy()
-        # FAR-104 — the budget check is FAIL-OPEN (never raises), so it is safe
-        # inside the never-fail fallback envelope: an agent-budget breach still
-        # terminalizes ``budget_exceeded`` even when the component build failed.
-        status, error_code, error_detail = await _apply_agent_budget_override(
-            session, run, merged_usage, is_terminal, status, error_code, error_detail
-        )
-        fallback_total = await _fallback_write(
+        await _fallback_finalize(
             session,
+            run,
             run_id,
+            org_id,
             status,
-            _MergedSets(merged_usage, merged_outputs, merged_telemetry),
             error_code,
             error_detail,
-            is_terminal=is_terminal,
-            claim_token=claim_token,
+            merged_usage,
+            merged_outputs,
+            merged_telemetry,
+            is_terminal,
+            session_factory,
+            claim_token,
         )
-        # FAR-391 — the never-fail fallback MUST still run the terminal ledger
-        # block so the spend-ceiling gate refuses the ledger and the org's
-        # consumed total is accrued. Otherwise a breached ceiling is silently
-        # skipped on the legacy path. Keep it inside the never-fail envelope:
-        # a ledger failure here must never resurrect the original exception.
-        if is_terminal:
-            run_date = _ledger_run_date(is_terminal, fallback_total, run)
-            if run_date is not None:
-                try:
-                    await _ledger_block(
-                        session,
-                        run_id=run_id,
-                        org_id=org_id,
-                        status=status,
-                        total=fallback_total,
-                        owner_team_id=run.owner_team_id,
-                        run_date=run_date,
-                        finalize_fields={
-                            "error_code": error_code,
-                            "error_detail": error_detail,
-                            "total_cost_usd": fallback_total,
-                        },
-                        session_factory=session_factory,
-                        claim_token=claim_token,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception(
-                        "cost_ledger.fallback_block_failed",
-                        extra={"run_id": str(run_id)},
-                    )
         return
 
     # --- Ledger block — terminal only, guarded, converged (§4.2/§4.6) ---
-    run_date = _ledger_run_date(is_terminal, built.total, run)
-    if run_date is not None:
-        await _ledger_block(
-            session,
-            run_id=run_id,
-            org_id=org_id,
-            status=status,
-            total=built.total,
-            owner_team_id=run.owner_team_id,
-            run_date=run_date,
-            finalize_fields={
-                "error_code": error_code,
-                "error_detail": error_detail,
-                "total_cost_usd": built.total,
-                "cost_breakdown": built.breakdown,
-                "node_token_usage": built.enriched,
-                "outputs_json": merged_outputs,
-                "node_telemetry_json": merged_telemetry,
-                "total_tokens": built.total_tokens,
-            },
-            session_factory=session_factory,
-            claim_token=claim_token,
-        )
+    await _terminal_ledger_block(
+        session,
+        run=run,
+        run_id=run_id,
+        org_id=org_id,
+        status=status,
+        total=built.total,
+        built=built,
+        merged_outputs=merged_outputs,
+        merged_telemetry=merged_telemetry,
+        error_code=error_code,
+        error_detail=error_detail,
+        is_terminal=is_terminal,
+        session_factory=session_factory,
+        claim_token=claim_token,
+    )
 
     # --- Analytics facts — every terminal path, SAME transaction (ADR 020) ---
     # ``record_run_facts`` is fail-open: a facts-write failure rolls back only
