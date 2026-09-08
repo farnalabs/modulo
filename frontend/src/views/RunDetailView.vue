@@ -97,76 +97,20 @@
       <!-- HITL Gate -->
       <!-- qa F4: a parked run still shows its open (claimable) gate — the status changed, the review did not. -->
       <section v-if="(run.status === 'awaiting_human' || run.status === 'hitl_parked') && pendingGates.length > 0" class="rounded-lg border bg-card p-6 mb-6">
-        <h2 class="text-base font-semibold tracking-tight mb-4">HITL Gate</h2>
-        <div v-for="gate in pendingGates" :key="gate.gate_id" class="space-y-3">
-          <div class="flex items-center gap-2 text-sm">
-            <span class="font-medium">{{ $t('views.RunDetailView.gate_label') }}</span>
-            <code
-              v-tooltip.top="{ value: gate.gate_id, showDelay: 300 }"
-              class="cursor-help select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
-            >{{ gate.label || shortId(gate.gate_id) }}</code>
-            <button
-              type="button"
-              data-testid="run-detail-copy-gate-id"
-              :aria-label="$t('views.RunDetailView.copy_gate_id')"
-              class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
-              @click="copyText(gate.gate_id)"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            </button>
-          </div>
-          <!-- FAR-613: the decision briefing — WHY the gate exists and WHAT
-               the reviewer is looking at, always visible before the controls. -->
-          <HitlBriefing :description="gate.description" :context="gate.context" />
-          <div v-if="gate.claimed_by && !claimToken" class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
-            Claimed by {{ gate.claimed_by }}
-          </div>
-          <div v-else-if="claimLoading" class="flex justify-center py-4">
-            <div class="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-          </div>
-          <template v-else-if="claimToken">
-            <div class="space-y-3">
-              <textarea
-                v-model="hitlNotes"
-                rows="2"
-                data-testid="run-detail-hitl-notes"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                placeholder="Review notes (optional)"
-                aria-label="Review notes"
-              />
-              <div class="flex gap-2">
-                <button
-                  type="button"
-                  :disabled="Boolean(actioning)"
-                  data-testid="run-detail-approve"
-                  class="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90 disabled:opacity-50"
-                  @click="approveGate"
-                >
-                  {{ actioning === 'approve' ? 'Approving...' : 'Approve' }}
-                </button>
-                <button
-                  type="button"
-                  :disabled="Boolean(actioning)"
-                  data-testid="run-detail-reject"
-                  class="flex-1 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
-                  @click="rejectGate"
-                >
-                  {{ actioning === 'reject' ? 'Rejecting...' : 'Reject' }}
-                </button>
-              </div>
-            </div>
-          </template>
-          <button
-            type="button"
-            v-else
-            :disabled="claimLoading"
-            class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            data-testid="run-detail-claim-gate"
-            @click="claimGate(gate)"
-          >
-            {{ claimLoading ? 'Claiming...' : 'Claim Gate' }}
-          </button>
-        </div>
+        <h2 class="text-base font-semibold tracking-tight mb-4">{{ $t('views.RunDetailView.hitl_gate') }}</h2>
+        <!-- Shared card (FAR-686): the component owns claim token, notes and
+             approve/reject actions. The FAR-631 invariant is preserved by
+             re-emitting decision messages to the hoisted hitlMessage below —
+             the card (and its internal banner) may unmount when the run
+             status flips, so the hoisted message is what survives. The card
+             renders the FAR-613 decision briefing (description + context). -->
+        <HitlGateCard
+          v-for="gate in pendingGates"
+          :key="gate.gate_id"
+          :gate="gate"
+          @claimed="onHitlClaimed"
+          @decided="onHitlDecided"
+        />
       </section>
 
       <!-- HITL action feedback. Hoisted outside the per-gate loop AND outside
@@ -756,7 +700,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
-import HitlBriefing from '../components/HitlBriefing.vue'
+import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
@@ -869,10 +813,6 @@ const cancelling = ref(false)
 const cancelError = ref<string | null>(null)
 const pendingGates = ref<components['schemas']['GateResponse'][]>([])
 const hitlLoading = ref(false)
-const claimToken = ref<string | null>(null)
-const claimLoading = ref(false)
-const actioning = ref<string | null>(null)
-const hitlNotes = ref('')
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
 const liveOutput = ref<Record<string, string>>({})
 const liveOutputSeq = ref(0)
@@ -1377,29 +1317,6 @@ async function copyInputPayload() {
   await copyText(JSON.stringify(payload, null, 2), inputPayloadCopied)
 }
 
-async function claimGate(gate: components['schemas']['GateResponse']) {
-  claimLoading.value = true
-  hitlMessage.value = null
-  try {
-    const { data, error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/claim', {
-      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
-      body: { expiry_minutes: 15 },
-    })
-    if (err) {
-      hitlMessage.value = { type: 'error', text: `Claim failed: ${formatApiError(err)}` }
-    } else if (data) {
-      const d = data as components['schemas']['ClaimResponse']
-      claimToken.value = d.claim_token
-      hitlMessage.value = { type: 'success', text: 'Gate claimed. You can now approve or reject.' }
-      setTimeout(() => { hitlMessage.value = null }, 5000)
-    }
-  } catch (e: unknown) {
-    hitlMessage.value = { type: 'error', text: `Claim failed: ${formatApiError(e)}` }
-  } finally {
-    claimLoading.value = false
-  }
-}
-
 async function cancelRun() {
   const runId = route.params.id as string
   if (!runId) return
@@ -1421,63 +1338,28 @@ async function cancelRun() {
   }
 }
 
-async function approveGate() {
-  if (!claimToken.value || pendingGates.value.length === 0) return
-  const gate = pendingGates.value[0]
-  actioning.value = 'approve'
-  hitlMessage.value = null
-  try {
-    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/approve', {
-      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
-      body: { claim_token: claimToken.value, notes: hitlNotes.value || null },
-    })
-    if (err) {
-      hitlMessage.value = {
-        type: 'error',
-        text: `Approve failed: ${formatApiError(err)}`,
-      }
-    } else {
-      pendingGates.value = []
-      claimToken.value = null
-      hitlNotes.value = ''
-      if (run.value) run.value.status = 'running'
-      hitlMessage.value = { type: 'success', text: 'Gate approved. Pipeline resuming.' }
-      setTimeout(() => { hitlMessage.value = null }, 5000)
-    }
-  } catch (e: unknown) {
-    hitlMessage.value = { type: 'error', text: `Approve failed: ${formatApiError(e)}` }
-  } finally {
-    actioning.value = null
-  }
+// FAR-631 invariant: approve/reject empties pendingGates and flips the run
+// status, unmounting the section — so the message emitted by the card is
+// hoisted into hitlMessage, rendered OUTSIDE the section (see template).
+let hitlMessageTimer: ReturnType<typeof setTimeout> | null = null
+
+// One timer at a time: a stale claim banner timer must not clear a newer
+// decided banner shown seconds later.
+function hoistHitlMessage(payload: { type: string; text: string }) {
+  if (hitlMessageTimer !== null) clearTimeout(hitlMessageTimer)
+  hitlMessage.value = payload
+  hitlMessageTimer = setTimeout(() => { hitlMessage.value = null; hitlMessageTimer = null }, 5000)
 }
 
-async function rejectGate() {
-  if (!claimToken.value || pendingGates.value.length === 0) return
-  const gate = pendingGates.value[0]
-  actioning.value = 'reject'
-  hitlMessage.value = null
-  try {
-    const { error: err } = await api.POST('/api/v1/runs/{run_id}/hitl/{gate_id}/reject', {
-      params: { path: { run_id: gate.run_id, gate_id: gate.gate_id } },
-      body: { claim_token: claimToken.value, reason: hitlNotes.value || 'Rejected by reviewer' },
-    })
-    if (err) {
-      hitlMessage.value = {
-        type: 'error',
-        text: `Reject failed: ${formatApiError(err)}`,
-      }
-    } else {
-      pendingGates.value = []
-      claimToken.value = null
-      hitlNotes.value = ''
-      if (run.value) run.value.status = 'running'
-      hitlMessage.value = { type: 'success', text: 'Gate rejected. Pipeline routed to reject target.' }
-      setTimeout(() => { hitlMessage.value = null }, 5000)
-    }
-  } catch (e: unknown) {
-    hitlMessage.value = { type: 'error', text: `Reject failed: ${formatApiError(e)}` }
-  } finally {
-    actioning.value = null
+function onHitlClaimed(payload: { type: string; text: string }) {
+  hoistHitlMessage(payload)
+}
+
+function onHitlDecided(payload: { type: string; text: string }) {
+  hoistHitlMessage(payload)
+  pendingGates.value = []
+  if (run.value && (run.value.status === 'awaiting_human' || run.value.status === 'hitl_parked')) {
+    run.value.status = 'running'
   }
 }
 

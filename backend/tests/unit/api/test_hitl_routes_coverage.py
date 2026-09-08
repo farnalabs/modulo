@@ -399,6 +399,98 @@ def test_list_org_pending_gates_no_gates_skips_pipeline_query(client: tuple[Test
     assert not resp.json()["gates"]
 
 
+def test_list_org_pending_gates_requests_include_claimed(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-686: the org endpoint asks list_pending() for claimed-but-undecided
+    gates too, so a claimed gate stays on the review page after a refresh
+    instead of vanishing (the reported bug)."""
+    http, _session = client
+    claimed = _org_gate()
+    unclaimed = _org_gate()
+    unclaimed.account_id = None
+    list_pending = AsyncMock(return_value=[claimed, unclaimed])
+    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=list_pending):
+        resp = http.get("/api/v1/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    list_pending.assert_awaited_once()
+    assert list_pending.await_args.args[1] == _ORG_ID
+    assert list_pending.await_args.kwargs["include_claimed"] is True
+    gates = resp.json()["gates"]
+    assert len(gates) == 2
+    claimed_rows = [g for g in gates if g["claimed_by"] is not None]
+    assert len(claimed_rows) == 1
+    assert claimed_rows[0]["claimed_by"] == str(_USER_ID)
+
+
+def test_list_org_pending_gates_resolves_gate_labels(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-686: the org endpoint batch-resolves each pending gate's human
+    label via run → snapshot → hitl_gate_config.label. A gate whose run has
+    no snapshot degrades to label=None while the rest of the list keeps its
+    labels, and pipeline_name resolution keeps working."""
+    http, session = client
+    snap_id = uuid.uuid4()
+    run_with_snapshot = uuid.uuid4()
+    run_without_snapshot = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+
+    claimed = _org_gate()
+    claimed.run_id = run_with_snapshot
+    claimed.gate_id = "hitl_gate_planner_deploy"
+    claimed.pipeline_id = pipeline_id
+    unclaimed = _org_gate()
+    unclaimed.run_id = run_without_snapshot
+    unclaimed.gate_id = "hitl_gate_review_ship"
+    unclaimed.pipeline_id = pipeline_id
+    unclaimed.account_id = None
+
+    graph_json = {
+        "edges": [
+            {
+                "source": "planner",
+                "target": "deploy",
+                "hitl_gate_config": {"label": "Deploy gate"},
+            }
+        ]
+    }
+
+    def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        result = MagicMock()
+        text = str(stmt)
+        if "pipeline_snapshots" in text:
+            result.all.return_value = [(snap_id, graph_json)]
+        elif "FROM runs" in text:
+            result.all.return_value = [
+                (run_with_snapshot, snap_id),
+                (run_without_snapshot, None),
+            ]
+        elif "pipelines" in text:
+            result.all.return_value = [(pipeline_id, "Reviewer Pipeline")]
+        else:
+            # set_config / authz plumbing — benign empty result
+            result.scalar.return_value = None
+            result.scalar_one_or_none.return_value = None
+            result.all.return_value = []
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[claimed, unclaimed])):
+        resp = http.get("/api/v1/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gates = resp.json()["gates"]
+    assert len(gates) == 2
+    assert gates[0]["gate_id"] == "hitl_gate_planner_deploy"
+    assert gates[0]["label"] == "Deploy gate"
+    assert gates[1]["gate_id"] == "hitl_gate_review_ship"
+    assert gates[1]["label"] is None
+    assert gates[0]["pipeline_name"] == "Reviewer Pipeline"
+    assert gates[1]["pipeline_name"] == "Reviewer Pipeline"
+
+
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (RuntimeError("kaboom"), 500)])
 def test_list_org_pending_gates_error_mapping(
     client: tuple[TestClient, AsyncMock], exc: Exception, expected: int
