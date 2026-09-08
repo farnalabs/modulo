@@ -165,7 +165,7 @@ def load_or_create(path: Path) -> LauncherSecrets:
     content = json.dumps(payload, indent=2, sort_keys=True).encode()
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if os.name == "posix":
-        flags |= os.O_NOFOLLOW
+        flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(str(path), flags, _PRIVATE_MODE)
     except FileExistsError:
