@@ -6426,8 +6426,24 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         )
                         sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://127.0.0.1:{_bridge_port}"
                         sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
+                        # FAR-664 (newline-safe bridge handoff): the rendered
+                        # agent command is handed to the bridge via a FILE, not
+                        # inline after ``--``. An inline interpolation word-
+                        # splits a multi-line command in the outer bash, so only
+                        # its first line would reach the bridge argv and any
+                        # post-heredoc statement would escape guardrail
+                        # interception (same class of bug FAR-651 fixed for the
+                        # outer log-redirect wrap). ``bash <file>`` is a single
+                        # argv element after ``--``; sandbox_bridge.py joins the
+                        # post-``--`` argv and runs it as a shell command, so
+                        # interception semantics are unchanged. Uniform for
+                        # single-line and multi-line commands (one code path).
+                        await asyncio.wait_for(
+                            sandbox.files.write("/home/user/.modulo_bridge_cmd.sh", rendered_agent_command),
+                            timeout=_SANDBOX_IO_TIMEOUT,
+                        )
                         _bridge_wrapped_command = (
-                            f"python3 /home/user/modulo_bridge.py --wrap -- {rendered_agent_command}"
+                            "python3 /home/user/modulo_bridge.py --wrap -- bash /home/user/.modulo_bridge_cmd.sh"
                         )
                 except asyncio.CancelledError:
                     raise
