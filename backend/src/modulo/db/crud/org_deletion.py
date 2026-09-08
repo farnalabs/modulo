@@ -410,8 +410,6 @@ async def batch_delete_langgraph_checkpoints(
     batch, so an old idle-channel blob still referenced by a fresh checkpoint
     is retained until that checkpoint itself ages out.
     """
-    from modulo.db.models.run import TERMINAL_STATUSES
-
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
     terminal_statuses = list(TERMINAL_STATUSES)
     deleted_total = 0
