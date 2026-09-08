@@ -158,7 +158,6 @@ else
     end
     tokens = tonumber(st[1])
     ts = tonumber(st[2])
-end
     if tokens == nil or ts == nil then
         return -1
     end

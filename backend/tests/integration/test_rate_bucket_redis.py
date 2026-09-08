@@ -87,19 +87,6 @@ def redis_prefix() -> str:
 
 
 @pytest.fixture
-def redis_prefix() -> str:
-    """A per-test key prefix so concurrent xdist workers never share buckets.
-
-    The integration suite runs with ``-n 2`` against one shared Redis. Without a
-    unique prefix, two workers (or the fixture's ``flushdb`` teardown) race on the
-    same ``itest:`` keys and the Lua script reads a half-written / wiped bucket,
-    surfacing as ``SharedBudgetUnavailableError: ... was corrupt`` instead of a
-    real bug. A uuid prefix fully isolates each test's keys.
-    """
-    return f"itest-{uuid.uuid4().hex}:"
-
-
-@pytest.fixture
 async def redis_client() -> aioredis.Redis:
     """A real Redis client; the test is skipped if Redis is unreachable.
 
