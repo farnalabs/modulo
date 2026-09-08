@@ -122,6 +122,36 @@ class VendorClient:
             timeout=REQUEST_TIMEOUT,
         )
 
+    async def _classify_response(
+        self,
+        resp: httpx.Response,
+        attempt: int,
+    ) -> tuple[tuple[bool, int, str | None] | None, str, bool]:
+        """Classify a completed response for the retry loop.
+
+        Returns ``(terminal, http_error, retried_after_429)``:
+
+        - ``terminal`` — the final ``(success, status_code, error_message)``
+          tuple for a success or terminal-400 response, else ``None``.
+        - ``http_error`` — the ``HTTP <status>: ...`` message for a
+          non-success response; ``""`` (unused) on terminal responses.
+        - ``retried_after_429`` — True when the 429 Retry-After backoff sleep
+          already ran and the loop must skip the standard backoff step.
+        """
+        response_code = resp.status_code
+        if resp.is_success:
+            terminal: tuple[bool, int, str | None] = (True, response_code, None)
+            return terminal, "", False
+        http_error = f"HTTP {response_code}: {resp.text[:200]}"
+        if response_code == 400:
+            terminal = (False, response_code, f"HTTP 400 (terminal): {resp.text[:200]}")
+            return terminal, "", False
+        if response_code == 429:
+            if attempt < MAX_ATTEMPTS:
+                await asyncio.sleep(self._delay_for_429(resp, attempt))
+            return None, http_error, True
+        return None, http_error, False
+
     async def post_batch(
         self,
         payload: bytes,
@@ -140,6 +170,7 @@ class VendorClient:
         response_code: int | None = None
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
+            retried_after_429 = False
             try:
                 resp = await self._post_once(client, url, signature, payload, timestamp, sequence)
             except (TimeoutError, httpx.RequestError) as exc:
@@ -150,15 +181,13 @@ class VendorClient:
                 response_code = None
             else:
                 response_code = resp.status_code
-                if resp.is_success:
-                    return True, response_code, None
-                if resp.status_code == 400:
-                    return False, resp.status_code, f"HTTP 400 (terminal): {resp.text[:200]}"
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                if resp.status_code == 429:
-                    if attempt < MAX_ATTEMPTS:
-                        await asyncio.sleep(self._delay_for_429(resp, attempt))
-                    continue
+                terminal, http_error, retried_after_429 = await self._classify_response(resp, attempt)
+                if terminal is not None:
+                    return terminal
+                last_error = http_error
+
+            if retried_after_429:
+                continue
 
             if attempt < MAX_ATTEMPTS:
                 self._log_attempt_failure(attempt, last_error)
