@@ -81,10 +81,16 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 - **Run-level execution, history and output diff semantics are tracked under `feat-runs`**
   (and `feat-pipelines-pipeline-diff-rollback`) — this entry covers authoring,
   management, validation and the graph layer, not the run-detail surfaces.
-- **`run_context.feature` / `run_lifecycle.feature` / `run_sequential.feature` /
-  `run_variants.feature`** live under the pipelines BDD directory but describe run-time
-  behaviour; they are exercised by the same step suite and are not re-listed here to keep
-  the run surfaces owned by `feat-runs`.
+- **`run_context.feature` / `run_variants.feature`** live under the pipelines BDD
+  directory but describe run-time behaviour and are registered for execution — by
+  `steps/test_run_context.py` and `steps/test_pipelines.py` respectively — so they are
+  not re-listed here to keep the run surfaces owned by `feat-runs` / `feat-variants`.
+- **No executing BDD surface for `run_lifecycle.feature` / `run_sequential.feature`** —
+  the two feature files ship under `tests/bdd/features/pipelines/` but no step module
+  registers them via `scenarios(...)`, so they never execute. The run lifecycle is
+  otherwise pinned by the registered step suite (`steps/test_pipelines.py` engine-pickup
+  / node-completion / error / cancellation transitions); wiring these files up needs a
+  few missing step definitions written.
 - **No executing BDD surface for graph validation, pipeline-config validation or
   checkpoint/resume** — `pipelines/validation.feature` and
   `pipelines/pipeline_config_validation.feature` ship under `tests/bdd/features/pipelines/`
@@ -97,6 +103,12 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 
 ## QA History
 
+- 2026-09-08: **improve-architecture (product-map walk)** — corrected a stale coverage
+  claim in Known Gaps: `run_lifecycle.feature` / `run_sequential.feature` were described
+  as "exercised by the same step suite", but no step module registers them via
+  `scenarios(...)` (verified across `backend/tests/bdd/steps/`). The claim now splits the
+  registered run files (`run_context.feature`, `run_variants.feature`) from the two
+  never-executing ones, and the latter are listed as a genuine no-executing BDD gap.
 - 2026-09-07: **improve-architecture (feature-gap walk)** — registered
   `checkpoint_resume.feature` in `steps/test_pipelines.py` (previously shipped but never
   executed) and aligned the resume step so a `Given a run that failed at node N` derives
