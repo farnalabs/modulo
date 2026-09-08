@@ -658,18 +658,20 @@ class GitHubConnector(ConnectorBase):
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
                 self._raise_status_error(exc)
-            except httpx.TimeoutException as exc:
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
                 last_exc = exc
                 if await self._sleep_network_retry(attempt):
                     continue
-                self._raise_network_error(exc, "GitHub API timeout", "network_timeout")
-            except httpx.ConnectError as exc:
-                last_exc = exc
-                if await self._sleep_network_retry(attempt):
-                    continue
-                self._raise_network_error(exc, "GitHub API connection error", "network_connection")
+                message, error_code = self._network_error_kind(exc)
+                self._raise_network_error(exc, message, error_code)
         self._record_failure()
         raise GitHubNetworkError("GitHub API request failed after retries") from last_exc
+
+    def _network_error_kind(self, exc: Exception) -> tuple[str, str]:
+        """Map a transport error to its ``(message, error_code)`` pair."""
+        if isinstance(exc, httpx.TimeoutException):
+            return ("GitHub API timeout", "network_timeout")
+        return ("GitHub API connection error", "network_connection")
 
     def _should_trip_circuit(self, status_code: int) -> bool:
         """Whether a terminal HTTP status should be recorded as a circuit failure.
