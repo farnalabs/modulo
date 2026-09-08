@@ -1510,72 +1510,69 @@ def _iso_or_none(value: Any) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-@router.post(
-    "/evals/from-run",
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
-    responses={
-        403: {"description": "Forbidden"},
-        404: {"description": "Not Found"},
-        409: {"description": "Conflict"},
-        500: {"description": "Internal Server Error"},
-        501: {"description": "Not Implemented"},
-        503: {"description": "Service Unavailable"},
-    },
-)
-@handle_db_errors(_CODE_EVALS_CREATE_EVAL_RUN)
-async def create_eval_from_run(
-    req: CreateEvalFromRunRequest,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("eval.definition.create"),
-) -> dict[str, Any]:
-    """Create an eval definition pre-populated from run output."""
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create eval definitions",
+async def _load_eval_source_run(session: AsyncSession, principal: TenantPrincipal, run_id: uuid.UUID) -> Run:
+    """Fetch the source run scoped to the caller's org (404 when missing)."""
+    run = (
+        await session.execute(
+            select(Run).where(
+                Run.id == run_id,
+                Run.organisation_id == principal.organisation_id,
+            )
         )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
 
+
+async def _load_eval_source_pipeline(session: AsyncSession, principal: TenantPrincipal, pipeline_id: Any) -> Pipeline:
+    """Fetch the source run's pipeline scoped to the caller's org (404 when missing)."""
+    pipeline = (
+        await session.execute(
+            select(Pipeline).where(
+                Pipeline.id == pipeline_id,
+                Pipeline.organisation_id == principal.organisation_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail=_MSG_PIPELINE_NOT_FOUND)
+    return pipeline
+
+
+async def _load_node_sample_output(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Read the flagged node's output, wrapped as a dict sample for the eval.
+
+    FAR-583 read-switch: the blobs reassemble from run_node_outputs (with the
+    legacy fallback) inside the caller's transaction.
+    """
+    blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=principal.organisation_id)
+    outputs = blobs.outputs or {}
+    node_output = (
+        node_return(outputs, blobs.telemetry, str(node_id)) or node_return(outputs, blobs.telemetry, node_id.hex) or {}
+    )
+    return node_output if isinstance(node_output, dict) else {"output": str(node_output)}
+
+
+async def _eval_from_run_source(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    req: CreateEvalFromRunRequest,
+) -> tuple[Run, dict[str, Any]]:
+    """Load the from-run eval source (run, pipeline, node output) in one transaction."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-
-            run = (
-                await session.execute(
-                    select(Run).where(
-                        Run.id == req.run_id,
-                        Run.organisation_id == principal.organisation_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if run is None:
-                raise HTTPException(status_code=404, detail="Run not found")
-
-            pipeline = (
-                await session.execute(
-                    select(Pipeline).where(
-                        Pipeline.id == run.pipeline_id,
-                        Pipeline.organisation_id == principal.organisation_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if pipeline is None:
-                raise HTTPException(status_code=404, detail=_MSG_PIPELINE_NOT_FOUND)
-
-            # FAR-583 read-switch: the blobs reassemble from run_node_outputs
-            # (with the legacy fallback) inside THIS transaction.
-            blobs = await read_run_blobs_with_fallback(
-                session, run_id=req.run_id, organisation_id=principal.organisation_id
-            )
-            outputs = blobs.outputs or {}
-            node_output = (
-                node_return(outputs, blobs.telemetry, str(req.node_id))
-                or node_return(outputs, blobs.telemetry, req.node_id.hex)
-                or {}
-            )
-
-            sample_output = node_output if isinstance(node_output, dict) else {"output": str(node_output)}
+            run = await _load_eval_source_run(session, principal, req.run_id)
+            await _load_eval_source_pipeline(session, principal, run.pipeline_id)
+            sample_output = await _load_node_sample_output(session, principal, req.run_id, req.node_id)
+            return run, sample_output
     except HTTPException:
         raise
     except IntegrityError:
@@ -1606,28 +1603,29 @@ async def create_eval_from_run(
             detail="An unexpected error occurred while creating an eval from run output.",
         ) from None
 
-    config_json: dict[str, Any] = {}
-    if req.eval_type == "regex":
-        config_json = {
-            "field": next(iter(sample_output.keys())) if sample_output else "",
-            "pattern": "",
-        }
-    elif req.eval_type == "json_schema":
-        config_json = {
-            "field": next(iter(sample_output.keys())) if sample_output else "",
-            "schema": {},
-        }
-    elif req.eval_type == "llm_judge":
-        config_json = {
-            "field": next(iter(sample_output.keys())) if sample_output else "",
-            "instructions": "",
-        }
-    elif req.eval_type == "custom_function":
-        config_json = {
-            "field": next(iter(sample_output.keys())) if sample_output else "",
-            "function": "",
-        }
 
+def _build_eval_config_json(eval_type: str, sample_output: dict[str, Any]) -> dict[str, Any]:
+    """Build the eval definition's stub config from the sample output's first field."""
+    field = next(iter(sample_output.keys())) if sample_output else ""
+    if eval_type == "regex":
+        return {"field": field, "pattern": ""}
+    if eval_type == "json_schema":
+        return {"field": field, "schema": {}}
+    if eval_type == "llm_judge":
+        return {"field": field, "instructions": ""}
+    if eval_type == "custom_function":
+        return {"field": field, "function": ""}
+    return {}
+
+
+async def _insert_eval_definition(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    req: CreateEvalFromRunRequest,
+    run: Run,
+    config_json: dict[str, Any],
+) -> EvalDefinition:
+    """Persist the new eval definition in its own transaction."""
     try:
         async with session.begin():
             eval_def = EvalDefinition(
@@ -1643,6 +1641,7 @@ async def create_eval_from_run(
             )
             session.add(eval_def)
             await session.flush()
+            return eval_def
     except HTTPException:
         raise
     except IntegrityError:
@@ -1675,6 +1674,35 @@ async def create_eval_from_run(
             detail="An unexpected error occurred while creating an eval from run output.",
         ) from None
 
+
+@router.post(
+    "/evals/from-run",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+    responses={
+        403: {"description": "Forbidden"},
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_CREATE_EVAL_RUN)
+async def create_eval_from_run(
+    req: CreateEvalFromRunRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("eval.definition.create"),
+) -> dict[str, Any]:
+    """Create an eval definition pre-populated from run output."""
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can create eval definitions",
+        )
+    run, sample_output = await _eval_from_run_source(session, principal, req)
+    config_json = _build_eval_config_json(req.eval_type, sample_output)
+    eval_def = await _insert_eval_definition(session, principal, req, run, config_json)
     result = _eval_def_to_dict(eval_def)
     result["sample_output"] = sample_output
     return result
