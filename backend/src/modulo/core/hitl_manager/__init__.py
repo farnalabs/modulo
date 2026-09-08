@@ -45,7 +45,7 @@ from modulo.core import hitl_email_alerts
 from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.run import unpark_parked_run
 from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
+from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, HITL_CLAIMABLE_RUN_STATUSES, Run
 from modulo.db.models.team_membership import TeamMembership
 
 _log = logging.getLogger(__name__)
@@ -368,6 +368,12 @@ class HITLManager:
         else:
             token = secrets.token_urlsafe(_TOKEN_BYTES)
 
+        # FAR-645: the run-status guard is folded INTO the atomic UPDATE via
+        # the EXISTS predicate below. The pre-check SELECT above is only a
+        # fast-fail for the specific error: between it and this write the run
+        # can go terminal, and a gate-columns-only WHERE would still claim —
+        # leaving a claimed gate stranded on a terminal run (invisible +
+        # expiring). The EXISTS makes the refusal atomic with the claim.
         stmt = (
             update(HitlClaim)
             .where(
@@ -379,6 +385,13 @@ class HITLManager:
                 # claimed_at restart is accepted).
                 or_(HitlClaim.account_id.is_(None), HitlClaim.account_id == claimant_id),
                 HitlClaim.decision.is_(None),
+                select(Run.id)
+                .where(
+                    Run.id == run_id,
+                    Run.organisation_id == org_id,
+                    Run.status.in_(HITL_CLAIMABLE_RUN_STATUSES),
+                )
+                .exists(),
             )
             .values(
                 account_id=claimant_id,
@@ -391,7 +404,16 @@ class HITLManager:
         result = await session.execute(stmt)
         claimed_id = result.scalar_one_or_none()
         if claimed_id is None:
-            # Race condition — someone else claimed between our check and update
+            # The UPDATE matched no row. Either another operator claimed the
+            # gate between our pre-check and this write (AlreadyClaimedError),
+            # or the run went terminal in the same window and the run-status
+            # EXISTS predicate refused the claim (RunNotAwaitingError,
+            # FAR-645). Re-read the run so the raised error names the actual
+            # cause instead of a generic already-claimed.
+            race_run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
+            race_run = race_run_result.scalar_one_or_none()
+            if race_run is not None and race_run.status not in HITL_CLAIMABLE_RUN_STATUSES:
+                raise RunNotAwaitingError(run_id, race_run.status)
             raise AlreadyClaimedError(run_id, gate_id)
 
         gate = await session.get(HitlClaim, claimed_id, populate_existing=True)

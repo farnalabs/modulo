@@ -99,6 +99,17 @@ PIPELINE_CAPACITY_STATUSES: frozenset[str] = frozenset(
 # to this exact set.
 HITL_ACTIONABLE_RUN_STATUSES: frozenset[str] = frozenset({"awaiting_human", "claimed", HITL_PARKED_STATUS})
 
+# Run statuses under which a claim may atomically ACQUIRE a gate (FAR-645).
+# Mirrors ``HITLManager.claim()``'s pre-check: ``awaiting_human`` gates are
+# claimable now; ``hitl_parked`` gates stay claimable (FAR-604 D2 — park !=
+# decide, a parked run's gate remains undecided work until a decision
+# un-parks it). Deliberately distinct from ``HITL_ACTIONABLE_RUN_STATUSES``
+# (which also contains ``claimed`` for listing semantics): a claimed gate is
+# HELD by a reviewer, not re-claimable. This set is what claim()'s atomic
+# UPDATE folds into its WHERE clause via a ``runs`` EXISTS predicate so a run
+# that goes terminal between the pre-check and the write can never be claimed.
+HITL_CLAIMABLE_RUN_STATUSES: frozenset[str] = frozenset({AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS})
+
 # In-flight run statuses for the ``ongoing`` trigger type (FAR-158). An ongoing
 # trigger keeps its pipeline topped up to ``max_concurrent_runs`` runs whose
 # status is in this set. pending = "queued" (the user-facing semantics — a

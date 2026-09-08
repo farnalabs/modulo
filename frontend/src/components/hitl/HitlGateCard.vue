@@ -316,17 +316,24 @@ onBeforeUnmount(() => {
 })
 
 function claimFailureMessage(err: unknown): string {
-  // FAR-612: map the backend's claim-failure detail to a specific message so
-  // the operator knows what actually happened (conflict shapes from the claim
-  // endpoint: already claimed / already decided / run not awaiting).
+  // FAR-645: discriminate the claim conflicts by the backend's machine-
+  // readable problem type (urn:problem:modulo:<type>), not by substring-
+  // matching English prose -- a backend rewording can no longer degrade the
+  // UX. (Rebased onto FAR-686: this logic moved from the review view into
+  // the shared card, and the typed switch was ported with it.) The detail
+  // text still flows into the generic fallback so an unrecognised type keeps
+  // rendering the backend's explanation.
   const detail = formatApiError(err)
-  if (detail.includes('already claimed')) {
+  const problemType = typeof err === 'object' && err !== null
+    ? (err as Record<string, unknown>).type
+    : undefined
+  if (problemType === 'urn:problem:modulo:hitl_gate_already_claimed') {
     return t('hitl.gate.claim_failed_already_claimed')
   }
-  if (detail.includes('already has a decision')) {
+  if (problemType === 'urn:problem:modulo:hitl_gate_already_decided') {
     return t('hitl.gate.claim_failed_already_decided')
   }
-  if (detail.includes('not awaiting a human decision')) {
+  if (problemType === 'urn:problem:modulo:hitl_run_not_awaiting') {
     return t('hitl.gate.claim_failed_run_not_awaiting', { reason: detail })
   }
   return `${t('hitl.gate.claim_failed')} ${detail}`

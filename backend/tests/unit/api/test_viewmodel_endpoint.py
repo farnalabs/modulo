@@ -266,6 +266,69 @@ def test_viewmodel_current_includes_pending_hitl(client: TestClient) -> None:
     assert resp.status_code == 200
 
 
+def test_viewmodel_current_pending_hitl_query_filters_to_actionable_run_statuses() -> None:
+    """FAR-645: the dashboard's pending-HITL query joins ``runs`` and filters to
+    ``HITL_ACTIONABLE_RUN_STATUSES`` — identical semantics to the org pending
+    list. Without the filter, gates on terminal runs still rendered on the
+    dashboard and claiming them 409'd."""
+    pipelines_page = MagicMock(items=[], total=0, page=1, page_size=20)
+    runs_page = MagicMock(items=[], total=0, page=1, page_size=10)
+    plan_ctx = _make_mock_plan_context()
+
+    captured: list[object] = []
+    benign = MagicMock()
+    benign.all = MagicMock(return_value=[])
+
+    session = _make_mock_session()
+
+    async def _capture_execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        captured.append(stmt)
+        return benign
+
+    session.execute = _capture_execute
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    try:
+        client = TestClient(app)
+        with (
+            patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+            patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
+            patch("modulo.api.routes.viewmodel.set_rls_org"),
+            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("modulo.api.routes.viewmodel.list_views", return_value=MagicMock(items=[])),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        ):
+            resp = client.get("/api/v1/viewmodel/current")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    hitl_stmts = [s for s in captured if "hitl_claims" in str(s)]
+    assert len(hitl_stmts) == 1
+    sql = str(hitl_stmts[0].compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "join runs" in sql
+    assert "awaiting_human" in sql
+    assert "claimed" in sql
+    assert "hitl_parked" in sql
+
+
 def test_viewmodel_current_includes_feature_flags(client: TestClient) -> None:
     pipeline = _make_pipeline()
     run = _make_run()

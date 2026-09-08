@@ -428,6 +428,10 @@ const filteredGates = computed(() => {
 // FAR-686: claim/decide logic lives inside HitlGateCard (shared with
 // RunDetailView). The view only hoists the card's feedback: failures persist
 // in the view-level banner (FAR-612), successes clear it and refresh the list.
+// FAR-645 (rebased onto FAR-686): the claim-conflict discrimination by the
+// backend's machine-readable problem type (urn:problem:modulo:<type>) lives
+// inside HitlGateCard's claimFailureMessage -- the card is where the claim
+// errors are handled now, so the typed switch was ported there.
 
 async function onClaimFailed(payload: { text: string }) {
   showClaimFailureBanner(payload.text)
