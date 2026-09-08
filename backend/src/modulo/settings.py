@@ -258,6 +258,17 @@ class Settings(BaseSettings):
     # TTL itself stays independent (claims are reset by the claim-expiry
     # sweep); the grace is the SECOND, much longer window after gate expiry.
     hitl_park_grace_seconds: int = Field(default=86400, alias="HITL_PARK_GRACE_SECONDS", ge=60, le=604800)
+    # FAR-648 HITL-gate-expiry terminalizer: an ``awaiting_human`` run whose
+    # open gate expired UNCLAIMED and UNDECIDED more than this window ago is a
+    # zombie (nobody claimed it; a decision will never arrive) that still holds
+    # an org-level concurrency slot. The dispatcher_reconcile sweep
+    # terminalizes it ``cancelled`` (``hitl_gate_expired``), releasing the
+    # slot. Default 60 min — an unanswered gate that sat a full hour past its
+    # own TTL is dead work, not pending review. Operators running the
+    # FAR-604 park sweep FIRST should keep this ABOVE ``hitl_park_grace_seconds``;
+    # at the defaults (60m < 24h) terminalization wins and the park sweep
+    # becomes the backstop for runs this sweep could not touch.
+    hitl_gate_cancel_grace_seconds: int = Field(default=3600, alias="HITL_GATE_CANCEL_GRACE_SECONDS", ge=60, le=604800)
     # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
     # least one node within this setup window or the execute_run zombie watchdog
     # fails it. Covers the pre-node hang window: checkpointer setup, graph
