@@ -799,7 +799,10 @@ async def test_dispatch_reject_correction_resolves_and_dispatches():
     with (
         patch("modulo.core.feedback_manager.get_run", AsyncMock(return_value=run)),
         patch("modulo.core.guardrails.conformance.load_node_guardrails", AsyncMock(return_value=[guardrail])),
-        patch("modulo.core.feedback_manager._get_feedback_record_for_node", AsyncMock(return_value=record)),
+        patch(
+            "modulo.core.feedback_manager.queries.get_feedback_record_for_node",
+            AsyncMock(return_value=record),
+        ),
         patch("modulo.core.pipeline_engine.decorator.get_model_backend_hub", return_value=hub),
         patch.object(
             FeedbackManager,
