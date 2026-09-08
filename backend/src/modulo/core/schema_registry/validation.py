@@ -43,7 +43,7 @@ def _validate_both(schema: dict[str, Any], path: str, _depth: int) -> SchemaVali
     result = validate_union_schema(schema, path, _depth)
     array_result = validate_array_schema(schema, path, _depth)
     result.errors.extend(array_result.errors)
-    result.valid = len(result.errors) == 0
+    result.valid = not result.errors
     return result
 
 
@@ -129,7 +129,7 @@ def validate_union_schema(
 
     _validate_properties(schema, path, _depth, result, _validate_both)
 
-    result.valid = len(result.errors) == 0
+    result.valid = not result.errors
     return result
 
 
@@ -219,12 +219,12 @@ def validate_array_schema(
     if schema_type is None:
         _validate_union_variants_array(schema, path, _depth, result)
         _validate_properties(schema, path, _depth, result, validate_array_schema)
-        result.valid = len(result.errors) == 0
+        result.valid = not result.errors
         return result
 
     if schema_type != "array":
         _validate_properties(schema, path, _depth, result, validate_array_schema)
-        result.valid = len(result.errors) == 0
+        result.valid = not result.errors
         return result
 
     items = schema.get("items")
@@ -240,7 +240,7 @@ def validate_array_schema(
         return result
 
     _validate_array_items(schema, path, _depth, result)
-    result.valid = len(result.errors) == 0
+    result.valid = not result.errors
     return result
 
 
@@ -248,5 +248,5 @@ def validate_union_and_array(schema: dict[str, Any]) -> SchemaValidationResult:
     result = validate_union_schema(schema)
     array_result = validate_array_schema(schema)
     result.errors.extend(array_result.errors)
-    result.valid = len(result.errors) == 0
+    result.valid = not result.errors
     return result
