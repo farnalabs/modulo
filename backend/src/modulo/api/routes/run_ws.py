@@ -26,7 +26,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
@@ -36,7 +36,7 @@ from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import RunEvent, get_registry
 from modulo.db.crud.run import get_run
-from modulo.db.models.run import TERMINAL_STATUSES
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
@@ -67,6 +67,61 @@ def _sanitize_event(event: RunEvent) -> dict[str, Any]:
     return data
 
 
+async def _consume_run_ws_token(redis_url: str, token: str) -> dict[str, Any] | None:
+    """Consume the opaque single-use ws-token; None on expiry or failure."""
+    redis = Redis.from_url(redis_url, decode_responses=False)
+    try:
+        payload = await consume_ws_token(redis, token)
+    except WsTokenExpiredError:
+        payload = None
+    except Exception as exc:
+        _log.exception(_CODE_RUN_WS_RUN_WEBSOCKET)
+        _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
+        payload = None
+    finally:
+        await redis.aclose()
+    return payload
+
+
+async def _load_run_with_rls(
+    session_factory: async_sessionmaker[AsyncSession],
+    principal: AuthenticatedPrincipal,
+    run_id: uuid.UUID,
+) -> Run | None:
+    """Load the run inside a fresh RLS-scoped transaction (or None when missing)."""
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        return await get_run(session, run_id, organisation_id=principal.organisation_id)
+
+
+async def _forward_run_events(
+    ws: WebSocket,
+    broker: Any,
+    queue: Any,
+    since_event_seq: int,
+) -> None:
+    """Replay buffered events, then forward live events until terminal/disconnect."""
+    try:
+        # Replay buffered events the client missed
+        for event in broker.replay_since(since_event_seq):
+            await ws.send_json(_sanitize_event(event))
+
+        # Forward live events until broker closes or client disconnects
+        while True:
+            item = await queue.get()
+            if item is None:
+                await ws.send_json({"status": "terminal"})
+                break
+            try:
+                await ws.send_json(_sanitize_event(item))
+            except WebSocketDisconnect:
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        broker.unsubscribe(queue)
+
+
 @router.websocket("/{run_id}/ws")
 @handle_db_errors(_CODE_RUN_WS_RUN_WEBSOCKET)
 async def run_websocket(
@@ -88,19 +143,7 @@ async def run_websocket(
         return
     settings = get_settings()
 
-    # Consume opaque single-use ws-token.
-    redis = Redis.from_url(settings.redis_url, decode_responses=False)
-    try:
-        payload = await consume_ws_token(redis, token)
-    except WsTokenExpiredError:
-        payload = None
-    except Exception as exc:
-        _log.exception(_CODE_RUN_WS_RUN_WEBSOCKET)
-        _log.warning("ws_token.consume_failed", extra={"error": str(exc)})
-        payload = None
-    finally:
-        await redis.aclose()
-
+    payload = await _consume_run_ws_token(settings.redis_url, token)
     if payload is None:
         await ws.close(code=4001)
         return
@@ -126,9 +169,7 @@ async def run_websocket(
     engine = _get_engine(settings)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with session_factory() as session, session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+        run = await _load_run_with_rls(session_factory, principal, run_id)
     except ProgrammingError:
         _log.exception(_CODE_RUN_WS_RUN_WEBSOCKET)
         await ws.send_json({"error": "migration_required", "detail": "Run database migrations to enable this feature."})
@@ -158,24 +199,4 @@ async def run_websocket(
     # --- Subscribe to broker ---
     registry = get_registry()
     broker = registry.get_or_create(run_id)
-    queue = broker.subscribe()
-
-    try:
-        # Replay buffered events the client missed
-        for event in broker.replay_since(since_event_seq):
-            await ws.send_json(_sanitize_event(event))
-
-        # Forward live events until broker closes or client disconnects
-        while True:
-            item = await queue.get()
-            if item is None:
-                await ws.send_json({"status": "terminal"})
-                break
-            try:
-                await ws.send_json(_sanitize_event(item))
-            except WebSocketDisconnect:
-                break
-    except WebSocketDisconnect:
-        pass
-    finally:
-        broker.unsubscribe(queue)
+    await _forward_run_events(ws, broker, broker.subscribe(), since_event_seq)
