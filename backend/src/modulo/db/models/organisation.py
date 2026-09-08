@@ -39,7 +39,9 @@ class Organisation(Base):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="active")
