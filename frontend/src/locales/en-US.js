@@ -3003,7 +3003,10 @@ export default {
     "CompositeEditorView": {
       "save_as_composite": "Save as Composite",
       "name": "Name",
-      "description": "Description"
+      "description": "Description",
+      "zoom_in": "Zoom in",
+      "zoom_out": "Zoom out",
+      "fit_view": "Fit view"
     },
     "SettingsGuardrailsView": {
       "title": "Guardrails",
