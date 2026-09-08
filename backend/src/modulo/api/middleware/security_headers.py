@@ -29,7 +29,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if settings.modulo_monitor_domains:
             csp_connect += " " + settings.modulo_monitor_domains
         csp_directives = [
-            f"default-src 'self'",
+            "default-src 'self'",
             f"connect-src {csp_connect}",
             "script-src 'self' 'unsafe-inline'",
             "style-src 'self' 'unsafe-inline'",
