@@ -65,6 +65,7 @@ from modulo.core.cost_controller.breakdown.params import (
     CostComponentConfig,
     build_telemetry,
     coerce_reported_token,
+    is_proven_zero_model_token_fields,
 )
 from modulo.core.cost_controller.system_config import (
     acquire_kv_lock,
@@ -422,17 +423,41 @@ def _pop_model_cost_fields(node_dict: dict[str, Any]) -> None:
         node_dict.pop(key, None)
 
 
+def _is_exact_zero(value: Any) -> bool:
+    """FAR-653: TRUE iff the value coerces (clamp_reported-style) to EXACTLY 0.
+
+    bool / non-numeric / NaN/Inf are never a zero; a finite Decimal(value) == 0
+    is (this includes ``-0.0`` — numerically zero).
+    """
+    if isinstance(value, bool):
+        return False
+    try:
+        d = Decimal(str(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return False
+    return d.is_finite() and d == 0
+
+
 def _fold_stored_clamped(node_dict: dict[str, Any]) -> None:
     """Branch (3): output ABSENT — re-clamp the stored-union value (fallback authority).
 
     The stored ``model_cost_usd`` is re-validated through ``clamp_reported`` and
-    the folded flags derive from the re-clamped fold.
+    the folded flags derive from the re-clamped fold. FAR-653: an EXACT zero in
+    the stored union is kept — the stored union is server-written and only the
+    validated proven-zero fold writes a zero into it, so keeping it preserves a
+    genuine-zero report across a re-enrich of an outputs-pruned run (dropping
+    it would resurrect the missing-self-report warning).
     """
     stored = node_dict.get("model_cost_usd")
     if stored is None:
         return
     folded = clamp_reported(stored)
     if folded is None:
+        if _is_exact_zero(stored):
+            node_dict["model_cost_usd"] = 0.0
+            node_dict["model_cost_clamped"] = bool(node_dict.get("model_cost_clamped", False))
+            node_dict["model_cost_out_of_band_high"] = bool(node_dict.get("model_cost_out_of_band_high", False))
+            return
         _pop_model_cost_fields(node_dict)
         return
     clamped_val, _was_clamped, oob = folded
@@ -445,7 +470,14 @@ def _fold_from_output_obj(node_dict: dict[str, Any], output_obj: dict[str, Any])
     """Branch (1): output PRESENT + carries ``model_cost_usd`` → overwrite with the
     re-clamped fold (the FULL mirror of the extraction validation, defense-in-depth;
     the input is the RAW field when present, else the clamped value — the
-    explicit-None pin)."""
+    explicit-None pin).
+
+    FAR-653: when the re-clamp rejects the value (``clamp_reported`` → None)
+    but the value is an EXACT zero AND the output PROVES no token spend
+    (``is_proven_zero_model_token_fields`` — the node-output ``model_tokens_*``
+    mirror of the extraction's ``token_usage`` proof), the genuine zero IS a
+    report and is folded. An unproven zero stays rejected (popped).
+    """
     raw_field = output_obj.get("model_cost_raw_usd")
     fold_input = raw_field if raw_field is not None else output_obj.get("model_cost_usd")
     if fold_input is None:
@@ -453,6 +485,15 @@ def _fold_from_output_obj(node_dict: dict[str, Any], output_obj: dict[str, Any])
         return
     folded = clamp_reported(fold_input)
     if folded is None:
+        if _is_exact_zero(fold_input) and is_proven_zero_model_token_fields(output_obj):
+            node_dict["model_cost_usd"] = 0.0
+            if raw_field is not None:
+                node_dict["model_cost_raw_usd"] = float(raw_field)
+            else:
+                node_dict.pop("model_cost_raw_usd", None)
+            node_dict["model_cost_clamped"] = bool(output_obj.get("model_cost_clamped", False))
+            node_dict["model_cost_out_of_band_high"] = bool(output_obj.get("model_cost_out_of_band_high", False))
+            return
         _pop_model_cost_fields(node_dict)
         return
     clamped_val, _was_clamped, _oob = folded

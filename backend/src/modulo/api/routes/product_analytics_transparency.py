@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -33,6 +33,57 @@ class TransparencyResponse(BaseModel):
     warning: str | None = None
 
 
+def _transparency_fields(
+    last_dump_value: Any,
+    dump_count_value: Any,
+    consent_value: Any,
+    instance_value: Any,
+    enforcement_value: Any,
+) -> tuple[str | None, int, str, bool, bool]:
+    """Normalise the five raw system-config values into response fields.
+
+    Coercion mirrors the original endpoint logic exactly: dump count is an
+    int (falsy -> 0), consent a string (falsy -> "off"), the two enable
+    flags bools (None -> False), and the last-dump timestamp a string
+    (non-None non-str -> str()).
+    """
+    last_dump_at: str | None
+    if isinstance(last_dump_value, str):
+        last_dump_at = last_dump_value
+    elif last_dump_value is not None:
+        last_dump_at = str(last_dump_value)
+    else:
+        last_dump_at = None
+
+    dump_count_total = int(dump_count_value) if dump_count_value else 0
+    consent_level = str(consent_value) if consent_value else "off"
+    instance_enabled = bool(instance_value) if instance_value is not None else False
+    enforcement_enabled = bool(enforcement_value) if enforcement_value is not None else False
+    return last_dump_at, dump_count_total, consent_level, instance_enabled, enforcement_enabled
+
+
+def _stale_dump_warning(last_dump_at: str | None, consent_level: str) -> str | None:
+    """The staleness warning when dumps stopped reaching farnalabs.
+
+    Fires only when the last successful dump is older than
+    *_STALE_WARNING_DAYS* AND consent is ``all``. An unparseable timestamp
+    never warns (best-effort, fail-silent).
+    """
+    if not last_dump_at:
+        return None
+    try:
+        last_dt = datetime.fromisoformat(last_dump_at)
+        now = datetime.now(UTC)
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=UTC)
+        days_since = (now - last_dt).total_seconds() / 86400
+        if days_since > _STALE_WARNING_DAYS and consent_level == "all":
+            return "not_reaching_farnalabs"
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
 @router.get("/transparency")
 @handle_db_errors("product_analytics.transparency")
 async def get_transparency(
@@ -46,38 +97,14 @@ async def get_transparency(
         instance_entry = await get_config(session, "product_analytics_enabled")
         enforcement_entry = await get_config(session, "product_analytics_enforcement_enabled")
 
-    last_dump_at_raw = last_dump_entry.value if last_dump_entry else None
-    last_dump_at: str | None = None
-    if isinstance(last_dump_at_raw, str):
-        last_dump_at = last_dump_at_raw
-    elif last_dump_at_raw is not None:
-        last_dump_at = str(last_dump_at_raw)
-
-    dump_count_raw = dump_count_entry.value if dump_count_entry else 0
-    dump_count_total = int(dump_count_raw) if dump_count_raw else 0
-
-    consent_level_raw = consent_entry.value if consent_entry else "off"
-    consent_level = str(consent_level_raw) if consent_level_raw else "off"
-
-    instance_enabled_raw = instance_entry.value if instance_entry else False
-    instance_enabled = bool(instance_enabled_raw) if instance_enabled_raw is not None else False
-
-    enforcement_enabled_raw = enforcement_entry.value if enforcement_entry else False
-    enforcement_enabled = bool(enforcement_enabled_raw) if enforcement_enabled_raw is not None else False
-
-    warning = None
-
-    if last_dump_at:
-        try:
-            last_dt = datetime.fromisoformat(last_dump_at)
-            now = datetime.now(UTC)
-            if last_dt.tzinfo is None:
-                last_dt = last_dt.replace(tzinfo=UTC)
-            days_since = (now - last_dt).total_seconds() / 86400
-            if days_since > _STALE_WARNING_DAYS and consent_level == "all":
-                warning = "not_reaching_farnalabs"
-        except (ValueError, TypeError):
-            pass
+    last_dump_at, dump_count_total, consent_level, instance_enabled, enforcement_enabled = _transparency_fields(
+        last_dump_entry.value if last_dump_entry else None,
+        dump_count_entry.value if dump_count_entry else 0,
+        consent_entry.value if consent_entry else "off",
+        instance_entry.value if instance_entry else False,
+        enforcement_entry.value if enforcement_entry else False,
+    )
+    warning = _stale_dump_warning(last_dump_at, consent_level)
 
     return TransparencyResponse(
         last_successful_dump_at=last_dump_at,

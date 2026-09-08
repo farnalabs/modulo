@@ -1164,7 +1164,7 @@ def _stamp_guardrail_blocked_run(run: Run, guardrail_block_message: str) -> None
     """
     run.status = "eval_failed"
     run.error_code = "eval_blocked"
-    run.error_detail = guardrail_block_message[:5000]
+    run.error_detail = guardrail_block_message
     run.completed_at = datetime.now(UTC)
 
 
@@ -2247,10 +2247,10 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "  WHEN CAST(:error_code AS text) IS NOT NULL THEN CAST(:error_detail AS text) ELSE error_detail END, "
     "total_tokens = COALESCE(:total_tokens, total_tokens), "
     "total_cost_usd = COALESCE(:total_cost_usd, total_cost_usd), "
-    "cost_breakdown = CASE WHEN :cost_breakdown_sentinel THEN CAST(cost_breakdown AS json) "
-    "  ELSE CAST(:cost_breakdown AS json) END, "
-    "node_token_usage = CASE WHEN CAST(:node_token_usage AS json) IS NOT NULL "
-    "  THEN CAST(:node_token_usage AS json) ELSE CAST(node_token_usage AS json) END, "
+    "cost_breakdown = CASE WHEN :cost_breakdown_sentinel THEN CAST(cost_breakdown AS jsonb) "
+    "  ELSE CAST(:cost_breakdown AS jsonb) END, "
+    "node_token_usage = CASE WHEN CAST(:node_token_usage AS jsonb) IS NOT NULL "
+    "  THEN CAST(:node_token_usage AS jsonb) ELSE CAST(node_token_usage AS jsonb) END, "
     "outputs_json = CASE WHEN CAST(:outputs_json AS json) IS NOT NULL "
     "  THEN CAST(:outputs_json AS json) ELSE CAST(outputs_json AS json) END, "
     "node_telemetry_json = CASE WHEN CAST(:node_telemetry_json AS json) IS NOT NULL "
