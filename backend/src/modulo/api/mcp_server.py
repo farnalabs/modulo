@@ -6137,13 +6137,6 @@ async def create_agent(
         return {"error": "internal_error", "detail": f"Failed to create agent: {e}"}
 
 
-@mcp.tool(
-    name="list_agents",
-    description=(
-        "List agents in the organisation with cursor-based pagination. Returns agent summaries "
-        "(no prompt templates — use get_agent for the full definition)."
-    ),
-)
 def _agent_item(a: Any) -> dict[str, Any]:
     """Build an agent summary for list_agents (no prompt template bodies)."""
     return {
@@ -6158,6 +6151,13 @@ def _agent_item(a: Any) -> dict[str, Any]:
     }
 
 
+@mcp.tool(
+    name="list_agents",
+    description=(
+        "List agents in the organisation with cursor-based pagination. Returns agent summaries "
+        "(no prompt templates — use get_agent for the full definition)."
+    ),
+)
 @_RETRY_DB
 async def list_agents(
     cursor: str | None = None,
@@ -6249,10 +6249,6 @@ async def get_agent(agent_id: str) -> dict[str, Any]:
         _log.exception("get_agent failed")
         return _tool_error("Failed to get agent")
 
-    # ---------------------------------------------------------------------------
-    # Context retrieval tools
-    # ---------------------------------------------------------------------------
-
 
 _doc_index: DocumentationIndex | None = None
 _doc_index_ts: float = 0.0
@@ -6288,6 +6284,11 @@ SENSITIVE_CONFIG_KEYS: set[str] = {
 def _is_sensitive_key(key: str) -> bool:
     lower = key.lower()
     return any(lower.startswith(prefix) for prefix in SENSITIVE_CONFIG_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# Context retrieval tools
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool(

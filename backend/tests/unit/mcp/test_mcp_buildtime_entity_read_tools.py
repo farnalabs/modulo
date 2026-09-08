@@ -26,6 +26,7 @@ from modulo.api.mcp_server import (
     list_environment_profiles,
     list_model_backends,
     list_parameter_schemas,
+    mcp,
 )
 from modulo.db.crud.base import PageResult
 from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
@@ -50,6 +51,15 @@ def _page(items: list, next_cursor: str | None = None, total: int | None = None)
 
 
 class TestListAgents(AuthContext):
+    def test_registered_tool_binds_to_list_agents(self) -> None:
+        registered = mcp._tool_manager._tools["list_agents"]
+        assert registered.fn is list_agents
+        import inspect
+
+        params = inspect.signature(registered.fn).parameters
+        assert "cursor" in params
+        assert "limit" in params
+
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate: AsyncMock) -> None:
         result = await list_agents()
