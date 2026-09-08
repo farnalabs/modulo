@@ -86,7 +86,7 @@ async def test_real_lua_no_lost_token_race_under_concurrency(
     assert grants == 5
     # The real script applied PEXPIRE; the key must exist with a bounded reclaim
     # TTL — NOT a stale worker ``now`` (~1.75e9 ms -> ~20-day expiry).
-    ttl = await redis_client.pttl("itest:k")
+    ttl = await redis_client.pttl(f"{redis_prefix}k")
     expected = _expected_ttl_ms(0.0001, 5)
     assert 1 <= ttl <= expected
 
@@ -170,7 +170,7 @@ async def test_real_lua_refills_over_server_wall_clock(
     # 2/s rate: ~0.6s refills a token.
     await asyncio.sleep(0.6)
     assert await bucket.consume("k", tokens=1.0) is True
-    ttl = await redis_client.pttl("itest:k")
+    ttl = await redis_client.pttl(f"{redis_prefix}k")
     expected = _expected_ttl_ms(2.0, 1)
     assert 1 <= ttl <= expected
 

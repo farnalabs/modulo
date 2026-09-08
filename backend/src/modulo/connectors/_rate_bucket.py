@@ -139,21 +139,26 @@ local tt = redis.call('TIME')
 local now = tt[1] + tt[2] / 1e6
 
 local st = redis.call('HMGET', key, 'tokens', 'ts')
+local tokens_present = st[1] ~= false
+local ts_present = st[2] ~= false
 local tokens = tonumber(st[1])
 local ts = tonumber(st[2])
--- A missing hash field comes back from Redis as Lua ``false`` (not ``nil``), so
--- ``st[1] ~= nil`` alone would wrongly classify a fresh/empty bucket as corrupt
--- and fail closed on every first consume. Only treat the bucket as corrupt when
--- the field is present (``st[1] ~= false``) yet not parseable as a number.
-if tokens == nil and st[1] ~= false then
-    return -1
-end
-if tokens == nil then
+-- A missing hash field comes back from Redis as Lua ``false`` (not ``nil``). A
+-- bucket is FRESH only when BOTH fields are absent (a never-seen destination,
+-- start full). If EXACTLY ONE field is present the bucket is half-written — a
+-- partial write, a per-field HEXPIRE, or a partial restore — and must fail
+-- closed rather than re-burst to full capacity (the one direction this script
+-- exists never to fail in: an exhausted budget handing out a fresh burst). A
+-- field that is present but unparseable (e.g. ``"garbage"``) is likewise corrupt.
+-- All three corrupt shapes return -1 so the caller fails closed instead of
+-- minting tokens from an uncounted budget.
+if not tokens_present and not ts_present then
     tokens = burst
     ts = now
-end
-if ts == nil then
-    ts = now
+elseif not tokens_present or not ts_present then
+    return -1
+elseif tokens == nil or ts == nil then
+    return -1
 end
 local elapsed = now - ts
 if elapsed < 0 then elapsed = 0 end
