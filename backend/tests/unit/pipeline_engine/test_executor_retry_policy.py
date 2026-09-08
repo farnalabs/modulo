@@ -1654,10 +1654,10 @@ def _capture_executor_logs(level: int):
 
 
 # ---------------------------------------------------------------------------
-# FAR-690 pin — the raw watchdog code resolves through the shared alias table
-# into the timeout event, so the watchdog-retry hook
-# (pipeline_engine.watchdog_retry) matches the same event an in-execute
-# deadline outcome would match.
+# FAR-690 / FAR-693 pins — the raw watchdog codes resolve through the shared
+# alias table into the timeout / stall events, so the watchdog-retry hook
+# (pipeline_engine.watchdog_retry) matches the same events an in-execute
+# outcome of the same shape would match.
 # ---------------------------------------------------------------------------
 
 

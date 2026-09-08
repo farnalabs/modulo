@@ -1616,6 +1616,21 @@ async def _sweep_org_stale_runs(
     )
     stranded_rows.extend(stranded_result.all())
 
+    # FAR-705: capacity.* is a RETRYABLE registry class (all four capacity
+    # codes carry retryable=True), so a run that exhausted its TTL while
+    # waiting for capacity must not be dropped on the first pass. The per-run
+    # capacity-retry budget (``SAQ_CAPACITY_RETRY_BUDGET``, default 3) caps
+    # total capacity retries: ``claim_count`` counts every claim/demote
+    # capacity cycle for such a run, so it IS the per-run capacity-retry
+    # counter — no schema change. Rows within the budget stay ``pending``
+    # with their capacity marker and are re-dispatched by the EXISTING
+    # capacity-recovery machinery (the 60s ``dispatcher_reconcile`` capacity
+    # branch re-dispatches via ``dispatch_run`` when capacity frees; its
+    # claim/demote cycle grows ``claim_count`` — that growth is the budget
+    # decrement, and the re-dispatch cadence is the backoff). Once the budget
+    # is gone the TTL terminal-fail fires exactly as before (the loop-cap),
+    # so a capacity row can never be resurrected forever.
+    capacity_retry_budget = int(getattr(get_settings(), "saq_capacity_retry_budget", 3))
     capacity_timeout_result = await conn.execute(
         text(
             "UPDATE runs "
@@ -1626,12 +1641,14 @@ async def _sweep_org_stale_runs(
             "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
             "AND created_at < now() - (:ttl * interval '1 minute') "
             "AND cancellation_requested = false "
+            "AND claim_count > :capacity_retry_budget "
             "RETURNING id"
         ),
         {
             "oid": str(org_id),
             "ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
             "detail": "Waited in capacity queue past the TTL.",
+            "capacity_retry_budget": capacity_retry_budget,
         },
     )
     capacity_timeout_count = capacity_timeout_result.rowcount or 0

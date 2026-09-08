@@ -1,8 +1,9 @@
 """Unit tests for the shared watchdog-kill retry mechanism (FAR-690 / FAR-693)
+and the per-run capacity-retry budget on the stale-run sweep (FAR-705).
 
-FAR-690: the FAR-369 absolute node-deadline watchdog and FAR-693: the
-executor-level zombie watchdog used to terminal-fail runs DIRECTLY, bypassing
-the run-level retry decision. Both now consult the
+FAR-690: the FAR-369 absolute node-deadline watchdog used to terminal-fail the
+run DIRECTLY, bypassing the run-level retry decision. FAR-693: the executor-
+level zombie watchdog had the same bypass for stalls. Both now consult the
 pipeline's ``retry_policy`` through the ONE shared mechanism
 (``pipeline_engine.watchdog_retry``) and re-dispatch via the SAME fenced
 pending-reset + ``RunRetryPolicyError`` re-raise the in-execute retry path
@@ -19,7 +20,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +30,7 @@ from modulo.core.pipeline_engine.executor import RunRetryPolicyError
 from modulo.core.pipeline_engine.watchdog_retry import WatchdogRetryOutcome
 from modulo.core.pipeline_execution import (
     _fail_overdue_node,
+    _sweep_org_stale_runs,
     _watchdog_retry_enabled_for_job,
     run_executor_with_watchdog,
     zombie_watchdog,
@@ -617,3 +619,89 @@ async def test_script_mode_graph_requires_lease_probe_before_redispatch():
     executor._probe_script_lease.assert_awaited_once()
     assert dispatched is False
     assert box.requested is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-705 — per-run capacity-retry budget on the stale-run sweep
+# ---------------------------------------------------------------------------
+
+
+def _sweep_engine(statements: list[str], params: list[dict[str, object]]):
+    """Async conn double recording statements/params for the sweep branches."""
+
+    class _AsyncResult:
+        def __init__(self) -> None:
+            self.rowcount = 0
+            self._rows: list[Any] = []
+
+        def all(self) -> list[Any]:
+            return self._rows
+
+    class _AsyncConn:
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *args: object) -> bool:
+            return False
+
+        def begin(self) -> Self:
+            return self
+
+        async def execute(self, stmt: object, bind: dict[str, object] | None = None) -> _AsyncResult:
+            statements.append(str(stmt))
+            params.append(bind or {})
+            return _AsyncResult()
+
+    class _AsyncEngine:
+        def connect(self) -> _AsyncConn:
+            return _AsyncConn()
+
+    return _AsyncEngine()
+
+
+def _compile_sql(stmt: object) -> str:
+    return str(stmt)
+
+
+@pytest.mark.parametrize("budget", [0, 3, 7])
+async def test_sweep_capacity_timeout_guards_on_capacity_retry_budget(budget: int):
+    """FAR-705: the capacity_timeout terminalisation only fires PAST the
+    per-run capacity-retry budget — the loop-cap that keeps the retryable
+    capacity.* class from resurrecting a run forever."""
+    statements: list[str] = []
+    params: list[dict[str, object]] = []
+    engine = _sweep_engine(statements, params)
+    with patch(
+        "modulo.core.pipeline_execution.get_settings",
+        lambda: MagicMock(saq_capacity_retry_budget=budget),
+    ):
+        never, capacity, lost = await _sweep_org_stale_runs(
+            engine.connect(),
+            org_id=uuid.uuid4(),
+            nd_window=300,
+            wl_window=600,
+            stranded_rows=[],
+            terminalised_run_ids=[],
+        )
+    assert never == 0
+    assert capacity == 0
+    assert lost == 0
+    capacity_stmts = [(s, p) for s, p in zip(statements, params, strict=True) if "capacity_timeout" in s]
+    assert len(capacity_stmts) == 1
+    sql, bound = capacity_stmts[0]
+    assert "AND claim_count > :capacity_retry_budget" in _compile_sql(sql)
+    assert bound["capacity_retry_budget"] == budget
+
+
+def test_capacity_retry_budget_setting_default_and_override(monkeypatch: pytest.MonkeyPatch):
+    """The new setting defaults to 3 (the FAR-705 budget) and honours its env
+    override."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+    monkeypatch.setenv("SECRET_KEY", "a" * 32)
+    monkeypatch.setenv("FERNET_KEY", "a" * 32)
+    monkeypatch.delenv("SAQ_CAPACITY_RETRY_BUDGET", raising=False)
+    from modulo.settings import Settings
+
+    assert Settings().saq_capacity_retry_budget == 3
+    monkeypatch.setenv("SAQ_CAPACITY_RETRY_BUDGET", "7")
+    assert Settings().saq_capacity_retry_budget == 7
