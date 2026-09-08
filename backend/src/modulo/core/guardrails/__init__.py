@@ -277,6 +277,65 @@ def set_static_path(payload: dict[str, Any], path: str, value: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _apply_block_policy(
+    value: Any,
+    policy: FieldRedactionPolicy,
+    path: str,
+    *,
+    raise_on_block: bool,
+    guardrail_name: str,
+) -> RedactionEntry:
+    """Handle a ``block`` policy: raise when the guarded value is present and raising is enabled."""
+    present = value is not None and (not isinstance(value, (str, list, dict)) or bool(value))
+    if present and raise_on_block:
+        raise GuardrailBlockedError(guardrail_name, f"blocked field {path!r} present in payload")
+    return RedactionEntry(
+        path=path, mode=policy.mode.value, applied=present, reason="present" if present else "field-absent"
+    )
+
+
+def _apply_drop_policy(redacted: dict[str, Any], policy: FieldRedactionPolicy, path: str) -> RedactionEntry:
+    """Handle a ``drop`` policy: remove the key when present."""
+    dropped = _delete_static_path(redacted, path)
+    return RedactionEntry(
+        path=path,
+        mode=policy.mode.value,
+        applied=dropped,
+        reason="dropped" if dropped else "field-absent",
+    )
+
+
+def _apply_transform_policy(redacted: dict[str, Any], policy: FieldRedactionPolicy, path: str) -> RedactionEntry:
+    """Handle the default transform policy: masks-only overwrite."""
+    set_static_path(redacted, path, REDACTION_MASK)
+    return RedactionEntry(path=path, mode=policy.mode.value, applied=True, reason="masked")
+
+
+def _apply_one_redaction_policy(
+    redacted: dict[str, Any],
+    policy: FieldRedactionPolicy,
+    allow: frozenset[str],
+    *,
+    raise_on_block: bool,
+    guardrail_name: str,
+) -> RedactionEntry:
+    """Apply one redaction policy to the working copy, returning its entry record."""
+    path = policy.path
+    segments = _split_path(path)
+    top_segment = segments[0] if segments else ""
+    if top_segment in allow:
+        return RedactionEntry(path=path, mode=policy.mode.value, applied=False, reason="allowlist")
+    found, value = resolve_static_path(redacted, path)
+    if not found:
+        return RedactionEntry(path=path, mode=policy.mode.value, applied=False, reason="field-absent")
+    if policy.mode == FieldRedactionMode.BLOCK:
+        return _apply_block_policy(value, policy, path, raise_on_block=raise_on_block, guardrail_name=guardrail_name)
+    if policy.mode == FieldRedactionMode.DROP:
+        return _apply_drop_policy(redacted, policy, path)
+    # transform (default): masks-only
+    return _apply_transform_policy(redacted, policy, path)
+
+
 def apply_redaction_masks(
     payload: dict[str, Any],
     policies: Sequence[FieldRedactionPolicy],
@@ -299,42 +358,17 @@ def apply_redaction_masks(
     if not payload:
         return copy.deepcopy(payload), []
     redacted: dict[str, Any] = copy.deepcopy(payload)
-    entries: list[RedactionEntry] = []
     allow = frozenset(allowlist)
-    for policy in policies:
-        path = policy.path
-        top_segment = _split_path(path)[0] if _split_path(path) else ""
-        if top_segment in allow:
-            entries.append(RedactionEntry(path=path, mode=policy.mode.value, applied=False, reason="allowlist"))
-            continue
-        found, value = resolve_static_path(redacted, path)
-        if not found:
-            entries.append(RedactionEntry(path=path, mode=policy.mode.value, applied=False, reason="field-absent"))
-            continue
-        if policy.mode == FieldRedactionMode.BLOCK:
-            present = value is not None and (not isinstance(value, (str, list, dict)) or bool(value))
-            if present and raise_on_block:
-                raise GuardrailBlockedError(guardrail_name, f"blocked field {path!r} present in payload")
-            entries.append(
-                RedactionEntry(
-                    path=path, mode=policy.mode.value, applied=present, reason="present" if present else "field-absent"
-                )
-            )
-            continue
-        if policy.mode == FieldRedactionMode.DROP:
-            dropped = _delete_static_path(redacted, path)
-            entries.append(
-                RedactionEntry(
-                    path=path,
-                    mode=policy.mode.value,
-                    applied=dropped,
-                    reason="dropped" if dropped else "field-absent",
-                )
-            )
-            continue
-        # transform (default): masks-only
-        set_static_path(redacted, path, REDACTION_MASK)
-        entries.append(RedactionEntry(path=path, mode=policy.mode.value, applied=True, reason="masked"))
+    entries: list[RedactionEntry] = [
+        _apply_one_redaction_policy(
+            redacted,
+            policy,
+            allow,
+            raise_on_block=raise_on_block,
+            guardrail_name=guardrail_name,
+        )
+        for policy in policies
+    ]
     return redacted, entries
 
 
@@ -544,31 +578,65 @@ def _resolve_action(eval_def: EvalDefinition) -> GuardrailAction:
         return GuardrailAction.OBSERVE
 
 
+@dataclass(frozen=True)
+class BlockDecision:
+    """The block decision of an interception pass (internal carrier).
+
+    ``blocked`` / ``block_message`` / ``blocking_eval_name`` travel as one
+    named carrier instead of a positional ``(bool, str, str)`` tuple — the
+    two adjacent same-typed strings are transposition-prone when unpacked
+    positionally.
+    """
+
+    blocked: bool = False
+    block_message: str = ""
+    blocking_eval_name: str = ""
+
+
+@dataclass(frozen=True)
+class RedactionPhaseOutcome:
+    """Outcome of phase two — the redaction phase of an interception pass."""
+
+    redacted: dict[str, Any]
+    entries: list[RedactionEntry]
+    decision: BlockDecision
+
+
+@dataclass(frozen=True)
+class DetectionLoopOutcome:
+    """Outcome of the bounded async detection loop (phase one)."""
+
+    results: list[EvalResult]
+    evaluated_defs: list[EvalDefinition]
+    decision: BlockDecision
+
+
 def _detect_block(
     definitions: Sequence[EvalDefinition],
     results: Sequence[EvalResult],
-) -> tuple[bool, str, str]:
+) -> BlockDecision:
     """Determine the block decision from aligned (definitions, results)."""
     for eval_def, result in zip(definitions, results, strict=True):
         detection_type, _ = _resolve_detection(eval_def)
         if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
-            return True, f"Guardrail {eval_def.name!r} blocked: {result.detail}", eval_def.name
-    return False, "", ""
+            return BlockDecision(
+                blocked=True,
+                block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
+                blocking_eval_name=eval_def.name,
+            )
+    return BlockDecision()
 
 
 def _apply_redaction_phase(
     definitions: Sequence[EvalDefinition],
     redacted: dict[str, Any],
-) -> tuple[dict[str, Any], list[RedactionEntry], bool, str, str]:
+) -> RedactionPhaseOutcome:
     """Phase two — apply redaction masks to redact-action guardrails.
 
-    Returns ``(redacted, entries, blocked, block_message, blocking_eval_name)``.
     A block-mode redaction policy firing records a block (never raises).
     """
     entries: list[RedactionEntry] = []
-    blocked: bool = False
-    block_message: str = ""
-    blocking_eval_name: str = ""
+    decision = BlockDecision()
     for eval_def in definitions:
         try:
             cfg = _validate_guardrail_definition(eval_def)
@@ -598,11 +666,9 @@ def _apply_redaction_phase(
             )
             entries.extend(batch_entries)
         except GuardrailBlockedError as exc:
-            if not blocked:
-                blocked = True
-                block_message = str(exc)
-                blocking_eval_name = eval_def.name
-    return redacted, entries, blocked, block_message, blocking_eval_name
+            if not decision.blocked:
+                decision = BlockDecision(blocked=True, block_message=str(exc), blocking_eval_name=eval_def.name)
+    return RedactionPhaseOutcome(redacted=redacted, entries=entries, decision=decision)
 
 
 def _mechanism_fail_result(eval_def: EvalDefinition, reason: str) -> EvalResult:
@@ -794,6 +860,50 @@ def derive_conformance_state(
 # ---------------------------------------------------------------------------
 
 
+def _assemble_outcome(
+    definitions: Sequence[EvalDefinition],
+    pre_act: dict[str, Any],
+    results: list[EvalResult],
+    decision: BlockDecision,
+    *,
+    detection_only: bool,
+    skipped: Sequence[GuardrailSkip] = (),
+) -> GuardrailInterceptionOutcome:
+    """Assemble the full interception outcome from the pass phases.
+
+    Shared tail of :func:`run_interception_pass` and
+    :func:`run_interception_pass_async`: the detection-only early return, the
+    redaction phase, the block merge (a redaction-phase block only wins when
+    the detection block decision is silent), and the outcome construction.
+
+    The sync/async skipped difference is preserved deliberately via the
+    *skipped* parameter: the async pass forwards its skip entries (e.g.
+    soft-deleted pinned guardrails, item 10) so the seam can audit them,
+    while the sync pass has no skip concept and passes ``()`` — the outcome's
+    ``skipped`` then defaults to an empty list exactly as before this helper
+    existed.
+    """
+    if detection_only:
+        return GuardrailInterceptionOutcome(
+            payload=pre_act,
+            results=results,
+            skipped=list(skipped),
+            blocked=False,
+        )
+    redaction_outcome = _apply_redaction_phase(definitions, pre_act)
+    if not decision.blocked and redaction_outcome.decision.blocked:
+        decision = redaction_outcome.decision
+    return GuardrailInterceptionOutcome(
+        payload=redaction_outcome.redacted,
+        results=results,
+        redactions=redaction_outcome.entries,
+        blocked=decision.blocked,
+        block_message=decision.block_message,
+        blocking_eval_name=decision.blocking_eval_name,
+        skipped=list(skipped),
+    )
+
+
 def run_interception_pass(
     engine: EvalEngine,
     definitions: Sequence[EvalDefinition],
@@ -822,21 +932,167 @@ def run_interception_pass(
     pre_act = copy.deepcopy(payload)
     results = evaluate_guardrails(engine, definitions, pre_act, raise_on_block=False)
 
-    blocked, block_message, blocking_eval_name = _detect_block(definitions, results)
-    if detection_only:
-        return GuardrailInterceptionOutcome(payload=pre_act, results=results, blocked=False)
-
-    redacted, entries, rb, rbm, rbname = _apply_redaction_phase(definitions, pre_act)
-    if not blocked and rb:
-        blocked, block_message, blocking_eval_name = rb, rbm, rbname
-    return GuardrailInterceptionOutcome(
-        payload=redacted,
-        results=results,
-        redactions=entries,
-        blocked=blocked,
-        block_message=block_message,
-        blocking_eval_name=blocking_eval_name,
+    decision = _detect_block(definitions, results)
+    return _assemble_outcome(
+        definitions,
+        pre_act,
+        results,
+        decision,
+        detection_only=detection_only,
     )
+
+
+def _over_budget_replay_outcome(
+    definitions: Sequence[EvalDefinition],
+    payload: dict[str, Any],
+    reason: str,
+    skipped: Sequence[GuardrailSkip],
+) -> GuardrailInterceptionOutcome:
+    """Detection-only over-budget outcome (item 10): record the error, never act.
+
+    The over-budget mechanism error is ALWAYS recorded as an errored result
+    for every bound guardrail — never a block — so the replay keeps the
+    evidence (guardrail_summary errored bucket). Mirrors the in-loop
+    detection-only mechanism-error handling.
+    """
+    _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
+    return GuardrailInterceptionOutcome(
+        payload=copy.deepcopy(payload),
+        results=[_mechanism_fail_result(d, reason) for d in definitions],
+        skipped=list(skipped),
+    )
+
+
+def _over_budget_enforcement_outcome(
+    definitions: Sequence[EvalDefinition],
+    payload: dict[str, Any],
+    reason: str,
+    skipped: Sequence[GuardrailSkip],
+) -> GuardrailInterceptionOutcome:
+    """Fail-closed outcome for an over-budget payload under enforcement guardrails."""
+    any_guarding = any(_resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
+    if any_guarding:
+        _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
+        return GuardrailInterceptionOutcome(
+            payload=copy.deepcopy(payload),
+            skipped=list(skipped),
+            blocked=True,
+            block_message="guardrail mechanism error at ingestion edge",
+            blocking_eval_name="<payload-budget>",
+        )
+    _log.warning("guardrails.payload_over_budget_observe", extra={"reason": reason})
+    return GuardrailInterceptionOutcome(
+        payload=copy.deepcopy(payload),
+        results=[_mechanism_fail_result(d, reason) for d in definitions],
+        skipped=list(skipped),
+    )
+
+
+def _payload_budget_outcome(
+    definitions: Sequence[EvalDefinition],
+    payload: dict[str, Any],
+    *,
+    detection_only: bool,
+    max_payload_bytes: int,
+    skipped: Sequence[GuardrailSkip],
+) -> GuardrailInterceptionOutcome | None:
+    """Return the outcome for an over-budget payload, else ``None`` when within budget.
+
+    A payload over ``max_payload_bytes`` (ReDoS amplification guard) fails
+    closed for block/redact and log-and-continues for observe/warn.
+    """
+    if check_payload_within_budget(payload, max_payload_bytes):
+        return None
+    reason = f"payload exceeds {max_payload_bytes}-byte guardrail budget"
+    if detection_only:
+        return _over_budget_replay_outcome(definitions, payload, reason, skipped)
+    return _over_budget_enforcement_outcome(definitions, payload, reason, skipped)
+
+
+def _mechanism_error_reason(exc: Exception, timeout: float) -> str:
+    """Describe a guardrail mechanism error (budget exceeded vs detection failure)."""
+    if isinstance(exc, TimeoutError):
+        return f"detection exceeded {timeout:g}s budget"
+    return f"detection error: {exc}"
+
+
+def _log_mechanism_error(eval_def: EvalDefinition, exc: Exception, timeout: float) -> str:
+    """Log a guardrail mechanism error and return its reason string."""
+    reason = _mechanism_error_reason(exc, timeout)
+    _log.warning(
+        "guardrails.detection_budget_exceeded",
+        extra={"guardrail": eval_def.name, "reason": reason},
+    )
+    return reason
+
+
+async def _detect_with_timeout(
+    engine: EvalEngine,
+    pre_act: dict[str, Any],
+    eval_def: EvalDefinition,
+    timeout_seconds: float,
+) -> EvalResult:
+    """Run one guardrail detection in a worker thread under the hard timeout."""
+    return await asyncio.wait_for(
+        asyncio.to_thread(_detect_one, engine, pre_act, eval_def),
+        timeout=timeout_seconds,
+    )
+
+
+async def _run_detection_loop(
+    engine: EvalEngine,
+    definitions: Sequence[EvalDefinition],
+    pre_act: dict[str, Any],
+    *,
+    detection_only: bool,
+    timeout_seconds: float,
+) -> DetectionLoopOutcome:
+    """Run every guardrail detection under its budget.
+
+    A mechanism error (timeout / malformed config / misrouting) fails CLOSED
+    for block/redact guardrails (recorded as a block); observe/warn — and any
+    guardrail in detection-only replay mode — records an errored result so it
+    stays observable (never silently dropped).
+    """
+    results: list[EvalResult] = []
+    evaluated_defs: list[EvalDefinition] = []
+    decision = BlockDecision()
+    for eval_def in definitions:
+        action = _resolve_action(eval_def)
+        guarding = action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+        try:
+            # NOTE — known trade-off (runaway thread): ``wait_for`` only bounds
+            # how long WE wait; the worker thread started by ``to_thread`` keeps
+            # running in the pool even after the budget fires (a pathological
+            # regex can keep spinning in the background). Under repeated
+            # pathological patterns this can exhaust the default thread pool
+            # executor (one thread per guardrail per run). The 1MB payload
+            # budget bounds but does not eliminate it; a future fix could run
+            # detection in a cancellable process/sandbox instead.
+            result = await _detect_with_timeout(engine, pre_act, eval_def, timeout_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Mechanism error (timeout, malformed config, misrouting). Fail
+            # closed for block/redact; log-and-continue for observe/warn.
+            # In detection_only mode the mechanism error is ALWAYS recorded as
+            # an errored result — never dropped — so the replay keeps the
+            # evidence of what happened (guardrail_summary errored bucket).
+            reason = _log_mechanism_error(eval_def, exc, timeout_seconds)
+            if guarding and not detection_only:
+                decision = BlockDecision(
+                    blocked=True,
+                    block_message="guardrail mechanism error at ingestion edge",
+                    blocking_eval_name=eval_def.name,
+                )
+            else:
+                results.append(_mechanism_fail_result(eval_def, reason))
+                evaluated_defs.append(eval_def)
+            continue
+        results.append(result)
+        evaluated_defs.append(eval_def)
+
+    return DetectionLoopOutcome(results=results, evaluated_defs=evaluated_defs, decision=decision)
 
 
 async def run_interception_pass_async(
@@ -878,109 +1134,36 @@ async def run_interception_pass_async(
     if not definitions:
         return GuardrailInterceptionOutcome(payload=dict(payload), skipped=list(skipped))
 
-    if not check_payload_within_budget(payload, max_payload_bytes):
-        any_guarding = any(_resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
-        reason = f"payload exceeds {max_payload_bytes}-byte guardrail budget"
-        if detection_only:
-            # Detection-only replays never act (item 10): the over-budget
-            # mechanism error is ALWAYS recorded as an errored result for every
-            # bound guardrail — never a block — so the replay keeps the evidence
-            # (guardrail_summary errored bucket). Mirrors the in-loop
-            # detection-only mechanism-error handling below.
-            _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
-            return GuardrailInterceptionOutcome(
-                payload=copy.deepcopy(payload),
-                results=[_mechanism_fail_result(d, reason) for d in definitions],
-                skipped=list(skipped),
-            )
-        if any_guarding:
-            _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
-            return GuardrailInterceptionOutcome(
-                payload=copy.deepcopy(payload),
-                skipped=list(skipped),
-                blocked=True,
-                block_message="guardrail mechanism error at ingestion edge",
-                blocking_eval_name="<payload-budget>",
-            )
-        _log.warning("guardrails.payload_over_budget_observe", extra={"reason": reason})
-        return GuardrailInterceptionOutcome(
-            payload=copy.deepcopy(payload),
-            results=[_mechanism_fail_result(d, reason) for d in definitions],
-            skipped=list(skipped),
-        )
+    budget_outcome = _payload_budget_outcome(
+        definitions,
+        payload,
+        detection_only=detection_only,
+        max_payload_bytes=max_payload_bytes,
+        skipped=skipped,
+    )
+    if budget_outcome is not None:
+        return budget_outcome
 
     timeout = timeout_seconds if timeout_seconds is not None else resolve_guardrail_timeout(definitions)
     pre_act = copy.deepcopy(payload)
-    results: list[EvalResult] = []
-    evaluated_defs: list[EvalDefinition] = []
-    blocked: bool = False
-    block_message: str = ""
-    blocking_eval_name: str = ""
-    for eval_def in definitions:
-        action = _resolve_action(eval_def)
-        guarding = action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
-        try:
-            # NOTE — known trade-off (runaway thread): ``wait_for`` only bounds
-            # how long WE wait; the worker thread started by ``to_thread`` keeps
-            # running in the pool even after the budget fires (a pathological
-            # regex can keep spinning in the background). Under repeated
-            # pathological patterns this can exhaust the default thread pool
-            # executor (one thread per guardrail per run). The 1MB payload
-            # budget bounds but does not eliminate it; a future fix could run
-            # detection in a cancellable process/sandbox instead.
-            result = await asyncio.wait_for(
-                asyncio.to_thread(_detect_one, engine, pre_act, eval_def),
-                timeout=timeout,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            # Mechanism error (timeout, malformed config, misrouting). Fail
-            # closed for block/redact; log-and-continue for observe/warn.
-            # In detection_only mode the mechanism error is ALWAYS recorded as
-            # an errored result — never dropped — so the replay keeps the
-            # evidence of what happened (guardrail_summary errored bucket).
-            reason = (
-                f"detection exceeded {timeout:g}s budget"
-                if isinstance(exc, TimeoutError)
-                else f"detection error: {exc}"
-            )
-            _log.warning(
-                "guardrails.detection_budget_exceeded",
-                extra={"guardrail": eval_def.name, "reason": reason},
-            )
-            if guarding and not detection_only:
-                blocked = True
-                block_message = "guardrail mechanism error at ingestion edge"
-                blocking_eval_name = eval_def.name
-                continue
-            results.append(_mechanism_fail_result(eval_def, reason))
-            evaluated_defs.append(eval_def)
-            continue
-        results.append(result)
-        evaluated_defs.append(eval_def)
+    detection_outcome = await _run_detection_loop(
+        engine,
+        definitions,
+        pre_act,
+        detection_only=detection_only,
+        timeout_seconds=timeout,
+    )
 
-    if not blocked:
-        blocked, block_message, blocking_eval_name = _detect_block(evaluated_defs, results)
-    if detection_only:
-        return GuardrailInterceptionOutcome(
-            payload=pre_act,
-            results=results,
-            skipped=list(skipped),
-            blocked=False,
-        )
-
-    redacted, entries, rb, rbm, rbname = _apply_redaction_phase(definitions, pre_act)
-    if not blocked and rb:
-        blocked, block_message, blocking_eval_name = rb, rbm, rbname
-    return GuardrailInterceptionOutcome(
-        payload=redacted,
-        results=results,
-        redactions=entries,
-        blocked=blocked,
-        block_message=block_message,
-        blocking_eval_name=blocking_eval_name,
-        skipped=list(skipped),
+    decision = detection_outcome.decision
+    if not decision.blocked:
+        decision = _detect_block(detection_outcome.evaluated_defs, detection_outcome.results)
+    return _assemble_outcome(
+        definitions,
+        pre_act,
+        detection_outcome.results,
+        decision,
+        detection_only=detection_only,
+        skipped=skipped,
     )
 
 

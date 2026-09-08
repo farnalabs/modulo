@@ -192,6 +192,68 @@ def _apply_map(output: Any, expression: str) -> Any:
     return compiled.search(output if isinstance(output, (dict, list)) else {"value": output})
 
 
+def _failed_branches(collected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the collected branches whose status is not ``succeeded``."""
+    return [c for c in collected if c.get("status") != "succeeded"]
+
+
+def _enforce_partial_policy(failed: list[dict[str, Any]], partial_policy: JoinPartialPolicy) -> None:
+    """Raise ``JoinConfigurationError`` when ``partial_policy='fail'`` and any branch failed."""
+    if partial_policy == "fail" and failed:
+        raise JoinConfigurationError(f"Join over {len(failed)} failed branch(es) with partial_policy='fail'.")
+
+
+def _merge_by_key_aggregate(
+    merged: dict[str, Any],
+    collected: list[dict[str, Any]],
+    spec: JoinAggregateSpec,
+) -> dict[Any, Any]:
+    """Aggregate the collected dict outputs keyed by each output's ``spec.key`` value."""
+    if not spec.key:
+        raise JoinConfigurationError("merge_by_key requires an explicit 'key'.")
+    aggregated: dict[Any, Any] = {}
+    for c in collected:
+        out = merged.get(str(c.get("node_id")))
+        if not isinstance(out, dict):
+            raise JoinConfigurationError("merge_by_key requires dict outputs.")
+        key_val = out.get(spec.key)
+        aggregated[key_val] = out
+    return aggregated
+
+
+def _map_aggregate(merged: dict[str, Any], collected: list[dict[str, Any]], spec: JoinAggregateSpec) -> list[Any]:
+    """Apply the JMESPath ``map_expression`` to each collected output."""
+    if not spec.map_expression:
+        raise JoinConfigurationError("map requires a 'map_expression'.")
+    return [_apply_map(merged.get(str(c.get("node_id"))), spec.map_expression) for c in collected]
+
+
+def _aggregate_by_kind(merged: dict[str, Any], collected: list[dict[str, Any]], spec: JoinAggregateSpec) -> Any:
+    """Dispatch the aggregation by ``spec.kind`` (concat | merge_by_key | map)."""
+    if spec.kind == "concat":
+        return [merged.get(str(c.get("node_id"))) for c in collected]
+    if spec.kind == "merge_by_key":
+        return _merge_by_key_aggregate(merged, collected, spec)
+    if spec.kind == "map":
+        return _map_aggregate(merged, collected, spec)
+    raise JoinConfigurationError(f"unknown aggregate kind {spec.kind!r}")  # pragma: no cover - guarded by Literal
+
+
+def _join_result_payload(
+    aggregated: Any,
+    failed: list[dict[str, Any]],
+    collected: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the structured aggregate result payload (failed branches marked)."""
+    status = "partial" if failed else "completed"
+    return {
+        "aggregated": aggregated,
+        "branches": [{"node_id": c.get("node_id"), "status": c.get("status", "succeeded")} for c in collected],
+        "empty": False,
+        "status": status,
+    }
+
+
 def aggregate_join_results(
     collected: list[dict[str, Any]],
     spec: JoinAggregateSpec,
@@ -217,39 +279,12 @@ def aggregate_join_results(
         # Design: empty-collection → typed empty result.
         return {"aggregated": None, "branches": [], "empty": True, "status": "empty"}
 
-    failed = [c for c in collected if c.get("status") != "succeeded"]
-
-    if partial_policy == "fail" and failed:
-        raise JoinConfigurationError(f"Join over {len(failed)} failed branch(es) with partial_policy='fail'.")
+    failed = _failed_branches(collected)
+    _enforce_partial_policy(failed, partial_policy)
 
     merged = _collect_outputs(collected)
-
-    if spec.kind == "concat":
-        aggregated: Any = [merged.get(str(c.get("node_id"))) for c in collected]
-    elif spec.kind == "merge_by_key":
-        if not spec.key:
-            raise JoinConfigurationError("merge_by_key requires an explicit 'key'.")
-        aggregated = {}
-        for c in collected:
-            out = merged.get(str(c.get("node_id")))
-            if not isinstance(out, dict):
-                raise JoinConfigurationError("merge_by_key requires dict outputs.")
-            key_val = out.get(spec.key)
-            aggregated[key_val] = out
-    elif spec.kind == "map":
-        if not spec.map_expression:
-            raise JoinConfigurationError("map requires a 'map_expression'.")
-        aggregated = [_apply_map(merged.get(str(c.get("node_id"))), spec.map_expression) for c in collected]
-    else:  # pragma: no cover - guarded by Literal
-        raise JoinConfigurationError(f"unknown aggregate kind {spec.kind!r}")
-
-    status = "completed" if not failed else "partial"
-    return {
-        "aggregated": aggregated,
-        "branches": [{"node_id": c.get("node_id"), "status": c.get("status", "succeeded")} for c in collected],
-        "empty": False,
-        "status": status,
-    }
+    aggregated = _aggregate_by_kind(merged, collected, spec)
+    return _join_result_payload(aggregated, failed, collected)
 
 
 def child_teardown_dedup_key(run_id: str, node_id: str, index: int) -> str:
@@ -366,6 +401,48 @@ def run_join_node(
     return result
 
 
+def _validate_join_collect_specs(collect: Any) -> None:
+    """Validate every collect entry parses as a ``JoinCollectSpec`` (fail closed)."""
+    try:
+        [JoinCollectSpec.model_validate(c) for c in collect]
+    except ValidationError as exc:
+        raise JoinConfigurationError(f"invalid join collect spec: {exc}") from exc
+
+
+def _validate_join_aggregate_spec(aggregate: Any) -> JoinAggregateSpec:
+    """Parse the join aggregate spec, mapping ``ValidationError`` to ``JoinConfigurationError``."""
+    try:
+        return aggregate if isinstance(aggregate, JoinAggregateSpec) else JoinAggregateSpec.model_validate(aggregate)
+    except ValidationError as exc:
+        raise JoinConfigurationError(f"invalid join aggregate spec: {exc}") from exc
+
+
+def _validate_join_node(node_def: dict[str, Any]) -> None:
+    """Validate a join node's collect + aggregate specs (compile-time, fail closed)."""
+    collect = node_def.get("collect")
+    aggregate = node_def.get("aggregate")
+    if not collect or not aggregate:
+        raise JoinConfigurationError("join node requires both 'collect' and 'aggregate'.")
+    # Validate shapes.
+    _validate_join_collect_specs(collect)
+    spec = _validate_join_aggregate_spec(aggregate)
+    if spec.kind == "merge_by_key" and not spec.key:
+        raise JoinConfigurationError("join aggregate merge_by_key requires 'key'.")
+    if spec.kind == "map" and not spec.map_expression:
+        raise JoinConfigurationError("join aggregate map requires 'map_expression'.")
+
+
+def _validate_fan_out_node(node_def: dict[str, Any], fan_out: Any) -> None:
+    """Validate a non-join node's ``fan_out`` config (compile-time, fail closed)."""
+    try:
+        FanOutConfig.model_validate(fan_out)
+    except ValidationError as exc:
+        raise JoinConfigurationError(f"invalid fan_out config: {exc}") from exc
+    allowed = node_def.get("node_type") in ("agent", "sandbox_agent")
+    if not allowed:
+        raise JoinConfigurationError("fan_out is only allowed on agent / sandbox_agent nodes.")
+
+
 def validate_scatter_join_node(node_def: dict[str, Any]) -> None:
     """Validate a single graph node's scatter/join configuration (compile-time).
 
@@ -373,35 +450,9 @@ def validate_scatter_join_node(node_def: dict[str, Any]) -> None:
     graph validation can fail closed.
     """
     node_type = node_def.get("node_type")
-    fan_out = node_def.get("fan_out")
-    collect = node_def.get("collect")
-    aggregate = node_def.get("aggregate")
-
     if node_type == "join":
-        if not collect or not aggregate:
-            raise JoinConfigurationError("join node requires both 'collect' and 'aggregate'.")
-        # Validate shapes.
-        try:
-            [JoinCollectSpec.model_validate(c) for c in collect]
-        except ValidationError as exc:
-            raise JoinConfigurationError(f"invalid join collect spec: {exc}") from exc
-        try:
-            spec = (
-                aggregate if isinstance(aggregate, JoinAggregateSpec) else JoinAggregateSpec.model_validate(aggregate)
-            )
-        except ValidationError as exc:
-            raise JoinConfigurationError(f"invalid join aggregate spec: {exc}") from exc
-        if spec.kind == "merge_by_key" and not spec.key:
-            raise JoinConfigurationError("join aggregate merge_by_key requires 'key'.")
-        if spec.kind == "map" and not spec.map_expression:
-            raise JoinConfigurationError("join aggregate map requires 'map_expression'.")
+        _validate_join_node(node_def)
         return
-
+    fan_out = node_def.get("fan_out")
     if fan_out is not None:
-        try:
-            FanOutConfig.model_validate(fan_out)
-        except ValidationError as exc:
-            raise JoinConfigurationError(f"invalid fan_out config: {exc}") from exc
-        allowed = node_def.get("node_type") in ("agent", "sandbox_agent")
-        if not allowed:
-            raise JoinConfigurationError("fan_out is only allowed on agent / sandbox_agent nodes.")
+        _validate_fan_out_node(node_def, fan_out)
