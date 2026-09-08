@@ -133,6 +133,66 @@ def _consent_active(settings_json: dict[str, Any] | None) -> bool:
     return pa.get("level") == "all"
 
 
+async def _stage_single_event(
+    session: AsyncSession,
+    event: MetricsEventItem,
+    *,
+    now: datetime,
+    registered_templates: set[str],
+    api_error_count: int,
+    org_id: uuid.UUID,
+) -> int:
+    """Stage ONE event row; returns the (possibly incremented) api_error count.
+
+    Per-row failures are logged and skipped — the caller's loop continues
+    (best-effort ingest never blocks the client).
+    """
+    # api_error daily cap
+    if event.event_type == "api_error":
+        if api_error_count >= API_ERROR_DAILY_CAP:
+            _log.debug(
+                "api_error daily cap reached for org %s",
+                org_id,
+            )
+            return api_error_count
+        api_error_count += 1
+
+    # Sanitize route in api_error payloads
+    payload = dict(event.payload)
+    if event.event_type == "api_error" and "route" in payload:
+        payload["route"] = _sanitize_route_template(payload["route"], registered_templates)
+
+    recorded_at = event.recorded_at or now
+
+    stmt = (
+        pg_insert(MetricsStaging)
+        .values(
+            id=uuid.uuid4(),
+            organisation_id=org_id,
+            event_id=event.event_id,
+            event_type=event.event_type,
+            payload=payload,
+            recorded_at=recorded_at,
+        )
+        .on_conflict_do_nothing(
+            index_elements=["organisation_id", "event_id"],
+        )
+    )
+    try:
+        await session.execute(stmt)
+    except IntegrityError:
+        # Duplicate event_id — silently skip
+        _log.debug("Duplicate event_id %s, skipping", event.event_id)
+    except SQLAlchemyError:
+        _log.exception(
+            "Failed to stage event %s (org=%s)",
+            event.event_id,
+            org_id,
+        )
+        # Best-effort: log and continue, never block the client
+    return api_error_count
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 
@@ -166,49 +226,14 @@ async def ingest_events(
             now = datetime.now(UTC)
             registered_templates = _registered_path_templates(request.app)
             for event in req.events:
-                # api_error daily cap
-                if event.event_type == "api_error":
-                    if api_error_count >= API_ERROR_DAILY_CAP:
-                        _log.debug(
-                            "api_error daily cap reached for org %s",
-                            current_user.organisation_id,
-                        )
-                        continue
-                    api_error_count += 1
-
-                # Sanitize route in api_error payloads
-                payload = dict(event.payload)
-                if event.event_type == "api_error" and "route" in payload:
-                    payload["route"] = _sanitize_route_template(payload["route"], registered_templates)
-
-                recorded_at = event.recorded_at or now
-
-                stmt = (
-                    pg_insert(MetricsStaging)
-                    .values(
-                        id=uuid.uuid4(),
-                        organisation_id=current_user.organisation_id,
-                        event_id=event.event_id,
-                        event_type=event.event_type,
-                        payload=payload,
-                        recorded_at=recorded_at,
-                    )
-                    .on_conflict_do_nothing(
-                        index_elements=["organisation_id", "event_id"],
-                    )
+                api_error_count = await _stage_single_event(
+                    session,
+                    event,
+                    now=now,
+                    registered_templates=registered_templates,
+                    api_error_count=api_error_count,
+                    org_id=current_user.organisation_id,
                 )
-                try:
-                    await session.execute(stmt)
-                except IntegrityError:
-                    # Duplicate event_id — silently skip
-                    _log.debug("Duplicate event_id %s, skipping", event.event_id)
-                except SQLAlchemyError:
-                    _log.exception(
-                        "Failed to stage event %s (org=%s)",
-                        event.event_id,
-                        current_user.organisation_id,
-                    )
-                    # Best-effort: log and continue, never block the client
 
     except HTTPException:
         raise
