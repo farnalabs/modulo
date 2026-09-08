@@ -2870,15 +2870,6 @@ elements:
         type: button
         dynamic_testid: false
     /settings/hitl-review:
-      - testid: hitl-review-column-headers
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-pipeline-name
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-node-name
-        type: element
-        dynamic_testid: false
       - testid: hitl-review-pipeline-select
         type: select
         dynamic_testid: false
@@ -2888,17 +2879,11 @@ elements:
       - testid: hitl-review-date-to
         type: input
         dynamic_testid: false
-      - testid: hitl-review-node-name
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-pipeline-name
+      - testid: hitl-review-column-headers
         type: element
         dynamic_testid: false
       - testid: hitl-review-toggle-expand
         type: button
-        dynamic_testid: false
-      - testid: hitl-review-column-headers
-        type: element
         dynamic_testid: false
       - testid: hitl-review-pipeline-name
         type: element
@@ -2937,9 +2922,6 @@ elements:
         type: element
         dynamic_testid: false
       - testid: hitl-review-claim-failure-banner
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-column-headers
         type: element
         dynamic_testid: false
       - testid: hitl-review-prev-page
