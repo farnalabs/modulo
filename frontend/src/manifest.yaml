@@ -2924,6 +2924,15 @@ elements:
       - testid: hitl-review-next-page
         type: button
         dynamic_testid: false
+      - testid: hitl-review-column-headers
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-pipeline-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-node-name
+        type: element
+        dynamic_testid: false
     /settings/license:
       - testid: license-key-input
         type: textarea
