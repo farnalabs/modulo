@@ -14020,7 +14020,7 @@ export interface components {
             description?: string | null;
             /**
              * Provider Type
-             * @description One of: local_docker, e2b, local, runner_docker (the provider_type vocabulary).
+             * @description One of: e2b, local, local_docker, runner_docker (the provider_type vocabulary).
              */
             provider_type: string;
             /** Image Ref */
@@ -14126,7 +14126,7 @@ export interface components {
             description?: string | null;
             /**
              * Provider Type
-             * @description One of: local_docker, e2b, local, runner_docker (the provider_type vocabulary).
+             * @description One of: e2b, local, local_docker, runner_docker (the provider_type vocabulary).
              */
             provider_type?: string | null;
             /** Image Ref */
