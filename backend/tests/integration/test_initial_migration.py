@@ -81,7 +81,10 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     "eval_suites": frozenset({"eval_definition_ids"}),
     "feature_flag_catalog": frozenset({"depends_on"}),
     "feedback_records": frozenset({"rejected_output", "correction_state"}),
-    "hitl_claims": frozenset({"decision_payload"}),
+    # hitl_claims.context_json (main's 0190, FAR-613): jsonb in the migration;
+    # generic JSON in the ORM for SQLite/MariaDB parity — the same pattern as
+    # decision_payload below.
+    "hitl_claims": frozenset({"decision_payload", "context_json"}),
     "library_primitives": frozenset({"tags", "content_json"}),
     "library_sync_state": frozenset({"manifest_json", "catalog_json"}),
     "lifecycle_maps": frozenset({"content_json"}),
@@ -243,6 +246,11 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         # FAR-583 ops/remediation quarantine side table (migration 0192):
         # written by migrations + the sweep, read by ops SQL only.
         "run_node_outputs_quarantine",
+        # FAR-590 bundled-runner seed backfill scratch table (migration 0191):
+        # captures the pre-repoint profile rows so the DOWNGRADE can revert
+        # exactly those rows; deliberately kept after upgrade (dropped only by
+        # the downgrade), never mapped by the ORM.
+        "_migration_0191_repoint_state",
     }
 )
 
