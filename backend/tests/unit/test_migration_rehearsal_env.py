@@ -171,7 +171,9 @@ def test_rehearsal_plan_returns_upgrade_order(monkeypatch, rehearsal_flags_unset
     # env.py's module-global `config` is None outside an alembic run; stub it so
     # _rehearsal_plan does not short-circuit with "Alembic env config unavailable".
     monkeypatch.setattr(rehearsal_env, "config", MagicMock())
-    monkeypatch.setattr(rehearsal_env, "ScriptDirectory", lambda cfg: fake_script)
+    fake_script_dir = MagicMock()
+    fake_script_dir.from_config.return_value = fake_script
+    monkeypatch.setattr(rehearsal_env, "ScriptDirectory", fake_script_dir)
     monkeypatch.setattr(
         rehearsal_env,
         "MigrationContext",
