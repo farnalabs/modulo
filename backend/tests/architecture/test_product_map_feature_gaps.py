@@ -376,8 +376,6 @@ _ORPHANED_BDD_FEATURES = frozenset(
         "backend/tests/bdd/features/licensing/feature_flag_inspection.feature",
         "backend/tests/bdd/features/mcp/onboarding.feature",
         "backend/tests/bdd/features/pipelines/pipeline_config_validation.feature",
-        "backend/tests/bdd/features/pipelines/run_lifecycle.feature",
-        "backend/tests/bdd/features/pipelines/run_sequential.feature",
         "backend/tests/bdd/features/pipelines/validation.feature",
         "backend/tests/bdd/features/rate_limiting/rate_limiting.feature",
     }
