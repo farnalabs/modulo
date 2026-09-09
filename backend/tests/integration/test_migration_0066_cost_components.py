@@ -106,7 +106,7 @@ async def test_cost_components_rls_enabled(db_engine: AsyncEngine) -> None:
     assert relrowsecurity is True
 
 
-async def test_probe_index_exists(db_engine: AsyncEngine) -> None:
+async def test_probe_index_exists_and_refusal_index_dropped(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
         indexes = await connection.run_sync(
             lambda sync_connection: {
@@ -114,8 +114,11 @@ async def test_probe_index_exists(db_engine: AsyncEngine) -> None:
                 for row in sync_connection.execute(text("SELECT indexname FROM pg_indexes WHERE tablename = 'runs'"))
             }
         )
-    # ix_runs_probe is created by the 0066 cost-components migration.
-    # NOTE: ix_runs_refusal was intentionally dropped by migration 0197
-    # (schema quality fixes) because it is a strict prefix of
-    # ix_runs_org_created_pipeline — so it must NOT be asserted here.
+    # ix_runs_probe (organisation_id, started_at) — migration 0066, retained.
     assert "ix_runs_probe" in indexes
+    # ix_runs_refusal (organisation_id, created_at) was INTENTIONALLY dropped by
+    # migration 0197_runs_index_and_constraint_fixes: it is a strict prefix of
+    # ix_runs_org_created_pipeline (organisation_id, created_at) INCLUDE
+    # (pipeline_id), so the same leading-key lookups are already covered (and the
+    # redundant index would only tax the hottest write path).
+    assert "ix_runs_refusal" not in indexes

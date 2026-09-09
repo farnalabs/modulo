@@ -338,9 +338,13 @@ async def _sum_created_at_day(
 
     NOTE: the refusal SUM reads the ``org_daily_run_counts`` LEDGER (keyed by
     ``run_date``), NOT ``runs`` — so it does NOT use ``ix_runs_refusal``
-    (organisation_id, created_at). That index is KEPT for the per-trigger
+    (organisation_id, created_at). That index was DROPPED by migration
+    ``0197_runs_index_and_constraint_fixes`` (it was a strict prefix of the
+    covering index ``ix_runs_org_created_pipeline (organisation_id, created_at)
+    INCLUDE (pipeline_id)``) and is recreated only on downgrade. The per-trigger
     daily-spend-limit enforcement readers (``cron_helpers`` / ``polling``) and
-    the billing overview, which still query ``Run.created_at``.
+    the billing overview are now served by that covering index, which still
+    supports their ``Run.created_at`` lookups.
 
     The ledger is keyed by ``(organisation_id, team_id, run_date)`` via
     ``get_or_create_daily_count``, so the created-at-day window filters
