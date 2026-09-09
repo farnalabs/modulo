@@ -387,7 +387,7 @@ Initial context:
 Severity: <Critical | High | Medium>
 Status: <detecting | containing | eradicating | recovering | closed>
 Opened: <timestamp UTC>
-Closed: <timestamp UTC | -->
+Closed: <timestamp UTC | –>
 
 Lead: @handle
 Responders: @handle1, @handle2
