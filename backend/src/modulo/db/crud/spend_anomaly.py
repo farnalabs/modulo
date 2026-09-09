@@ -9,6 +9,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.spend_anomaly import SpendAnomaly
@@ -33,28 +34,39 @@ async def record_or_get_anomaly(
     same (organisation, anomaly_date) reuses the existing row unchanged, so its
     ``dismissed`` state survives across reads. The partial unique index
     ``uq_spend_anomalies_org_date`` backs the idempotency at the storage layer.
+
+    The original select-then-insert path raced under concurrency: two concurrent
+    first-reads of the same (organisation, anomaly_date) could both miss the row,
+    both attempt the INSERT, and the loser raise ``IntegrityError`` on flush
+    (uq_spend_anomalies_org_date) -> ``SQLAlchemyError`` -> a transient 503 on
+    ``GET /anomalies``. We instead lead with an ``INSERT ... ON CONFLICT DO
+    NOTHING`` (atomic on the storage layer, so no lost-token-style race) and then
+    re-SELECT the row — whether we just inserted it or the winning concurrent
+    caller did. The re-SELECT always returns the stored row, so the loser never
+    observes an error.
     """
-    existing = (
+    insert_stmt = (
+        pg_insert(SpendAnomaly)
+        .values(
+            organisation_id=organisation_id,
+            anomaly_date=anomaly_date,
+            pipeline_id=pipeline_id,
+            amount=amount,
+            baseline=baseline,
+            percent_above=percent_above,
+            dismissed=False,
+        )
+        .on_conflict_do_nothing(index_elements=["organisation_id", "anomaly_date"])
+    )
+    await session.execute(insert_stmt)
+    anomaly = (
         await session.execute(
             select(SpendAnomaly).where(
                 SpendAnomaly.organisation_id == organisation_id,
                 SpendAnomaly.anomaly_date == anomaly_date,
             )
         )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-
-    anomaly = SpendAnomaly(
-        organisation_id=organisation_id,
-        anomaly_date=anomaly_date,
-        pipeline_id=pipeline_id,
-        amount=amount,
-        baseline=baseline,
-        percent_above=percent_above,
-        dismissed=False,
-    )
-    session.add(anomaly)
+    ).scalar_one()
     await session.flush()
     return anomaly
 
