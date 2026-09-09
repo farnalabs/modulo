@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1305,6 +1305,154 @@ async def test_marker_sweep_lock_engine_reads_real_sessionmaker_bind() -> None:
         assert _marker_sweep_lock_engine(factory) is engine
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Sweep dedup-lock error branches (prove the fail-open + cleanup paths)
+# ---------------------------------------------------------------------------
+
+
+def test_marker_sweep_lock_engine_requires_bound_engine() -> None:
+    """``_marker_sweep_lock_engine`` must refuse a factory with no bound engine
+    (no ``kw['bind']``) rather than leaking a broken connection later in the sweep."""
+    import modulo.core.runner_capacity as rc
+
+    class _NoBind:
+        pass
+
+    with pytest.raises(RuntimeError):
+        rc._marker_sweep_lock_engine(_NoBind())
+
+
+async def test_acquire_sweep_lock_connect_failure_fails_open(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If the dedicated connection cannot even be opened, the acquisition FAILS
+    OPEN (``(False, None)``) and logs ``marker_sweep_lock_failed`` — never hangs or
+    raises into the cron tick. ``engine.connect()`` sits inside the lock-acquire
+    try, so a pool-exhaustion error is swallowed into fail-open."""
+    import modulo.core.runner_capacity as rc
+
+    class _FailConnectEngine:
+        async def connect(self) -> Any:
+            raise RuntimeError("pool exhausted")
+
+    class _Factory:
+        kw: ClassVar[dict[str, Any]] = {"bind": _FailConnectEngine()}
+
+    caplog.set_level(logging.WARNING, logger="modulo.core.runner_capacity")
+    acquired, lock_conn = await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
+    assert acquired is False and lock_conn is None
+    assert any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records)
+
+
+async def test_acquire_sweep_lock_execute_failure_fails_open_and_closes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If ``pg_try_advisory_lock`` itself raises on the open connection, the lock
+    acquisition fails open AND the dedicated connection is still closed (no leak)
+    — covering the acquire-side cleanup branch."""
+    import modulo.core.runner_capacity as rc
+
+    class _FailExecConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            raise RuntimeError("exec down")
+
+        async def close(self) -> None:
+            raise RuntimeError("close down")
+
+    class _Engine:
+        async def connect(self) -> Any:
+            return _FailExecConn()
+
+    class _Factory:
+        kw: ClassVar[dict[str, Any]] = {"bind": _Engine()}
+
+    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    acquired, lock_conn = await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
+    assert acquired is False and lock_conn is None
+    assert any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records)
+    # The acquire-side cleanup must still log the close failure rather than raise.
+    assert any("runner.capacity.marker_sweep_lock_conn_close_failed" in r.message for r in caplog.records)
+
+
+async def test_acquire_sweep_lock_cancelled_reraises() -> None:
+    """The acquire loop must propagate ``asyncio.CancelledError`` so the sweep
+    task can be cancelled cleanly (it must NOT be swallowed into fail-open)."""
+    import modulo.core.runner_capacity as rc
+
+    class _CancelConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            raise asyncio.CancelledError
+
+        async def close(self) -> None:
+            return None
+
+    class _Engine:
+        async def connect(self) -> Any:
+            return _CancelConn()
+
+    class _Factory:
+        kw: ClassVar[dict[str, Any]] = {"bind": _Engine()}
+
+    with pytest.raises(asyncio.CancelledError):
+        await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
+
+
+async def test_release_sweep_lock_unlock_failure_logs_and_closes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If ``pg_advisory_unlock`` raises on the dedicated connection, the release
+    logs ``marker_sweep_unlock_failed`` and STILL closes the connection (the
+    close is the backstop that actually frees the lock)."""
+    import modulo.core.runner_capacity as rc
+
+    class _UnlockFailConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            raise RuntimeError("unlock down")
+
+        async def close(self) -> None:
+            return None
+
+    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    await rc._release_sweep_dedup_lock(_UnlockFailConn(), 1, 2)
+    assert any("runner.capacity.marker_sweep_unlock_failed" in r.message for r in caplog.records)
+
+
+async def test_release_sweep_lock_close_failure_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If the dedicated connection's ``close`` raises, the release must log
+    ``marker_sweep_lock_conn_close_failed`` rather than propagate (the lock is
+    already released by the unlock or will be reclaimed on disconnect)."""
+    import modulo.core.runner_capacity as rc
+
+    class _CloseFailConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            return MagicMock()
+
+        async def close(self) -> None:
+            raise RuntimeError("close down")
+
+    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    await rc._release_sweep_dedup_lock(_CloseFailConn(), 1, 2)
+    assert any("runner.capacity.marker_sweep_lock_conn_close_failed" in r.message for r in caplog.records)
+
+
+async def test_release_sweep_lock_cancelled_reraises() -> None:
+    """The release must propagate ``asyncio.CancelledError`` so a cancelled
+    sweep task tears down without swallowing the cancellation."""
+    import modulo.core.runner_capacity as rc
+
+    class _CancelConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            raise asyncio.CancelledError
+
+        async def close(self) -> None:
+            return None
+
+    with pytest.raises(asyncio.CancelledError):
+        await rc._release_sweep_dedup_lock(_CancelConn(), 1, 2)
 
 
 def test_sweep_sql_sandbox_id_asymmetry() -> None:
