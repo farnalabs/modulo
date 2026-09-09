@@ -1351,6 +1351,10 @@ async def test_dispatch_capacity_denied_before_provisioning():
     async def _fake_get_limit(*_a: Any, **_kw: Any) -> SandboxConcurrencyLimit:
         return SandboxConcurrencyLimit(cap=5, is_default=False)
 
+    class _FakeGateSettings:
+        runner_capacity_gate_enabled = False
+        runner_capacity_lock_timeout_ms = 2000
+
     async def _noop_set_rls(*_a: Any, **_kw: Any) -> None:
         pass
 
@@ -1371,7 +1375,20 @@ async def test_dispatch_capacity_denied_before_provisioning():
     mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
 
     session_factory = MagicMock(return_value=mock_session_ctx)
+
+    # The gate's fenced own-row SELECT must answer a claim_count so the flow
+    # reaches the capacity decision.
+    def _route_gate_select(stmt_text: str) -> Any:
+        result = MagicMock()
+        result.fetchone.return_value = (3,) if "claim_count" in stmt_text else None
+        return result
+
+    mock_session.execute = AsyncMock(side_effect=lambda stmt, params=None: _route_gate_select(str(stmt)))
     fn = make_sandbox_agent_fn(node_def, session_factory=session_factory)
+    # Production-shaped state: the executor always seeds the claim lease, and
+    # the D8 gate REQUIRES it (a missing claim context fails open by design).
+    _state = _run_state()
+    _state["_claim_lease"] = "claim-token-abc"
 
     with (
         patch("e2b.AsyncSandbox.create", new_callable=AsyncMock) as mock_create,
@@ -1383,6 +1400,7 @@ async def test_dispatch_capacity_denied_before_provisioning():
             "modulo.db.crud.run.get_sandbox_concurrency_limit",
             new=_fake_get_limit,
         ),
+        patch("modulo.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
         patch(
             "modulo.db.rls.set_rls_org",
             new=_noop_set_rls,
@@ -1393,16 +1411,95 @@ async def test_dispatch_capacity_denied_before_provisioning():
         ),
         pytest.raises(SandboxCapacityExceededError, match="at capacity"),
     ):
-        await fn(_run_state())
+        await fn(_state)
 
     # Sandbox must NOT have been created
     mock_create.assert_not_called()
 
 
-async def test_dispatch_capacity_not_checked_for_llm_mode():
-    """LLM mode does NOT trigger the dispatch-time capacity gate — even when
-    the org is at capacity. LLM-mode dispatches go through the executor's
-    claim-time check instead."""
+async def test_dispatch_capacity_checked_for_llm_mode():
+    """D8 (FAR-594): the capacity gate applies to EVERY sandbox_agent dispatch
+    regardless of sandbox_mode — an LLM-mode dispatch at capacity is denied
+    exactly like a script-mode one (the pre-D8 gate was script-only)."""
+    node_def: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0, "y": 0},
+        "template_id": "opencode",
+        "mode": "llm",
+        "agent_prompt": "Do the thing",
+        "agent_command": "opencode run --auto",
+    }
+
+    async def _fake_count(*_a: Any, **_kw: Any) -> int:
+        return 4
+
+    async def _fake_get_limit(*_a: Any, **_kw: Any) -> SandboxConcurrencyLimit:
+        return SandboxConcurrencyLimit(cap=4, is_default=False)
+
+    class _FakeGateSettings:
+        runner_capacity_gate_enabled = False
+        runner_capacity_lock_timeout_ms = 2000
+
+    async def _noop_set_rls(*_a: Any, **_kw: Any) -> None:
+        pass
+
+    mock_session = MagicMock()
+    mock_begin_ctx = AsyncMock()
+    mock_begin_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_begin_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin = MagicMock(return_value=mock_begin_ctx)
+    mock_session_ctx = AsyncMock()
+    mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+    session_factory = MagicMock(return_value=mock_session_ctx)
+
+    # The claim_count SELECT must be fenced and answered so the gate reaches
+    # the capacity decision (claim_count 3 → attempt key suffix 3).
+    def _route(stmt_text: str) -> Any:
+        result = MagicMock()
+        result.fetchone.return_value = (3,) if "claim_count" in stmt_text else None
+        return result
+
+    mock_session.execute = AsyncMock(side_effect=lambda stmt, params=None: _route(str(stmt)))
+
+    fn = make_sandbox_agent_fn(node_def, session_factory=session_factory)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router('{"result": "ok"}'))
+    sandbox.commands.run = AsyncMock(
+        return_value=MagicMock(wait=AsyncMock(return_value=MagicMock(exit_code=0, stdout="", stderr="")))
+    )
+    sandbox.kill = AsyncMock()
+
+    # Production-shaped state: the executor always seeds the claim lease and
+    # the D8 gate REQUIRES it (a missing claim context fails open by design).
+    _state = _run_state()
+    _state["_claim_lease"] = "claim-token-abc"
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as mock_create,
+        patch(
+            "modulo.db.crud.run.count_active_runner_dispatches_for_org",
+            new=_fake_count,
+        ),
+        patch(
+            "modulo.db.crud.run.get_sandbox_concurrency_limit",
+            new=_fake_get_limit,
+        ),
+        patch("modulo.core.runner_capacity.get_settings", new=lambda: _FakeGateSettings()),
+        patch("modulo.db.rls.set_rls_org", new=_noop_set_rls),
+        patch("modulo.db.rls.set_rls_execution_context", new=_noop_set_rls),
+        pytest.raises(SandboxCapacityExceededError, match="at capacity"),
+    ):
+        await fn(_state)
+
+    mock_create.assert_not_called()
+
+
+async def test_dispatch_capacity_llm_mode_without_session_factory_fails_open():
+    """No session factory → no gate context → fail-open dispatch (pre-D8
+    behaviour preserved for claim-less / DB-less dispatch paths)."""
     node_def: dict[str, Any] = {
         "id": str(uuid.uuid4()),
         "node_type": "sandbox_agent",
@@ -1421,9 +1518,6 @@ async def test_dispatch_capacity_not_checked_for_llm_mode():
     )
     sandbox.kill = AsyncMock()
 
-    # The dispatch-time capacity gate is ONLY checked when sandbox_mode == "script".
-    # For LLM mode, the gate code is never entered — verify the node completes
-    # successfully without any capacity check.
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
         result = await fn(_run_state())
 

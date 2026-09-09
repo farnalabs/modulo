@@ -48,6 +48,9 @@ export function useNavVisibilityContext(
       devMode: planStore.devMode,
       tierInfoLoaded: !!planStore.tierRanks && Object.keys(planStore.tierRanks).length > 0,
       isAtMinimumTier: (tier: string) => planStore.isAtMinimumTier(tier),
+      // FAR-656: flag-gated nav items resolve through the plan store so the
+      // sidebar stays consistent with the manifest feature_flag router guard.
+      isFeatureEnabled: (flag: string) => planStore.featureEnabled(flag),
       // FAR-535: read once per context evaluation, not per nav item.
       isDemoSession: isDemoSession(),
     }

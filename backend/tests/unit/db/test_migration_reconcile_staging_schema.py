@@ -34,7 +34,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and FAR-583's 0192_run_node_outputs re-parents onto 0191 with its
 # 0193_run_node_outputs_sweep_index chaining onto 0192, and 0194_uuid_pk_server_defaults
 # (FAR-718, from main) chains off 0193; improve-database's 0197/0198/0199 chain off it.
-_CHAIN_HEAD_MIGRATION = "0199_runs_json_to_jsonb"
+_CHAIN_HEAD_MIGRATION = "0200_runs_runner_marker_sweep_index"
 
 
 def _source(name: str) -> str:

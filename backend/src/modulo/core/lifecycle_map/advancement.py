@@ -272,6 +272,92 @@ async def confirm_reported_refs(
     return confirmed, unmatched
 
 
+def _canonicalise_and_dedupe(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Canonicalise raw refs in order, dropping invalid and duplicate (kind, ref)."""
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in refs:
+        canonical = _canonicalise_entry(entry)
+        if canonical is None:
+            continue
+        key = (canonical["kind"], canonical["ref"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(canonical)
+    return deduped
+
+
+def _ref_params(organisation_id: uuid.UUID, canonical: dict[str, Any]) -> dict[str, Any]:
+    """The shared mint/advance statement params for one canonical ref."""
+    return {
+        "id": uuid.uuid4().hex,
+        "org_id": organisation_id.hex,
+        "kind": canonical["kind"],
+        "ref": canonical["ref"],
+        "canonical_id": canonical_work_item_id(organisation_id, canonical["kind"], canonical["ref"]).hex,
+    }
+
+
+async def _advance_stage_identity(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    *,
+    advancing: bool,
+    pipeline_id: uuid.UUID | None,
+    explicit_stage: LifecycleMapStage | None,
+) -> LifecycleMapStage | None:
+    """Resolve the lifecycle-map stage row; pipeline-resolved stage wins."""
+    if not advancing:
+        return None
+    stage: LifecycleMapStage | None = None
+    if pipeline_id is not None:
+        stage = await _resolve_stage_identity(session, organisation_id, pipeline_id)
+    if stage is None and explicit_stage is not None:
+        stage = explicit_stage
+    return stage
+
+
+async def _mint_or_advance_ref(
+    session: AsyncSession,
+    *,
+    organisation_id: uuid.UUID,
+    canonical: dict[str, Any],
+    advancing: bool,
+    status: str,
+    run_id: uuid.UUID | None,
+    stage: LifecycleMapStage | None,
+    run_count_delta: int,
+    evidence_ts: datetime,
+) -> int:
+    """Execute the mint (non-advancing) or advance statement for one ref.
+
+    Returns 0 for the mint path, 1 when a journey advanced.
+    """
+    params = _ref_params(organisation_id, canonical)
+    if not advancing:
+        await session.execute(_MINT_SQL, params)
+        return 0
+
+    await session.execute(
+        _ADVANCE_SQL,
+        {
+            **params,
+            "run_id": run_id.hex if run_id is not None else None,
+            "status": status,
+            "provenance": canonical.get("source", "derived"),
+            "map_id": stage.map_id.hex if stage is not None else None,
+            "map_version": stage.version if stage is not None else None,
+            "stage_id": stage.stage_id if stage is not None else None,
+            "stage_name": stage.stage_name if stage is not None else None,
+            "position": stage.position if stage is not None else None,
+            "run_count_delta": run_count_delta,
+            "evidence_ts": evidence_ts,
+        },
+    )
+    return 1
+
+
 async def advance_journeys(
     session: AsyncSession,
     organisation_id: uuid.UUID,
@@ -335,51 +421,25 @@ async def advance_journeys(
     run_count_delta = 1 if status in _ADVANCING_TERMINAL_STATUSES else 0
     evidence_ts = _evidence_timestamp(completed_at, run_created_at)
 
-    stage: LifecycleMapStage | None = None
-    if advancing and pipeline_id is not None:
-        stage = await _resolve_stage_identity(session, organisation_id, pipeline_id)
-    if advancing and stage is None and explicit_stage is not None:
-        stage = explicit_stage
+    stage = await _advance_stage_identity(
+        session,
+        organisation_id,
+        advancing=advancing,
+        pipeline_id=pipeline_id,
+        explicit_stage=explicit_stage,
+    )
 
     advanced = 0
-    seen: set[tuple[str, str]] = set()
-    for entry in refs:
-        canonical = _canonicalise_entry(entry)
-        if canonical is None:
-            continue
-        key = (canonical["kind"], canonical["ref"])
-        if key in seen:
-            continue
-        seen.add(key)
-
-        params: dict[str, Any] = {
-            "id": uuid.uuid4().hex,
-            "org_id": organisation_id.hex,
-            "kind": canonical["kind"],
-            "ref": canonical["ref"],
-            "canonical_id": canonical_work_item_id(organisation_id, canonical["kind"], canonical["ref"]).hex,
-        }
-
-        if not advancing:
-            await session.execute(_MINT_SQL, params)
-            continue
-
-        await session.execute(
-            _ADVANCE_SQL,
-            {
-                **params,
-                "run_id": run_id.hex if run_id is not None else None,
-                "status": status,
-                "provenance": canonical.get("source", "derived"),
-                "map_id": stage.map_id.hex if stage is not None else None,
-                "map_version": stage.version if stage is not None else None,
-                "stage_id": stage.stage_id if stage is not None else None,
-                "stage_name": stage.stage_name if stage is not None else None,
-                "position": stage.position if stage is not None else None,
-                "run_count_delta": run_count_delta,
-                "evidence_ts": evidence_ts,
-            },
+    for canonical in _canonicalise_and_dedupe(refs):
+        advanced += await _mint_or_advance_ref(
+            session,
+            organisation_id=organisation_id,
+            canonical=canonical,
+            advancing=advancing,
+            status=status,
+            run_id=run_id,
+            stage=stage,
+            run_count_delta=run_count_delta,
+            evidence_ts=evidence_ts,
         )
-        advanced += 1
-
     return advanced

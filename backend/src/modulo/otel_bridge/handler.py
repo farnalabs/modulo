@@ -160,6 +160,53 @@ class LangGraphOtelBridge(BaseCallbackHandler):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _parent_context(self, parent_run_id: UUID | None) -> Context | None:
+        """Resolve the new span's parent context.
+
+        An explicit LangGraph parent span wins; otherwise the run root span
+        provides the run's deterministic trace id (FAR-198). MUST be called
+        while holding ``self._lock`` (it reads the live span maps).
+        """
+        ctx: Context | None = None
+        if parent_run_id is not None:
+            parent = self._spans.get(str(parent_run_id))
+            if parent is not None:
+                ctx = set_span_in_context(parent)
+        if ctx is None and self._root_span is not None:
+            # No LangGraph parent — inherit the run's deterministic trace id
+            # from the run root span (FAR-198).
+            ctx = set_span_in_context(self._root_span)
+        return ctx
+
+    def _finalize_stale_span(self, existing: Span, run_id: UUID) -> None:
+        """Set OK status + end a superseded span for *run_id* (best-effort)."""
+        try:
+            existing.set_status(Status(StatusCode.OK))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("Failed to finalize stale span %s", run_id)
+        try:
+            existing.end()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("Failed to end stale span %s", run_id)
+
+    def _span_attributes(
+        self,
+        attributes: dict[str, str | int | float | bool] | None,
+        org_id: str | None,
+        pipeline_id: str | None,
+    ) -> dict[str, str | int | float | bool]:
+        """Merge the caller's attributes with the org/pipeline identity stamps."""
+        attrs = dict(attributes or {})
+        if org_id is not None:
+            attrs["organisation_id"] = org_id
+        if pipeline_id is not None:
+            attrs["pipeline_id"] = pipeline_id
+        return attrs
+
     def _start_span(
         self,
         name: str,
@@ -169,37 +216,14 @@ class LangGraphOtelBridge(BaseCallbackHandler):
         tags: list[str] | None = None,
     ) -> None:
         with self._lock:
-            ctx: Context | None = None
-            if parent_run_id is not None:
-                parent = self._spans.get(str(parent_run_id))
-                if parent is not None:
-                    ctx = set_span_in_context(parent)
-            if ctx is None and self._root_span is not None:
-                # No LangGraph parent — inherit the run's deterministic trace
-                # id from the run root span (FAR-198).
-                ctx = set_span_in_context(self._root_span)
+            ctx = self._parent_context(parent_run_id)
             existing = self._spans.pop(str(run_id), None)
             org_id = self._org_id
             pipeline_id = self._pipeline_id
         if existing is not None:
-            try:
-                existing.set_status(Status(StatusCode.OK))
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("Failed to finalize stale span %s", run_id)
-            try:
-                existing.end()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("Failed to end stale span %s", run_id)
+            self._finalize_stale_span(existing, run_id)
 
-        attrs = dict(attributes or {})
-        if org_id is not None:
-            attrs["organisation_id"] = org_id
-        if pipeline_id is not None:
-            attrs["pipeline_id"] = pipeline_id
+        attrs = self._span_attributes(attributes, org_id, pipeline_id)
         span = self._tracer.start_span(name, context=ctx, attributes=attrs)
         self._set_tags(span, tags)
         with self._lock:

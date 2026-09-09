@@ -22,7 +22,6 @@ from modulo.core.pipeline_engine.node_runner import (
     _combine_log_entries,
     _compile_delivery_sentinel_pattern,
     _compute_sandbox_cost,
-    _dispatch_marker_json,
     _effective_self_reported_cap,
     _extract_reported_cost,
     _log_entry_text,
@@ -79,7 +78,12 @@ class TestClaimTokenAttemptSuffix:
         assert _claim_token_attempt_suffix("token-abc") != _claim_token_attempt_suffix("token-abd")
 
     def test_dispatch_marker_json_embeds_attempt_key(self) -> None:
-        marker = _dispatch_marker_json("run:1:node:a:2")
+        # D8 (FAR-594): the marker vocabulary moved to
+        # runner_capacity.build_dispatch_marker — the tier-less shape is
+        # unchanged (no provider key → Docker-tier attribution, fail-safe).
+        from modulo.core.runner_capacity import build_dispatch_marker
+
+        marker = build_dispatch_marker("run:1:node:a:2")
         assert marker == '{"state": "dispatching", "attempt_key": "run:1:node:a:2"}'
 
 

@@ -798,7 +798,11 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
 
     from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
     from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+    from modulo.auth.dependencies import (
+        get_current_tenant_user,
+        get_current_tenant_user_or_api_key,
+        get_current_user,
+    )
     from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
     from modulo.db.models.model_backend import ModelBackend
     from modulo.settings import Settings, get_settings
@@ -860,6 +864,12 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
         username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin"
     )
     app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin"
+    )
+    # FAR-681 switched the model-backend route to require_permission_any_credential
+    # (resolves get_current_tenant_user_or_api_key) so declarative apply can use mk_ keys.
+    # The admin principal must satisfy that dependency too.
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
         username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin"
     )
     app.dependency_overrides[get_plan_context] = lambda: mock_plan

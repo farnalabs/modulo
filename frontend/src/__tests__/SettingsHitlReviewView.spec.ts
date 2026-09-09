@@ -74,11 +74,11 @@ function pendingGateRow() {
   }
 }
 
-function problemDetail(detail: string) {
+function problemDetail(detail: string, type = 'urn:problem:modulo:conflict') {
   // Shape produced by the api client wrapper: FastAPI's ProblemDetail body
   // (type/title/status/detail) or a raw {detail} normalized by toProblemDetail.
   return {
-    type: 'urn:problem:modulo:conflict',
+    type,
     title: 'Conflict',
     status: 409,
     detail,
@@ -393,7 +393,10 @@ describe('SettingsHitlReviewView', () => {
     ;(api.GET as any).mockImplementation(mockGetWithGates(gates))
     ;(api.POST as any).mockResolvedValue({
       data: null,
-      error: problemDetail('Run 550e8400-e29b-41d4-a716-446655440000 is not awaiting a human decision (status: complete)'),
+      error: problemDetail(
+        'Run 550e8400-e29b-41d4-a716-446655440000 is not awaiting a human decision (status: complete)',
+        'urn:problem:modulo:hitl_run_not_awaiting',
+      ),
     })
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -428,7 +431,10 @@ describe('SettingsHitlReviewView', () => {
     ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
     ;(api.POST as any).mockResolvedValue({
       data: null,
-      error: problemDetail("Gate 'approval-gate-1' on run 550e8400-e29b-41d4-a716-446655440000 is already claimed"),
+      error: problemDetail(
+        "Gate 'approval-gate-1' on run 550e8400-e29b-41d4-a716-446655440000 is already claimed",
+        'urn:problem:modulo:hitl_gate_already_claimed',
+      ),
     })
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -445,6 +451,61 @@ describe('SettingsHitlReviewView', () => {
     const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('already claimed by another reviewer')
+  })
+
+  it('maps a typed already-decided 409 to a specific view-level banner (FAR-645)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+    ;(api.POST as any).mockResolvedValue({
+      data: null,
+      error: problemDetail(
+        "Gate 'approval-gate-1' on run 550e8400-e29b-41d4-a716-446655440000 already has a decision",
+        'urn:problem:modulo:hitl_gate_already_decided',
+      ),
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    await wrapper!.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('already has a final decision')
+  })
+
+  it('falls back to the backend detail for an unknown problem type (no prose matching, FAR-645)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
+    // The detail prose still says "already claimed", but the generic conflict
+    // type must NOT be substring-matched anymore: only the typed problems get
+    // the specific i18n message, everything else renders the raw detail.
+    ;(api.POST as any).mockResolvedValue({
+      data: null,
+      error: problemDetail("Gate 'approval-gate-1' is already claimed"),
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+    await expandFirstGate(wrapper!)
+
+    await wrapper!.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper!.find('[data-testid="hitl-review-claim-failure-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain("Gate 'approval-gate-1' is already claimed")
+    expect(banner.text()).not.toContain('already claimed by another reviewer')
   })
 
   it('re-fetches the list even when the claim throws a network error', async () => {

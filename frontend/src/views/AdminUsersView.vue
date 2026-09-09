@@ -525,8 +525,14 @@ function showFlash(type: 'success' | 'error', text: string) {
 }
 
 function updateUserInList(data: UserItem) {
-  const idx = users.value.findIndex(x => x.id === data.id)
-  if (idx !== -1) users.value[idx] = data
+  // Query data is deep-readonly (FAR-630/FAR-645): `users` is a computed over
+  // the vue-query response, so `users.value[idx] = ...` would be silently
+  // dropped. Replace the whole response through the writable computed instead.
+  if (!usersResp.value) return
+  usersResp.value = {
+    ...usersResp.value,
+    items: usersResp.value.items.map(u => (u.id === data.id ? data : u)),
+  }
 }
 
 async function updateRole(u: UserItem, newRole: unknown) {

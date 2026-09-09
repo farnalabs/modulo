@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -111,6 +112,17 @@ _HITL_PARK_SWEEP_STALE_SECONDS = 15 * 60
 # without gating readiness.
 _RUNNER_WORKSPACE_RECONCILE_STATS_KEY = "saq:cron:stats:runner_workspace_reconcile"
 _RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS = 15 * 60
+
+# runner_marker_sweep (FAR-594 D8, qa F9): the runner dispatch-marker
+# reconciliation sweep runs every 5 min on the system worker (plus the 60s
+# dispatcher_reconcile path) and persists its outcome to this Redis key.
+# Same advisory contract as its siblings: a dead sweep does not wedge
+# dispatch (the gate fails open) — but stale markers would silently
+# accumulate as phantom capacity and the D8 rollback signal
+# (runner.capacity.violation) would go dark, so a missing or >15min-stale
+# key warns without gating readiness.
+_RUNNER_MARKER_SWEEP_STATS_KEY = "saq:cron:stats:runner_marker_sweep"
+_RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
 
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
@@ -346,6 +358,29 @@ async def _configured_queues() -> list[str]:
     return [runs_queue, system_queue]
 
 
+def _hostname_from_worker_blob(blob: bytes | str) -> str | None:
+    """Extract the worker hostname from one SAQ worker metadata blob, or None."""
+    try:
+        info = json.loads(blob)
+    except (ValueError, TypeError):
+        return None
+    metadata = info.get("metadata") if isinstance(info, dict) else None
+    hostname = (metadata or {}).get("hostname") if isinstance(metadata, dict) else None
+    return str(hostname) if hostname else None
+
+
+def _hostnames_from_worker_blobs(raw: Iterable[bytes | str | None]) -> set[str]:
+    """Decode SAQ worker metadata blobs into the set of live hostnames."""
+    hostnames: set[str] = set()
+    for blob in raw:
+        if not blob:
+            continue
+        hostname = _hostname_from_worker_blob(blob)
+        if hostname:
+            hostnames.add(hostname)
+    return hostnames
+
+
 async def _live_worker_hostnames(queue_name: str) -> set[str]:
     """Read live worker hostnames for *queue_name* from SAQ worker metadata.
 
@@ -368,19 +403,7 @@ async def _live_worker_hostnames(queue_name: str) -> set[str]:
         if not member_keys:
             return set()
         raw = await r.mget(cast("list[bytes | str]", member_keys))
-        hostnames: set[str] = set()
-        for blob in raw:
-            if not blob:
-                continue
-            try:
-                info = json.loads(blob)
-            except (ValueError, TypeError):
-                continue
-            metadata = info.get("metadata") if isinstance(info, dict) else None
-            hostname = (metadata or {}).get("hostname") if isinstance(metadata, dict) else None
-            if hostname:
-                hostnames.add(str(hostname))
-        return hostnames
+        return _hostnames_from_worker_blobs(raw)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -576,7 +599,8 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     """Human-readable reconciliation counters for the readiness check detail.
 
     Surfaces the reconcile outcome counters (D1): scanned/repaired/skipped/
-    redis_errors/deduped plus the terminalizer and enqueue-failed recovery
+    redis_errors/deduped plus the claimed-but-never-dispatched recovery
+    counter (FAR-714) and the terminalizer and enqueue-failed recovery
     counters. Every counter defaults to 0 so a pre-D worker's payload renders
     without error.
     """
@@ -584,6 +608,7 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
         f"skipped={stats.get('skipped', 0)}, redis_errors={stats.get('redis_errors', 0)}, "
         f"deduped={stats.get('deduped', 0)}, nodeless_failed={stats.get('nodeless_failed', 0)}, "
+        f"claimed_but_never_dispatched={stats.get('claimed_but_never_dispatched', 0)}, "
         f"claim_cap_terminalized={stats.get('claim_cap_terminalized', 0)}, "
         f"age_terminalized={stats.get('age_terminalized', 0)}, "
         f"dispatch_failed_terminalized={stats.get('dispatch_failed_terminalized', 0)}, "
@@ -707,6 +732,27 @@ async def _check_runner_workspace_reconcile() -> CheckResult:
         _RUNNER_WORKSPACE_RECONCILE_STATS_KEY,
         _RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS,
         "orphans_destroyed",
+    )
+
+
+async def _check_runner_marker_sweep() -> CheckResult:
+    """ADVISORY — last runner_marker_sweep outcome (never gates readiness).
+
+    The FAR-594 D8 runner dispatch-marker reconciliation sweep
+    (``saq_worker.runner_marker_sweep``) runs in the SYSTEM WORKER process
+    every 5 min (plus the 60s dispatcher_reconcile path) and persists its
+    outcome (``cleared`` + ``last_run_at``) to
+    ``saq:cron:stats:runner_marker_sweep`` (qa F9). A silently dead sweep
+    lets stale markers accumulate as phantom capacity and the D8 rollback
+    signal (``runner.capacity.violation``) goes dark — the gate itself fails
+    open, so nothing wedges, but the capacity numbers rot. A missing or
+    >15min-stale key reports "degraded" to alert operators while the app
+    remains healthy. Fail-open on Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _RUNNER_MARKER_SWEEP_STATS_KEY,
+        _RUNNER_MARKER_SWEEP_STALE_SECONDS,
+        "cleared",
     )
 
 
@@ -845,6 +891,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         sr_check,
         hps_check,
         rwr_check,
+        rms_check,
     ) = await asyncio.gather(
         _check_database(),
         _check_redis(),
@@ -857,6 +904,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_slot_reconciliation(),
         _check_hitl_park_sweep(),
         _check_runner_workspace_reconcile(),
+        _check_runner_marker_sweep(),
     )
     bg_check = _check_break_glass()
 
@@ -889,6 +937,11 @@ async def readiness(response: Response) -> ReadinessResponse:
         # repair (destroy path soak-gated, so no capacity wedge), so it stays
         # alert-only.
         "runner_workspace_reconcile": rwr_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-594 D8 (qa F9): a dead marker sweep lets stale markers
+        # accumulate as phantom capacity and the rollback signal goes dark;
+        # the gate fails open, so it stays alert-only.
+        "runner_marker_sweep": rms_check,
     }
 
     # Aggregate over the NON-advisory checks only.

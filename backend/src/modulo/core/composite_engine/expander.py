@@ -577,20 +577,9 @@ class _CompositeExpander:
 
         return final_nodes, final_edges, bindings
 
-    async def _expand_composite(
-        self,
-        composite_node: dict[str, Any],
-        template: CompositeTemplate,
-        parameter_values: dict[str, Any],
-        *,
-        depth: int,
-    ) -> _ExpandedComposite:
-        """Expand one composite node's sub-pipeline into flat nodes and edges."""
-        if depth > self._depth_limit:
-            raise ValueError(
-                f"Composite nesting exceeds depth limit {self._depth_limit} for node '{composite_node.get('id')}'"
-            )
-
+    @staticmethod
+    def _sub_graph_parts(template: CompositeTemplate) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Extract and shape-check a template's sub-pipeline nodes/edges."""
         graph = template.sub_pipeline_graph_json
         if not isinstance(graph, dict):
             raise ValueError(f"Composite template '{template.id}' has no sub-pipeline graph")
@@ -600,14 +589,58 @@ class _CompositeExpander:
             raise ValueError(f"Composite template '{template.id}' has no sub-pipeline nodes to expand")
         if not isinstance(sub_edges, list):
             sub_edges = []
+        return sub_nodes, sub_edges
 
-        parent_node_id = str(composite_node.get("id"))
+    @staticmethod
+    def _expanded_leaf(
+        sub: dict[str, Any],
+        idx: int,
+        new_id: str,
+        parent_node_id: str,
+        parameter_values: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Clone a leaf sub-node with its fresh id, parent stamp, index and injected parameters."""
+        expanded = dict(sub)
+        expanded["id"] = new_id
+        expanded["_composite_parent_id"] = parent_node_id
+        expanded["_composite_index"] = idx
+        _inject_node_parameters(expanded, parameter_values)
+        return expanded
 
-        leaf_id_map = _build_leaf_id_map(sub_nodes, template)
+    @staticmethod
+    def _record_boundary(
+        node_id: str,
+        incoming_ids: set[str],
+        outgoing_ids: set[str],
+        entry_ids: list[str],
+        exit_ids: list[str],
+        entry_values: list[str],
+        exit_values: list[str],
+    ) -> None:
+        """Extend entry/exit id lists when a sub-node id is not wired to an internal edge."""
+        if node_id not in incoming_ids:
+            entry_ids.extend(entry_values)
+        if node_id not in outgoing_ids:
+            exit_ids.extend(exit_values)
 
+    async def _expand_sub_nodes(
+        self,
+        sub_nodes: list[dict[str, Any]],
+        *,
+        parent_node_id: str,
+        leaf_id_map: dict[str, str],
+        incoming_ids: set[str],
+        outgoing_ids: set[str],
+        parameter_values: dict[str, Any],
+        depth: int,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], list[str], dict[str, _ExpandedComposite]]:
+        """Expand each sub-node (recursively for nested composites) into flat nodes.
+
+        Returns ``(flat_nodes, bindings, entry_ids, exit_ids, composite_id_map)``.
+        Nested composites are removed from ``leaf_id_map`` so the edge remap
+        below routes through them instead of a leaf id.
+        """
         composite_id_map: dict[str, _ExpandedComposite] = {}
-        incoming_ids: set[str] = {str(e.get("target")) for e in sub_edges}
-        outgoing_ids: set[str] = {str(e.get("source")) for e in sub_edges}
 
         flat_nodes: list[dict[str, Any]] = []
         bindings: list[dict[str, Any]] = []
@@ -624,23 +657,49 @@ class _CompositeExpander:
                 del leaf_id_map[old_id]
                 flat_nodes.extend(nested.nodes)
                 bindings.extend(nested.bindings)
-                if old_id not in incoming_ids:
-                    entry_ids.extend(nested_entries)
-                if old_id not in outgoing_ids:
-                    exit_ids.extend(nested_exits)
+                self._record_boundary(
+                    old_id, incoming_ids, outgoing_ids, entry_ids, exit_ids, nested_entries, nested_exits
+                )
                 continue
 
             new_id = leaf_id_map[old_id]
-            expanded = dict(sub)
-            expanded["id"] = new_id
-            expanded["_composite_parent_id"] = parent_node_id
-            expanded["_composite_index"] = idx
-            _inject_node_parameters(expanded, parameter_values)
-            flat_nodes.append(expanded)
-            if old_id not in incoming_ids:
-                entry_ids.append(new_id)
-            if old_id not in outgoing_ids:
-                exit_ids.append(new_id)
+            flat_nodes.append(self._expanded_leaf(sub, idx, new_id, parent_node_id, parameter_values))
+            self._record_boundary(old_id, incoming_ids, outgoing_ids, entry_ids, exit_ids, [new_id], [new_id])
+
+        return flat_nodes, bindings, entry_ids, exit_ids, composite_id_map
+
+    async def _expand_composite(
+        self,
+        composite_node: dict[str, Any],
+        template: CompositeTemplate,
+        parameter_values: dict[str, Any],
+        *,
+        depth: int,
+    ) -> _ExpandedComposite:
+        """Expand one composite node's sub-pipeline into flat nodes and edges."""
+        if depth > self._depth_limit:
+            raise ValueError(
+                f"Composite nesting exceeds depth limit {self._depth_limit} for node '{composite_node.get('id')}'"
+            )
+
+        sub_nodes, sub_edges = self._sub_graph_parts(template)
+
+        parent_node_id = str(composite_node.get("id"))
+
+        leaf_id_map = _build_leaf_id_map(sub_nodes, template)
+
+        incoming_ids: set[str] = {str(e.get("target")) for e in sub_edges}
+        outgoing_ids: set[str] = {str(e.get("source")) for e in sub_edges}
+
+        flat_nodes, bindings, entry_ids, exit_ids, composite_id_map = await self._expand_sub_nodes(
+            sub_nodes,
+            parent_node_id=parent_node_id,
+            leaf_id_map=leaf_id_map,
+            incoming_ids=incoming_ids,
+            outgoing_ids=outgoing_ids,
+            parameter_values=parameter_values,
+            depth=depth,
+        )
 
         remapped_edges = _rewire_edges(sub_edges, leaf_map=leaf_id_map, composite_map=composite_id_map)
 

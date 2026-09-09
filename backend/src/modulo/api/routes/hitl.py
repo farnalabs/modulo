@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string, require_permission
+from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
@@ -225,6 +226,17 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
         )
 
 
+def _client_type(principal: TenantPrincipal) -> str:
+    """The caller's credential kind for HITL audit enrichment (FAR-611).
+
+    JWTs carry no client-type claim (no amr / token-type marker), so the
+    principal's ``via_api_key`` credential-kind marker (FAR-610) is the only
+    reliable signal: ``"api_key"`` for mk_ principals, ``"browser"`` for JWT
+    logins. MCP callers pass ``"mcp"`` directly in ``mcp_server.py``.
+    """
+    return "api_key" if principal.via_api_key else "browser"
+
+
 async def _enforce_human_only_gate(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -329,16 +341,27 @@ async def claim_gate(
                     org_id=principal.organisation_id,
                     claimant_id=principal.account_id,
                     expiry_minutes=req.expiry_minutes,
+                    client_type=_client_type(principal),
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
             except AlreadyClaimedError as exc:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+                # FAR-645: the three claim conflicts carry distinct problem
+                # types so the frontend can discriminate by ``type`` instead
+                # of substring-matching English prose. Detail text is
+                # unchanged (the i18n keys render the same messages).
+                raise ProblemException(ProblemType.HITL_GATE_ALREADY_CLAIMED, detail=str(exc)) from exc
+            except GateAlreadyDecidedError as exc:
+                # A decided gate previously fell through to the generic
+                # Exception backstop (500) on this route; a stale row on
+                # screen makes this reachable, so it is a 409 like the other
+                # claim conflicts.
+                raise ProblemException(ProblemType.HITL_GATE_ALREADY_DECIDED, detail=str(exc)) from exc
             except RunNotAwaitingError as exc:
                 # FAR-612: a terminal/still-executing run must never be flipped
                 # to "claimed" by a stale gate claim -- 409 with the run's
                 # actual status so the operator sees why.
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+                raise ProblemException(ProblemType.HITL_RUN_NOT_AWAITING, detail=str(exc)) from exc
             except NotTeamMemberError as exc:
                 logger.warning("hitl.claim_gate.team_access_denied: %s", exc)
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
@@ -505,6 +528,7 @@ async def approve_gate(
         mgr_method="approve",
         claim_token=req.claim_token,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     try:
@@ -573,6 +597,7 @@ async def approve_gate_with_modification(
         claim_token=req.claim_token,
         modified_output=req.modified_output,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     try:
@@ -628,6 +653,7 @@ async def reject_gate(
         mgr_method="reject",
         claim_token=req.claim_token,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     # Resume the graph with rejection data so the gate router picks the
@@ -695,6 +721,7 @@ async def deliver_manual_output(
         claim_token=req.claim_token,
         output=req.output,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     try:
@@ -750,6 +777,7 @@ async def submit_manual_output(
         mgr_method="approve",
         claim_token=req.claim_token,
         decision_payload=resume_data,
+        client_type=_client_type(principal),
     )
 
     try:

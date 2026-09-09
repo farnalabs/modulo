@@ -250,6 +250,39 @@ def _ensure_builtin_sets() -> None:
         register_human_eval_set(DEMO_CLASSIFICATION_V1)
 
 
+def _human_eval_result(eval_def: Any, run_id: Any, *, passed: bool, score: float, detail: str) -> EvalResult:
+    """Build an :class:`EvalResult` attributed to *eval_def*'s id/node."""
+    return EvalResult(
+        run_id=run_id,
+        node_id=eval_def.node_id or "",
+        eval_id=eval_def.id,
+        passed=passed,
+        score=score,
+        detail=detail,
+    )
+
+
+def _run_set_assertions(eval_set: HumanEvalSet, output: dict[str, Any], config: dict[str, Any]) -> list[str]:
+    """Run every assertion in *eval_set*; return the descriptions of the failures.
+
+    A broken assertion (one that raises) fails loudly — it is recorded as a
+    failure, never passed silently. An assertion whose result is not a passing
+    dict (wrong shape or ``passed`` falsy) also records a failure carrying the
+    assertion's own ``detail`` when available.
+    """
+    failures: list[str] = []
+    for assertion in eval_set.assertions:
+        try:
+            raw = assertion.fn(output, config)
+        except Exception as exc:  # a broken assertion must fail loudly, never pass silently
+            failures.append(f"{assertion.name}: raised {type(exc).__name__}: {exc}")
+            continue
+        if not isinstance(raw, dict) or not bool(raw.get("passed", False)):
+            detail = "" if not isinstance(raw, dict) else str(raw.get("detail") or "")
+            failures.append(f"{assertion.name}: {detail}".rstrip(": "))
+    return failures
+
+
 def run_human_eval_set(
     name: str,
     output: dict[str, Any],
@@ -276,39 +309,28 @@ def run_human_eval_set(
     run_id = run_id or uuid4()
     eval_set = get_human_eval_set(name)
     if eval_set is None:
-        return EvalResult(
-            run_id=run_id,
-            node_id=eval_def.node_id or "",
-            eval_id=eval_def.id,
+        return _human_eval_result(
+            eval_def,
+            run_id,
             passed=False,
             score=_SCORE_FAIL,
             detail=f"human eval set {name!r} is not registered",
         )
 
-    failures: list[str] = []
-    for assertion in eval_set.assertions:
-        try:
-            raw = assertion.fn(output, getattr(eval_def, "config", {}) or {})
-        except Exception as exc:  # a broken assertion must fail loudly, never pass silently
-            failures.append(f"{assertion.name}: raised {type(exc).__name__}: {exc}")
-            continue
-        if not isinstance(raw, dict) or not bool(raw.get("passed", False)):
-            detail = "" if not isinstance(raw, dict) else str(raw.get("detail") or "")
-            failures.append(f"{assertion.name}: {detail}".rstrip(": "))
+    config = getattr(eval_def, "config", {}) or {}
+    failures = _run_set_assertions(eval_set, output, config)
 
     if failures:
-        return EvalResult(
-            run_id=run_id,
-            node_id=eval_def.node_id or "",
-            eval_id=eval_def.id,
+        return _human_eval_result(
+            eval_def,
+            run_id,
             passed=False,
             score=_SCORE_FAIL,
             detail=f"human set {eval_set.id} failed: {'; '.join(failures)}",
         )
-    return EvalResult(
-        run_id=run_id,
-        node_id=eval_def.node_id or "",
-        eval_id=eval_def.id,
+    return _human_eval_result(
+        eval_def,
+        run_id,
         passed=True,
         score=_SCORE_PASS,
         detail=f"human set {eval_set.id} passed ({len(eval_set.assertions)} assertions)",

@@ -443,6 +443,59 @@ async def run_analytics_query(
     }
 
 
+def _pipeline_caps_stmt(org_id: uuid.UUID, pipeline_ids: tuple[uuid.UUID, ...]) -> Any:
+    scope = Pipeline.id.in_(pipeline_ids) if pipeline_ids else sa.true()
+    return sa.select(Pipeline.max_concurrent_runs).where(
+        scope,
+        Pipeline.organisation_id == org_id,
+    )
+
+
+async def _read_pipeline_caps(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_ids: tuple[uuid.UUID, ...],
+) -> list[int]:
+    rows = (await session.execute(_pipeline_caps_stmt(org_id, pipeline_ids))).scalars()
+    return sorted({int(value) for value in rows if value is not None})
+
+
+def _pool_reference_decision(org_limit: int | None, caps: list[int]) -> int | None:
+    if org_limit is not None:
+        return min(int(org_limit), caps[0]) if caps else int(org_limit)
+    return caps[0] if caps else None
+
+
+async def _resolve_pool_reference_value(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_ids: tuple[uuid.UUID, ...],
+) -> int | None:
+    scoped_caps: list[int] | None = None
+    if pipeline_ids:
+        scoped_caps = await _read_pipeline_caps(session, org_id=org_id, pipeline_ids=pipeline_ids)
+        if len(pipeline_ids) == 1 and scoped_caps:
+            # Exactly ONE filtered pipeline with a present row:
+            # its own per-pipeline cap is the reference. A
+            # missing row (empty read) falls through to the
+            # org limit below.
+            return scoped_caps[0]
+    # Every other shape (org-wide, mixed/uniform multi-pipeline
+    # filters, missing single row): the org limit ALWAYS
+    # participates — it gates every run in the org.
+    org_limit = await get_org_run_concurrency_limit(session, org_id)
+    # An org-wide query reads the WHOLE org's caps (the caps
+    # statement scopes to sa.true() when no pipeline filter).
+    caps = (
+        scoped_caps
+        if scoped_caps is not None
+        else await _read_pipeline_caps(session, org_id=org_id, pipeline_ids=pipeline_ids)
+    )
+    return _pool_reference_decision(org_limit, caps)
+
+
 async def _resolve_pool_reference(
     factory: async_sessionmaker[AsyncSession],
     _settings: Settings,
@@ -487,37 +540,7 @@ async def _resolve_pool_reference(
                     await set_rls_org(session, org_id)
                     if account_id is not None:
                         await set_rls_user_context(session, account_id, org_role or "")
-
-                    def _caps_stmt() -> Any:
-                        scope = Pipeline.id.in_(pipeline_ids) if pipeline_ids else sa.true()
-                        return sa.select(Pipeline.max_concurrent_runs).where(
-                            scope,
-                            Pipeline.organisation_id == org_id,
-                        )
-
-                    async def _read_caps() -> list[int]:
-                        rows = (await session.execute(_caps_stmt())).scalars()
-                        return sorted({int(value) for value in rows if value is not None})
-
-                    scoped_caps: list[int] | None = None
-                    if pipeline_ids:
-                        scoped_caps = await _read_caps()
-                        if len(pipeline_ids) == 1 and scoped_caps:
-                            # Exactly ONE filtered pipeline with a present row:
-                            # its own per-pipeline cap is the reference. A
-                            # missing row (empty read) falls through to the
-                            # org limit below.
-                            return scoped_caps[0]
-                    # Every other shape (org-wide, mixed/uniform multi-pipeline
-                    # filters, missing single row): the org limit ALWAYS
-                    # participates — it gates every run in the org.
-                    org_limit = await get_org_run_concurrency_limit(session, org_id)
-                    # An org-wide query reads the WHOLE org's caps (the caps
-                    # statement scopes to sa.true() when no pipeline filter).
-                    caps = scoped_caps if scoped_caps is not None else await _read_caps()
-                    if org_limit is not None:
-                        return min(int(org_limit), caps[0]) if caps else int(org_limit)
-                    return caps[0] if caps else None
+                    return await _resolve_pool_reference_value(session, org_id=org_id, pipeline_ids=pipeline_ids)
             except asyncio.CancelledError:
                 raise
             except (ProgrammingError, SQLAlchemyError):

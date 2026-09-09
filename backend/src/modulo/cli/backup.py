@@ -23,6 +23,7 @@ import psycopg
 from cryptography.fernet import Fernet, InvalidToken
 from psycopg.rows import dict_row
 
+from modulo.cli.apply import register_apply
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -697,3 +698,16 @@ def restore(backup_dir: Path, db_url: str | None, yes: bool, previous_fernet_key
         _log.exception("Restore failed")
         click.echo(f"Restore failed: {exc}", err=True)
         raise click.ClickException(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# modulo apply (FAR-681)
+# ---------------------------------------------------------------------------
+# Registered once at import time so the ``modulo apply`` subcommand is wired
+# into the CLI group. Wrapped in an ``_init_once_*`` helper because the
+# module-side-effects architecture test forbids bare module-level calls.
+def _init_once_register_apply() -> None:
+    register_apply(cli)
+
+
+_init_once_register_apply()

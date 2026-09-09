@@ -130,6 +130,7 @@ class TestFunctionsWiring:
         assert "slot_reconciliation" in names
         assert "hitl_park_sweep" in names
         assert "runner_workspace_reconcile" in names
+        assert "runner_marker_sweep" in names
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
@@ -152,6 +153,7 @@ class TestFunctionsWiring:
             "slot_reconciliation",
             "hitl_park_sweep",
             "runner_workspace_reconcile",
+            "runner_marker_sweep",
             "cost_probe",
             "analytics_facts_maintenance",
             "journey_reconcile",
@@ -1891,18 +1893,29 @@ class TestCancellationPropagation:
 class TestExecuteRunMissingRun:
     @pytest.mark.asyncio
     async def test_execute_run_missing_run_returns_early(self) -> None:
-        """A claimed run whose ``load_and_setup`` yields no run row must return
-        ``missing`` without touching the watchdog or completion path."""
+        """A claimed run whose ``load_and_setup`` yields no run row must be
+        terminal-failed (never left 'running' with a frozen heartbeat until the
+        zombie repair collects it) and return ``missing`` without touching the
+        watchdog or completion path."""
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
             patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=True),
             patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock, return_value=(None, None)),
+            patch(
+                "modulo.core.pipeline_execution.fail_run_terminal",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as fail,
             patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
             patch("modulo.core.pipeline_execution.run_executor_with_watchdog", new_callable=AsyncMock) as watchdog,
         ):
             result = await sw.execute_run({}, run_id=_UUID_1, org_id=_UUID_ORG)
 
         assert result == {"status": "missing"}
+        fail.assert_awaited_once()
+        assert fail.await_args.args[1] == _UUID_1
+        assert fail.await_args.args[2] == _UUID_ORG
+        assert fail.await_args.kwargs["error_code"] == "executor_setup_failed"
         complete.assert_not_awaited()
         watchdog.assert_not_awaited()
 

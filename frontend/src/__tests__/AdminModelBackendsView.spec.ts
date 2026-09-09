@@ -391,10 +391,22 @@ describe('AdminModelBackendsView — pipeline references', () => {
     ...over,
   })
 
+  async function setRefsOpen(wrapper: ReturnType<typeof mountView>, backendId: string, open: boolean) {
+    const el = wrapper.find(`[data-testid="admin-model-backends-refs-expand-${backendId}"]`)
+    // The view derives toggle direction from the native open state (like a
+    // real browser), so mirror it on the element before dispatching.
+    ;(el.element as HTMLDetailsElement).open = open
+    await el.trigger('toggle')
+    await nextTick()
+    await nextTick()
+  }
+
   async function expandRefs(wrapper: ReturnType<typeof mountView>, backendId = 'mb-1') {
-    await wrapper.find(`[data-testid="admin-model-backends-refs-expand-${backendId}"]`).trigger('toggle')
-    await nextTick()
-    await nextTick()
+    await setRefsOpen(wrapper, backendId, true)
+  }
+
+  async function collapseRefs(wrapper: ReturnType<typeof mountView>, backendId = 'mb-1') {
+    await setRefsOpen(wrapper, backendId, false)
   }
 
   it('loads and renders pipeline references when the details row is expanded', async () => {
@@ -502,8 +514,144 @@ describe('AdminModelBackendsView — pipeline references', () => {
     await expandRefs(wrapper)
     expect(wrapper.text()).toContain('Pipeline p-1')
 
-    await wrapper.find('[data-testid="admin-model-backends-refs-expand-mb-1"]').trigger('toggle')
+    await collapseRefs(wrapper)
     await nextTick()
     expect(wrapper.text()).not.toContain('Pipeline p-1')
+  })
+
+  function mockTwoBackendsGet(refsHandler: (backendId: string, call: number) => unknown) {
+    const refsCalls: Record<string, number> = {}
+    mockGet.mockImplementation(async (url: string, opts?: { params?: { path?: { backend_id?: string } } }) => {
+      if (url === '/api/v1/model-backends') return { data: { items: [backend('mb-1'), backend('mb-2')] }, error: undefined }
+      if (url === '/api/v1/model-backends/{backend_id}/pipeline-references') {
+        const id = opts?.params?.path?.backend_id ?? ''
+        refsCalls[id] = (refsCalls[id] ?? 0) + 1
+        return refsHandler(id, refsCalls[id])
+      }
+      return { data: undefined, error: { detail: 'unrouted' } }
+    })
+    return refsCalls
+  }
+
+  it('keeps row A refs intact after expanding row B (FAR-658 cross-row blanking regression)', async () => {
+    const refsCalls = mockTwoBackendsGet((id) =>
+      id === 'mb-1'
+        ? { data: { items: [refItem('p-1')], total: 1, page: 1, page_size: 20 }, error: undefined }
+        : { data: { items: [refItem('p-9')], total: 1, page: 1, page_size: 20 }, error: undefined },
+    )
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await expandRefs(wrapper, 'mb-1')
+    await expandRefs(wrapper, 'mb-2')
+
+    const tableA = wrapper.find('[data-testid="admin-model-backends-refs-table-mb-1"]')
+    const tableB = wrapper.find('[data-testid="admin-model-backends-refs-table-mb-2"]')
+    expect(tableA.exists()).toBe(true)
+    expect(tableB.exists()).toBe(true)
+    expect(tableA.text()).toContain('Pipeline p-1')
+    expect(tableB.text()).toContain('Pipeline p-9')
+    // Expanding row B must not refetch row A (per-backend cache).
+    expect(refsCalls['mb-1']).toBe(1)
+  })
+
+  it('renders the no-references message per expanded row independently (FAR-658 empty-state regression)', async () => {
+    mockTwoBackendsGet((id) =>
+      id === 'mb-1'
+        ? { data: { items: [], total: 0, page: 1, page_size: 20 }, error: undefined }
+        : { data: { items: [refItem('p-9')], total: 1, page: 1, page_size: 20 }, error: undefined },
+    )
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await expandRefs(wrapper, 'mb-1')
+    expect(wrapper.text()).toContain('No pipeline graph references found')
+
+    await expandRefs(wrapper, 'mb-2')
+    // Row A's empty message must survive row B's expansion; B shows its own refs.
+    expect(wrapper.text()).toContain('No pipeline graph references found')
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-2"]').text()).toContain('Pipeline p-9')
+  })
+
+  it('keeps error state per row and retries only the errored row', async () => {
+    mockTwoBackendsGet((id) =>
+      id === 'mb-1'
+        ? { data: undefined, error: { detail: 'refs down' } }
+        : { data: { items: [refItem('p-9')], total: 1, page: 1, page_size: 20 }, error: undefined },
+    )
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await expandRefs(wrapper, 'mb-1')
+    await expandRefs(wrapper, 'mb-2')
+
+    expect(wrapper.text()).toContain('refs down')
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-retry-mb-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-2"]').exists()).toBe(true)
+
+    mockTwoBackendsGet((id) =>
+      id === 'mb-1'
+        ? { data: { items: [refItem('p-1')], total: 1, page: 1, page_size: 20 }, error: undefined }
+        : { data: { items: [refItem('p-9')], total: 1, page: 1, page_size: 20 }, error: undefined },
+    )
+    await wrapper.find('[data-testid="admin-model-backends-refs-retry-mb-1"]').trigger('click')
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-1"]').text()).toContain('Pipeline p-1')
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-2"]').text()).toContain('Pipeline p-9')
+  })
+
+  it('tracks loading state per row while both fetches are in flight', async () => {
+    let resolveA: (value?: unknown) => void = () => {}
+    let resolveB: (value?: unknown) => void = () => {}
+    mockTwoBackendsGet((id) =>
+      new Promise((resolve) => {
+        const done = () => resolve(
+          id === 'mb-1'
+            ? { data: { items: [refItem('p-1')], total: 1, page: 1, page_size: 20 }, error: undefined }
+            : { data: { items: [refItem('p-9')], total: 1, page: 1, page_size: 20 }, error: undefined },
+        )
+        if (id === 'mb-1') resolveA = done
+        else resolveB = done
+      }),
+    )
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await expandRefs(wrapper, 'mb-1')
+    await expandRefs(wrapper, 'mb-2')
+    expect(wrapper.findAll('loading-spinner-stub').length).toBe(2)
+
+    resolveA()
+    await nextTick()
+    expect(wrapper.findAll('loading-spinner-stub').length).toBe(1)
+    resolveB()
+    await nextTick()
+    expect(wrapper.findAll('loading-spinner-stub').length).toBe(0)
+    expect(wrapper.text()).toContain('Pipeline p-1')
+    expect(wrapper.text()).toContain('Pipeline p-9')
+  })
+
+  it('clears only the collapsed row refs and refetches it on re-expand (FAR-658 per-row collapse)', async () => {
+    const refsCalls = mockTwoBackendsGet((id) =>
+      id === 'mb-1'
+        ? { data: { items: [refItem('p-1')], total: 1, page: 1, page_size: 20 }, error: undefined }
+        : { data: { items: [refItem('p-9')], total: 1, page: 1, page_size: 20 }, error: undefined },
+    )
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await expandRefs(wrapper, 'mb-1')
+    await expandRefs(wrapper, 'mb-2')
+
+    await collapseRefs(wrapper, 'mb-1')
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-2"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Pipeline p-1')
+
+    await expandRefs(wrapper, 'mb-1')
+    expect(refsCalls['mb-1']).toBe(2)
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-1"]').text()).toContain('Pipeline p-1')
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-table-mb-2"]').text()).toContain('Pipeline p-9')
   })
 })

@@ -130,12 +130,20 @@ def _is_router_decorator(dec: ast.expr) -> bool:
     return isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id.endswith("router")
 
 
+#: Canonical break-glass mint-deny markers. The stock ``deny_break_glass_mint``
+#: dependency is JWT-only, so routes that must also accept org API-key (``mk_``)
+#: credentials for declarative apply (e.g. FAR-681 model-backends create/patch)
+#: use the any-credential variant below. Both implement the same account-based
+#: break-glass mint deny, so the oracle must recognise either as the marker.
+MINT_MARKER_NAMES = frozenset({"deny_break_glass_mint", "deny_break_glass_mint_any_credential"})
+
+
 def _mentions_marker(node: ast.expr | None) -> bool:
-    """True when the AST subtree references ``deny_break_glass_mint`` by name."""
+    """True when the AST subtree references a break-glass mint-deny marker by name."""
     if node is None:
         return False
     if isinstance(node, ast.Name):
-        return node.id == "deny_break_glass_mint"
+        return node.id in MINT_MARKER_NAMES
     if isinstance(node, ast.Attribute):
         return _mentions_marker(node.value)
     if isinstance(node, ast.Call):

@@ -421,5 +421,41 @@ describe('AppSidebar', () => {
       expect(avatar.exists()).toBe(true)
       expect(avatar.attributes('href')).toBe('/admin/my-profile')
     })
+
+    it('lists Notifications in MONITOR above Error Dashboard (real manifest, FAR-656)', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      const store = usePlanStore()
+      store.currentTier = 'team'
+      await flushPromises()
+      const monitorItems = wrapper.find('#sidebar-group-monitor')
+      expect(monitorItems.exists()).toBe(true)
+      const hrefs = monitorItems.findAll('a.sidebar-link').map((l) => l.attributes('href'))
+      expect(hrefs[0]).toBe('/notifications')
+      expect(hrefs[1]).toBe('/admin/errors')
+    })
+
+    it('hides the flag-gated Webhook Notifications link while the flag is disabled (real manifest, FAR-656)', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      const store = usePlanStore()
+      store.currentTier = 'team'
+      await flushPromises()
+      const monitorItems = wrapper.find('#sidebar-group-monitor')
+      const hrefs = monitorItems.findAll('a.sidebar-link').map((l) => l.attributes('href'))
+      expect(hrefs).not.toContain('/admin/notification-delivery')
+    })
+
+    it('shows the flag-gated Webhook Notifications link when the flag is enabled (real manifest, FAR-656)', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      const store = usePlanStore()
+      store.currentTier = 'team'
+      store.features['webhook_notification_log'] = true
+      await flushPromises()
+      const monitorItems = wrapper.find('#sidebar-group-monitor')
+      const hrefs = monitorItems.findAll('a.sidebar-link').map((l) => l.attributes('href'))
+      expect(hrefs).toContain('/admin/notification-delivery')
+    })
   })
 })

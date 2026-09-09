@@ -167,13 +167,15 @@ class TestCheckDispatcherReconcile:
     @pytest.mark.asyncio
     async def test_fresh_run_detail_surfaces_new_counters(self) -> None:
         """The readiness detail surfaces the D1 counters (terminalizers,
-        enqueue-failed recovery) even when zero."""
+        enqueue-failed recovery) and the FAR-714 claimed-but-never-dispatched
+        counter even when zero."""
         fake = _FakeStatsRedis(
             blob=_fresh_payload(
                 claim_cap_terminalized=1,
                 nodeless_failed=2,
                 enqueue_failed_redispatched=3,
                 age_terminalized=4,
+                claimed_but_never_dispatched=5,
             ).encode()
         )
         with (
@@ -186,6 +188,7 @@ class TestCheckDispatcherReconcile:
         assert "nodeless_failed=2" in result.detail
         assert "enqueue_failed_redispatched=3" in result.detail
         assert "age_terminalized=4" in result.detail
+        assert "claimed_but_never_dispatched=5" in result.detail
 
 
 def _srr_payload(**overrides: Any) -> str:

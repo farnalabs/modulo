@@ -19,11 +19,24 @@ test.describe('Admin My Profile', { tag: "@regression" }, () => {
 })
 
 test.describe('Admin Notification Delivery', { tag: "@regression" }, () => {
-  test('renders the Notification Delivery page', { tag: "@regression" }, async ({ page, env }) => {
+  test('renders the Webhook Notifications page when the flag is enabled', { tag: "@regression" }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+    // FAR-656: the webhook delivery log is gated behind the
+    // webhook_notification_log flag (default OFF) — mock the plan fetch so the
+    // router guard resolves the flag as enabled for this regression run.
+    await page.route('**/api/v1/admin/feature-flags*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, flags: [{ name: 'webhook_notification_log', currently_active: true }] }) })
+    })
+    await page.goto('/admin/notification-delivery')
+    await expect(page.locator('h1')).toContainText('Webhook Notifications')
+    await expect(page.getByTestId('admin-notification-log-title')).toBeVisible()
+  })
+
+  test('redirects to the dashboard while the webhook_notification_log flag is off', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
     await page.goto('/admin/notification-delivery')
-    await expect(page.locator('h1')).toContainText('Notification Delivery Log')
-    await expect(page.getByTestId('admin-notification-log-title')).toBeVisible()
+    // The manifest feature_flag guard redirects a disabled-flag route to '/'.
+    await expect(page).toHaveURL(/\/$/)
   })
 })
 

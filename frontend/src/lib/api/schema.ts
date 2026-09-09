@@ -752,7 +752,16 @@ export interface paths {
         };
         /** Get Feature Flag */
         get: operations["get_feature_flag_api_v1_admin_feature_flags__flag_name__get"];
-        /** Toggle Feature Flag */
+        /**
+         * Toggle Feature Flag
+         * @description Toggle a feature flag for the caller's organisation — persists durably.
+         *
+         *     Writes ``feature_overrides[flag_name]`` into the org's settings (the same
+         *     persistence path as ``PUT /{flag_name}/org-override``) and invalidates the
+         *     list cache, so the toggle survives a fresh request/process and both
+         *     endpoints write the same truth. ``overridden: true`` is only returned
+         *     after the durable write has committed.
+         */
         put: operations["toggle_feature_flag_api_v1_admin_feature_flags__flag_name__put"];
         post?: never;
         delete?: never;
@@ -12691,6 +12700,10 @@ export interface components {
             model_id: string;
             /** Api Key */
             api_key: string;
+            /** Default Params */
+            default_params?: {
+                [key: string]: unknown;
+            };
             /** Fallback Backend Ids */
             fallback_backend_ids?: string[] | null;
             /**

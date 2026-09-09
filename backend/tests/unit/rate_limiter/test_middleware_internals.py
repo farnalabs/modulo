@@ -48,22 +48,27 @@ class TestClientKey:
     def test_hitl_path_normalizes_hex_uuid_segments(self, middleware):
         """Variable run/gate UUIDs in HITL paths must be normalised to fixed
         placeholders so pre-bucket rotation by variable segments is prevented
-        (FAR-1304)."""
+        (FAR-1304). Since FAR-611 the trailing action is normalized away too —
+        one aggregate bucket per identity (PRD §7.18)."""
         run_id = "3f2a1b2c-9d4e-4b5c-8a1f-123456789abc"
         gate_id = "7cba9876-543f-4edc-8ba1-fedcba987654"
         request = make_mock_request(
             path=f"/api/v1/runs/{run_id}/hitl/{gate_id}/claim",
             headers={"X-Forwarded-For": "198.51.100.7"},
         )
-        assert middleware._client_key(request) == "ip:198.51.100.7:/api/v1/runs/<run_id>/hitl/<gate_id>/claim"
+        assert middleware._client_key(request) == "ip:198.51.100.7:/api/v1/runs/<run_id>/hitl/<gate_id>"
 
-    def test_hitl_path_keeps_non_hex_segments(self, middleware):
-        """Non-hex (already-stable) segment values must be left untouched."""
+    def test_hitl_path_normalizes_non_hex_gate_ids(self, middleware):
+        """Real gate ids are node ids like ``hitl_gate_<source>_<target>`` —
+        the pre-FAR-611 normalizer only stripped hex-UUID segments, so these
+        paths kept the raw gate id (and action) in the bucket key and every
+        gate got its own 20/min bucket. Regression test for the 2026-09-05
+        bulk-approve sweep (FAR-611)."""
         request = make_mock_request(
-            path="/api/v1/runs/run-123/hitl/gate-abc/approve",
+            path="/api/v1/runs/3f2a1b2c-9d4e-4b5c-8a1f-123456789abc/hitl/hitl_gate_fetch-pr-title_verify-branch/approve",
             headers={"X-Forwarded-For": "198.51.100.7"},
         )
-        assert middleware._client_key(request) == "ip:198.51.100.7:/api/v1/runs/run-123/hitl/gate-abc/approve"
+        assert middleware._client_key(request) == "ip:198.51.100.7:/api/v1/runs/<run_id>/hitl/<gate_id>"
 
     def test_hitl_client_key_does_not_leak_raw_uuids(self, middleware):
         """Raw run/gate UUIDs must never appear in a rate-limit bucket key."""

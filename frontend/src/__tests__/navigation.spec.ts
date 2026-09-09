@@ -9,19 +9,21 @@ const mockManifest = vi.hoisted(() => ({
   },
   routes: {
     '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'core', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
-    '/notifications': { name: 'notifications', breadcrumb: 'Notifications', sidebar_group: null, sidebar_order: null, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/notifications': { name: 'notifications', breadcrumb: 'Notifications', sidebar_group: 'monitor', sidebar_order: 0, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'core', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'core', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
     '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'core', sidebar_order: 5, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'core', sidebar_order: 8, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
     '/lifecycle-maps': { name: 'lifecycle-maps', breadcrumb: 'Lifecycle Maps', sidebar_group: 'core', sidebar_order: 9, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
-    '/runs/diff': { name: 'runs-diff', breadcrumb: 'Output Diff', sidebar_group: 'monitor', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
-    '/evals/editor': { name: 'eval-editor', breadcrumb: 'Evals', sidebar_group: 'monitor', sidebar_order: 2, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
-    '/evals/proposals': { name: 'eval-proposals-queue', breadcrumb: 'Eval Proposals', sidebar_group: 'monitor', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
-    '/variants/compare': { name: 'variant-compare', breadcrumb: 'Variants', sidebar_group: 'monitor', sidebar_order: 4, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
-    '/variants/ab-test': { name: 'ab-test-models', breadcrumb: 'AB Test Models', sidebar_group: 'monitor', sidebar_order: 5, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
-    '/settings/observability': { name: 'settings-observability', breadcrumb: 'Observability', sidebar_group: 'monitor', sidebar_order: 6, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
-    '/settings/monitoring': { name: 'settings-monitoring', breadcrumb: 'Browser Monitoring', sidebar_group: 'monitor', sidebar_order: 7, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
+    '/runs/diff': { name: 'runs-diff', breadcrumb: 'Output Diff', sidebar_group: 'monitor', sidebar_order: 2, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/evals/editor': { name: 'eval-editor', breadcrumb: 'Evals', sidebar_group: 'monitor', sidebar_order: 3, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
+    '/evals/proposals': { name: 'eval-proposals-queue', breadcrumb: 'Eval Proposals', sidebar_group: 'monitor', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
+    '/variants/compare': { name: 'variant-compare', breadcrumb: 'Variants', sidebar_group: 'monitor', sidebar_order: 5, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/variants/ab-test': { name: 'ab-test-models', breadcrumb: 'AB Test Models', sidebar_group: 'monitor', sidebar_order: 6, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/settings/observability': { name: 'settings-observability', breadcrumb: 'Observability', sidebar_group: 'monitor', sidebar_order: 7, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/monitoring': { name: 'settings-monitoring', breadcrumb: 'Browser Monitoring', sidebar_group: 'monitor', sidebar_order: 8, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
+    '/admin/errors': { name: 'admin-errors', breadcrumb: 'Error Dashboard', sidebar_group: 'monitor', sidebar_order: 1, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/admin/notification-delivery': { name: 'admin-notification-delivery', breadcrumb: 'Webhook Notifications', sidebar_group: 'monitor', sidebar_order: 9, feature_flag: 'webhook_notification_log', type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/schemas': { name: 'schemas', breadcrumb: 'Schemas', sidebar_group: 'configure', sidebar_order: 1, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/schemas/editor/:id': { name: 'schema-editor', breadcrumb: 'Schema Editor', sidebar_group: 'configure', sidebar_order: 2, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/schemas/infer': { name: 'schema-infer', breadcrumb: 'Schema Inference', sidebar_group: 'configure', sidebar_order: 3, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
@@ -57,14 +59,28 @@ vi.mock('@/manifest.yaml', () => ({
   default: mockManifest,
 }))
 
-import { getNavGroups, canSeeItem } from '../config/navigation'
+import { getNavGroups, canSeeItem, isNavItemVisible } from '../config/navigation'
 const navGroups = getNavGroups()
-import type { NavItem } from '../config/navigation'
+import type { NavItem, NavVisibilityContext } from '../config/navigation'
 
 describe('navigation.ts', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
+
+  function visibilityContext(overrides: Partial<NavVisibilityContext> = {}): NavVisibilityContext {
+    return {
+      isSystemAdmin: false,
+      userRole: 'admin',
+      userPermissions: [],
+      devMode: false,
+      tierInfoLoaded: true,
+      isAtMinimumTier: () => true,
+      isDemoSession: false,
+      isFeatureEnabled: () => false,
+      ...overrides,
+    }
+  }
 
   it('populates sidebar groups from manifest', () => {
     expect(navGroups).toHaveLength(4)
@@ -289,6 +305,54 @@ describe('navigation.ts', () => {
     expect(monitor.items.length).toBeGreaterThanOrEqual(3)
     expect(monitor.items.some(i => i.to === '/runs/diff')).toBe(true)
     expect(monitor.items.some(i => i.to === '/evals/editor')).toBe(true)
+  })
+
+  it('places Notifications first in the monitor group, above Error Dashboard (FAR-656)', () => {
+    const monitor = navGroups.find((g) => g.id === 'monitor')!
+    expect(monitor.items[0].to).toBe('/notifications')
+    expect(monitor.items[1].to).toBe('/admin/errors')
+  })
+
+  it('maps the manifest feature_flag onto the webhook log nav item (FAR-656)', () => {
+    const monitor = navGroups.find((g) => g.id === 'monitor')!
+    const webhookLog = monitor.items.find((item) => item.to === '/admin/notification-delivery')!
+    expect(webhookLog.requiredFeatureFlag).toBe('webhook_notification_log')
+    expect(webhookLog.labelKey).toBe('components.SidebarNav.item_notification_log')
+  })
+
+  it('isNavItemVisible hides flag-gated items while their flag is disabled (FAR-656)', () => {
+    const item: NavItem = {
+      to: '/admin/notification-delivery',
+      icon: 'Bell',
+      label: 'Webhook Notifications',
+      labelKey: 'components.SidebarNav.item_notification_log',
+      requiredFeatureFlag: 'webhook_notification_log',
+    }
+    expect(isNavItemVisible(item, visibilityContext())).toBe(false)
+    expect(isNavItemVisible(item, visibilityContext({ isFeatureEnabled: () => true }))).toBe(true)
+  })
+
+  it('isNavItemVisible hides flag-gated items until tier info is loaded (FAR-656)', () => {
+    const item: NavItem = {
+      to: '/admin/notification-delivery',
+      icon: 'Bell',
+      label: 'Webhook Notifications',
+      labelKey: 'components.SidebarNav.item_notification_log',
+      requiredFeatureFlag: 'webhook_notification_log',
+    }
+    expect(
+      isNavItemVisible(item, visibilityContext({ tierInfoLoaded: false, isFeatureEnabled: () => true })),
+    ).toBe(false)
+  })
+
+  it('isNavItemVisible ignores the flag check for items without a requiredFeatureFlag', () => {
+    const item: NavItem = {
+      to: '/',
+      icon: 'LayoutDashboard',
+      label: 'Dashboard',
+      labelKey: 'components.SidebarNav.item_dashboard',
+    }
+    expect(isNavItemVisible(item, visibilityContext())).toBe(true)
   })
 
   it('configure group contains connectors, schemas, costs etc', () => {

@@ -473,6 +473,18 @@ async def execute_run(
         )
         return {"status": "setup_failed"}
     if run is None:
+        # The claim succeeded (status=running + heartbeat), but the row is now
+        # invisible to load_and_setup — terminalize so the claimed row is not
+        # left running with a frozen heartbeat until dispatcher_reconcile
+        # collects it (~35-min zombie backstop).
+        _log.warning("SAQ execute_run: run %s not found after claim — terminalizing", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="run row not found during load_and_setup after a successful claim",
+        )
         return {"status": "missing"}
 
     outcome = await run_executor_with_watchdog(
@@ -507,7 +519,7 @@ async def resume_run(
     resume_data: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """SAQ ``resume_run`` job — claim (awaiting_human/claimed or stale-running) + resume.
+    """SAQ ``resume_run`` job — claim (awaiting_human/claimed/hitl_parked or stale-running) + resume.
 
     The ``claim_token`` kwarg is the stale token stamped into this job's kwargs
     by a previous attempt (PR #1003). SAQ retries re-invoke this function with
@@ -1157,6 +1169,12 @@ RUNNER_WORKSPACE_RECONCILE_STATS_KEY = "saq:cron:stats:runner_workspace_reconcil
 RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS = 15 * 60
 RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS = RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS + 60
 
+# Cross-process stats key for the FAR-594 D8 runner dispatch-marker
+# reconciliation sweep (same contract as the sibling sweeps).
+RUNNER_MARKER_SWEEP_STATS_KEY = "saq:cron:stats:runner_marker_sweep"
+RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
+RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS = RUNNER_MARKER_SWEEP_STALE_SECONDS + 60
+
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
     """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
@@ -1246,7 +1264,6 @@ async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
 
 async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — FAR-604 D2 HITL park-on-expiry sweep (every 5 min).
-
     Parks runs whose open HITL gate expired unanswered past the grace window
     (``HITL_PARK_GRACE_SECONDS``, default 24h): the run leaves
     ``awaiting_human`` for the non-terminal ``hitl_parked`` status — the
@@ -1283,6 +1300,63 @@ async def hitl_park_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
             "parked": result["parked"],
         },
         HITL_PARK_SWEEP_STATS_TTL_SECONDS,
+    )
+    return result
+
+
+async def runner_marker_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-594 D8 runner dispatch-marker reconciliation (every 5 min).
+
+    State-aware marker sweep: clears non-fence markers on genuinely terminal
+    runs and stale (>25h) non-fence markers, transitions a stale non-terminal
+    RUNNING run terminal (no zombie running-without-marker-without-workspace),
+    and NEVER clears ``script_executing`` fence components or markers of runs
+    ``dispatcher_reconcile`` considers recoverable (parity by construction —
+    the sweep evaluates the reconciler's own predicates). Breaches of the org
+    cap are logged as ``runner.capacity.violation`` (the D8 rollback signal).
+
+    Liveness contract (qa F5, mirrors the ``runner_workspace_reconcile``
+    sibling): the outcome is persisted to the shared Redis key every tick. A
+    FAILED sweep (org-index or any org pass) persists the PARTIAL counts with
+    ``"error": "sweep_failed"`` and then RE-RAISES so SAQ's ``retries=2``
+    engages — a swallowed sweep failure is a silently dead safety net (stale
+    markers accumulate as phantom capacity and the rollback signal goes dark).
+
+    The sweep is ALSO wired into ``dispatcher_reconcile`` (60s cadence via
+    ``_run_reconcile_sweeps``); this dedicated cron is the independent
+    periodic path with a liveness key so a silently dead sweep is visible to
+    /healthz/ready. The session-scoped dedup advisory lock makes concurrent
+    ticks a no-op.
+    """
+    from modulo.core.runner_capacity import RunnerMarkerSweepError, reconcile_runner_dispatch_markers
+
+    try:
+        result = await reconcile_runner_dispatch_markers(_make_session_factory())
+    except RunnerMarkerSweepError as exc:
+        await _persist_sweep_stats(
+            RUNNER_MARKER_SWEEP_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "scanned": exc.scanned,
+                "cleared": exc.cleared,
+                "transitioned": exc.transitioned,
+                "orgs_failed": exc.org_failures,
+                "error": "sweep_failed",
+            },
+            RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
+        )
+        raise
+    await _persist_sweep_stats(
+        RUNNER_MARKER_SWEEP_STATS_KEY,
+        {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "scanned": result["scanned"],
+            "cleared": result["cleared"],
+            "transitioned": result["transitioned"],
+            "violations": result["violations"],
+            "orgs_failed": result.get("orgs_failed", 0),
+        },
+        RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
     )
     return result
 
@@ -1621,6 +1695,7 @@ def _system_functions() -> list[Any]:
         slot_reconciliation,
         hitl_park_sweep,
         runner_workspace_reconcile,
+        runner_marker_sweep,
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
@@ -1774,6 +1849,24 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # partial counts and re-raises (retries=2 engages).
         CronJob(
             runner_workspace_reconcile,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # runner_marker_sweep: every 5 min (FAR-594 D8) — state-aware
+        # dispatch-marker reconciliation: clears non-fence markers on
+        # terminal runs and stale (>25h) markers, transitions stale
+        # non-terminal RUNNING runs terminal, and never clears
+        # script_executing fence components or reconciler-recoverable rows.
+        # unique=True so overlapping cron ticks cannot double-clear; the
+        # sweep's session-scoped dedup advisory lock also guards the 60s
+        # dispatcher_reconcile path overlapping this cron (a failed sweep
+        # persists the partial counts + re-raises — retries=2 engages).
+        CronJob(
+            runner_marker_sweep,
             cron=_CRON_EVERY_5_MINUTES,
             unique=True,
             timeout=120,

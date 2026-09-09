@@ -35,7 +35,7 @@ from typing import Any
 
 from jwt import ExpiredSignatureError
 from jwt import InvalidTokenError as JWTError
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,9 +43,10 @@ from modulo.auth.jwt import create_claim_token as _create_claim_jwt
 from modulo.auth.jwt import decode_claim_token as _decode_claim_jwt
 from modulo.core import hitl_email_alerts
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.hitl_manager.sweep_alarm import maybe_alarm_approve_sweep
 from modulo.db.crud.run import unpark_parked_run
 from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
+from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, HITL_CLAIMABLE_RUN_STATUSES, Run
 from modulo.db.models.team_membership import TeamMembership
 
 _log = logging.getLogger(__name__)
@@ -275,6 +276,7 @@ class HITLManager:
         org_id: uuid.UUID,
         claimant_id: uuid.UUID,
         expiry_minutes: int = _DEFAULT_EXPIRY_MINUTES,
+        client_type: str | None = None,
     ) -> HitlClaim:
         """Atomically claim the gate.  Raises AlreadyClaimedError if held.
 
@@ -284,6 +286,13 @@ class HITLManager:
 
         If the gate has a ``required_team_id``, the claimant must be a
         member of that team, otherwise ``NotTeamMemberError`` is raised.
+
+        ``client_type`` (FAR-611) is the caller's credential kind —
+        ``"browser"`` (JWT login), ``"api_key"`` (mk_ key), or ``"mcp"``
+        (MCP transport) — recorded on the ``hitl_claimed`` audit event so
+        a sweep is attributable by client surface. Internal callers that
+        cannot know the client omit it (the audit payload then carries no
+        ``client_type`` key).
         """
         if expiry_minutes <= 0:
             raise HITLError(f"expiry_minutes must be positive, got {expiry_minutes}")
@@ -322,9 +331,13 @@ class HITLManager:
         run = run_result.scalar_one_or_none()
         if run is None:
             raise GateNotFoundError(run_id, gate_id)
-        allowed_statuses: tuple[str, ...] = ("awaiting_human", "hitl_parked")
+        # FAR-645: the fresh/cross-account set is single-sourced on
+        # HITL_CLAIMABLE_RUN_STATUSES -- the same set the atomic UPDATE's
+        # EXISTS predicate below enforces, so the pre-check cannot drift from
+        # the atomic guard.
+        allowed_statuses: frozenset[str] = HITL_CLAIMABLE_RUN_STATUSES
         if gate_check.account_id == claimant_id:
-            allowed_statuses = ("awaiting_human", "hitl_parked", "claimed")
+            allowed_statuses = HITL_CLAIMABLE_RUN_STATUSES | {"claimed"}
         if run.status not in allowed_statuses:
             raise RunNotAwaitingError(run_id, run.status)
         if gate_check.required_team_id is not None:
@@ -368,6 +381,12 @@ class HITLManager:
         else:
             token = secrets.token_urlsafe(_TOKEN_BYTES)
 
+        # FAR-645: the run-status guard is folded INTO the atomic UPDATE via
+        # the EXISTS predicate below. The pre-check SELECT above is only a
+        # fast-fail for the specific error: between it and this write the run
+        # can go terminal, and a gate-columns-only WHERE would still claim —
+        # leaving a claimed gate stranded on a terminal run (invisible +
+        # expiring). The EXISTS makes the refusal atomic with the claim.
         stmt = (
             update(HitlClaim)
             .where(
@@ -379,6 +398,22 @@ class HITLManager:
                 # claimed_at restart is accepted).
                 or_(HitlClaim.account_id.is_(None), HitlClaim.account_id == claimant_id),
                 HitlClaim.decision.is_(None),
+                select(Run.id)
+                .where(
+                    Run.id == run_id,
+                    Run.organisation_id == org_id,
+                    or_(
+                        # FAR-645: fresh claims require a claimable run status.
+                        Run.status.in_(HITL_CLAIMABLE_RUN_STATUSES),
+                        # FAR-686: a same-account re-claim targets a run the
+                        # claim itself flipped to "claimed" (the claim route's
+                        # update_run_status). Allowed atomically only while the
+                        # gate row is still held by this caller — the outer
+                        # account guard carries the same predicate.
+                        and_(Run.status == "claimed", HitlClaim.account_id == claimant_id),
+                    ),
+                )
+                .exists(),
             )
             .values(
                 account_id=claimant_id,
@@ -391,7 +426,38 @@ class HITLManager:
         result = await session.execute(stmt)
         claimed_id = result.scalar_one_or_none()
         if claimed_id is None:
-            # Race condition — someone else claimed between our check and update
+            # The UPDATE matched no row. Either another operator claimed the
+            # gate between our pre-check and this write (AlreadyClaimedError),
+            # the gate was DECIDED in the same window
+            # (GateAlreadyDecidedError), or the run went terminal in the same
+            # window and the run-status EXISTS predicate refused the claim
+            # (RunNotAwaitingError, FAR-645). Re-read the run and the gate so
+            # the raised error names the actual cause instead of a generic
+            # already-claimed.
+            race_run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
+            race_run = race_run_result.scalar_one_or_none()
+            # "claimed" needs no RunNotAwaitingError: it is the same-account
+            # re-claim's own window status (FAR-686) or another operator's
+            # fresh claim — either way the accurate cause is the gate's
+            # account/decision state, re-read below.
+            if (
+                race_run is not None
+                and race_run.status not in HITL_CLAIMABLE_RUN_STATUSES
+                and race_run.status != "claimed"
+            ):
+                raise RunNotAwaitingError(run_id, race_run.status)
+            race_gate_result = await session.execute(
+                select(HitlClaim).where(
+                    HitlClaim.run_id == run_id,
+                    HitlClaim.gate_id == gate_id,
+                    HitlClaim.organisation_id == org_id,
+                )
+            )
+            race_gate = race_gate_result.scalar_one_or_none()
+            if race_gate is None:
+                raise GateNotFoundError(run_id, gate_id)
+            if race_gate.decision is not None:
+                raise GateAlreadyDecidedError(run_id, gate_id)
             raise AlreadyClaimedError(run_id, gate_id)
 
         gate = await session.get(HitlClaim, claimed_id, populate_existing=True)
@@ -428,6 +494,16 @@ class HITLManager:
         # audited — only the later ``hitl.claim_expired``/decision events were.
         # Failure-isolated: a broken audit append must never fail the claim
         # (the savepoint rollback undoes only the audit write).
+        claim_payload: dict[str, Any] = {
+            "pipeline_run_id": str(run_id),
+            "node_id": gate_id,
+            "team_id": str(gate_check.required_team_id) if gate_check.required_team_id else None,
+            "expiry_minutes": expiry_minutes,
+        }
+        # FAR-611: client-type enrichment — only recorded when the caller knows
+        # the credential kind (REST routes / MCP); internal callers omit the key.
+        if client_type is not None:
+            claim_payload["client_type"] = client_type
         try:
             await append_audit_event(
                 session,
@@ -436,12 +512,7 @@ class HITLManager:
                 actor_user_id=claimant_id,
                 resource_type="hitl_claim",
                 resource_id=claimed_id,
-                payload_json={
-                    "pipeline_run_id": str(run_id),
-                    "node_id": gate_id,
-                    "team_id": str(gate_check.required_team_id) if gate_check.required_team_id else None,
-                    "expiry_minutes": expiry_minutes,
-                },
+                payload_json=claim_payload,
             )
         except asyncio.CancelledError:
             raise
@@ -468,11 +539,16 @@ class HITLManager:
         modified_output: dict[str, Any],
         actor_id: uuid.UUID | None = None,
         decision_payload: dict[str, Any] | None = None,
+        client_type: str | None = None,
     ) -> HitlClaim:
         """Record approval with a modified output payload.
 
         Logs a ``hitl.output_modified`` audit event documenting the change,
         then logs the standard ``hitl.output_delivered`` event.
+
+        ``client_type`` (FAR-611): the caller's credential kind recorded on
+        both audit events when known (``"browser"`` / ``"api_key"`` /
+        ``"mcp"``); internal callers omit it.
 
         Raises on missing token, expired token, or decided gate, and
         ``DecisionPayloadError`` when the supplied *decision_payload* violates
@@ -498,10 +574,16 @@ class HITLManager:
             org_id=org_id,
             actor_id=actor_id,
             events=[
-                ("hitl.output_modified", self._base_audit_payload(gate, modified_output=modified_output)),
-                ("hitl.output_delivered", self._base_audit_payload(gate, modified=True)),
+                (
+                    "hitl.output_modified",
+                    self._base_audit_payload(gate, client_type=client_type, modified_output=modified_output),
+                ),
+                ("hitl.output_delivered", self._base_audit_payload(gate, client_type=client_type, modified=True)),
             ],
         )
+        # FAR-611: approve-sweep anomaly alarm — failure-isolated so a broken
+        # alarm can never fail the committed decision.
+        await self._run_sweep_alarm(session, org_id=org_id, actor_id=actor_id, gate=gate)
 
         return gate
 
@@ -515,8 +597,13 @@ class HITLManager:
         claim_token: str,
         actor_id: uuid.UUID | None = None,
         decision_payload: dict[str, Any] | None = None,
+        client_type: str | None = None,
     ) -> HitlClaim:
         """Record approval and log a ``hitl.output_delivered`` audit event.
+
+        ``client_type`` (FAR-611): the caller's credential kind recorded on
+        the audit event when known (``"browser"`` / ``"api_key"`` /
+        ``"mcp"``); internal callers omit it.
 
         Raises on missing token, expired token, or decided gate, and
         ``DecisionPayloadError`` when the supplied *decision_payload* violates
@@ -541,8 +628,11 @@ class HITLManager:
             gate,
             org_id=org_id,
             actor_id=actor_id,
-            events=[("hitl.output_delivered", self._base_audit_payload(gate))],
+            events=[("hitl.output_delivered", self._base_audit_payload(gate, client_type=client_type))],
         )
+        # FAR-611: approve-sweep anomaly alarm — failure-isolated so a broken
+        # alarm can never fail the committed decision.
+        await self._run_sweep_alarm(session, org_id=org_id, actor_id=actor_id, gate=gate)
 
         return gate
 
@@ -557,8 +647,13 @@ class HITLManager:
         actor_id: uuid.UUID | None = None,
         reason: str | None = None,
         decision_payload: dict[str, Any] | None = None,
+        client_type: str | None = None,
     ) -> HitlClaim:
         """Record rejection and log a ``hitl.output_rejected`` audit event.
+
+        ``client_type`` (FAR-611): the caller's credential kind recorded on
+        the audit event when known (``"browser"`` / ``"api_key"`` /
+        ``"mcp"``); internal callers omit it.
 
         Raises on missing token, expired token, or decided gate, and
         ``DecisionPayloadError`` when the supplied *decision_payload* violates
@@ -588,7 +683,7 @@ class HITLManager:
             gate,
             org_id=org_id,
             actor_id=actor_id,
-            events=[("hitl.output_rejected", self._base_audit_payload(gate, **extra))],
+            events=[("hitl.output_rejected", self._base_audit_payload(gate, client_type=client_type, **extra))],
         )
 
         return gate
@@ -604,6 +699,7 @@ class HITLManager:
         output: dict[str, Any],
         actor_id: uuid.UUID | None = None,
         decision_payload: dict[str, Any] | None = None,
+        client_type: str | None = None,
     ) -> HitlClaim:
         """Record manual delivery and log a ``hitl.manual_delivery`` audit event.
 
@@ -611,6 +707,10 @@ class HITLManager:
         correction run or back to the agent. The output is validated against
         the expected output schema (if available) and the run resumes past the
         HITL gate with the manually-supplied value.
+
+        ``client_type`` (FAR-611): the caller's credential kind recorded on
+        the audit event when known (``"browser"`` / ``"api_key"`` /
+        ``"mcp"``); internal callers omit it.
 
         Raises on missing token, expired token, or decided gate, and
         ``DecisionPayloadError`` when the supplied *decision_payload* violates
@@ -637,8 +737,19 @@ class HITLManager:
             gate,
             org_id=org_id,
             actor_id=actor_id,
-            events=[("hitl.manual_delivery", self._base_audit_payload(gate, manual_output=output))],
+            events=[
+                (
+                    "hitl.manual_delivery",
+                    self._base_audit_payload(gate, client_type=client_type, manual_output=output),
+                )
+            ],
         )
+        # FAR-611: approve-sweep anomaly alarm — failure-isolated so a broken
+        # alarm can never fail the committed decision. A pure manual-delivery
+        # sweep (REST /runs/{run}/hitl/{gate}/deliver-manual, MCP deliver_manual)
+        # writes a ``hitl.manual_delivery`` event counted by the detection
+        # aggregate, so it must trip the same alarm as an approve.
+        await self._run_sweep_alarm(session, org_id=org_id, actor_id=actor_id, gate=gate)
 
         return gate
 
@@ -949,14 +1060,47 @@ class HITLManager:
 
     @staticmethod
     def _base_audit_payload(gate: HitlClaim, **extra: Any) -> dict[str, Any]:
-        """Common audit event payload fields for a HITL gate decision."""
-        return {
+        """Common audit event payload fields for a HITL gate decision.
+
+        ``client_type`` (FAR-611) is included only when the caller knows the
+        credential kind — internal callers' payloads stay unchanged (no
+        ``client_type`` key at all, not a null one).
+        """
+        client_type = extra.pop("client_type", None)
+        payload: dict[str, Any] = {
             "pipeline_run_id": str(gate.run_id),
             "node_id": gate.gate_id,
             "decision": gate.decision,
             "team_id": str(gate.required_team_id) if gate.required_team_id else None,
-            **extra,
         }
+        if client_type is not None:
+            payload["client_type"] = client_type
+        payload.update(extra)
+        return payload
+
+    @staticmethod
+    async def _run_sweep_alarm(
+        session: AsyncSession,
+        *,
+        org_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
+        gate: HitlClaim,
+    ) -> None:
+        """FAR-611: run the approve-sweep anomaly alarm, failure-isolated.
+
+        The alarm function is itself no-throw by contract (only
+        ``asyncio.CancelledError`` propagates); this guard is defense in depth
+        so a defect in the alarm seam can never fail the human's decision.
+        """
+        try:
+            await maybe_alarm_approve_sweep(session, org_id=org_id, actor_id=actor_id, gate=gate)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "hitl_manager.sweep_alarm_failed",
+                extra={"org_id": str(org_id), "actor": str(actor_id) if actor_id else None},
+            )
 
     async def _log_audit_and_deliver(
         self,
@@ -968,6 +1112,9 @@ class HITLManager:
         events: list[tuple[str, dict[str, Any]]],
     ) -> None:
         """Log audit events, mark delivered, and flush.
+
+        The event payloads are built by the callers (which own the optional
+        ``client_type`` enrichment, FAR-611) via ``_base_audit_payload``.
 
         On failure, the original session transaction is in a broken state,
         so the decision rolls back along with the audit events — preventing

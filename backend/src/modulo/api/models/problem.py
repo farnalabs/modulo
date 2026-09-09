@@ -6,10 +6,10 @@ import enum
 from collections.abc import Sequence
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from starlette.exceptions import HTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class ProblemType(enum.StrEnum):
@@ -21,6 +21,13 @@ class ProblemType(enum.StrEnum):
     CONFLICT = "conflict"
     GONE = "gone"
     METHOD_NOT_ALLOWED = "method_not_allowed"
+    # FAR-645: machine-readable HITL claim-failure types. The frontend
+    # discriminates the three claim-conflict modes by ``type`` (not by
+    # substring-matching English prose), so a backend rewording can never
+    # silently degrade the claim-failure UX.
+    HITL_GATE_ALREADY_CLAIMED = "hitl_gate_already_claimed"
+    HITL_GATE_ALREADY_DECIDED = "hitl_gate_already_decided"
+    HITL_RUN_NOT_AWAITING = "hitl_run_not_awaiting"
     RATE_LIMITED = "rate_limited"
     FEATURE_REQUIRED = "feature_required"
     PIPELINE_ERROR = "pipeline_error"
@@ -41,6 +48,9 @@ _PROBLEM_METADATA: dict[ProblemType, dict[str, Any]] = {
     ProblemType.CONFLICT: {"status": 409, "title": "Conflict"},
     ProblemType.GONE: {"status": 410, "title": "Gone"},
     ProblemType.METHOD_NOT_ALLOWED: {"status": 405, "title": "Method Not Allowed"},
+    ProblemType.HITL_GATE_ALREADY_CLAIMED: {"status": 409, "title": "Conflict"},
+    ProblemType.HITL_GATE_ALREADY_DECIDED: {"status": 409, "title": "Conflict"},
+    ProblemType.HITL_RUN_NOT_AWAITING: {"status": 409, "title": "Conflict"},
     ProblemType.RATE_LIMITED: {"status": 429, "title": "Rate Limited"},
     ProblemType.FEATURE_REQUIRED: {"status": 402, "title": "Feature Not Available"},
     ProblemType.PIPELINE_ERROR: {"status": 500, "title": "Pipeline Error"},
@@ -109,7 +119,15 @@ class ProblemDetail(BaseModel):
 
 
 class ProblemException(HTTPException):
-    """Raise this anywhere to produce a structured ProblemDetail response."""
+    """Raise this anywhere to produce a structured ProblemDetail response.
+
+    Bases on FastAPI's ``HTTPException`` (a subclass of starlette's), NOT
+    starlette's directly: the codebase's blanket ``except HTTPException:
+    raise`` pass-through clauses in routes and ``handle_db_errors`` bind to
+    FastAPI's class, so a starlette-based ProblemException raised inside a
+    wrapped route body would fall through to the generic Exception backstop
+    and be masked as a 500 (FAR-645).
+    """
 
     def __init__(
         self,
@@ -132,7 +150,7 @@ class ProblemException(HTTPException):
 
 def problem_from_http_exception(
     request: Request,
-    exc: HTTPException,
+    exc: StarletteHTTPException,
 ) -> ProblemDetail:
     """Map a plain HTTPException to a ProblemDetail (no ProblemException)."""
     status = exc.status_code

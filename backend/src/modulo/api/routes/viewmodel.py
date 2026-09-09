@@ -28,6 +28,7 @@ from modulo.db.crud.run import list_runs
 from modulo.db.crud.team_membership import list_team_memberships_for_account
 from modulo.db.crud.view import get_view, list_views
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.models.team import Team
 from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -306,12 +307,19 @@ async def viewmodel_current(
                 runs_page = await list_runs(session, page=1, page_size=10)
 
                 user_team_ids = [m.team_id for m in memberships]
+                # FAR-645: join ``runs`` and filter to the actionable run
+                # statuses — identical semantics to the org pending list
+                # (``HITLManager.list_pending``). Without the filter, gates on
+                # terminal runs still rendered on the dashboard and claiming
+                # them 409'd.
                 hitl_query = (
                     select(HitlClaim, Team.name.label("required_team_name"))
                     .outerjoin(Team, HitlClaim.required_team_id == Team.id)
+                    .join(Run, HitlClaim.run_id == Run.id)
                     .where(
                         HitlClaim.organisation_id == current_user.organisation_id,
                         HitlClaim.decision.is_(None),
+                        Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
                     )
                 )
                 if user_team_ids:
