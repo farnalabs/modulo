@@ -5,6 +5,6 @@ import SettingsNotificationLogView from '../views/SettingsNotificationLogView.vu
 describe('SettingsNotificationLogView', () => {
   it('renders the heading', () => {
     const wrapper = mount(SettingsNotificationLogView)
-    expect(wrapper.text()).toContain('Notification Delivery Log')
+    expect(wrapper.text()).toContain('Webhook Notifications')
   })
 })

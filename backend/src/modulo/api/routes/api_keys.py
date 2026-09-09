@@ -246,26 +246,17 @@ async def _enforce_user_key_quota(
         )
 
 
-@router.post(
-    "",
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
-)
-@handle_db_errors(_CODE_API_KEYS_CREATE_API)
-async def create_api_key_endpoint(
-    req: ApiKeyCreate,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("api_key.create"),
-    settings: Settings = Depends(get_settings),
-) -> ApiKeyCreatedResponse:
+async def _validate_create_request(req: ApiKeyCreate, principal: TenantPrincipal) -> str:
+    """Validate role/scope on a create payload and resolve the requested scope.
+
+    FAR-620: 'org' (or omitted) keeps the pre-flag behaviour; 'user' is gated
+    by the org flag (OFF ⇒ 422, never a silent downgrade to an org key).
+    """
     if req.role not in ("operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
         )
-    # FAR-620: optional caller scope. 'org' (or omitted) keeps today's
-    # behaviour; 'user' is gated by the org flag (OFF ⇒ 422, never a silent
-    # downgrade to an org key) and the per-account active-key quota.
     requested_scope = req.scope if req.scope is not None else "org"
     if requested_scope not in KEY_SCOPES:
         raise HTTPException(
@@ -281,42 +272,76 @@ async def create_api_key_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="User-scoped API keys are not enabled for this organisation",
         )
-    name = _normalise_name(req.name)
-    if not name:
+    return requested_scope
+
+
+async def _resolve_new_team_id(
+    team_id_raw: str | None,
+    settings: Settings,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+) -> uuid.UUID | None:
+    """Resolve the team scope on a create payload (team-tier + admin gated)."""
+    if team_id_raw is None:
+        return None
+    await _require_team_rbac(settings, session)
+    _require_admin(principal)
+    return uuid.UUID(team_id_raw)
+
+
+def _parse_future_expires_at(value: str | None) -> datetime | None:
+    """Parse an optional ISO expiry, rejecting values that are not in the future."""
+    if not value:
+        return None
+    expires_at = _parse_expires_at(value)
+    if expires_at <= datetime.now(UTC):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="API key name must not be blank",
+            detail="expires_at must be in the future",
         )
-    team_id: uuid.UUID | None = None
-    if req.team_id is not None:
-        await _require_team_rbac(settings, session)
-        _require_admin(principal)
-        team_id = uuid.UUID(req.team_id)
-    expires_at: datetime | None = None
-    if req.expires_at:
-        expires_at = _parse_expires_at(req.expires_at)
-        if expires_at <= datetime.now(UTC):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="expires_at must be in the future",
-            )
+    return expires_at
+
+
+async def _create_key_tx(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    name: str,
+    role: str,
+    team_id: uuid.UUID | None,
+    expires_at: datetime | None,
+    requested_scope: str,
+) -> tuple[OrgApiKey, str]:
+    """Mint the key in one transaction: RLS context, role cap, quota, create."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        await _enforce_mint_cap(session, principal, role)
+        if requested_scope == "user":
+            await _enforce_user_key_quota(session, principal)
+        return await create_api_key(
+            session,
+            org_id=principal.organisation_id,
+            name=name,
+            role=role,
+            account_id=principal.account_id,
+            team_id=team_id,
+            expires_at=expires_at,
+            scope=requested_scope,
+        )
+
+
+async def _mint_api_key(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    name: str,
+    role: str,
+    team_id: uuid.UUID | None,
+    expires_at: datetime | None,
+    requested_scope: str,
+) -> tuple[OrgApiKey, str]:
+    """Mint the key, mapping DB errors to the route's HTTP error contract."""
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            await _enforce_mint_cap(session, principal, req.role)
-            if requested_scope == "user":
-                await _enforce_user_key_quota(session, principal)
-            key, full_key = await create_api_key(
-                session,
-                org_id=principal.organisation_id,
-                name=name,
-                role=req.role,
-                account_id=principal.account_id,
-                team_id=team_id,
-                expires_at=expires_at,
-                scope=requested_scope,
-            )
+        return await _create_key_tx(session, principal, name, role, team_id, expires_at, requested_scope)
     except ApiKeyScopeError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -349,6 +374,30 @@ async def create_api_key_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
+@handle_db_errors(_CODE_API_KEYS_CREATE_API)
+async def create_api_key_endpoint(
+    req: ApiKeyCreate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("api_key.create"),
+    settings: Settings = Depends(get_settings),
+) -> ApiKeyCreatedResponse:
+    requested_scope = await _validate_create_request(req, principal)
+    name = _normalise_name(req.name)
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="API key name must not be blank",
+        )
+    team_id = await _resolve_new_team_id(req.team_id, settings, session, principal)
+    expires_at = _parse_future_expires_at(req.expires_at)
+    key, full_key = await _mint_api_key(session, principal, name, req.role, team_id, expires_at, requested_scope)
 
     # PRD §8.12 ``api_key_created``: key minting was never audited. Written in a
     # fresh transaction (the create above already committed) and failure-isolated
@@ -427,15 +476,8 @@ async def list_api_keys_endpoint(
         ) from None
 
 
-@router.put("/{key_id}", dependencies=[Depends(deny_break_glass_mint)])
-@handle_db_errors(_CODE_API_KEYS_UPDATE_API)
-async def update_api_key_endpoint(
-    key_id: uuid.UUID,
-    req: ApiKeyUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("api_key.revoke"),
-    settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
+def _validate_update_payload(req: ApiKeyUpdate) -> None:
+    """Reject invalid roles and immutable-scope mutations on an update payload."""
     if req.role is not None and req.role not in ("operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -449,49 +491,79 @@ async def update_api_key_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="scope is immutable: an API key's caller scope cannot be changed after mint",
         )
-    name: str | None = None
-    if req.name is not None:
-        name = _normalise_name(req.name)
-        if not name:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="API key name must not be blank",
-            )
-    team_id: uuid.UUID | object | None = _UNSET
-    if "team_id" in req.model_fields_set:
-        if req.team_id is not None:
-            await _require_team_rbac(settings, session)
-            _require_admin(principal)
-            team_id = uuid.UUID(req.team_id)
-        else:
-            # Explicitly clearing the team scope is an admin operation, same as
-            # setting one — but it needs no team-tier feature check (removing
-            # scope never enables a team feature).
-            _require_admin(principal)
-            team_id = None
-    expires_at: datetime | None = None
-    if req.expires_at:
-        expires_at = _parse_expires_at(req.expires_at)
-        if expires_at <= datetime.now(UTC):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="expires_at must be in the future",
-            )
+
+
+def _resolve_update_name(req: ApiKeyUpdate) -> str | None:
+    """Normalise an update payload's name, rejecting blank values."""
+    if req.name is None:
+        return None
+    name = _normalise_name(req.name)
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="API key name must not be blank",
+        )
+    return name
+
+
+async def _resolve_update_team_id(
+    req: ApiKeyUpdate,
+    settings: Settings,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+) -> uuid.UUID | object | None:
+    """Resolve the team scope on an update payload (_UNSET = leave unchanged)."""
+    if "team_id" not in req.model_fields_set:
+        return _UNSET
+    if req.team_id is not None:
+        await _require_team_rbac(settings, session)
+        _require_admin(principal)
+        return uuid.UUID(req.team_id)
+    # Explicitly clearing the team scope is an admin operation, same as
+    # setting one — but it needs no team-tier feature check (removing
+    # scope never enables a team feature).
+    _require_admin(principal)
+    return None
+
+
+async def _apply_key_update_tx(
+    session: AsyncSession,
+    key_id: uuid.UUID,
+    principal: TenantPrincipal,
+    role: str | None,
+    name: str | None,
+    team_id: uuid.UUID | object | None,
+    expires_at: datetime | None,
+) -> OrgApiKey | None:
+    """Apply the key update in one transaction: RLS context, role cap, update."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        if role is not None:
+            await _enforce_mint_cap(session, principal, role)
+        return await update_api_key(
+            session,
+            key_id,
+            principal.organisation_id,
+            name=name,
+            role=role,
+            team_id=team_id,
+            expires_at=expires_at,
+        )
+
+
+async def _apply_key_update(
+    session: AsyncSession,
+    key_id: uuid.UUID,
+    principal: TenantPrincipal,
+    role: str | None,
+    name: str | None,
+    team_id: uuid.UUID | object | None,
+    expires_at: datetime | None,
+) -> OrgApiKey | None:
+    """Apply the key update, mapping DB errors to the route's HTTP error contract."""
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            if req.role is not None:
-                await _enforce_mint_cap(session, principal, req.role)
-            key = await update_api_key(
-                session,
-                key_id,
-                principal.organisation_id,
-                name=name,
-                role=req.role,
-                team_id=team_id,
-                expires_at=expires_at,
-            )
+        return await _apply_key_update_tx(session, key_id, principal, role, name, team_id, expires_at)
     except IntegrityError:
         logger.exception(_CODE_API_KEYS_UPDATE_API)
         raise HTTPException(
@@ -522,6 +594,22 @@ async def update_api_key_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
+
+
+@router.put("/{key_id}", dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors(_CODE_API_KEYS_UPDATE_API)
+async def update_api_key_endpoint(
+    key_id: uuid.UUID,
+    req: ApiKeyUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("api_key.revoke"),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _validate_update_payload(req)
+    name = _resolve_update_name(req)
+    team_id = await _resolve_update_team_id(req, settings, session, principal)
+    expires_at = _parse_future_expires_at(req.expires_at)
+    key = await _apply_key_update(session, key_id, principal, req.role, name, team_id, expires_at)
     if key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
     return {

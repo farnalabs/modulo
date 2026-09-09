@@ -728,92 +728,137 @@ async def list_pipeline_references_endpoint(
     )
 
 
-@router.patch("/{backend_id}", dependencies=[Depends(deny_break_glass_mint)])
-@handle_db_errors(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
-async def update_model_backend_endpoint(
-    backend_id: uuid.UUID,
-    req: ModelBackendUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.update"),
-    settings: Settings = Depends(get_settings),
-) -> ModelBackendResponse:
+def _prepare_update_payload(req: ModelBackendUpdate, settings: Settings) -> dict[str, Any]:
+    """Build the update dict, encrypting a supplied api_key into ciphertext."""
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
     if "api_key" in updates and updates["api_key"] is not None:
         ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
         updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
     elif "api_key" in updates:
         updates.pop("api_key")
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-            fallback_ids = updates.get("fallback_backend_ids")
-            if fallback_ids is not None:
-                await _validate_fallback_ids(session, principal.organisation_id, fallback_ids, backend_id=backend_id)
-                # JSON column cannot serialize raw uuid.UUID objects; stringify
-                # before the write, mirroring the create path (line ~315).
-                updates["fallback_backend_ids"] = [str(fid) for fid in fallback_ids]
-            existing = await get_model_backend(session, backend_id)
-            if existing is None or existing.organisation_id != principal.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
-            mb = await update_model_backend(session, backend_id, updates)
-            if mb is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
-            await session.refresh(mb)
-            if req.api_key is not None:
-                secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-                secret_value = json.dumps({"api_key": req.api_key})
-                await secrets_backend.set_secret(str(mb.id), secret_value)
-            response = _to_response(mb)
-        # The entity write has COMMITTED above. A credential change re-runs the
-        # PRD 8.1 health check OUTSIDE the write transaction (post-rotation
-        # validation) so the provider network call never holds the DB connection
-        # or row lock; the result is persisted in a short second transaction.
-        if req.api_key is not None:
-            await _run_health_check_on_save_and_persist(
-                session,
-                mb,
-                mb.provider,
-                mb.model_id,
-                req.api_key,
-                dict(mb.default_params or {}),
-                org_id=principal.organisation_id,
-                user_id=principal.account_id,
-                org_role=principal.org_role,
-            )
+    return updates
 
-        # PRD §8.12 audit trail: backend edits and credential rotation were
-        # previously invisible. Written in fresh transactions (the update above
-        # already committed) and failure-isolated so a broken append never fails
-        # a completed update. ``model_backend_credentials_updated`` fires under
-        # its exact PRD name when an API key is supplied; the generic edit event
-        # carries only the non-credential fields that actually changed.
-        changed_fields = _audit_safe_backend_fields(updates)
-        if changed_fields:
-            await append_audit_event_isolated(
-                session,
-                principal,
-                resource_type="model_backend",
-                event_type="model_backend.updated",
-                resource_id=mb.id,
-                payload={"backend_id": str(mb.id), "changed_fields": changed_fields},
-                log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
-            )
+
+async def _stringify_fallback_ids(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    updates: dict[str, Any],
+    backend_id: uuid.UUID,
+) -> None:
+    """Validate fallback ids and stringify them for the JSON column.
+
+    JSON column cannot serialize raw uuid.UUID objects; stringify before the
+    write, mirroring the create path.
+    """
+    fallback_ids = updates.get("fallback_backend_ids")
+    if fallback_ids is not None:
+        await _validate_fallback_ids(session, org_id, fallback_ids, backend_id=backend_id)
+        updates["fallback_backend_ids"] = [str(fid) for fid in fallback_ids]
+
+
+async def _update_backend_tx(
+    session: AsyncSession,
+    backend_id: uuid.UUID,
+    principal: TenantPrincipal,
+    req: ModelBackendUpdate,
+    settings: Settings,
+    updates: dict[str, Any],
+) -> tuple[ModelBackend, ModelBackendResponse]:
+    """Apply the update in one transaction: RLS, fallback validation, write, secret."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        await _stringify_fallback_ids(session, principal.organisation_id, updates, backend_id)
+        existing = await get_model_backend(session, backend_id)
+        if existing is None or existing.organisation_id != principal.organisation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
+        mb = await update_model_backend(session, backend_id, updates)
+        if mb is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
+        await session.refresh(mb)
         if req.api_key is not None:
-            await append_audit_event_isolated(
-                session,
-                principal,
-                resource_type="model_backend",
-                event_type="model_backend_credentials_updated",
-                resource_id=mb.id,
-                payload={
-                    "backend_id": str(mb.id),
-                    "name": mb.name,
-                    "provider": mb.provider,
-                    "model_id": mb.model_id,
-                },
-                log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
-            )
+            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+            secret_value = json.dumps({"api_key": req.api_key})
+            await secrets_backend.set_secret(str(mb.id), secret_value)
+        response = _to_response(mb)
+        return mb, response
+
+
+async def _update_and_post_process(
+    session: AsyncSession,
+    backend_id: uuid.UUID,
+    principal: TenantPrincipal,
+    req: ModelBackendUpdate,
+    settings: Settings,
+    updates: dict[str, Any],
+) -> ModelBackendResponse:
+    """Apply the update, then run the post-commit health check and audit appends.
+
+    The entity write COMMITS inside ``_update_backend_tx``. A credential change
+    re-runs the PRD 8.1 health check OUTSIDE the write transaction (post-rotation
+    validation) so the provider network call never holds the DB connection
+    or row lock; the result is persisted in a short second transaction.
+
+    PRD §8.12 audit trail: backend edits and credential rotation were
+    previously invisible. Written in fresh transactions (the update above
+    already committed) and failure-isolated so a broken append never fails
+    a completed update. ``model_backend_credentials_updated`` fires under
+    its exact PRD name when an API key is supplied; the generic edit event
+    carries only the non-credential fields that actually changed.
+    """
+    mb, response = await _update_backend_tx(session, backend_id, principal, req, settings, updates)
+    if req.api_key is not None:
+        await _run_health_check_on_save_and_persist(
+            session,
+            mb,
+            mb.provider,
+            mb.model_id,
+            req.api_key,
+            dict(mb.default_params or {}),
+            org_id=principal.organisation_id,
+            user_id=principal.account_id,
+            org_role=principal.org_role,
+        )
+    changed_fields = _audit_safe_backend_fields(updates)
+    if changed_fields:
+        await append_audit_event_isolated(
+            session,
+            principal,
+            resource_type="model_backend",
+            event_type="model_backend.updated",
+            resource_id=mb.id,
+            payload={"backend_id": str(mb.id), "changed_fields": changed_fields},
+            log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
+        )
+    if req.api_key is not None:
+        await append_audit_event_isolated(
+            session,
+            principal,
+            resource_type="model_backend",
+            event_type="model_backend_credentials_updated",
+            resource_id=mb.id,
+            payload={
+                "backend_id": str(mb.id),
+                "name": mb.name,
+                "provider": mb.provider,
+                "model_id": mb.model_id,
+            },
+            log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
+        )
+    return response
+
+
+async def _apply_backend_update(
+    session: AsyncSession,
+    backend_id: uuid.UUID,
+    principal: TenantPrincipal,
+    req: ModelBackendUpdate,
+    settings: Settings,
+    updates: dict[str, Any],
+) -> ModelBackendResponse:
+    """Apply the update, mapping DB errors to the route's HTTP error contract."""
+    try:
+        return await _update_and_post_process(session, backend_id, principal, req, settings, updates)
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
         raise HTTPException(
@@ -840,7 +885,19 @@ async def update_model_backend_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating model backend.",
         ) from None
-    return response
+
+
+@router.patch("/{backend_id}", dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
+async def update_model_backend_endpoint(
+    backend_id: uuid.UUID,
+    req: ModelBackendUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("model_backend.update"),
+    settings: Settings = Depends(get_settings),
+) -> ModelBackendResponse:
+    updates = _prepare_update_payload(req, settings)
+    return await _apply_backend_update(session, backend_id, principal, req, settings, updates)
 
 
 @router.post("/{backend_id}/health-check")

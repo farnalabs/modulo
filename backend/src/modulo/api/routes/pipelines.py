@@ -848,7 +848,14 @@ class PipelineGraphNode(BaseModel):
             "join": self._validate_join_node,
         }
         node_validators[self.node_type]()
-        # FAR-402 P3 / FAR-417: fan_out / collect / aggregate cross-checks.
+        self._validate_fan_out_cross_checks()
+        self._validate_sandbox_only_fields()
+        self._validate_agent_only_fields()
+        self._validate_output_schema_pin_consistency()
+        return self
+
+    def _validate_fan_out_cross_checks(self) -> None:
+        """FAR-402 P3 / FAR-417: fan_out / collect / aggregate cross-checks."""
         if self.fan_out is not None and self.node_type == "join":
             raise ValueError("A join node cannot also declare fan_out")
         if self.fan_out is not None and self.node_type not in (
@@ -856,23 +863,32 @@ class PipelineGraphNode(BaseModel):
             "sandbox_agent",
         ):
             raise ValueError("fan_out is only allowed on agent / sandbox_agent nodes")
-        # FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
-        # A non-sandbox node that sets them is rejected — the enforcement surface
-        # (read-only workspace, git-credential scope) only exists for sandbox
-        # agents, and a declared-but-unenforced field on another node type would
-        # be a silent no-op. agent_commands / commands_concatenation_string get
-        # the same treatment: the runtime only reads them for sandbox nodes.
-        if self.node_type != "sandbox_agent":
-            if self.read_only:
-                raise ValueError("Only sandbox_agent nodes can set read_only=True")
-            if self.git_credentials is not None:
-                raise ValueError("Only sandbox_agent nodes can set git_credentials")
-            if self.agent_commands is not None:
-                raise ValueError("Only sandbox_agent nodes can set agent_commands")
-            if self.commands_concatenation_string != " && ":
-                raise ValueError("Only sandbox_agent nodes can set commands_concatenation_string")
+
+    def _validate_sandbox_only_fields(self) -> None:
+        """FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
+
+        A non-sandbox node that sets them is rejected — the enforcement surface
+        (read-only workspace, git-credential scope) only exists for sandbox
+        agents, and a declared-but-unenforced field on another node type would
+        be a silent no-op. agent_commands / commands_concatenation_string get
+        the same treatment: the runtime only reads them for sandbox nodes.
+        """
+        if self.node_type == "sandbox_agent":
+            return
+        if self.read_only:
+            raise ValueError("Only sandbox_agent nodes can set read_only=True")
+        if self.git_credentials is not None:
+            raise ValueError("Only sandbox_agent nodes can set git_credentials")
+        if self.agent_commands is not None:
+            raise ValueError("Only sandbox_agent nodes can set agent_commands")
+        if self.commands_concatenation_string != " && ":
+            raise ValueError("Only sandbox_agent nodes can set commands_concatenation_string")
+
+    def _validate_agent_only_fields(self) -> None:
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
+
+    def _validate_output_schema_pin_consistency(self) -> None:
         if (
             self.output_schema_pin is not None
             and self.output_schema_id is not None
@@ -882,7 +898,6 @@ class PipelineGraphNode(BaseModel):
                 f"output_schema_pin.schema_id ({self.output_schema_pin.schema_id}) "
                 f"does not match output_schema_id ({self.output_schema_id})"
             )
-        return self
 
     def _validate_manual_node(self) -> None:
         if self.agent_id is not None:
