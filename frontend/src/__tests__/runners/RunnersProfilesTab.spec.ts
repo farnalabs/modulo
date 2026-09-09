@@ -217,4 +217,103 @@ describe('RunnersProfilesTab', () => {
     expect(detail.text()).toContain('1 CPU / 1024 MiB per container')
     expect(detail.text()).toContain('bundled-runner-operator-guide.md')
   })
+
+  it('search filters rows by query', async () => {
+    const wrapper = await mountWithStore([BUNDLED_PROFILE, E2B_PROFILE])
+    const searchInput = wrapper.find('[data-testid="envprofile-list-search"]')
+    await searchInput.setValue('e2b')
+    await nextTick()
+    expect(wrapper.findAll('[data-testid="envprofile-list-name"]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('E2B')
+
+    await searchInput.setValue('zzz-no-match')
+    await nextTick()
+    expect(wrapper.findAll('[data-testid="envprofile-list-name"]')).toHaveLength(0)
+    // The header (search box + new-profile button) stays rendered for the
+    // non-matching query; the grid simply yields zero rows.
+    expect(wrapper.find('[data-testid="envprofile-list-search"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="envprofile-list-new"]').exists()).toBe(true)
+  })
+
+  it('surfaces a load failure via the inline ErrorAlert', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.fetchProfiles = vi.fn()
+    store.$patch({ error: 'backend down', profiles: [] })
+    const wrapper = mount(RunnersProfilesTab, { props: { status: makeStatus(), reloadStatus } })
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const alert = wrapper.find('.border-destructive\\/50')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('backend down')
+  })
+
+  it('streams SSE test-connection events into the panel and dismisses', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"event":"provisioning","detail":"booting","timestamp":"t1"}\n\n'))
+        controller.enqueue(encoder.encode('data: {"event":"provisioned","detail":"ready","timestamp":"t2"}\n\n'))
+        controller.close()
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: stream }))
+
+    const wrapper = await mountWithStore([BUNDLED_PROFILE])
+    await wrapper.find('[data-testid="envprofile-test"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    await flushPromises()
+
+    const panel = wrapper.find('[data-testid="envprofile-test-panel"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.text()).toContain('provisioning')
+    expect(panel.text()).toContain('booting')
+    expect(panel.text()).toContain('provisioned')
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      '/api/v1/environment-profiles/p-bundled/test',
+      expect.objectContaining({ method: 'POST' }),
+    )
+
+    await wrapper.find('[data-testid="envprofile-test-dismiss"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="envprofile-test-panel"]').exists()).toBe(false)
+  })
+
+  it('delete flow confirms, calls the store delete, and cancels without deleting', async () => {
+    const wrapper = await mountWithStore([E2B_PROFILE])
+    const store = useEnvironmentProfilesStore()
+    const delSpy = vi.spyOn(store, 'deleteProfile').mockResolvedValue(undefined)
+
+    await wrapper.find('[data-testid="envprofile-list-delete"]').trigger('click')
+    await nextTick()
+    expect(wrapper.text()).toContain('Delete "E2B"?')
+
+    await wrapper.find('[data-testid="envprofile-list-delete-cancel"]').trigger('click')
+    await nextTick()
+    expect(delSpy).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('Delete "E2B"?')
+
+    await wrapper.find('[data-testid="envprofile-list-delete"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="envprofile-list-delete-confirm"]').trigger('click')
+    await flushPromises()
+    expect(delSpy).toHaveBeenCalledWith('p-e2b')
+  })
+
+  it('a failed delete surfaces the error in the confirm panel', async () => {
+    const wrapper = await mountWithStore([E2B_PROFILE])
+    const store = useEnvironmentProfilesStore()
+    vi.spyOn(store, 'deleteProfile').mockRejectedValue(new Error('delete forbidden'))
+
+    await wrapper.find('[data-testid="envprofile-list-delete"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="envprofile-list-delete-confirm"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('delete forbidden')
+  })
 })
