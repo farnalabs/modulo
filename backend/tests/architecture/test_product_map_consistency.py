@@ -55,15 +55,17 @@ SVG_ICON_PATH = REPO_ROOT / "frontend" / "src" / "components" / "SvgIcon.vue"
 # product map (no breadcrumb or sidebar surface a user navigates to).
 NON_PRODUCT_ROUTES = frozenset({"login", "auth-callback", "not-found", "dev-metrics", "demo"})
 
-#: The frontend router file defines every route at a 6-space-indented ``path:``
-#: key; everything after the routes array (``scrollBehavior``, guards) is
-#: non-route and must not be parsed. A route is a page when its block carries a
-#: ``component:`` and a pure alias when it only carries a ``redirect:``.
-_PATH_INDENT = r"^      path: "
+#: The frontend router file defines every route at a ``path:`` key indented at
+#: least six spaces (top-level records sit at six, NESTED children — e.g. the
+#: Runners page's route-per-tab children, FAR-591 — sit deeper); everything
+#: after the routes array (``scrollBehavior``, guards) is non-route and must
+#: not be parsed. A route is a page when its block carries a ``component:``
+#: and a pure alias when it only carries a ``redirect:``.
+_PATH_INDENT = r"^\s{6,}path: "
 _ROUTE_BLOCK_START = re.compile(_PATH_INDENT + r"'[^']*'", re.MULTILINE)
-_ROUTE_NAME = re.compile(r"^\s{6}name: '([^']+)'", re.MULTILINE)
-_HAS_COMPONENT = re.compile(r"^\s{6}component:", re.MULTILINE)
-_IS_REDIRECT = re.compile(r"^\s{6}redirect:", re.MULTILINE)
+_ROUTE_NAME = re.compile(r"^\s{6,}name: '([^']+)'", re.MULTILINE)
+_HAS_COMPONENT = re.compile(r"^\s{6,}component:", re.MULTILINE)
+_IS_REDIRECT = re.compile(r"^\s{6,}redirect:", re.MULTILINE)
 
 #: Static ``data-testid`` literals contributing to each element inventory are
 #: qualified with the exact attribute form they must appear as in the sources.

@@ -1,19 +1,19 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('i18n Keys & SvgIcon Regression', () => {
-  test('sidebar shows "Environment Profiles" not raw key', { tag: "@regression" }, async ({ page, env }) => {
+  test('sidebar shows "Runners" not raw key', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    await page.goto('/environment-profiles')
+    await page.goto('/admin/runners/profiles')
 
     // CONFIGURE group button - click to expand if collapsed
     const configureGroup = page.locator('button.sidebar-group-header', { hasText: 'CONFIGURE' }).first()
     await configureGroup.click()
 
-    // Check that the sidebar link is "Environment Profiles" not "nav.environment-profiles"
-    const envProfileLink = page.locator('a.sidebar-link', { hasText: 'Environment Profiles' }).first()
-    await expect(envProfileLink).toBeVisible()
+    // Check that the sidebar link is "Runners" not "nav.admin-runners-profiles"
+    const runnersLink = page.locator('a.sidebar-link', { hasText: 'Runners' }).first()
+    await expect(runnersLink).toBeVisible()
 
-    const rawKeyLink = page.locator('a.sidebar-link', { hasText: 'nav.environment-profiles' })
+    const rawKeyLink = page.locator('a.sidebar-link', { hasText: 'nav.admin-runners-profiles' })
     await expect(rawKeyLink).toHaveCount(0)
   })
 
