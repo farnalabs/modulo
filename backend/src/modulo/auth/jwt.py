@@ -35,6 +35,10 @@ _WS_TOKEN_MINUTES: int = 15
 CLIENT_KIND_BROWSER: str = "browser"
 CLIENT_KIND_PROGRAMMATIC: str = "programmatic"
 _CLIENT_KIND_CLAIM: str = "client_kind"
+#: DECODE-SIDE ONLY: the claim default for legacy tokens minted before the
+#: claim existed. Mint-side, ``client_kind`` is a REQUIRED parameter on
+#: ``create_access_token``/``create_refresh_token`` (FAR-634 review) so a
+#: future programmatic mint path cannot silently inherit the browser class.
 _DEFAULT_CLIENT_KIND: str = CLIENT_KIND_BROWSER
 
 
@@ -85,21 +89,21 @@ def create_access_token(
     is_system_admin: bool = False,
     user_id: str = "",
     ttl_minutes: int | None = None,
-    client_kind: str = _DEFAULT_CLIENT_KIND,
+    client_kind: str,
 ) -> str:
     """Access token with a configurable TTL (default 15 minutes).
 
     ``client_kind`` (FAR-634) stamps the credential class: ``CLIENT_KIND_BROWSER``
     for tokens minted by an interactive login flow, ``CLIENT_KIND_PROGRAMMATIC``
-    for tokens minted for API-key/automation exchange paths. Every mint site in
-    the codebase today is an interactive flow (password login, demo login, SSO
-    callback, refresh rotation), so the default is ``browser`` — the parameter
-    exists so a future programmatic mint path cannot silently inherit the
-    browser class. HONEST LIMITATION (defense-in-depth, not absolute): agent
-    sessions in this org hold the admin password and mint through the same
-    login endpoint, so their tokens are indistinguishable from a browser login
-    at issuance — the FAR-611 sweep alarm is the detective control for that
-    residual. Step-up re-auth is a separate (bigger) product decision.
+    for tokens minted for API-key/automation exchange paths. REQUIRED (no
+    default) so a future programmatic mint path cannot silently inherit the
+    browser class and pass the human_only HITL gate — every mint site must
+    state the credential class explicitly at issuance. HONEST LIMITATION
+    (defense-in-depth, not absolute): agent sessions in this org hold the
+    admin password and mint through the same login endpoint, so their tokens
+    are indistinguishable from a browser login at issuance — the FAR-611 sweep
+    alarm is the detective control for that residual. Step-up re-auth is a
+    separate (bigger) product decision.
     """
     resolved_account_id: str = account_id or user_id
     now: datetime = datetime.now(UTC)
@@ -127,14 +131,16 @@ def create_refresh_token(
     token_family: str,
     token_sequence: int,
     user_id: str = "",
-    client_kind: str = _DEFAULT_CLIENT_KIND,
+    client_kind: str,
 ) -> str:
     """7-day refresh token with family+sequence for rotation detection.
 
     ``client_kind`` (FAR-634) rides along so rotation propagates the ORIGINAL
     credential class: the refresh endpoint re-stamps it onto the rotated
     access+refresh pair (a browser family never silently becomes a
-    programmatic one and vice versa).
+    programmatic one and vice versa). REQUIRED (no default) — same fail-closed
+    contract as :func:`create_access_token`: a mint site must state the
+    credential class explicitly, never silently inherit ``browser``.
     """
     resolved_account_id: str = account_id or user_id
     now: datetime = datetime.now(UTC)

@@ -17,6 +17,7 @@ from modulo.api.routes.hitl import HumanOnlyDenied, _emit_human_only_denial_audi
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
+from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED, MSG_HUMAN_ONLY_DENY, MSG_HUMAN_ONLY_UNRESOLVED
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -586,8 +587,11 @@ class TestListRunPendingGatesLabelResolution:
 # FAR-610: human_only enforcement on the REST decision routes
 # ---------------------------------------------------------------------------
 
-_HUMAN_ONLY_DETAIL = "human_only gate requires browser authentication; API-key clients cannot approve this gate"
-_UNRESOLVABLE_DETAIL = "HITL gate configuration could not be resolved; decision requires browser authentication"
+# FAR-634 review: the denial detail is the shared MSG_HUMAN_ONLY_DENY constant
+# (single-sourced in db.crud.hitl_gate_config) — REST and MCP must deny with
+# the SAME wording.
+_HUMAN_ONLY_DETAIL = MSG_HUMAN_ONLY_DENY
+_UNRESOLVABLE_DETAIL = MSG_HUMAN_ONLY_UNRESOLVED
 _SRC_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _TGT_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
 _SNAPSHOT_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
@@ -1215,7 +1219,7 @@ class TestHumanOnlyDenialAudit:
 
         append.assert_awaited_once()
         kwargs = append.await_args.kwargs
-        assert kwargs["event_type"] == "hitl.human_only_denied"
+        assert kwargs["event_type"] == EVENT_HUMAN_ONLY_DENIED
         assert kwargs["org_id"] == _ORG_ID
         assert kwargs["actor_user_id"] == _USER_ID
         assert kwargs["resource_type"] == "run"

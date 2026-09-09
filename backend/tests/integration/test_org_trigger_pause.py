@@ -61,6 +61,7 @@ def _token(org_id: uuid.UUID, user_id: uuid.UUID, role: str) -> str:
         organisation_id=str(org_id),
         account_id=str(user_id),
         org_role=role,
+        client_kind="browser",
     )
 
 

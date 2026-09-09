@@ -452,7 +452,16 @@ async def hitl_gate_exists_but_unresolved(
     return row is not None
 
 
-MSG_HUMAN_ONLY_DENY = "human_only gate requires browser authentication; API-key clients cannot approve this gate"
+#: FAR-634 review: the audit event type emitted on EVERY human_only denial,
+#: hoisted here (the shared cross-surface home, beside ``MSG_HUMAN_ONLY_DENY``)
+#: so a rename cannot fork the audit stream — the REST warning log, the REST
+#: audit append, the MCP warning log, and the MCP audit append all read this
+#: one constant.
+EVENT_HUMAN_ONLY_DENIED = "hitl.human_only_denied"
+MSG_HUMAN_ONLY_DENY = (
+    "human_only gate requires browser authentication; "
+    "non-browser credentials (API keys and programmatic tokens) cannot decide this gate"
+)
 MSG_HUMAN_ONLY_UNRESOLVED = "HITL gate configuration could not be resolved; decision requires browser authentication"
 
 

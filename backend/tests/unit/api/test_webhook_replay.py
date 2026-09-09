@@ -95,6 +95,7 @@ def _auth_headers(role: str = "admin") -> dict[str, str]:
         organisation_id=str(_ORG_ID),
         account_id=str(_USER_ID),
         org_role=role,
+        client_kind="browser",
     )
     return {"Authorization": f"Bearer {token}"}
 

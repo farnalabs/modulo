@@ -29,7 +29,9 @@ _GATE = "review-step"
 
 
 def _make_access_token(subject: str = "alice") -> str:
-    return create_access_token(subject, _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
+    return create_access_token(
+        subject, _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin", client_kind="browser"
+    )
 
 
 def test_create_access_token_and_decode_principal_roundtrip() -> None:
@@ -48,6 +50,7 @@ def test_create_access_token_respects_custom_ttl() -> None:
         account_id=_ACCOUNT,
         org_role="admin",
         ttl_minutes=120,
+        client_kind="browser",
     )
     claims = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
     now = datetime.now(UTC)
@@ -166,11 +169,7 @@ def test_decode_principal_validates_tenant_identity() -> None:
     org_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     account_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     token = create_access_token(
-        "alice",
-        _KEY,
-        organisation_id=org_id,
-        account_id=account_id,
-        org_role="operator",
+        "alice", _KEY, organisation_id=org_id, account_id=account_id, org_role="operator", client_kind="browser"
     )
     principal = decode_principal(token, _KEY)
     assert principal.username == "alice"
@@ -180,7 +179,9 @@ def test_decode_principal_validates_tenant_identity() -> None:
 
 
 def test_decode_principal_accepts_malformed_org_id_as_none() -> None:
-    token = create_access_token("alice", _KEY, organisation_id="not-a-uuid", account_id=_ACCOUNT, org_role="admin")
+    token = create_access_token(
+        "alice", _KEY, organisation_id="not-a-uuid", account_id=_ACCOUNT, org_role="admin", client_kind="browser"
+    )
     principal = decode_principal(token, _KEY)
     assert principal.organisation_id is None
     assert principal.username == "alice"
@@ -225,6 +226,7 @@ def test_decode_principal_rejects_refresh_token_for_ws_purpose() -> None:
         org_role="admin",
         token_family="f",
         token_sequence=1,
+        client_kind="browser",
     )
     with pytest.raises(JWTError, match="purpose"):
         decode_principal(token, _KEY, allowed_purposes=["ws"])
@@ -240,6 +242,7 @@ def test_decode_principal_multiple_allowed_purposes() -> None:
         org_role="admin",
         token_family="f",
         token_sequence=1,
+        client_kind="browser",
     )
     principal_ws = decode_principal(ws, _KEY, allowed_purposes=["ws", "refresh"])
     assert principal_ws.username == "alice"
@@ -262,6 +265,7 @@ def test_create_refresh_token_roundtrip() -> None:
         org_role="admin",
         token_family="f",
         token_sequence=1,
+        client_kind="browser",
     )
     principal = decode_principal(token, _KEY, allowed_purposes=["refresh"])
     assert principal.username == "alice"
@@ -276,6 +280,7 @@ def test_refresh_token_has_refresh_purpose() -> None:
         org_role="admin",
         token_family="f",
         token_sequence=1,
+        client_kind="browser",
     )
     payload = pyjwt.decode(token, _KEY, algorithms=[_ALGORITHM])
     assert payload.get("purpose") == "refresh"
@@ -297,6 +302,7 @@ def test_decode_refresh_token_claims_roundtrip() -> None:
         org_role="admin",
         token_family="f",
         token_sequence=1,
+        client_kind="browser",
     )
     payload = decode_refresh_token_claims(token, _KEY)
     assert payload["purpose"] == "refresh"
@@ -318,6 +324,7 @@ def test_refresh_access_token_returns_valid_access_token() -> None:
         org_role="admin",
         token_family="f",
         token_sequence=1,
+        client_kind="browser",
     )
     new_token = refresh_access_token(refresh, _KEY)
     principal = decode_principal(new_token, _KEY)
@@ -347,6 +354,7 @@ def test_refresh_access_token_carries_context() -> None:
         org_role="operator",
         token_family="f",
         token_sequence=1,
+        client_kind="browser",
     )
     new_token = refresh_access_token(refresh, _KEY)
     principal = decode_principal(new_token, _KEY)
@@ -365,6 +373,25 @@ def test_access_token_defaults_to_browser_client_kind() -> None:
     token = _make_access_token("alice")
     principal = decode_principal(token, _KEY)
     assert principal.client_kind == "browser"
+
+
+def test_mint_requires_client_kind_kwarg() -> None:
+    """FAR-634 review: ``client_kind`` is a REQUIRED parameter on both mint
+    functions — a future programmatic mint path that forgets it must fail at
+    the call (TypeError), never silently inherit the browser class and pass
+    the human_only HITL gate."""
+    with pytest.raises(TypeError):
+        create_access_token("alice", _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin")
+    with pytest.raises(TypeError):
+        create_refresh_token(
+            "alice",
+            _KEY,
+            organisation_id=_ORG,
+            account_id=_ACCOUNT,
+            org_role="admin",
+            token_family="f",
+            token_sequence=1,
+        )
 
 
 def test_access_token_stamps_programmatic_client_kind() -> None:

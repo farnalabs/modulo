@@ -3935,6 +3935,7 @@ async def _append_hitl_human_only_denied_audit(
     """
     try:
         from modulo.core.audit_logger import append_audit_event
+        from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED
 
         try:
             actor_user_id = _ctx_user_id_val()
@@ -3943,7 +3944,7 @@ async def _append_hitl_human_only_denied_audit(
         await append_audit_event(
             s,
             org_id=org_id,
-            event_type="hitl.human_only_denied",
+            event_type=EVENT_HUMAN_ONLY_DENIED,
             actor_user_id=actor_user_id,
             resource_type="run",
             resource_id=run_id,
@@ -4008,6 +4009,7 @@ async def _check_human_only_gate(
     returned.
     """
     from modulo.db.crud.hitl_gate_config import (
+        EVENT_HUMAN_ONLY_DENIED,
         hitl_gate_exists_but_unresolved,
         human_only_denial,
         resolve_hitl_gate_config,
@@ -4021,7 +4023,7 @@ async def _check_human_only_gate(
     verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
     if verdict is not None:
         _log.warning(
-            "hitl.human_only_denied",
+            EVENT_HUMAN_ONLY_DENIED,
             extra={
                 "run_id": str(run.id),
                 "gate_id": gate_id,

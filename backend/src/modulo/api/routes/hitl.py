@@ -60,6 +60,7 @@ from modulo.core.pipeline_engine.executor import (
     org_sandbox_capacity_free,
 )
 from modulo.db.crud.hitl_gate_config import (
+    EVENT_HUMAN_ONLY_DENIED,
     edge_source_or_target,
     hitl_gate_exists_but_unresolved,
     human_only_denial,
@@ -106,9 +107,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
-#: FAR-634: the audit event type emitted on EVERY human_only denial (REST + MCP).
+#: FAR-634: the audit event type emitted on EVERY human_only denial (REST +
+#: MCP) — imported from ``db.crud.hitl_gate_config`` (the shared cross-surface
+#: home) so the REST and MCP emitters cannot fork the audit stream on a rename.
 #: Denied-attempt visibility is cheap probe detection (post FAR-611 sweep).
-EVENT_HUMAN_ONLY_DENIED = "hitl.human_only_denied"
 
 
 class HumanOnlyDenied(HTTPException):
@@ -387,7 +389,7 @@ async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
     outcome (it is already a 403).
     """
     logger.warning(
-        "hitl.human_only_denied",
+        EVENT_HUMAN_ONLY_DENIED,
         extra={
             "run_id": str(exc.run_id),
             "gate_id": exc.gate_id,

@@ -26,6 +26,7 @@ from modulo.core.hitl_manager import (
     RunNotAwaitingError,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED
 from modulo.db.crud.hitl_gate_config import MSG_HUMAN_ONLY_DENY as _MSG_HUMAN_ONLY_DENY
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -1416,7 +1417,7 @@ class TestReviewHitl(_AuthContext):
         assert result["error"] == "human_only_gate"
         mock_append.assert_awaited_once()
         kwargs = mock_append.await_args.kwargs
-        assert kwargs["event_type"] == "hitl.human_only_denied"
+        assert kwargs["event_type"] == EVENT_HUMAN_ONLY_DENIED
         assert kwargs["resource_type"] == "run"
         assert kwargs["resource_id"] == run_id
         payload = kwargs["payload_json"]
