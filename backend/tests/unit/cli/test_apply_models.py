@@ -9,7 +9,11 @@ from modulo.cli.apply.models import (
     ENV_REF_PATTERN,
     SECRET_REF_PATTERN,
     ApplyConfig,
+    ApplyConfigError,
+    ApplyGraphNode,
     ModelBackendEntity,
+    PipelineEntity,
+    TriggerEntity,
     parse_api_version_major,
 )
 
@@ -194,3 +198,279 @@ class TestMergeMajors:
         assert parse_api_version_major("modulo.dev/v1.3") == 1
         with pytest.raises(ValueError, match="not parseable"):
             parse_api_version_major("modulo.dev/vx.3")
+
+
+class TestTriggerEntityContracts:
+    def test_inline_secret_in_config_json_rejected(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {
+                        "pipeline": "p",
+                        "name": "hook",
+                        "trigger_type": "webhook",
+                        "config_json": {"hmac_secret": "sk-super-secret-literal"},
+                    }
+                ]
+            },
+        }
+        with pytest.raises(ValidationError, match="must be a reference") as exc_info:
+            _config(tx)
+        # The validator's own message must not echo the secret value.
+        assert "sk-super-secret-literal" not in str(exc_info.value.errors()[0]["msg"])
+
+    def test_secret_value_patterns_rejected_under_any_key(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {
+                        "pipeline": "p",
+                        "name": "hook",
+                        "trigger_type": "webhook",
+                        "config_json": {"note": "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                    }
+                ]
+            },
+        }
+        with pytest.raises(ValidationError, match="must be a reference"):
+            _config(tx)
+
+    def test_env_ref_and_secretref_parse_in_config_json(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {
+                        "pipeline": "p",
+                        "name": "hook",
+                        "trigger_type": "webhook",
+                        "config_json": {"hmac_secret": "${env:HS}", "other": "secretref://vault/hook"},
+                    }
+                ]
+            },
+        }
+        config = _config(tx)
+        assert config.entities.triggers[0].config_json["hmac_secret"] == "${env:HS}"
+
+    def test_empty_string_secret_value_allowed(self) -> None:
+        """Empty strings are never masked server-side -> never a secret."""
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {
+                        "pipeline": "p",
+                        "name": "hook",
+                        "trigger_type": "webhook",
+                        "config_json": {"hmac_secret": ""},
+                    }
+                ]
+            },
+        }
+        config = _config(tx)
+        stored = config.entities.triggers[0].config_json["hmac_secret"]
+        assert not stored
+
+    def test_unknown_trigger_type_rejected(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {"triggers": [{"pipeline": "p", "name": "hook", "trigger_type": "warp"}]},
+        }
+        with pytest.raises(ValidationError):
+            _config(tx)
+
+    def test_duplicate_trigger_identity_rejected(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {"pipeline": "p", "name": "hook", "trigger_type": "webhook"},
+                    {"pipeline": "p", "name": "hook", "trigger_type": "cron"},
+                ]
+            },
+        }
+        with pytest.raises(ValidationError, match="duplicate triggers"):
+            _config(tx)
+
+    def test_same_name_different_pipeline_distinct_identity(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {"pipeline": "a", "name": "hook", "trigger_type": "webhook"},
+                    {"pipeline": "b", "name": "hook", "trigger_type": "cron"},
+                ]
+            },
+        }
+        config = _config(tx)
+        assert [t.display_key() for t in config.entities.triggers] == ["a/hook", "b/hook"]
+
+    def test_create_payload_carries_name(self) -> None:
+        entity = TriggerEntity.model_validate(
+            {"pipeline": "p", "name": "hook", "trigger_type": "webhook", "config_json": {"hmac_secret": "${env:HS}"}}
+        )
+        payload = entity.create_payload({"hmac_secret": "resolved"})
+        assert payload["name"] == "hook"
+        assert payload["config_json"]["hmac_secret"] == "resolved"
+
+    def test_update_payload_always_carries_spend_limit(self) -> None:
+        entity = TriggerEntity.model_validate({"pipeline": "p", "name": "hook", "trigger_type": "cron"})
+        payload = entity.update_payload({})
+        assert "daily_spend_limit" in payload
+        assert payload["daily_spend_limit"] is None
+
+
+class TestPipelineEntityContracts:
+    def test_graphless_managed_view_excludes_graph(self) -> None:
+        entity = PipelineEntity.model_validate({"name": "sample", "max_concurrent_runs": 2})
+        view = entity.managed_view()
+        assert view == {"description": None, "max_concurrent_runs": 2}
+
+    def test_declared_graph_managed_view_includes_graph(self) -> None:
+        entity = PipelineEntity.model_validate(
+            {
+                "name": "sample",
+                "graph": {
+                    "nodes": [
+                        {
+                            "id": "00000000-0000-0000-0000-0000000000a1",
+                            "agent": "worker",
+                            "position": {"x": 0, "y": 0},
+                        }
+                    ]
+                },
+            }
+        )
+        view = entity.managed_view(graph={"nodes": [{"agent_id": "x"}], "edges": []})
+        assert view["graph"] == {"nodes": [{"agent_id": "x"}], "edges": []}
+
+    def test_node_extra_field_rejected(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "pipelines": [
+                    {
+                        "name": "sample",
+                        "graph": {
+                            "nodes": [
+                                {
+                                    "id": "00000000-0000-0000-0000-0000000000a1",
+                                    "agent": "worker",
+                                    "position": {"x": 0, "y": 0},
+                                    "mystery_field": 1,
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        }
+        with pytest.raises(ValidationError):
+            _config(tx)
+
+    def test_node_agent_id_forbidden(self) -> None:
+        """apply configs reference agents by NAME only."""
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "pipelines": [
+                    {
+                        "name": "sample",
+                        "graph": {
+                            "nodes": [
+                                {
+                                    "id": "00000000-0000-0000-0000-0000000000a1",
+                                    "agent_id": "00000000-0000-0000-0000-0000000000ff",
+                                    "position": {"x": 0, "y": 0},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        }
+        with pytest.raises(ValidationError):
+            _config(tx)
+
+    def test_node_field_set_mirrors_api_model(self) -> None:
+        """Drift alarm: the apply node mirror must cover every API node field
+        (except the agent_id <-> agent swap) — a silently-dropped declarative
+        field would create permanent plan drift."""
+        from modulo.api.routes.pipelines import PipelineGraphNode
+
+        apply_fields = set(ApplyGraphNode.model_fields) - {"agent"}
+        api_fields = set(PipelineGraphNode.model_fields) - {"agent_id"}
+        assert apply_fields == api_fields
+
+    def test_graph_duplicate_node_ids_rejected(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "pipelines": [
+                    {
+                        "name": "sample",
+                        "graph": {
+                            "nodes": [
+                                {
+                                    "id": "00000000-0000-0000-0000-0000000000a1",
+                                    "agent": "worker",
+                                    "position": {"x": 0, "y": 0},
+                                }
+                            ]
+                            * 2
+                        },
+                    }
+                ]
+            },
+        }
+        with pytest.raises(ValidationError, match="unique"):
+            _config(tx)
+
+
+class TestSensitiveKeyTwin:
+    def test_local_sensitive_key_patterns_equal_middleware(self) -> None:
+        """Drift alarm: the CLI runs WITHOUT server settings, so it cannot
+        import the FastAPI/DB-heavy mask middleware — the local pattern set
+        must stay byte-identical to the middleware's."""
+        from modulo.api.middleware.sensitive_mask import _SENSITIVE_KEY_PATTERNS
+        from modulo.cli.apply import models
+
+        assert models._SENSITIVE_KEY_PATTERNS == _SENSITIVE_KEY_PATTERNS
+
+    def test_local_is_sensitive_key_matches_middleware(self) -> None:
+        from modulo.api.middleware.sensitive_mask import is_sensitive_key as middleware_is_sensitive_key
+        from modulo.cli.apply.models import is_sensitive_key
+
+        for key in ("signing_secret", "API-KEY", "db password", "TokenValue", "hmac_secret", "note", "scan_interval"):
+            assert is_sensitive_key(key) == middleware_is_sensitive_key(key), key
+
+
+class TestForwardReferenceMergeGate:
+    def test_trigger_pipeline_in_later_document_rejected(self) -> None:
+        base = _config(
+            {
+                "api_version": "modulo.dev/v1",
+                "entities": {"triggers": [{"pipeline": "later", "name": "hook", "trigger_type": "webhook"}]},
+            }
+        )
+        other = _config({"api_version": "modulo.dev/v1", "entities": {"pipelines": [{"name": "later"}]}})
+        with pytest.raises(ApplyConfigError, match="forward-references"):
+            base.merge_entities(other)
+
+    def test_trigger_pipeline_in_same_document_merges(self) -> None:
+        base = _config(
+            {
+                "api_version": "modulo.dev/v1",
+                "entities": {"pipelines": [{"name": "p"}]},
+            }
+        )
+        other = _config(
+            {
+                "api_version": "modulo.dev/v1",
+                "entities": {"triggers": [{"pipeline": "p", "name": "hook", "trigger_type": "webhook"}]},
+            }
+        )
+        merged = base.merge_entities(other)
+        assert [t.display_key() for t in merged.entities.triggers] == ["p/hook"]

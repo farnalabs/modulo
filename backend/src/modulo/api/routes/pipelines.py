@@ -35,7 +35,9 @@ from modulo.api.dependencies import (
     get_db_session,
     require_feature,
     require_permission,
+    require_permission_any_credential,
     require_team_membership_or_admin,
+    require_team_membership_or_admin_any_credential,
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import resolve_pipeline_team_scope, team_membership_exists
@@ -1491,7 +1493,9 @@ async def list_pipelines_endpoint(
     cursor: Annotated[str | None, Query()] = None,
     include_archived: Annotated[bool, Query()] = False,
     folder_id: Annotated[uuid.UUID | None, Query()] = None,
-    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    # any_credential: declarative apply (FAR-681) lists pipelines with mk_ org
+    # API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_LIST),
 ) -> PipelineListResponse:
     try:
         async with session.begin():
@@ -1522,7 +1526,9 @@ async def list_pipelines_endpoint(
 async def create_pipeline_endpoint(
     req: PipelineCreate,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission("pipeline.create"),
+    # any_credential: declarative apply (FAR-681) creates pipelines with mk_
+    # org API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential("pipeline.create"),
 ) -> PipelineResponse:
     try:
         async with session.begin():
@@ -1579,7 +1585,9 @@ async def get_pipeline_endpoint(
 async def get_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission("pipeline.graph.read"),
+    # any_credential: declarative apply (FAR-681) fetches current graphs to
+    # hash against declared state with mk_ org API keys.
+    principal: TenantPrincipal = require_permission_any_credential("pipeline.graph.read"),
 ) -> PipelineGraphResponse:
     try:
         async with session.begin():
@@ -1970,8 +1978,12 @@ async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
     req: PipelineUpdate,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
-    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+    # any_credential pair: declarative apply (FAR-681) updates pipelines (incl.
+    # the graph_json replace) with mk_ org API keys — the permission gate and
+    # the team gate both accept any credential, with the same role clamping
+    # and visibility/membership matrix.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     updates = req.model_dump(exclude_unset=True)
     has_graph = "graph_json" in updates

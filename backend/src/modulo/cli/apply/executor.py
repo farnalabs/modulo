@@ -1,12 +1,13 @@
-"""HTTP execution for ``modulo apply`` (FAR-681, slice 1).
+"""HTTP execution for ``modulo apply`` (FAR-681, slices 1+2).
 
 Transport: sync httpx against MODULO_URL with ``Authorization: Bearer
 <MODULO_API_KEY>`` (the server authenticates bearer tokens as either a user
 JWT or an ``mk_`` org API key; the API key scopes RLS/permissions to the org).
 
-Applies schemas (+ versions) and model_backends per plan decisions. Per-entity
-errors are captured into ``report["failed"]`` instead of aborting the run.
-pipelines/triggers are slices 2/3 and intentionally absent.
+Applies schemas (+ versions), model_backends, pipelines (agent name-refs
+resolved via the /agents map; graphs normalised through the real API models)
+and triggers per plan decisions, in that dependency order. Per-entity errors
+are captured into ``report["failed"]`` instead of aborting the run.
 """
 
 from __future__ import annotations
@@ -18,7 +19,14 @@ from typing import Any, cast
 import httpx
 
 from modulo.cli.apply.models import ApplyConfig, ModelBackendEntity, SchemaEntity
-from modulo.cli.apply.plan import KIND_BACKEND, KIND_SCHEMA, build_plan, has_blockers
+from modulo.cli.apply.plan import (
+    KIND_BACKEND,
+    KIND_PIPELINE,
+    KIND_SCHEMA,
+    KIND_TRIGGER,
+    build_plan,
+    has_blockers,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -32,10 +40,15 @@ _CONFLICT_HINT = "name already exists; rerun to apply as update"
 
 
 def _entity_reports(config: ApplyConfig) -> dict[str, list[tuple[str, Any]]]:
-    """kind -> [(name, entity-object)] preserving declaration order."""
+    """kind -> [(name, entity-object)] preserving declaration order.
+
+    Triggers are keyed by their (pipeline, name) composite display key.
+    """
     return {
         KIND_SCHEMA: [(e.name, e) for e in config.entities.schemas],
         KIND_BACKEND: [(e.name, e) for e in config.entities.model_backends],
+        KIND_PIPELINE: [(e.name, e) for e in config.entities.pipelines],
+        KIND_TRIGGER: [(e.display_key(), e) for e in config.entities.triggers],
     }
 
 
@@ -172,6 +185,26 @@ class ApplyExecutor:
                 path=path,
             ) from None
 
+    def _put(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.put(self._url(path), json=payload, headers=self._auth_headers)
+        if not 200 <= response.status_code < 300:
+            detail = _extract_detail(response)
+            raise ApplyHttpError(
+                f"PUT {path} -> {response.status_code}: {detail}",
+                status_code=response.status_code,
+                method="PUT",
+                path=path,
+            )
+        try:
+            return cast("dict[str, Any]", response.json())
+        except ValueError as exc:
+            raise ApplyHttpError(
+                f"PUT {path} returned invalid JSON: {exc}",
+                status_code=response.status_code,
+                method="PUT",
+                path=path,
+            ) from None
+
     # ------------------------------------------------------------------
     # Current-state fetch
     # ------------------------------------------------------------------
@@ -198,14 +231,22 @@ class ApplyExecutor:
     def fetch_current(
         self,
         config: ApplyConfig,
-    ) -> dict[str, dict[str, dict[str, Any]]]:
-        """Fetch current org state for both kinds: kind -> {name: raw entity}.
+    ) -> dict[str, Any]:
+        """Fetch current org state: kind -> {name: raw entity} (+ lookups).
 
         Schema versions are fetched for schemas whose desired entity declares
         versions (needed for hash comparison). Model backends are fetched with
         ``include_in_dev=true`` so in_dev-tier entities are not missed as false
         "created" decisions; a 403 (operator-tier key cannot reveal in_dev)
         falls back to the default exclusion.
+
+        Pipelines/triggers/agents lists are fetched only when the config
+        declares those kinds. Pipeline graphs are fetched (and normalised to
+        the hash shape via the real API models) for desired pipelines that
+        exist in the org. Triggers are keyed by ``pipeline/name`` (pre-name
+        rows and triggers whose pipeline is invisible are unmanaged by
+        apply); the ``agents`` entry maps agent name -> id for node ref
+        resolution.
         """
         schemas_list = self._get_paginated("/schemas")
         try:
@@ -236,7 +277,42 @@ class ApplyExecutor:
                 if v.get("version") != "latest"
             ]
             schemas[name]["versions"] = versions
-        return {KIND_SCHEMA: schemas, KIND_BACKEND: backends}
+
+        from modulo.cli.apply import pipeline_apply
+
+        wants_pipelines = bool(config.entities.pipelines)
+        wants_triggers = bool(config.entities.triggers)
+        pipelines_list: list[dict[str, Any]] = []
+        agents_list: list[dict[str, Any]] = []
+        triggers_list: list[dict[str, Any]] = []
+        if wants_pipelines or wants_triggers:
+            pipelines_list = self._get_paginated("/pipelines")
+        if wants_pipelines:
+            agents_list = self._get_paginated("/agents")
+        if wants_triggers:
+            triggers_list = self._get_paginated("/triggers")
+        pipelines = {item["name"]: item for item in pipelines_list}
+        if wants_pipelines:
+            # Only pipelines whose config DECLARES a graph need the fetched
+            # graph (a graph-less config does not manage the graph at all).
+            for name in {e.name for e in config.entities.pipelines if e.graph is not None} & pipelines.keys():
+                graph_payload = self._get(f"/pipelines/{pipelines[name]['id']}/graph")
+                pipelines[name]["graph"] = pipeline_apply.normalize_current_graph(graph_payload)
+        pipeline_names_by_id = {str(item["id"]): item["name"] for item in pipelines_list if item.get("id") is not None}
+        triggers: dict[str, dict[str, Any]] = {}
+        for item in triggers_list:
+            trigger_name = item.get("name")
+            pipeline_name = pipeline_names_by_id.get(str(item.get("pipeline_id")))
+            if not trigger_name or pipeline_name is None:
+                continue
+            triggers[f"{pipeline_name}/{trigger_name}"] = item
+        return {
+            KIND_SCHEMA: schemas,
+            KIND_BACKEND: backends,
+            KIND_PIPELINE: pipelines,
+            KIND_TRIGGER: triggers,
+            "agents": {item["name"]: item["id"] for item in agents_list if item.get("name") is not None},
+        }
 
     # ------------------------------------------------------------------
     # Execution
@@ -402,9 +478,20 @@ class ApplyExecutor:
                         )
 
     def run(self, config: ApplyConfig, dry_run: bool) -> dict[str, Any]:
-        """Resolve refs, plan, optionally execute, and return the report."""
+        """Resolve refs, plan, optionally execute, and return the report.
+
+        Phase order: schemas -> model_backends -> pipelines -> triggers
+        (forward-dependency order; a trigger's pipeline is applied before the
+        trigger). Pipeline/trigger resolution failures enter ``blocked`` with
+        per-entity containment identical to the slice-1 kinds.
+        """
+        from modulo.cli.apply import pipeline_apply, trigger_apply
+
         resolved_api_keys, blocked = resolve_secret_refs(config)
         entities = _entity_reports(config)
+        current_entities: dict[str, Any] = self.fetch_current(config) if any(entities.values()) else _empty_current()
+        resolved_trigger_configs, trigger_blocked = trigger_apply.resolve_trigger_config_refs(entities)
+        blocked = [*blocked, *trigger_blocked]
         blocked_keys = {(kind, name) for kind, name, _reason in blocked}
         desired: dict[str, list[tuple[str, dict[str, Any]]]] = {
             KIND_SCHEMA: [
@@ -415,8 +502,15 @@ class ApplyExecutor:
                 for name, e in entities[KIND_BACKEND]
                 if (KIND_BACKEND, name) not in blocked_keys
             ],
+            KIND_PIPELINE: [],
+            KIND_TRIGGER: [],
         }
-        current_entities = self.fetch_current(config) if any(desired.values()) else {KIND_SCHEMA: {}, KIND_BACKEND: {}}
+        desired, blocked = pipeline_apply.build_desired_views(
+            config.entities, current_entities, desired, blocked, blocked_keys
+        )
+        desired, blocked = trigger_apply.build_desired_views(
+            config.entities, current_entities, desired, blocked, blocked_keys
+        )
         report: dict[str, Any] = build_plan(desired, current_entities, blocked)
         report["dry_run"] = dry_run
         report["failed"] = []
@@ -424,7 +518,20 @@ class ApplyExecutor:
             return report
         self.apply_backends(entities, current_entities, resolved_api_keys, report)
         self.apply_schemas(entities, current_entities, report)
+        pipeline_ids = pipeline_apply.apply_pipelines(self, entities, current_entities, report)
+        trigger_apply.apply_triggers(self, entities, current_entities, report, pipeline_ids, resolved_trigger_configs)
         return report
+
+
+def _empty_current() -> dict[str, Any]:
+    """The no-entity current-state shape (nothing declared -> nothing fetched)."""
+    return {
+        KIND_SCHEMA: {},
+        KIND_BACKEND: {},
+        KIND_PIPELINE: {},
+        KIND_TRIGGER: {},
+        "agents": {},
+    }
 
 
 class ApplyHttpError(RuntimeError):

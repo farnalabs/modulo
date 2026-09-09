@@ -52,6 +52,10 @@ class Trigger(SoftDeleteMixin, OrgScoped):
         nullable=False,
         index=True,
     )
+    # FAR-681 slice 2: declarative-apply identity within (pipeline, name).
+    # Nullable — pre-0200 rows carry NULL and are invisible to name-based
+    # apply (they stay UI/MCP-managed only).
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

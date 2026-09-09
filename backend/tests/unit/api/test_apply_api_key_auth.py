@@ -245,3 +245,129 @@ class TestApplyApiKeyAuth:
             app.dependency_overrides.clear()
 
         assert resp.status_code == 403
+
+    def test_api_key_creates_pipeline(self) -> None:
+        """The document create endpoint accepts the mk_ API-key bearer through
+        the REAL require_permission_any_credential stack (FAR-681 slice 2)."""
+        pipeline = MagicMock()
+        pipeline.id = uuid.uuid4()
+        pipeline.organisation_id = _ORG_ID
+        pipeline.name = "Apply Pipeline"
+        pipeline.description = None
+        pipeline.visibility = "org"
+        pipeline.owner_team_id = None
+        pipeline.max_concurrent_runs = 5
+        pipeline.lock_wait_timeout_seconds = 300
+        pipeline.node_timeout_seconds = 300
+        pipeline.run_context_defaults = {}
+        pipeline.default_autonomy_level = "manual_approval"
+        pipeline.rate_limit_config = None
+        pipeline.retry_policy = {}
+        pipeline.max_duration_seconds = None
+        pipeline.stale_run_timeout_minutes = 30
+        pipeline.snapshot_count = 0
+        pipeline.graph_nodes_json = []
+        pipeline.connector_rebind_required = False
+        pipeline.archived_at = None
+        pipeline.folder_id = None
+        pipeline.account_id = _USER_ID
+        pipeline.created_at = _NOW_STAMP
+        pipeline.updated_at = _NOW_STAMP
+
+        route_session = _make_route_session()
+        auth_session = _make_auth_session()
+
+        def override_session():
+            yield route_session
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        try:
+            with (
+                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch(
+                    "modulo.api.dependencies.get_or_create_session_factory",
+                    return_value=_FakeFactory(auth_session),
+                ),
+                patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+                patch(
+                    "modulo.auth.dependencies.resolve_role_from_membership",
+                    new=AsyncMock(return_value="operator"),
+                ),
+                patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
+            ):
+                client = TestClient(app)
+                resp = client.post(
+                    "/api/v1/pipelines",
+                    json={"name": "Apply Pipeline", "max_concurrent_runs": 5},
+                    headers=_AUTH_HEADERS,
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["name"] == "Apply Pipeline"
+
+    def test_api_key_creates_trigger(self) -> None:
+        """The pipeline-scoped trigger create (FAR-681: carries the declarative
+        name) accepts the mk_ API-key bearer through the real stack."""
+        target_pipeline_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+        pipeline_row = MagicMock()
+        pipeline_row.max_concurrent_runs = 5
+        trigger_row = MagicMock()
+        trigger_row.id = uuid.uuid4()
+        trigger_row.organisation_id = _ORG_ID
+        trigger_row.pipeline_id = target_pipeline_id
+        trigger_row.name = "apply-trigger"
+        trigger_row.trigger_type = "cron"
+        trigger_row.active = True
+        trigger_row.max_concurrent_runs = 1
+        trigger_row.daily_spend_limit = None
+        trigger_row.config_json = {}
+        trigger_row.cron_expression = "0 3 * * *"
+        trigger_row.cron_timezone = None
+        trigger_row.last_fired_at = None
+        trigger_row.next_fire_at = _NOW_STAMP
+        trigger_row.account_id = _USER_ID
+
+        route_session = _make_route_session()
+        route_session.get = AsyncMock(return_value=pipeline_row)
+        auth_session = _make_auth_session()
+
+        def override_session():
+            yield route_session
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        try:
+            with (
+                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch(
+                    "modulo.api.dependencies.get_or_create_session_factory",
+                    return_value=_FakeFactory(auth_session),
+                ),
+                patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+                patch(
+                    "modulo.auth.dependencies.resolve_role_from_membership",
+                    new=AsyncMock(return_value="operator"),
+                ),
+            ):
+                client = TestClient(app)
+                resp = client.post(
+                    f"/api/v1/pipelines/{target_pipeline_id}/triggers",
+                    json={"name": "apply-trigger", "trigger_type": "cron", "cron_expression": "0 3 * * *"},
+                    headers=_AUTH_HEADERS,
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["name"] == "apply-trigger"

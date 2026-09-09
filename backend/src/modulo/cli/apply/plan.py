@@ -47,6 +47,8 @@ class Decision:
 
 KIND_SCHEMA = "schema"
 KIND_BACKEND = "model_backend"
+KIND_PIPELINE = "pipeline"
+KIND_TRIGGER = "trigger"
 
 
 def _schema_current_view(current: dict[str, Any]) -> dict[str, Any]:
@@ -69,6 +71,46 @@ def _backend_current_view(current: dict[str, Any]) -> dict[str, Any]:
         "visibility": current.get("visibility"),
         "tier": current.get("tier"),
     }
+
+
+def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]) -> dict[str, Any]:
+    """Current view restricted to the DESIRED managed keys.
+
+    A graph-less config does not manage the graph at all (the key is absent
+    from the desired view), so a UI-authored graph never causes drift.
+    """
+    view: dict[str, Any] = {}
+    for key in desired_view:
+        if key == "graph":
+            view[key] = current.get("graph") or {"nodes": [], "edges": []}
+        else:
+            view[key] = current.get(key)
+    return view
+
+
+def _trigger_current_view(current: dict[str, Any], desired_view: dict[str, Any]) -> dict[str, Any]:
+    """Current view restricted to the desired managed keys.
+
+    config_json is compared on the DESIRED key set only (apply merges its
+    declared keys and never deletes foreign keys, so undeclared stored keys
+    are unmanaged) with secret-shaped entries stripped symmetrically with the
+    desired side (the API masks server-stored secrets on read).
+    daily_spend_limit is canonicalised to float on both sides (the column is
+    Numeric; the API serialises it as float).
+    """
+    from modulo.cli.apply.models import strip_secret_shaped_config
+
+    view: dict[str, Any] = {}
+    for key, desired_value in desired_view.items():
+        current_value = current.get(key)
+        if key == "daily_spend_limit":
+            current_value = float(current_value) if current_value is not None else None
+        elif key == "config_json" and isinstance(desired_value, dict):
+            current_config = current_value if isinstance(current_value, dict) else {}
+            restricted = {k: current_config[k] for k in desired_value if k in current_config}
+            current_value = strip_secret_shaped_config(restricted)
+        view[key] = current_value
+    return view
 
 
 _CURRENT_VIEWS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -155,7 +197,13 @@ def plan_entity(
                 desired_hash=desired_hash,
                 current_hash=canonical_hash(_CURRENT_VIEWS[kind](current)),
             )
-    current_view = _CURRENT_VIEWS[kind](current)
+    current_view: dict[str, Any]
+    if kind == KIND_PIPELINE:
+        current_view = _pipeline_current_view(current, desired_view)
+    elif kind == KIND_TRIGGER:
+        current_view = _trigger_current_view(current, desired_view)
+    else:
+        current_view = _CURRENT_VIEWS[kind](current)
     current_hash = canonical_hash(current_view)
     status = "unchanged" if current_hash == desired_hash else "updated"
     return Decision(

@@ -442,10 +442,38 @@ def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvide
 
        _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope)
     """
+    return _team_membership_or_admin_dep(resource_team_id_provider, get_current_tenant_user)
+
+
+def require_team_membership_or_admin_any_credential(resource_team_id_provider: TeamScopeProvider) -> Any:
+    """Any-credential variant of the team gate (JWT OR ``mk_`` org API key).
+
+    Same visibility/membership matrix as :func:`require_team_membership_or_admin`,
+    but the principal resolves via ``get_current_tenant_user_or_api_key`` so
+    declarative apply (FAR-681) can update team-gated resources (pipelines)
+    with org API keys. Roles are clamped to the key owner's LIVE org role.
+    The org-role floor itself is still enforced by the route's own permission
+    dependency, so this variant only widens WHO can present a credential —
+    the gate body is single-sourced (the deny_break_glass_mint_dependency
+    parameterization precedent).
+    """
+    return _team_membership_or_admin_dep(resource_team_id_provider, get_current_tenant_user_or_api_key)
+
+
+def _team_membership_or_admin_dep(
+    resource_team_id_provider: TeamScopeProvider,
+    principal_dependency: Callable[..., Any],
+) -> Any:
+    """Single-sourced team-gate body, parameterized by the principal dependency.
+
+    The principal dependency is the ONLY difference between the stock
+    (JWT-only) and any-credential variants; the visibility/membership matrix
+    must never be duplicated across the two.
+    """
 
     async def _check(
         request: Request,
-        principal: TenantPrincipal = Depends(get_current_tenant_user),
+        principal: TenantPrincipal = Depends(principal_dependency),
         session: AsyncSession = Depends(get_db_session),
     ) -> TenantPrincipal:
         if principal.org_role == "admin":

@@ -1,11 +1,9 @@
-"""``modulo apply`` orchestration + CLI registration (FAR-681, slice 1).
+"""``modulo apply`` orchestration + CLI registration (FAR-681, slices 1+2).
 
 Declarative configuration: ``modulo apply -f config.yaml`` plans name-based
-upserts against the live org and executes them idempotently. This slice
-covers schemas (+versions) and model_backends; pipelines and triggers land
-in slices 2/3.
-
-Exit-code semantics:
+upserts against the live org and executes them idempotently. Slices 1+2
+cover schemas (+versions), model_backends, pipelines (agent name-refs in
+graphs) and triggers ((pipeline, name) identity). Exit-code semantics:
 - dry-run (--dry-run/--plan): always exit 0
 - real apply: exit 1 if any entity was blocked or failed, else 0
 """
@@ -124,7 +122,7 @@ def register_apply(group: click.Group) -> None:
         output_format: str,
         json_flag: bool,
     ) -> None:
-        """Apply a declarative config file (schemas, model backends)."""
+        """Apply a declarative config file (schemas, model backends, pipelines, triggers)."""
         try:
             config = load_apply_file(config_path)
         except ApplyLoadError as exc:
