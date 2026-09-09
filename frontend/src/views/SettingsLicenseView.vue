@@ -31,8 +31,8 @@
             You are currently on the {{ planStore.getTierLabel(licenseInfo.tier) }} tier. Upgrade to {{ planStore.getTierLabel('team') }} to unlock all features.
           </p>
           <Button as="a" href="https://modulo.run/pricing" target="_blank" rel="noopener noreferrer" class="mt-4 border-primary/30 hover:border-primary/60">
-            Get a Team License
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            {{ $t('views.SettingsLicenseView.get_team_license') }}
+            <ExternalLink class="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
@@ -61,13 +61,13 @@
 
           <div class="flex flex-wrap items-center gap-3">
             <Button data-testid="license-verify-btn" severity="secondary" outlined :disabled="!newLicenseKey.trim() || verifying" @click="verifyKey">
-              {{ verifying ? 'Verifying...' : 'Verify Key' }}
+              {{ verifying ? $t('views.SettingsLicenseView.verifying') : $t('views.SettingsLicenseView.verify_key') }}
             </Button>
             <Button data-testid="license-apply-btn" :disabled="!newLicenseKey.trim() || applying" @click="openApplyDialog">
-              {{ applying ? 'Applying...' : 'Apply Key' }}
+              {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.apply_key') }}
             </Button>
             <Button v-if="licenseInfo.has_license" severity="danger" :disabled="removing" @click="openRemoveDialog">
-              {{ removing ? 'Removing...' : 'Remove License' }}
+              {{ removing ? $t('views.SettingsLicenseView.removing') : $t('views.SettingsLicenseView.remove_license') }}
             </Button>
           </div>
           <p class="text-xs text-muted-foreground">
@@ -79,18 +79,18 @@
 
     <FormDialog
       v-model:open="applyDialogOpen"
-      title="Apply License Key"
-      description="This will replace your current license key. Applying a new license key requires a server restart to take full effect."
-      confirmText="Confirm Apply"
+      :title="$t('views.SettingsLicenseView.apply_license_title')"
+      :description="$t('views.SettingsLicenseView.apply_license_description')"
+      :confirmText="$t('views.SettingsLicenseView.confirm_apply')"
       :loading="applying"
       @confirm="applyKey"
     />
 
     <FormDialog
       v-model:open="removeDialogOpen"
-      title="Remove License"
-      description="Are you sure you want to remove the Team license? Your instance will revert to Community tier and all Team features will be disabled."
-      confirmText="Confirm Remove"
+      :title="$t('views.SettingsLicenseView.remove_license_title')"
+      :description="$t('views.SettingsLicenseView.remove_license_description')"
+      :confirmText="$t('views.SettingsLicenseView.confirm_remove')"
       :loading="removing"
       @confirm="removeLicense"
     />
@@ -99,6 +99,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import Button from 'primevue/button'
 import { api } from '../lib/api/client'
@@ -109,9 +110,11 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Badge from 'primevue/badge'
 import FormDialog from '../components/shared/FormDialog.vue'
+import { ExternalLink } from '@lucide/vue'
 import { format } from 'date-fns'
 import { shortId } from '../utils/format'
 
+const { t } = useI18n()
 const planStore = usePlanStore()
 
 interface LicenseStatus {
@@ -147,7 +150,7 @@ const removing = ref(false)
 const removeDialogOpen = ref(false)
 
 const maskedKey = computed(() => {
-  return 'Team license key active'
+  return licenseInfo.value.has_license ? t('views.SettingsLicenseView.team_license_key_active') : '—'
 })
 
 function formatDate(iso: string): string {
@@ -171,7 +174,10 @@ async function verifyKey() {
     } else {
       verifyResult.value = {
         valid: true,
-        message: `Valid license key — Tier: ${data.tier}, expires: ${data.expires_at ? formatDate(data.expires_at) : 'never'}`,
+        message: t('views.SettingsLicenseView.valid_license_key', {
+          tier: data.tier,
+          expires: data.expires_at ? formatDate(data.expires_at) : 'never',
+        }),
       }
     }
   } catch (e: unknown) {

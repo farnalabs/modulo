@@ -2041,7 +2041,15 @@ export default {
       "new_license_key": "New License Key",
       "applying": "Applying...",
       "team": "Team",
-      "community": "Community"
+      "community": "Community",
+      "apply_license_title": "Apply License Key",
+      "apply_license_description": "This will replace your current license key. Applying a new license key requires a server restart to take full effect.",
+      "confirm_apply": "Confirm Apply",
+      "remove_license_title": "Remove License",
+      "remove_license_description": "Are you sure you want to remove the Team license? Your instance will revert to Community tier and all Team features will be disabled.",
+      "confirm_remove": "Confirm Remove",
+      "valid_license_key": "Valid license key — Tier: {tier}, expires: {expires}",
+      "get_team_license": "Get a Team License"
     },
     "SchemaEditorView": {
       "schema_name_is_required": "Schema name is required",
