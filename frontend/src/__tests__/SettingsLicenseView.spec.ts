@@ -54,6 +54,17 @@ import SettingsLicenseView from '../views/SettingsLicenseView.vue'
 
 const dialogStubs = ['Dialog', 'DialogContent', 'DialogDescription', 'DialogFooter', 'DialogHeader', 'DialogTitle']
 
+// Stub FormDialog so its @confirm handler (applyKey / removeLicense) can be
+// triggered without rendering the full primevue Dialog tree.
+const formDialogStub = {
+  props: ['open', 'title', 'description', 'confirmText', 'loading'],
+  emits: ['confirm'],
+  template: `<button v-if="open" class="formdialog-confirm" @click="$emit('confirm')">{{ confirmText }}</button>`,
+}
+
+// Object form of the stubs (name -> true) so we can also override FormDialog.
+const dialogStubObj = Object.fromEntries(dialogStubs.map((name) => [name, true]))
+
 function mockApiResponses(getMock: any, licenseData: any, flagsData: any) {
   getMock.mockImplementation((path: string) => {
     if (path === '/api/v1/admin/license') {
@@ -167,5 +178,105 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.find('textarea').exists()).toBe(true)
     expect(wrapper.text()).toContain('Verify Key')
     expect(wrapper.text()).toContain('Apply Key')
+  })
+
+  it('verifyKey shows a valid license message with an expiry date', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockResolvedValue({ data: { tier: 'team', expires_at: '2027-01-01' }, error: undefined })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-verify-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(wrapper.text()).toContain('Valid license key')
+  })
+
+  it('verifyKey shows a never-expiry fallback when expires_at is absent', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockResolvedValue({ data: { tier: 'team' }, error: undefined })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-verify-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(wrapper.text()).toContain('never')
+  })
+
+  it('applyKey surfaces an error when the API returns an error', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockResolvedValue({ data: null, error: 'boom' })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-apply-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(wrapper.text()).toContain('Failed to apply')
+  })
+
+  it('applyKey surfaces an error when the API call throws', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockRejectedValue(new Error('network-down'))
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-apply-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(wrapper.text()).toContain('Failed to apply')
+  })
+
+  it('removeLicense surfaces an error when the API returns an error', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.DELETE as any).mockResolvedValue({ error: 'nope' })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    const removeBtn = wrapper.findAll('button').find((b) => b.text() === 'Remove License')
+    expect(removeBtn).toBeTruthy()
+    await removeBtn!.trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(wrapper.text()).toContain('Failed to remove')
+  })
+
+  it('removeLicense surfaces an error when the API call throws', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.DELETE as any).mockRejectedValue(new Error('network-down'))
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    const removeBtn = wrapper.findAll('button').find((b) => b.text() === 'Remove License')
+    expect(removeBtn).toBeTruthy()
+    await removeBtn!.trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(wrapper.text()).toContain('Failed to remove')
   })
 })
