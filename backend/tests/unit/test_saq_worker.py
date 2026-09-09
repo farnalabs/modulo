@@ -131,6 +131,7 @@ class TestFunctionsWiring:
         assert "hitl_park_sweep" in names
         assert "runner_workspace_reconcile" in names
         assert "runner_marker_sweep" in names
+        assert "runner_health_probe" in names
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
@@ -154,6 +155,7 @@ class TestFunctionsWiring:
             "hitl_park_sweep",
             "runner_workspace_reconcile",
             "runner_marker_sweep",
+            "runner_health_probe",
             "cost_probe",
             "analytics_facts_maintenance",
             "journey_reconcile",
