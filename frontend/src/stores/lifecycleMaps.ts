@@ -118,7 +118,9 @@ const JOURNEY_PERIOD_HOURS: Record<Exclude<JourneyPeriod, 'all'>, number> = {
 export function updatedSinceForPeriod(period: JourneyPeriod, now: number = Date.now()): string | undefined {
   const hours: number | undefined = period === 'all' ? undefined : JOURNEY_PERIOD_HOURS[period]
   if (!hours) return undefined
-  return new Date(now - hours * 3600000).toISOString()
+  const date = new Date(now - hours * 3600000)
+  if (isNaN(date.getTime())) return undefined
+  return date.toISOString()
 }
 
 const LAYOUT_SPACING_X = 300
