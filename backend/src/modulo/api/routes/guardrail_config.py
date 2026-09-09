@@ -209,6 +209,92 @@ async def _audit(
         _log.exception("guardrail_config.audit_failed")
 
 
+async def _load_pipeline_guardrail_rows_by_name(
+    session: AsyncSession,
+    pipeline: Pipeline,
+    org_id: uuid.UUID,
+) -> tuple[Pipeline, dict[str, EvalDefinitionRow]]:
+    """Load one pipeline's live guardrail rows keyed by the config id (name)."""
+    rows = await load_pipeline_guardrail_rows(
+        session,
+        pipeline_id=pipeline.id,
+        organisation_id=org_id,
+    )
+    return pipeline, {row.name: row for row in rows}
+
+
+def _pipeline_collisions(
+    rows_by_name: dict[str, EvalDefinitionRow],
+    proposed_by_id: dict[str, Any],
+    existing: list[str],
+) -> list[str]:
+    """Return proposed ids colliding with a node-bound row on this pipeline.
+
+    A collision is a live row with the same name that is bound to a pipeline
+    node (node_id set) — config-as-code must not claim it.
+    """
+    colliding: list[str] = []
+    for gid in proposed_by_id:
+        row = rows_by_name.get(gid)
+        if row is not None and row.node_id is not None and gid not in existing:
+            colliding.append(gid)
+    return colliding
+
+
+def _apply_guardrail_upserts(
+    session: AsyncSession,
+    pipeline: Pipeline,
+    rows_by_name: dict[str, EvalDefinitionRow],
+    proposed_by_id: dict[str, Any],
+    config_set: GuardrailConfigSet,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+) -> None:
+    """Add missing guardrail rows and upsert the ones config-as-code owns."""
+    for gid, item in proposed_by_id.items():
+        row = rows_by_name.get(gid)
+        config_json = to_eval_config(
+            item,
+            max_guardrails_per_node=config_set.max_guardrails_per_node,
+            guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
+        )
+        if row is None:
+            session.add(
+                EvalDefinitionRow(
+                    organisation_id=org_id,
+                    pipeline_id=pipeline.id,
+                    node_id=None,
+                    name=gid,
+                    eval_type="guardrail",
+                    config_json=config_json,
+                    failure_behaviour="warn",
+                    account_id=account_id,
+                )
+            )
+        elif row.node_id is None:
+            # Only upsert rows the config-as-code layer owns. A node-bound
+            # row (graph-save flow) that collides on name must not be
+            # silently clobbered — mirror the deletion path's ownership
+            # check below.
+            row.config_json = config_json
+
+
+async def _apply_guardrail_deletes(
+    session: AsyncSession,
+    rows_by_name: dict[str, EvalDefinitionRow],
+    proposed_by_id: dict[str, Any],
+) -> None:
+    """Delete guardrail rows the config-as-code layer owns and no longer proposes.
+
+    Node-bound guardrails authored via the graph-save flow (node_id set) are
+    NOT config-as-code's to reconcile — deleting them would silently strip
+    guardrails the evals API bound to pipeline nodes.
+    """
+    for name, row in rows_by_name.items():
+        if name not in proposed_by_id and row.node_id is None:
+            await session.delete(row)
+
+
 async def _reconcile_guardrail_rows(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -245,53 +331,14 @@ async def _reconcile_guardrail_rows(
     pipelines_rows: list[tuple[Pipeline, dict[str, EvalDefinitionRow]]] = []
     colliding: list[str] = []
     for pipeline in pipelines:
-        rows = await load_pipeline_guardrail_rows(
-            session,
-            pipeline_id=pipeline.id,
-            organisation_id=org_id,
-        )
-        rows_by_name = {row.name: row for row in rows}
-        pipelines_rows.append((pipeline, rows_by_name))
-        for gid in proposed_by_id:
-            row = rows_by_name.get(gid)
-            if row is not None and row.node_id is not None and gid not in colliding:
-                colliding.append(gid)
+        entry = await _load_pipeline_guardrail_rows_by_name(session, pipeline, org_id)
+        pipelines_rows.append(entry)
+        colliding.extend(_pipeline_collisions(entry[1], proposed_by_id, colliding))
     if colliding:
         return colliding
     for pipeline, rows_by_name in pipelines_rows:
-        for gid, item in proposed_by_id.items():
-            row = rows_by_name.get(gid)
-            config_json = to_eval_config(
-                item,
-                max_guardrails_per_node=config_set.max_guardrails_per_node,
-                guardrail_timeout_seconds=config_set.guardrail_timeout_seconds,
-            )
-            if row is None:
-                session.add(
-                    EvalDefinitionRow(
-                        organisation_id=org_id,
-                        pipeline_id=pipeline.id,
-                        node_id=None,
-                        name=gid,
-                        eval_type="guardrail",
-                        config_json=config_json,
-                        failure_behaviour="warn",
-                        account_id=account_id,
-                    )
-                )
-            elif row.node_id is None:
-                # Only upsert rows the config-as-code layer owns. A node-bound
-                # row (graph-save flow) that collides on name must not be
-                # silently clobbered — mirror the deletion path's ownership
-                # check below.
-                row.config_json = config_json
-        for name, row in rows_by_name.items():
-            # Only delete rows the config-as-code layer owns. Node-bound
-            # guardrails authored via the graph-save flow (node_id set) are
-            # NOT config-as-code's to reconcile — deleting them would silently
-            # strip guardrails the evals API bound to pipeline nodes.
-            if name not in proposed_by_id and row.node_id is None:
-                await session.delete(row)
+        _apply_guardrail_upserts(session, pipeline, rows_by_name, proposed_by_id, config_set, org_id, account_id)
+        await _apply_guardrail_deletes(session, rows_by_name, proposed_by_id)
     await session.flush()
     return []
 

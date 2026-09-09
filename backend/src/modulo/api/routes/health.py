@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -346,6 +347,29 @@ async def _configured_queues() -> list[str]:
     return [runs_queue, system_queue]
 
 
+def _hostname_from_worker_blob(blob: bytes | str) -> str | None:
+    """Extract the worker hostname from one SAQ worker metadata blob, or None."""
+    try:
+        info = json.loads(blob)
+    except (ValueError, TypeError):
+        return None
+    metadata = info.get("metadata") if isinstance(info, dict) else None
+    hostname = (metadata or {}).get("hostname") if isinstance(metadata, dict) else None
+    return str(hostname) if hostname else None
+
+
+def _hostnames_from_worker_blobs(raw: Iterable[bytes | str | None]) -> set[str]:
+    """Decode SAQ worker metadata blobs into the set of live hostnames."""
+    hostnames: set[str] = set()
+    for blob in raw:
+        if not blob:
+            continue
+        hostname = _hostname_from_worker_blob(blob)
+        if hostname:
+            hostnames.add(hostname)
+    return hostnames
+
+
 async def _live_worker_hostnames(queue_name: str) -> set[str]:
     """Read live worker hostnames for *queue_name* from SAQ worker metadata.
 
@@ -368,19 +392,7 @@ async def _live_worker_hostnames(queue_name: str) -> set[str]:
         if not member_keys:
             return set()
         raw = await r.mget(cast("list[bytes | str]", member_keys))
-        hostnames: set[str] = set()
-        for blob in raw:
-            if not blob:
-                continue
-            try:
-                info = json.loads(blob)
-            except (ValueError, TypeError):
-                continue
-            metadata = info.get("metadata") if isinstance(info, dict) else None
-            hostname = (metadata or {}).get("hostname") if isinstance(metadata, dict) else None
-            if hostname:
-                hostnames.add(str(hostname))
-        return hostnames
+        return _hostnames_from_worker_blobs(raw)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
