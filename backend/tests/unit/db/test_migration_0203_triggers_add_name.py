@@ -33,7 +33,7 @@ from alembic.operations import Operations
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
-_REVISION = "0201_triggers_add_name"
+_REVISION = "0203_triggers_add_name"
 _IDENTITY_INDEX = "uq_triggers_org_pipeline_name"
 
 _ADD_COLUMN_RE = re.compile(r'op\.add_column\(\s*"(\w+)"\s*,\s*sa\.Column\(\s*"(\w+)"')
@@ -287,7 +287,7 @@ class TestSymmetryAndModelParity:
         """The migration chains onto the tip that `uv run alembic heads`
         resolved at delivery time (never edited after the fact)."""
         spec = _load_migration()
-        assert spec.down_revision == "0200_runs_runner_marker_sweep_index"
+        assert spec.down_revision == "0195_hitl_claim_gate_config_json"
 
     def test_model_matches_upgraded_schema(self) -> None:
         from modulo.db.models.trigger import Trigger

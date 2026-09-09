@@ -1,7 +1,7 @@
 """Trigger name — declarative-apply identity column + uniqueness (FAR-681 slice 2).
 
-Revision ID: 0201_triggers_add_name
-Revises: 0200_runs_runner_marker_sweep_index
+Revision ID: 0203_triggers_add_name
+Revises: 0195_hitl_claim_gate_config_json
 Create Date: 2026-09-09
 
 ``modulo apply`` (FAR-681) identifies triggers declaratively by the pair
@@ -33,8 +33,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0201_triggers_add_name"
-down_revision: str | None = "0200_runs_runner_marker_sweep_index"
+revision: str = "0203_triggers_add_name"
+down_revision: str | None = "0195_hitl_claim_gate_config_json"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
