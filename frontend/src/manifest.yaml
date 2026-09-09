@@ -3724,7 +3724,7 @@ features:
             - "[x] A cron trigger's input_template populates the run input payload on fire; snapshot_id pins the fired graph"
 
             # Webhook
-            - "[x] Webhook delivery is HMAC-SHA256 verified via X-Modulo-Webhook-Secret with an X-Modulo-Timestamp validated within the Â±300s replay window; invalid/missing signature -> 401, missing trigger -> 404, expired timestamp -> 400"
+            - "[x] Webhook delivery is HMAC-SHA256 verified via X-Modulo-Webhook-Secret with an X-Modulo-Timestamp validated within the ±300s replay window; invalid/missing signature -> 401, missing trigger -> 404, expired timestamp -> 400"
             - "[x] HMAC-less triggers accept unauthenticated deliveries by design, with a log warning"
             - "[x] A valid delivery returns 202 {'run_id', status: 'accepted'}; the run is dispatched in the background via fail-fast SAQ enqueue, and dispatch failures are ingested as error events without blocking the 202 (capacity-deferred runs are left to dispatcher_reconcile)"
             - "[x] Duplicate payloads are rejected 400 'Duplicate webhook payload'; concurrent-run-limit and pipeline rate-limit rejections are 429; a busy pipeline snapshot lock retries acquisition briefly, then surfaces an honest 503 'snapshot lock unavailable — retry the delivery' (never a fabricated 'queued' ack with no run behind it)"
