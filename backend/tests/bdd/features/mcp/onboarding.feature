@@ -1,36 +1,29 @@
-Feature: MCP Onboarding
-  As a new Modulo user
-  I want to discover available MCP tools and their capabilities
-  So that I know what I can do via MCP
+Feature: MCP Onboarding — discoverable tool surface (ADR 017)
+  As a new MCP client
+  I want to discover the MCP tool stack and the authentication contract that gates it
+  So that I can drive Modulo through the MCP protocol
 
   Background:
-    Given an MCP server is running at /mcp
+    Given the MCP server is mounted at /mcp
 
-  Scenario: MCP lists available tools
-    When the MCP client sends a tools/list request
-    Then the response contains tool definitions
-    And the tools include "trigger", "review_hitl", "library_browse", "human_only"
+  Scenario: The MCP server advertises a documented tool inventory
+    When the MCP tool registry is inspected
+    Then the tool inventory contains definitions
+    And the "trigger_pipeline" tool has a description and inputSchema
+    And the "review_hitl" tool has a description and inputSchema
+    And the "search_library" tool has a description and inputSchema
+    And the "list_schemas" tool has a description and inputSchema
 
-  Scenario: Each tool has a description and input schema
-    When the MCP client sends a tools/list request
-    Then the "trigger" tool has description and inputSchema
-    And the "review_hitl" tool has description and inputSchema
-    And the "library_browse" tool has description and inputSchema
+  Scenario: Every advertised tool carries the onboarding contract
+    When the MCP tool registry is inspected
+    Then the tool inventory contains at least 20 tools
+    And every tool definition carries a name, a description and an inputSchema
 
-  Scenario: MCP onboarding without auth shows public info
-    Given no API key is provided
-    When the MCP client sends a tools/list request
-    Then the response still contains tool definitions
-    But invoking any tool returns 401
+  Scenario: Unauthenticated introspection fails closed
+    When an unauthenticated request reaches the MCP auth middleware
+    Then the MCP request is rejected with status 401
 
-  Scenario: MCP returns tool descriptions in natural language
-    When the MCP client sends a tools/list request
-    Then the "trigger" tool description explains how to trigger a pipeline run
-    And the "review_hitl" tool description explains how to review gates
-    And the "library_browse" tool description explains how to browse primitives
-
-  Scenario: SSE transport works for tool listing
-    Given the MCP server uses SSE transport
-    When a client connects to /mcp with Accept: text/event-stream
-    Then the connection is established
-    And the client receives a tools/list response
+  Scenario: An invalid credential fails closed
+    Given a request with an invalid bearer token
+    When the request reaches the MCP auth middleware
+    Then the MCP request is rejected with status 401
