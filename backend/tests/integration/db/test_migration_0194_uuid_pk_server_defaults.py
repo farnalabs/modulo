@@ -45,10 +45,19 @@ _HEAD = "0194_uuid_pk_server_defaults"
 _PRE_HEAD = "0193_run_node_outputs_sweep_index"
 
 
-def _uuid_pk_pairs() -> set[tuple[str, str]]:
-    """(table, column) for every uuid primary key that is not a foreign-key parent."""
+def _uuid_pk_pairs(existing: set[str] | None = None) -> set[tuple[str, str]]:
+    """(table, column) for every uuid primary key that is not a foreign-key parent.
+
+    When ``existing`` is supplied, only pairs whose table is present in that set
+    are returned. Migration 0194 is applied against a DB migrated only to its own
+    head, so tables introduced by LATER migrations (e.g. ``runner_probe_cache`` at
+    0204) do not exist yet at that state and must not be asserted against here —
+    those migrations supply their own uuid-PK server default at CREATE time.
+    """
     pairs: set[tuple[str, str]] = set()
     for table in Base.metadata.sorted_tables:
+        if existing is not None and table.name not in existing:
+            continue
         fk_parents = {fk.parent.name for fk in table.foreign_keys}
         for column in table.columns:
             if column.primary_key and isinstance(column.type, (Uuid, POSTGRES_UUID)) and column.name not in fk_parents:
@@ -147,7 +156,8 @@ async def test_every_uuid_pk_has_gen_random_uuid_default(fresh_migration_db) -> 
     finally:
         await engine.dispose()
 
-    missing = sorted(f"{t}.{c}" for t, c in _uuid_pk_pairs() if rows.get((t, c)) != "gen_random_uuid()")
+    existing_tables = {t for t, _ in rows}
+    missing = sorted(f"{t}.{c}" for t, c in _uuid_pk_pairs(existing_tables) if rows.get((t, c)) != "gen_random_uuid()")
     assert not missing, f"uuid PKs without gen_random_uuid() default: {missing}"
 
     # Selectivity: the default must NOT blanket-apply to non-uuid PKs or to the
@@ -194,7 +204,6 @@ async def test_downgrade_drops_defaults_and_reupgrade_restores(fresh_migration_d
     config = _alembic_config(db_url)
 
     async def _count_defaults() -> int:
-        pairs = _uuid_pk_pairs()
         async with engine.connect() as conn:
             result = await conn.execute(
                 text(
@@ -203,6 +212,8 @@ async def test_downgrade_drops_defaults_and_reupgrade_restores(fresh_migration_d
                 )
             )
             rows = {(r[0], r[1]): r[2] for r in result.fetchall()}
+        existing = {t for t, _ in rows}
+        pairs = _uuid_pk_pairs(existing)
         return sum(1 for t, c in pairs if rows.get((t, c)) == "gen_random_uuid()")
 
     try:
