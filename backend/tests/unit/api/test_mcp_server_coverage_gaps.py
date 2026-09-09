@@ -2083,6 +2083,10 @@ class TestHitlHelpers(_AuthContext):
         assert result["status"] == "rejected"
         payload = mgr.reject.await_args.kwargs["decision_payload"]
         assert payload["reason"] == "nope"
+        # FAR-611 review fix: the audit actor is the ACCOUNT id (the position
+        # previously held the org_api_keys key id, which FK-fails the audit
+        # event and rolls back the decision).
+        assert mgr.reject.await_args.kwargs["actor_id"] == _USER_ID
 
     async def test_review_impl_gate_not_found(self) -> None:
         with (

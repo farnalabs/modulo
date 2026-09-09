@@ -882,6 +882,185 @@ class TestReviewHitl(_AuthContext):
             "output": {"result": "ok"},
         }
 
+    # -- FAR-611 review fix: audit actor / claimant attribution ---------------
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_approve_attributes_decision_to_account_id(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The MCP approve's audit actor is the ACCOUNT id — AuditEvent.
+        account_id is FK'd to accounts.id, so the org_api_keys row id (or the
+        OAuth uuid(int=0) sentinel) would violate the FK and roll back the
+        whole decision."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok-123")
+
+        assert result == {"status": "approved", "gate_id": "gate-1"}
+        assert manager.approve.await_args.kwargs["actor_id"] == _PLACEHOLDER_USER_ID
+        assert manager.approve.await_args.kwargs["client_type"] == "mcp"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_claim_claims_on_behalf_of_account_id(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """hitl_claims.account_id is FK'd to accounts.id — the claimant must be
+        the account id, never the key id (REST passes principal.account_id)."""
+        manager = MagicMock()
+        manager.claim = AsyncMock()
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+
+        assert result["status"] == "claimed"
+        assert manager.claim.await_args.kwargs["claimant_id"] == _PLACEHOLDER_USER_ID
+        assert manager.claim.await_args.kwargs["client_type"] == "mcp"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_reject_and_deliver_manual_attribute_to_account_id(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """reject and deliver_manual carry the account id as the audit actor."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.reject = AsyncMock()
+        manager.deliver_manual = AsyncMock()
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(),
+                _make_run_lookup_result(),
+                _make_run_lookup_result(None),
+            ]
+        )
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result_reject = await review_hitl(
+            run_id=str(uuid.uuid4()), gate_id="gate-1", action="reject", claim_token="tok-123", reason="nope"
+        )
+        result_manual = await review_hitl(
+            run_id=str(uuid.uuid4()),
+            gate_id="gate-1",
+            action="deliver_manual",
+            claim_token="tok-123",
+            output={"result": "ok"},
+        )
+
+        assert result_reject == {"status": "rejected", "gate_id": "gate-1"}
+        assert manager.reject.await_args.kwargs["actor_id"] == _PLACEHOLDER_USER_ID
+        assert result_manual == {"status": "delivered_manual", "gate_id": "gate-1"}
+        assert manager.deliver_manual.await_args.kwargs["actor_id"] == _PLACEHOLDER_USER_ID
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_oauth_sentinel_key_id_does_not_leak_into_audit(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """OAuth/JWT MCP sessions carry the uuid(int=0) key-id sentinel; the
+        audit actor must STILL be the account id (the sentinel id exists in no
+        accounts row, so writing it would FK-fail the decision)."""
+        from modulo.api.mcp_server import _ctx_key_id, _ctx_user_id
+
+        self._set_role_operator()
+        _ctx_key_id.set(uuid.UUID(int=0))
+        account_id = uuid.uuid4()
+        _ctx_user_id.set(account_id)
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok-123")
+
+        assert result == {"status": "approved", "gate_id": "gate-1"}
+        assert manager.approve.await_args.kwargs["actor_id"] == account_id
+        assert manager.approve.await_args.kwargs["actor_id"] != uuid.UUID(int=0)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_approve_without_user_context_omits_actor(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A session with no account id (defensive: unreachable through the
+        production auth paths, which all set one) omits the actor rather than
+        writing a bogus id — the decision still succeeds."""
+        from modulo.api.mcp_server import _ctx_user_id
+
+        self._set_role_operator()
+        _ctx_user_id.set(None)
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="approve", claim_token="tok-123")
+
+        assert result == {"status": "approved", "gate_id": "gate-1"}
+        assert manager.approve.await_args.kwargs["actor_id"] is None
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_claim_without_user_context_fails_closed(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A claim cannot omit its claimant (hitl_claims.account_id defines
+        claim ownership) and must never write a bogus id — it fails closed."""
+        from modulo.api.mcp_server import _ctx_user_id
+
+        _ctx_user_id.set(None)
+        manager = MagicMock()
+        manager.claim = AsyncMock()
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(uuid.uuid4()), gate_id="gate-1", action="claim")
+
+        assert result["error"] == "no_user_context"
+        manager.claim.assert_not_called()
+
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")

@@ -7,6 +7,7 @@ Event categories and their notification config:
   - budget_exceeded   → level: warning, scope: org,   category: "run.budget_exceeded"
   - claim_expired     → level: info,   scope: org,   category: "hitl.claim_expired"
   - hitl_overdue      → level: warning, scope: admin
+  - hitl_approve_sweep_suspected → level: warning, scope: admin (FAR-611)
   - eval_regression   → level: warning, scope: org
   - feedback_pending  → level: info,   scope: user (target_user_id assigned)
   - system_announcement → level: info,  scope: org
@@ -31,6 +32,7 @@ from modulo.core.notifier import (
     EVENT_GUARDRAIL_ENFORCEMENT_GAP,
     EVENT_GUARDRAIL_KILL_SWITCH,
     EVENT_GUARDRAIL_UNEXPECTED_SKIP,
+    EVENT_HITL_APPROVE_SWEEP,
     EVENT_HITL_AWAITING,
     EVENT_HITL_OVERDUE,
     EVENT_RUN_FAILED,
@@ -97,6 +99,14 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "level": "warning",
         "scope": "admin",
         "category": "hitl.overdue",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 168,
+    },
+    EVENT_HITL_APPROVE_SWEEP: {
+        "level": "warning",
+        "scope": "admin",
+        "category": "hitl.approve_sweep",
         "dismiss_strategy": "org_admin",
         "dismissible_at_scope": True,
         "ttl_hours": 168,
@@ -190,6 +200,7 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_BUDGET_EXCEEDED: "Budget exceeded — {pipeline_name}",
     EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
     EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
+    EVENT_HITL_APPROVE_SWEEP: "HITL approve sweep suspected",
     EVENT_HITL_GATE_REMOVED: "HITL gate weakened — {pipeline_name}",
     EVENT_HITL_GATE_REMOVAL_DENIED: "HITL gate removal denied",
     EVENT_EVAL_REGRESSION: "Eval regression detected — {agent_name}",
@@ -211,6 +222,10 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
     EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
     EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
+    EVENT_HITL_APPROVE_SWEEP: (
+        "{approve_count} HITL gates across {distinct_pipeline_count} pipelines were approved by "
+        "actor {actor} within {window_seconds} seconds — possible bulk-approve sweep."
+    ),
     EVENT_HITL_GATE_REMOVED: 'A HITL gate on "{pipeline_name}" was weakened or removed.',
     EVENT_HITL_GATE_REMOVAL_DENIED: "A non-privileged attempt to weaken a HITL gate was denied.",
     EVENT_EVAL_REGRESSION: 'Eval pass rate dropped for agent "{agent_name}".',
@@ -242,6 +257,7 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_CLAIM_EXPIRED: _RUN_DETAIL_URL,
     EVENT_HITL_OVERDUE: _RUN_DETAIL_URL,
     EVENT_HITL_GATE_REMOVED: None,
+    EVENT_HITL_APPROVE_SWEEP: None,
     EVENT_HITL_GATE_REMOVAL_DENIED: None,
     EVENT_EVAL_REGRESSION: "/evals",
     EVENT_EVAL_BLOCKED: _RUN_DETAIL_URL,
