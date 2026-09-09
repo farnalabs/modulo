@@ -1073,10 +1073,24 @@ async def reconcile_runner_dispatch_markers(
             "orgs_failed": 0,
         }
     finally:
-        if acquired and lock_conn is not None:
+        if acquired:
             try:
-                await lock_conn.execute(text("SELECT pg_advisory_unlock(:k1, :k2)"), {"k1": k1, "k2": k2})
-                await lock_conn.commit()
+                # Release the SESSION-scoped advisory lock on the lock session
+                # itself, inside a FRESH explicit transaction. The lock was
+                # acquired in the ``async with lock_session.begin()`` block
+                # above; re-using the ``lock_conn`` handle captured there to
+                # unlock would execute outside any active transaction and raise
+                # under an ``autobegin=False`` session factory (the codebase DI
+                # convention) — the unlock then silently fails and the lock
+                # leaks onto the pooled connection, so every subsequent sweep
+                # that reuses that connection sees ``pg_try_advisory_lock``
+                # return False and takes the skipped-locked early return. That
+                # left the integration sweep tests flaky (FAR-766 fallout: the
+                # lock now actually engages, whereas it previously failed-open
+                # every tick). Opening a fresh transaction here makes the unlock
+                # reliable for both ``autobegin`` settings.
+                async with lock_session.begin():
+                    await lock_session.execute(text("SELECT pg_advisory_unlock(:k1, :k2)"), {"k1": k1, "k2": k2})
             except asyncio.CancelledError:
                 raise
             except Exception:
