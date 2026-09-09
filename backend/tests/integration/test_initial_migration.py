@@ -42,9 +42,10 @@ pytestmark = pytest.mark.integration
 # ANY JSONB<->JSON modify_type, bare-column-set FK matching, blanket
 # audit-chain remove_columns) hid genuine drift. Every entry below carries a
 # one-line reason and an expiry tag:
-#   * `# expires: B2b`  — the drift disappears when migration 0192 drops the
-#     legacy runs blob columns; remove the entry then (a stale entry would
-#     keep hiding drift and must fail loudly instead).
+#   * `# expires: B2b (migration 0194 drops the columns)`  — the drift
+#     disappears when migration 0194 drops the legacy runs blob columns;
+#     remove the entry then (a stale entry would keep hiding drift and must
+#     fail loudly instead).
 #   * `# permanent (documented repo divergence)` — the repo's multi-backend
 #     convention or DB-trigger-maintained surface.
 # GENUINE drift stays listed as a KNOWN GAP with `# tracked: FAR-583
@@ -113,13 +114,14 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     # permanent (documented repo divergence) — the new table keeps its three
     # blob columns after B2b (they ARE the store once the legacy columns go).
     "run_node_outputs": frozenset({"outputs_json", "node_telemetry_json", "raw_output_markers"}),
-    # runs: the three legacy blob columns EXPIRE at B2b (dropped by 0192);
-    # the rest are the multi-backend parity convention.
+    # runs: the three legacy blob columns EXPIRE at B2b (dropped by 0194,
+    # after the ORM mapping was cut at B1); the rest are the multi-backend
+    # parity convention.
     "runs": frozenset(
         {
-            "outputs_json",  # expires: B2b
-            "node_telemetry_json",  # expires: B2b
-            "raw_output_markers",  # expires: B2b
+            "outputs_json",  # expires: B2b (migration 0194 drops the columns)
+            "node_telemetry_json",  # expires: B2b (migration 0194 drops the columns)
+            "raw_output_markers",  # expires: B2b (migration 0194 drops the columns)
             "cost_breakdown",
             "node_token_usage",
             "input_payload",
@@ -305,7 +307,13 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         return inner[2] == "modulo_journey_facts" and inner[3].name == "updated_at"
     if kind == "remove_column":
         # Audit-chain columns the DB triggers own (0108) — per-table entries.
-        return inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]
+        if inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]:
+            return True
+        # The legacy ``runs`` blob columns (FAR-583 B1): the ORM mapping was
+        # CUT while the DB keeps the columns until migration 0194 (B2b), so
+        # the parity diff arrives as an ORM-side remove_column. Per-column
+        # B2b-expiry entries; removed together with the columns at B2b.
+        return (inner[2], inner[3].name) in _JSONB_DB_TO_JSON_ORM_EXPIRES_B2B
     if kind == "remove_fk":
         # The audit-chain FKs on the trigger-maintained columns — per-table.
         return inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool(
@@ -363,9 +371,10 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
     rewrite — the old blanket classes hid genuine drift). Every entry carries
     a one-line reason and an expiry tag:
 
-    * ``# expires: B2b`` — the drift disappears when migration 0192 drops the
-      legacy ``runs`` blob columns; the entry must be removed then (a stale
-      entry keeps hiding drift and must fail loudly instead).
+    * ``# expires: B2b (migration 0194 drops the columns)`` — the drift
+      disappears when migration 0194 drops the legacy ``runs`` blob columns;
+      the entry must be removed then (a stale entry keeps hiding drift and
+      must fail loudly instead).
     * ``# permanent (documented repo divergence)`` — the repo's multi-backend
       convention (JSONB in migrations / generic JSON in the ORM) or
       DB-trigger-maintained columns.
@@ -556,6 +565,10 @@ class TestParityIgnoreListClassify:
         )
         # B2b-expiring legacy column still listed while the columns exist.
         assert _is_benign_migration_managed(("modify_type", None, "runs", "outputs_json", {}, JSONB(), JSON()))
+        # B2b-expiring legacy column: the B1 ORM cut makes the parity drift a
+        # remove_column (DB column present, ORM mapping gone) — the
+        # per-column expiry set classifies it benign until B2b.
+        assert _is_benign_migration_managed(("remove_column", None, "runs", Column("outputs_json", JSONB())))
         # Comments/indexes stay blanket-ignored (reasoned in the predicate).
         assert _is_benign_migration_managed(("modify_comment",))
         assert _is_benign_migration_managed(("add_index", None, "t", "ix_something"))
@@ -587,6 +600,9 @@ class TestParityIgnoreListClassify:
         assert not _is_benign_migration_managed(
             ("remove_column", None, "brand_new_table", Column("created_by", UUID()))
         )
+        # A listed table's UNLISTED remove_column is real drift (the B2b
+        # expiry set is per-column, never per-table).
+        assert not _is_benign_migration_managed(("remove_column", None, "runs", Column("brand_new_column", JSONB())))
         # An unlisted FK (non-audit columns) is real drift.
         assert not _is_benign_migration_managed(("remove_fk", self._fk("agents", "pipeline_id", "pipelines.id")))
         # An unlisted nodes.id FK is real drift.

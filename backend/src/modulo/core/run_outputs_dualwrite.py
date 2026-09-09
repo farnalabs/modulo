@@ -150,7 +150,6 @@ DUAL_WRITE_COUNTERS: tuple[str, ...] = (
     "outputs_dual_write_retries",
     "outputs_dual_write_degraded",
     "outputs_dual_write_sentinel_filtered",
-    "outputs_dual_write_skipped_no_org",
 )
 
 # Bounded lock_timeout for the separate-session terminalize: a lock collision

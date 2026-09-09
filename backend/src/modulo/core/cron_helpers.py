@@ -5502,7 +5502,7 @@ async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any])
     remaining orgs continue. Best-effort: a failure never raises past this
     helper (cancellation excepted).
     """
-    from modulo.db.crud.run_node_outputs import backfill_run_node_outputs_batch
+    from modulo.db.crud.run_node_outputs_backfill import backfill_run_node_outputs_batch
 
     factory = _open_system_factory()
     healed = 0

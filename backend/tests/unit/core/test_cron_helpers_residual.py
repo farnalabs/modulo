@@ -2049,7 +2049,6 @@ def _reconcile_row(status: str = "running") -> SimpleNamespace:
         dispatched_at=None,
         heartbeat_at=None,
         node_token_usage={"input": 1},
-        outputs_json={"done": True},
         started_at=datetime.now(UTC),
         claim_count=0,
         dispatcher=None,

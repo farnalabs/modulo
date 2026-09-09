@@ -1204,7 +1204,7 @@ class TestDedicatedCounters:
 
         async def _mget(keys: list[str]) -> list[Any]:
             assert keys == [f"saq:run_outputs:counters:{name}" for name in DUAL_WRITE_COUNTERS]
-            return [b"7", None, b"2", None, b"0"]
+            return [b"7", None, b"2", None]
 
         client.mget = _mget  # type: ignore[method-assign]
         counters = await read_dual_write_counters(client)

@@ -34,7 +34,6 @@ from modulo.db.crud.run_node_outputs import (
     RunBlobs,
     _dialect_insert,
     _jsonb_canonical_key,
-    backfill_run_node_outputs_batch,
     parse_marker_node_id,
     read_node_output_blob_bytes,
     read_run_blobs_with_fallback,
@@ -43,6 +42,7 @@ from modulo.db.crud.run_node_outputs import (
     replace_run_node_outputs,
     write_run_markers,
 )
+from modulo.db.crud.run_node_outputs_backfill import backfill_run_node_outputs_batch
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
@@ -1172,7 +1172,7 @@ class TestBackfill:
     ) -> None:
         """Re-terminalization ghost protection: rows that moved between the
         census and the pre-insert re-check are skipped, never overwritten."""
-        import modulo.db.crud.run_node_outputs as repo_module
+        import modulo.db.crud.run_node_outputs_backfill as backfill_module
 
         run = await _seed_run(session, completed_at=datetime(2026, 9, 1, 12, 0, 0), outputs={"a": {"v": 1}})
 
@@ -1181,7 +1181,7 @@ class TestBackfill:
             # committed new rows for the run after the census read.
             return {uuid.UUID(str(rid)): datetime(2026, 9, 2, 0, 0, 0) for rid in run_ids}
 
-        monkeypatch.setattr(repo_module, "_existing_row_updated_at", _moved_recheck)
+        monkeypatch.setattr(backfill_module, "_existing_row_updated_at", _moved_recheck)
         async with session.begin():
             await set_rls_org(session, _ORG_A)
             result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)

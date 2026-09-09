@@ -1336,7 +1336,6 @@ def _f6a_row(status: str, *, stale: bool = True) -> SimpleNamespace:
         dispatched_at=datetime.now(UTC),
         heartbeat_at=heartbeat,
         node_token_usage={},
-        outputs_json={},
         started_at=datetime.now(UTC) - timedelta(minutes=1),
     )
 
