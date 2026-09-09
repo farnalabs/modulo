@@ -544,42 +544,48 @@ class _CaplogCtx:
 def caplog_at_level_warning() -> Any:
     """Minimal caplog shim: capture warning-level records for the gate logger."""
     messages: list[str] = []
+    _logger = logging.getLogger("modulo.core.runner_capacity")
+    _prev_level = _logger.level
 
     class _Handler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
             messages.append(record.getMessage())
 
     handler = _Handler(level=logging.WARNING)
-    logging.getLogger("modulo.core.runner_capacity").addHandler(handler)
-    logging.getLogger("modulo.core.runner_capacity").setLevel(logging.WARNING)
+    _logger.addHandler(handler)
+    _logger.setLevel(logging.WARNING)
 
     class _CM:
         def __enter__(self) -> _CaplogCtx:
             return _CaplogCtx(messages)
 
         def __exit__(self, *_a: object) -> None:
-            logging.getLogger("modulo.core.runner_capacity").removeHandler(handler)
+            _logger.removeHandler(handler)
+            _logger.setLevel(_prev_level)
 
     return _CM()
 
 
 def caplog_at_level_error() -> Any:
     messages: list[str] = []
+    _logger = logging.getLogger("modulo.core.runner_capacity")
+    _prev_level = _logger.level
 
     class _Handler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
             messages.append(record.getMessage())
 
     handler = _Handler(level=logging.ERROR)
-    logging.getLogger("modulo.core.runner_capacity").addHandler(handler)
-    logging.getLogger("modulo.core.runner_capacity").setLevel(logging.ERROR)
+    _logger.addHandler(handler)
+    _logger.setLevel(logging.ERROR)
 
     class _CM:
         def __enter__(self) -> _CaplogCtx:
             return _CaplogCtx(messages)
 
         def __exit__(self, *_a: object) -> None:
-            logging.getLogger("modulo.core.runner_capacity").removeHandler(handler)
+            _logger.removeHandler(handler)
+            _logger.setLevel(_prev_level)
 
     return _CM()
 
