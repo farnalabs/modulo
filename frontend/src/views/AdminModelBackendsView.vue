@@ -186,25 +186,25 @@
                   <td colspan="7" class="p-0">
                     <details
                       :data-testid="`admin-model-backends-refs-expand-${backend.id}`"
-                      @toggle="toggleRefsExpand(backend.id)"
+                      @toggle="toggleRefsExpand(backend.id, $event)"
                     >
                       <summary class="cursor-pointer px-4 py-2 text-xs text-muted-foreground hover:text-foreground">
                         {{ $t('views.AdminModelBackendsView.pipeline_references') }}
                       </summary>
                       <div class="border-t px-4 py-3" :data-testid="`admin-model-backends-refs-${backend.id}`">
-                        <LoadingSpinner v-if="refsLoading && expandedBackendId === backend.id" />
-                        <div v-else-if="refsError && expandedBackendId === backend.id" class="flex items-center gap-2 text-sm text-destructive">
-                          <span>{{ refsError }}</span>
+                        <LoadingSpinner v-if="refsState[backend.id]?.loading" />
+                        <div v-else-if="refsState[backend.id]?.error" class="flex items-center gap-2 text-sm text-destructive">
+                          <span>{{ refsState[backend.id]?.error }}</span>
                           <button type="button"
                             class="rounded border border-input px-2 py-1 text-xs hover:bg-accent"
                             :data-testid="`admin-model-backends-refs-retry-${backend.id}`"
-                            @click="fetchPipelineRefs(backend.id, 1)"
+                            @click="retryRefs(backend.id)"
                           >
                             {{ $t('views.AdminModelBackendsView.retry') }}
                           </button>
                         </div>
-                        <div v-else-if="expandedBackendId === backend.id && refsData">
-                          <div v-if="refsData.items.length === 0" class="text-sm text-muted-foreground">
+                        <div v-else-if="refsState[backend.id]?.data">
+                          <div v-if="(refsState[backend.id]?.data?.items.length ?? 0) === 0" class="text-sm text-muted-foreground">
                             {{ $t('views.AdminModelBackendsView.no_pipeline_refs') }}
                           </div>
                           <template v-else>
@@ -217,7 +217,7 @@
                                 </tr>
                               </thead>
                               <tbody class="divide-y">
-                                <tr v-for="ref in refsData.items" :key="`${ref.pipeline_id}-${ref.agent_id ?? 'direct'}`" class="hover:bg-muted/30">
+                                <tr v-for="ref in refsState[backend.id]?.data?.items ?? []" :key="`${ref.pipeline_id}-${ref.agent_id ?? 'direct'}`" class="hover:bg-muted/30">
                                   <td class="table-cell font-medium">{{ ref.pipeline_name }}</td>
                                   <td class="table-cell text-muted-foreground">{{ ref.agent_name || '\u2014' }}</td>
                                   <td class="table-cell">
@@ -231,21 +231,21 @@
                                 </tr>
                               </tbody>
                             </table>
-                            <div v-if="refsData.total > refsData.page_size" class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                              <span>{{ $t('views.AdminModelBackendsView.refs_page_info', { page: refsData.page, total: Math.ceil(refsData.total / refsData.page_size) }) }}</span>
+                            <div v-if="refsHasPagination(backend.id)" class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                              <span>{{ $t('views.AdminModelBackendsView.refs_page_info', { page: refsPage(backend.id), total: refsTotalPages(backend.id) }) }}</span>
                               <button type="button"
-                                v-if="refsData.page > 1"
+                                v-if="refsPage(backend.id) > 1"
                                 class="rounded border border-input px-2 py-1 hover:bg-accent"
                                 :data-testid="`admin-model-backends-refs-prev-${backend.id}`"
-                                @click="fetchPipelineRefs(backend.id, refsData.page - 1)"
+                                @click="pageRefs(backend.id, refsPage(backend.id) - 1)"
                               >
                                 {{ $t('views.AdminModelBackendsView.previous') }}
                               </button>
                               <button type="button"
-                                v-if="refsData.page < Math.ceil(refsData.total / refsData.page_size)"
+                                v-if="refsPage(backend.id) < refsTotalPages(backend.id)"
                                 class="rounded border border-input px-2 py-1 hover:bg-accent"
                                 :data-testid="`admin-model-backends-refs-next-${backend.id}`"
-                                @click="fetchPipelineRefs(backend.id, refsData.page + 1)"
+                                @click="pageRefs(backend.id, refsPage(backend.id) + 1)"
                               >
                                 {{ $t('views.AdminModelBackendsView.next') }}
                               </button>
@@ -478,41 +478,74 @@ const deleteConfirmName = ref('')
 const deleting = ref(false)
 const deleteError = ref<string | null>(null)
 
-const expandedBackendId = ref<string | null>(null)
-const refsLoading = ref(false)
-const refsError = ref<string | null>(null)
-const refsData = ref<{ items: PipelineRefItem[]; total: number; page: number; page_size: number } | null>(null)
-
-async function toggleRefsExpand(backendId: string) {
-  if (expandedBackendId.value === backendId) {
-    expandedBackendId.value = null
-    refsData.value = null
-    refsError.value = null
-    return
-  }
-  expandedBackendId.value = backendId
-  refsData.value = null
-  refsError.value = null
-  await fetchPipelineRefs(backendId, 1)
+interface PipelineRefsResponse {
+  items: PipelineRefItem[]
+  total: number
+  page: number
+  page_size: number
 }
 
-async function fetchPipelineRefs(backendId: string, page: number) {
-  refsLoading.value = true
-  refsError.value = null
+interface RefsPanelState {
+  loading: boolean
+  error: string | null
+  data: PipelineRefsResponse | null
+}
+
+const refsState = reactive<Record<string, RefsPanelState>>({})
+
+function toggleRefsExpand(backendId: string, event: Event) {
+  const details = event.target as HTMLDetailsElement | null
+  if (!details?.open) {
+    delete refsState[backendId]
+    return
+  }
+  if (refsState[backendId]) return
+  const state = reactive<RefsPanelState>({ loading: true, error: null, data: null })
+  refsState[backendId] = state
+  fetchPipelineRefs(backendId, 1, state)
+}
+
+async function fetchPipelineRefs(backendId: string, page: number, state: RefsPanelState) {
+  state.loading = true
+  state.error = null
   try {
     const { data, error: err } = await api.GET('/api/v1/model-backends/{backend_id}/pipeline-references', {
       params: { path: { backend_id: backendId }, query: { page, page_size: 20 } },
     })
     if (err) {
-      refsError.value = formatApiError(err)
+      state.error = formatApiError(err)
     } else if (data) {
-      refsData.value = data as { items: PipelineRefItem[]; total: number; page: number; page_size: number }
+      state.data = data as PipelineRefsResponse
     }
   } catch (e: unknown) {
-    refsError.value = formatApiError(e)
+    state.error = formatApiError(e)
   } finally {
-    refsLoading.value = false
+    state.loading = false
   }
+}
+
+function retryRefs(backendId: string) {
+  const state = refsState[backendId]
+  if (state) fetchPipelineRefs(backendId, 1, state)
+}
+
+function pageRefs(backendId: string, page: number) {
+  const state = refsState[backendId]
+  if (state) fetchPipelineRefs(backendId, page, state)
+}
+
+function refsPage(backendId: string): number {
+  return refsState[backendId]?.data?.page ?? 1
+}
+
+function refsTotalPages(backendId: string): number {
+  const data = refsState[backendId]?.data
+  return data && data.page_size > 0 ? Math.ceil(data.total / data.page_size) : 1
+}
+
+function refsHasPagination(backendId: string): boolean {
+  const data = refsState[backendId]?.data
+  return !!data && data.total > data.page_size
 }
 
 function openAddForm() {
