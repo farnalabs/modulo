@@ -67,7 +67,7 @@ _MIGRATION_PATH = (
 # 0193_run_node_outputs_sweep_index (qa iteration 2, the sweep's partial index)
 # chained onto 0192, 0194_uuid_pk_server_defaults (FAR-718, from main) chained onto
 # 0193 as the chain head, and improve-database's 0197/0198/0199 chain off it.
-_CHAIN_HEAD_MIGRATION_NAME = "0199_runs_json_to_jsonb"
+_CHAIN_HEAD_MIGRATION_NAME = "0200_runs_runner_marker_sweep_index"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

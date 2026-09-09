@@ -7,6 +7,7 @@ code:
   - backend/src/modulo/core/hitl_manager/__init__.py
   - backend/src/modulo/core/hitl_manager/expiry_job.py
   - backend/src/modulo/core/hitl_manager/overdue_warning.py
+  - backend/src/modulo/core/hitl_manager/sweep_alarm.py
   - backend/src/modulo/core/run_context/autonomy.py
   - backend/src/modulo/db/models/hitl_claim.py
   - frontend/src/views/SettingsHitlReviewView.vue
@@ -15,6 +16,8 @@ unit-tests:
   - backend/tests/unit/hitl_manager/test_output_delivery_audit.py
   - backend/tests/unit/hitl_manager/test_overdue_warning.py
   - backend/tests/unit/hitl_manager/test_claim_expiry_job.py
+  - backend/tests/unit/hitl_manager/test_sweep_alarm.py
+  - backend/tests/unit/hitl_manager/test_client_type_audit.py
   - backend/tests/unit/core/hitl_manager/test_hitl_jwt.py
   - backend/tests/unit/api/test_hitl_resilience.py
   - backend/tests/unit/api/test_rate_limit_hitl_review.py
@@ -116,6 +119,38 @@ may decide.
       (`hitl.claim`/`hitl.approve`/`hitl.reject`/`hitl.deliver_manual`/
       `hitl.list`) — a caller without the grant gets 403
       (`test_rate_limit_hitl_review`, `test_hitl_resilience`)
+- [x] Audit events carry the caller's client type when known (FAR-611):
+      `hitl_claimed` / `hitl.output_delivered` / `hitl.output_modified` /
+      `hitl.output_rejected` / `hitl.manual_delivery` gain `client_type`
+      (`"browser"` for JWT logins via the principal's `via_api_key` marker,
+      `"api_key"` for mk_ keys, `"mcp"` for the MCP surface); internal
+      callers that cannot know the client omit the key
+      (`test_client_type_audit`)
+- [x] Approve-sweep anomaly alarm (FAR-611): when one actor's committed
+      decisions exceed 5 within 60 seconds AND span more than one pipeline,
+      the decision path emits `hitl_approve_sweep_suspected` — an audit
+      event and a fire-and-forget webhook dispatch whose `dispatch_event`
+      also creates the in-app admin notification (hitl_overdue sibling
+      pattern — the alarm writes the notification once, never twice)
+      (`sweep_alarm.py`, `test_sweep_alarm`). Detection counts BOTH decision
+      surfaces — `hitl.output_delivered` (approve) AND `hitl.manual_delivery`
+      (a manual delivery resumes the run past the gate with caller-supplied
+      output, the same sweep signal as an approve) — and keys off the audit
+      chain (the only per-actor decision record — `hitl_claims.account_id` is
+      NULLed at decision time), is failure-isolated (a broken alarm never
+      fails the human's decision — the detection SELECT and the emission
+      write each run inside a savepoint), and self-suppresses to at most one
+      alarm per (org, actor) per hour via a bounded in-process marker (a
+      multi-replica deployment may therefore emit up to one alarm per replica
+      per hour — bounded duplicates, the correct envelope for an anomaly page)
+- [x] HITL review actions are rate limited at 20/min per identity,
+      AGGREGATE across runs, gates, actions, and both surfaces — the
+      `/hitl/` review routes AND the approve-capable
+      `/runs/{run_id}/manual/{gate_id}/submit` route share one budget
+      (FAR-611) — the bucket key normalizes the whole variable path tail,
+      so the 2026-09-05 bulk sweep's per-gate bucket rotation cannot recur
+      (`test_rate_limit_hitl_review` aggregate/throttle cases,
+      `test_middleware_internals`)
 
 ## Known Gaps
 
@@ -126,13 +161,16 @@ may decide.
   between ticks stays claimed until the next `claim_expiry` sweep
   (`expiry_job.py`).
 - **No executing BDD surface for modify-then-approve, `human_only` refusal, or
-  overdue warnings** — `modify_then_approve.feature`, `human_only_gate.feature`
-  and `overdue_warning.feature` ship under `tests/bdd/features/hitl/` but no
-  step module registers them via `scenarios(...)`, so they never execute and are
-  no longer cited as coverage here. The behaviours themselves are unit-tested
-  (`test_hitl_manager`, `test_node_runner_hitl`, `test_mcp_security`,
+  overdue warnings** — the pre-existing `modify_then_approve.feature`,
+  `human_only_gate.feature` and `overdue_warning.feature` drafts shipped under
+  `tests/bdd/features/hitl/` were removed in the 2026-09-07 product-map walk:
+  they described a removed API surface (`/api/runs/{id}/human-input`, the
+  `waiting_for_human` status, pre-claim-token flows), were never registered via
+  `scenarios(...)`, and therefore never executed. The behaviours themselves are
+  unit-tested (`test_hitl_manager`, `test_node_runner_hitl`, `test_mcp_security`,
   `test_mcp_runtime_tools`, `test_overdue_warning`, `test_claim_expiry_job`);
-  wiring the feature files up needs their missing step definitions written.
+  an executing BDD surface would need the drafts rewritten against the current
+  API before registration.
 
 ## QA History
 
@@ -149,3 +187,12 @@ may decide.
   folded into `bdd:` here: that feature file ships but no step module registers
   it via `scenarios(...)`, so citing it would claim BDD coverage for scenarios
   that never execute. Status: covered.
+- 2026-09-07: **improve-architecture (product-map walk)** — closed the stale-BDD
+  drift: removed the never-executed, superseded feature files
+  (`hitl/approval_gate.feature` marked `@deprecated`, `hitl/human_only_gate.feature`,
+  `hitl/modify_then_approve.feature`, `hitl/overdue_warning.feature`) and the
+  byte-identical duplicate `eval/conditional_hitl.feature` (the registered copy
+  lives at `evals/conditional_hitl.feature`). The covered behaviours are
+  unchanged; the architecture suite now guards against new orphaned `.feature`
+  files (see `backend/tests/architecture/test_product_map_feature_gaps.py`).
+  Status: covered.

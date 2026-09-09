@@ -339,6 +339,97 @@ org triggers pause). Four independent mechanisms keep that gate healthy:
   (`capacity_timeout`), and legacy non-SAQ `running` rows with 5+ claims
   (`worker_lost`) are terminalised or re-dispatched as before.
 
+#### Runner capacity gate (FAR-594 D8)
+
+Sandbox-agent dispatches (every `sandbox_mode`, every provider tier) reserve a
+runner slot through ONE atomic transaction —
+`runner_capacity.acquire_runner_dispatch_slot` — replacing the pre-D8 racy
+check-then-act count. Transaction shape: `SET LOCAL lock_timeout`
+(`MODULO_RUNNER_CAPACITY_LOCK_TIMEOUT_MS`, default 2s) → **own-row
+claim-token-fenced lock FIRST** → per-org advisory lock (the RESERVED
+`modulo:runner-capacity:org-v1` namespace, per-org derived; never the shared
+`_uuid_to_lock_keys` keyspace) → lock-free count → decide → the fenced
+dispatch-marker UPDATE commits the reservation → the workspace provisions
+OUTSIDE the transaction. The uniform row→advisory ordering is shared with the
+resume path (`executor.resume` writes the run row before its advisory lock),
+which makes the scheme cycle-free by construction — including same-run
+dispatch+resume overlap. SQLSTATE 55P03 (lock_timeout) degrades to a RETRYABLE
+capacity denial with the distinct `runner.capacity.lock_degraded` event; 40P01
+is a separate `runner.capacity.deadlock_degraded` alarm (expected impossible
+under the uniform ordering). Every other DB error fails OPEN
+(`runner.capacity.gate_error`) and the dispatch marker is still written
+best-effort in its own transaction; if even that write fails
+(`sandbox_agent.best_effort_marker_failed`) the dispatch proceeds
+markerless fail-open — the sweep and the re-dispatch path own healing, a DB
+hiccup must never become a dispatch outage.
+
+- **Count population (unified across all four capacity paths — dispatch gate,
+  resume gate, HITL pre-check, claim-time read):** flag ON: `running` runs
+  holding a live dispatch marker only. `awaiting_human`/`pending`/`claimed`/
+  `unknown`/`hitl_parked` hold no slot (a parked HITL run cannot starve the
+  org; the resume re-acquires a slot when the approval re-dispatches through
+  the decided-gate auto-resume loop). The count excludes the run's OWN marker,
+  so a re-dispatch of a run still carrying a fence-carrying stale marker
+  cannot self-block. Flag OFF: the pre-D8 population exactly
+  (`ACTIVE_RUN_STATUSES`, no tombstone exclusion) — the flag-off window is the
+  pre-D8 behaviour, not a hybrid.
+- **Tier attribution:** the gate's marker write carries `"provider"`
+  (`runner_docker` | `e2b` | `local`) + `"written_at"`. Legacy tier-less
+  markers count as Docker-tier (fail-safe) and age out via the sweep.
+- **Tier-scoped default:** with the rollout flag
+  (`MODULO_RUNNER_CAPACITY_GATE_ENABLED`) ON and the org key ABSENT, the
+  Docker-tier default 4 gates Docker+Local dispatches only (e2b carries its
+  own platform-side quota and is neither counted into that bucket nor denied
+  by it); an explicit value gates ALL runner dispatches; an explicit `null` is
+  no gate; `0` is deny-all. Flag OFF keeps the pre-D8 behaviour exactly: the
+  pre-D8 count population above (no advisory lock, no lock_timeout,
+  `enforced_cap` semantics — absent key = no gate), the legacy
+  `_uuid_to_lock_keys` keyspace on the resume path, and NO HITL tombstone.
+  The flag is short-lived (removed at GA).
+- **HITL boundary (flag ON):** at interrupt handling — before the run enters
+  `awaiting_human` — any remaining NON-FENCE dispatch marker becomes the
+  `{"state": "cleared_at_hitl"}` tombstone: capacity-neutral (the count is
+  running-only AND excludes tombstones) while still recording the dispatch.
+  The exactly-once `script_executing` fence is NEVER tombstoned (a fence
+  proves a script PROCESS may have started; replacing it would let the fence
+  be re-acquired — double-execute). Flag OFF the tombstone does not fire at
+  all (pre-D8: the marker simply survives the park).
+- **State-aware reconciliation sweep** (wired into `dispatcher_reconcile`
+  every 60s and a dedicated 5-min `runner_marker_sweep` cron): clears non-fence
+  markers on genuinely terminal runs and markers stale beyond 25h
+  (`MODULO_RUNNER_MARKER_STALE_SECONDS`; marker `written_at`, legacy tier-less
+  fall back to `runs.updated_at`); a stale clear on a non-terminal RUNNING run
+  also terminalises the run (`worker_lost` — the slot is reclaimed by killing
+  the zombie, so no running-without-marker-without-workspace state can be
+  minted) unless the row itself is FRESH (a freshly-resumed long-parked run:
+  only the stale marker is cleared, never a live attempt); every
+  clear/transition UPDATE is CAS-guarded on the classified marker text (a
+  concurrent fresh-marker commit makes the UPDATE match 0 rows — the sweep
+  never clobbers a reservation it did not classify), the candidate scan is
+  batched (500-row cursor pages) over the
+  `ix_runs_org_runner_marker_sweep` partial index, and any org-index or
+  org-pass failure raises `RunnerMarkerSweepError` carrying the partial
+  counts (the cron wrapper persists them + re-raises — retries engage).
+  Fence-carrying `script_executing` components on NON-terminal rows are
+  NEVER cleared (precedence over staleness); on TERMINAL rows the
+  rollback detector's anomaly-code exemption outranks the fence, and a
+  terminal non-anomaly crash-leaked fence clears past the staleness cap.
+  Runs `dispatcher_reconcile` considers recoverable keep their markers (the
+  sweep evaluates the reconciler's OWN OR-composed recovery predicates —
+  parity by construction, evaluated lazily and never for terminal rows);
+  terminal runs carrying the rollback detector's anomaly error
+  codes keep their markers (`rollback_thresholds._count_claim_without_marker`
+  requires them). Every COMMITTED clear emits `runner.capacity.marker_cleared`
+  — the coordination note the D4 container reconciler consumes (the cleared
+  run is terminal or capacity-neutral, so its workspace becomes an orphan the
+  D4 reconciler owns destroying); a rolled-back org pass emits nothing. After
+  each org's pass the live count is asserted ≤ cap with
+  `runner.capacity.violation` on a genuine breach (a cap-less org never
+  violates) — the D8 rollback signal. The claim-time demotion
+  (`_check_capacity`) remains an explicitly
+  ADVISORY, lock-free, population-only read (its own-row lock exists only at
+  the fenced demote write); the sweep is its named backstop.
+
 ### WebSocket event flow
 
 ```
@@ -459,10 +550,13 @@ Hardcoded sliding-window rules enforced by `RateLimitMiddleware` (see `backend/s
 | `/api/v1/runs` | 60 | 60s |
 | `/api/v1/triggers` | 100 | 60s |
 | `/api/v1/errors/ingest` | 10 | 60s |
+| HITL review actions (`/api/v1/runs/{run_id}/hitl/{gate_id}/{action}` and `/api/v1/runs/{run_id}/manual/{gate_id}/submit`, POST) | 20 per user (aggregate) | 60s |
 | `/mcp` | 200 | 60s |
 | Auth endpoints (`/api/v1/auth/`) | 10 attempts | 60s (configurable via `MODULO_AUTH_MAX_ATTEMPTS`) |
 
 Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op when Redis is unavailable. Auth rate limiter requires Redis and is disabled without it.
+
+The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, review actions, AND both surfaces — the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). The manual-output submit route (`/runs/{run_id}/manual/{gate_id}/submit` — an approve-capability HITL surface whose path has no `/hitl/` segment) shares the SAME aggregate bucket, so a sweep alternating `/hitl/` review actions and `/manual/` submits exhausts one budget. MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule — they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
 
 ## Deployment Architecture
 

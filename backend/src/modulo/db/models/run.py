@@ -170,10 +170,6 @@ class Run(OrgScoped):
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
         # Probe sample query (organisation_id, started_at) — migration 0066.
         Index("ix_runs_probe", "organisation_id", "started_at"),
-        # Per-trigger daily-spend-limit enforcement readers (cron_helpers /
-        # polling) + billing overview — org_id + created_at. Migration 0066.
-        # The cost-controller refusal SUM reads the ledger, NOT runs (0066).
-        Index("ix_runs_refusal", "organisation_id", "created_at"),
         # Per-pipeline trigger rate-limit backstop (migration 0117 / #1105) —
         # one active run per (pipeline, rate_limit_key). create_run admits
         # atomically and translates the IntegrityError to a rate-limit error.
@@ -282,6 +278,22 @@ class Run(OrgScoped):
     enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Sandbox dispatch lifecycle state (migration 0074) — the persistent handle
     # dispatch.py reads to resume/retry a sandbox_agent node after a crash.
+    # D8 (FAR-594) JSON vocabulary (written by ``runner_capacity`` /
+    # ``node_runner``; consumers read ONLY ``state``/``attempt_key``):
+    #   * dispatch marker  — {"state": "dispatching", "attempt_key": …,
+    #     "provider": "runner_docker"|"e2b"|"local", "written_at": ISO-8601}
+    #     — the D8 atomic dispatch gate commits it as the slot reservation
+    #     (provider/written_at may be absent on tier-less writers, which
+    #     attribute to the Docker tier — fail-safe);
+    #   * script lease     — {"state": "script_executing", "attempt_key": …,
+    #     "provider": …, "written_at": …} — the exactly-once fence; the
+    #     reconciliation sweep NEVER clears it;
+    #   * HITL tombstone   — {"state": "cleared_at_hitl", "written_at": …} —
+    #     written at the interrupt boundary (capacity-neutral: the D8 count is
+    #     running-only AND excludes this state; visible to the rollback
+    #     detector).
+    # Pre-D8 values (bare "dispatching" literals, JSON without
+    # provider/written_at) count as Docker-tier and age out via the sweep.
     sandbox_dispatch_state: Mapped[str | None] = mapped_column(Text)
     # E2B sandbox id surfaced for observability (migration 0074).
     sandbox_id: Mapped[str | None] = mapped_column(Text)

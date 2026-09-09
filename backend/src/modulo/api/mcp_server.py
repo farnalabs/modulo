@@ -3953,7 +3953,7 @@ async def _dispatch_hitl_action(
     rid: uuid.UUID,
     gate_id: str,
     org_id: uuid.UUID,
-    key_id: uuid.UUID,
+    actor_account_id: uuid.UUID | None,
     claim_token: str | None,
     output: dict[str, Any] | None,
     reason: str | None,
@@ -3969,9 +3969,30 @@ async def _dispatch_hitl_action(
     dispatcher reconcile is the resume path, and it scopes its reconstruction
     by this stamp. HITLManager._decide would stamp the persisted payload
     anyway; these explicit stamps document the writer contract per call.
+
+    FAR-611: every action records ``client_type="mcp"`` on its audit event (the
+    sweep was previously attributable only by inference), and every action
+    attributes its decision to the CALLER'S ACCOUNT id. ``AuditEvent.account_id``
+    and ``hitl_claims.account_id`` are foreign-keyed to ``accounts.id`` — the
+    ``org_api_keys`` row id (or the ``uuid(int=0)`` OAuth sentinel) the
+    auth context exposes as the key id would violate the FK and roll back the
+    whole decision (REST routes pass ``principal.account_id``; MCP must do the
+    same). When the session has no account id at all, decision actions omit
+    the actor (the audit event carries no ``account_id``, matching the
+    pre-FAR-611 MCP approve shape) and claims are refused — an unattributable
+    claim row would break claim ownership, so it fails closed instead of
+    writing a bogus id.
     """
+    client_type = "mcp"
     if action == "claim":
-        gate = await mgr.claim(s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=key_id)
+        if actor_account_id is None:
+            return {
+                "error": "no_user_context",
+                "detail": "A gate claim requires an authenticated user context; this MCP session has none",
+            }
+        gate = await mgr.claim(
+            s, run_id=rid, gate_id=gate_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type
+        )
         return {
             "status": "claimed",
             "claim_token": gate.claim_token,
@@ -3985,7 +4006,9 @@ async def _dispatch_hitl_action(
             gate_id=gate_id,
             org_id=org_id,
             claim_token=claim_token or "",
+            actor_id=actor_account_id,
             decision_payload={"action": "approved", "gate_id": gate_id},
+            client_type=client_type,
         )
         return {"status": "approved", "gate_id": gate_id}
     if action == "deliver_manual":
@@ -3997,8 +4020,9 @@ async def _dispatch_hitl_action(
             org_id=org_id,
             claim_token=claim_token or "",
             output=output or {},
-            actor_id=key_id,
+            actor_id=actor_account_id,
             decision_payload={"action": "deliver_manual", "gate_id": gate_id, "output": output or {}},
+            client_type=client_type,
         )
         return {"status": "delivered_manual", "gate_id": gate_id}
     # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
@@ -4011,9 +4035,10 @@ async def _dispatch_hitl_action(
         gate_id=gate_id,
         org_id=org_id,
         claim_token=claim_token or "",
-        actor_id=key_id,
+        actor_id=actor_account_id,
         reason=reason,
         decision_payload=reject_payload,
+        client_type=client_type,
     )
     return {"status": "rejected", "gate_id": gate_id}
 
@@ -4057,7 +4082,18 @@ async def _review_hitl_impl(
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
 
     org_id = _ctx_org_id_val()
-    key_id = _ctx_key_id.get(uuid.UUID("00000000-0000-0000-0000-000000000002"))
+    # FAR-611 review fix: the audit actor / claimant must be the ACCOUNT id
+    # (AuditEvent.account_id and hitl_claims.account_id are FK'd to
+    # accounts.id — an org_api_keys row id or the uuid(int=0) OAuth sentinel
+    # would violate the FK and roll back the whole decision). Every
+    # production auth path (API key, OAuth JWT, browser principal) sets
+    # _ctx_user_id to the credential's owning account; a session without one
+    # resolves to None and the dispatch omits the actor honestly instead of
+    # writing a bogus id.
+    try:
+        actor_account_id: uuid.UUID | None = _ctx_user_id_val()
+    except McpAuthContextError:
+        actor_account_id = None
     mgr = HITLManager()
 
     rid, parse_err = _parse_hitl_action(run_id, action, claim_token, output)
@@ -4088,7 +4124,7 @@ async def _review_hitl_impl(
 
         try:
             return await _dispatch_hitl_action(
-                mgr, s, action, rid, gate_id, org_id, key_id, claim_token, output, reason
+                mgr, s, action, rid, gate_id, org_id, actor_account_id, claim_token, output, reason
             )
         except (
             GateNotFoundError,

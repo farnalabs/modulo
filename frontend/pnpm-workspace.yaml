@@ -78,6 +78,7 @@ minimumReleaseAgeExclude:
   - 'fast-uri@3.1.7'
   - '@rolldown/binding-linux-ppc64-gnu@1.2.7'
   - '@lucide/vue@1.41.0'
+  - '@lucide/vue@1.43.0'
   - '@playwright/test@1.63.0'
   - 'eslint@10.10.0'
   - 'playwright-core@1.63.0'

@@ -33,7 +33,11 @@ _log = logging.getLogger(__name__)
 # ``script.budget_killed`` (see pipeline_engine/error_codes.py) — NOT a
 # phantom ``timeout.kill`` which would match nothing and silently disable the
 # claim_without_marker anomaly.
-_SCRIPT_ANOMALY_ERROR_CODES = frozenset({"script.side_effect_unknown", "script.budget_killed"})
+# Public name (FAR-594 D8 qa F3): the marker sweep's terminal-row exemption
+# consumes the SAME set (single source — a private name would fork the
+# vocabulary); the private alias is kept for existing call sites.
+SCRIPT_ANOMALY_ERROR_CODES: frozenset[str] = frozenset({"script.side_effect_unknown", "script.budget_killed"})
+_SCRIPT_ANOMALY_ERROR_CODES = SCRIPT_ANOMALY_ERROR_CODES
 
 # Script-mode error code for unexpected side_effect_unknown.
 _SCRIPT_SIDE_EFFECT_UNKNOWN = "script.side_effect_unknown"

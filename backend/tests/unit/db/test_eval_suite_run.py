@@ -812,12 +812,16 @@ def test_single_migration_head() -> None:
     # 0198_runs_add_missing_indexes (improve-database) chains off 0197.
     chaining_off_0197 = [p for p in revisions if parents[p] == "0197_runs_index_and_constraint_fixes"]
     assert [_basename(p) for p in chaining_off_0197] == ["0198_runs_add_missing_indexes.py"]
-    # 0199_runs_json_to_jsonb (improve-database) chains off 0198 and is the single head.
+    # 0199_runs_json_to_jsonb (improve-database) chains off 0198.
     chaining_off_0198 = [p for p in revisions if parents[p] == "0198_runs_add_missing_indexes"]
     assert [_basename(p) for p in chaining_off_0198] == ["0199_runs_json_to_jsonb.py"]
-    # Nothing chains off 0199 -> it is the single head.
+    # 0200_runs_runner_marker_sweep_index (FAR-594 D8 qa F8, the marker sweep's
+    # partial index) chains off 0199 and is the single head.
     chaining_off_0199 = [p for p in revisions if parents[p] == "0199_runs_json_to_jsonb"]
-    assert chaining_off_0199 == []
+    assert [_basename(p) for p in chaining_off_0199] == ["0200_runs_runner_marker_sweep_index.py"]
+    # Nothing chains off 0200 -> it is the single head.
+    chaining_off_0200 = [p for p in revisions if parents[p] == "0200_runs_runner_marker_sweep_index"]
+    assert chaining_off_0200 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

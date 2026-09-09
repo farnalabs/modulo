@@ -1381,6 +1381,7 @@ class TestSaqWorkerSettings:
             "journey_reconcile",
             "metrics_dump",
             "library_sync",
+            "runner_marker_sweep",
         }
         assert settings["after_process"] is not None
 
