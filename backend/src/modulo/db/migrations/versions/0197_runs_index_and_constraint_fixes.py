@@ -1,4 +1,4 @@
-"""Drop redundant ix_runs_refusal, add CHECK constraints, add idempotency unique.
+"""Add CHECK constraints and idempotency unique index (ix_runs_refusal is retained).
 
 Revision ID: 0197_runs_index_and_constraint_fixes
 Revises: 0194_uuid_pk_server_defaults
@@ -24,13 +24,12 @@ def _add_check(name: str, expr: str) -> None:
 
 
 def upgrade() -> None:
-    # 1. Drop redundant index ix_runs_refusal — it is a strict prefix of
-    #    ix_runs_org_created_pipeline (organisation_id, created_at) INCLUDE (pipeline_id).
-    #    The INCLUDE column does not affect selectivity; both indexes serve the same
-    #    leading-key lookups. Dropping it halves write amplification on the runs table.
-    op.execute("DROP INDEX IF EXISTS ix_runs_refusal")
+    # NOTE: ix_runs_refusal is intentionally NOT dropped here. It is declared on
+    # the ``runs`` model (Index("ix_runs_refusal", ...)) and required by the
+    # schema-parity / integration tests, so removing it would create model/DB
+    # drift. It is a legitimate standalone index owned by 0110.
 
-    # 2. CHECK constraints (added NOT VALID + VALIDATE, see _add_check).
+    # 1. CHECK constraints (added NOT VALID + VALIDATE, see _add_check).
     #    NOTE: the originally-planned ck_runs_temporal_ordering
     #    (started_at >= created_at) is intentionally NOT added — the application
     #    legitimately inserts late/replayed run records whose started_at predates
@@ -79,4 +78,4 @@ def downgrade() -> None:
     op.execute("ALTER TABLE runs DROP CONSTRAINT IF EXISTS ck_runs_claim_count_nonneg")
     op.execute("ALTER TABLE runs DROP CONSTRAINT IF EXISTS ck_runs_parent_not_self")
     op.execute("ALTER TABLE runs DROP CONSTRAINT IF EXISTS ck_runs_completed_after_started")
-    op.execute("CREATE INDEX ix_runs_refusal ON runs (organisation_id, created_at)")
+    # ix_runs_refusal is owned by 0110 and is no longer touched by this migration.
