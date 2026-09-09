@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div
     class="rounded-lg border px-4 py-3 flex items-center gap-2.5 text-sm"
     :class="stripClass"

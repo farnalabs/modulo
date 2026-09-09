@@ -1668,7 +1668,8 @@ export default {
       "test_connection": "Test connection",
       "testing": "Testing...",
       "test_connection_for": "Test connection for {name}",
-      "no_response_body": "No response body"
+      "no_response_body": "No response body",
+      "dismiss": "Dismiss"
     },
     "RunnersConcurrencyTab": {
       "max_concurrent_runner_runs": "Max concurrent Runner runs",
