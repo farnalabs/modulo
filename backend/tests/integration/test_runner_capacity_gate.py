@@ -725,3 +725,26 @@ async def test_sweep_emits_violation_on_breach(
     with caplog.at_level(logging.ERROR, logger="modulo.core.runner_capacity"):
         await _sweep(db_engine)
     assert any("runner.capacity.violation" in m for m in caplog.messages)
+
+
+async def test_sweep_no_violation_below_cap(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """(h) an org sitting below cap with live dispatches MUST NOT be counted as a
+    breach — ``violations`` must be 0 and no ``runner.capacity.violation`` must
+    be logged. This is the regression guard for the D8 rollback signal: a healthy
+    tick must stay silent so a true breach stays distinguishable from noise."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    org_id, user_id = await _seed_org_account(db_engine, "D8SweepBelowCap", cap=4)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeBelowCap", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("k1", "e2b"))
+    await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("k2", "e2b"))
+
+    with caplog.at_level(logging.ERROR, logger="modulo.core.runner_capacity"):
+        result = await _sweep(db_engine)
+    assert result["violations"] == 0, "an org below cap must not be counted as a breach"
+    assert not any("runner.capacity.violation" in m for m in caplog.messages)

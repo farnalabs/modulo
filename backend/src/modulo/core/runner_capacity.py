@@ -740,15 +740,20 @@ async def _run_recoverable(session: AsyncSession, run_id: Any, predicates: tuple
     return int(result.scalar_one() or 0) > 0
 
 
-async def _assert_capacity_within_cap(session: AsyncSession, org_id: uuid.UUID) -> int:
-    """Sweep rule (h): assert the live count ≤ cap; log a violation otherwise.
+async def _assert_capacity_within_cap(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Sweep rule (h): assert the live count ≤ cap; log a violation on breach.
 
-    Returns the live count. This is the D8 ROLLBACK signal — a sustained
-    breach means the atomic gate is not holding and the rollout flag must go
-    off.
+    Returns ``True`` when the live count exceeds the cap (a real breach) and
+    ``False`` otherwise. This is the D8 ROLLBACK signal — a sustained breach
+    means the atomic gate is not holding and the rollout flag must go off. A
+    healthy org sitting below cap (including one with live dispatches) MUST NOT
+    be reported as a breach, otherwise the dispatcher-reconcile ``violations``
+    summary and the liveness key become indistinguishable from noise and a true
+    breach is masked.
     """
     decision = await resolve_runner_capacity_decision(session, org_id)
-    if decision.cap is not None and decision.active > decision.cap:
+    breached = decision.cap is not None and decision.active > decision.cap
+    if breached:
         _log.error(
             "runner.capacity.violation",
             extra={
@@ -758,7 +763,7 @@ async def _assert_capacity_within_cap(session: AsyncSession, org_id: uuid.UUID) 
                 "host_resource_only": decision.host_resource_only,
             },
         )
-    return decision.active
+    return breached
 
 
 async def reconcile_runner_dispatch_markers(
@@ -877,7 +882,7 @@ async def reconcile_runner_dispatch_markers(
                                     "note": "container destroy owned by the D4 reconciler",
                                 },
                             )
-                if await _assert_capacity_within_cap(session, org_id) > 0:
+                if await _assert_capacity_within_cap(session, org_id):
                     violations += 1
         except asyncio.CancelledError:
             raise
