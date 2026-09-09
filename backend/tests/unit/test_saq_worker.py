@@ -9,6 +9,7 @@ delegates, and claim expiry.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Self
@@ -131,6 +132,7 @@ class TestFunctionsWiring:
         assert "hitl_park_sweep" in names
         assert "runner_workspace_reconcile" in names
         assert "runner_marker_sweep" in names
+        assert "runner_health_probe" in names
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
@@ -154,6 +156,7 @@ class TestFunctionsWiring:
             "hitl_park_sweep",
             "runner_workspace_reconcile",
             "runner_marker_sweep",
+            "runner_health_probe",
             "cost_probe",
             "analytics_facts_maintenance",
             "journey_reconcile",
@@ -1700,6 +1703,68 @@ class TestSystemJobDelegates:
             result = await sw.library_sync({})
 
         assert result == {"status": "failed", "error": "unexpected cron failure"}
+
+
+class TestRunnerHealthProbeWrapper:
+    """qa F3: the runner_health_probe wrapper mirrors the sibling sweeps —
+    stats persisted on success AND on failure, infra failures re-raised."""
+
+    @pytest.mark.asyncio
+    async def test_success_persists_stats_and_liveness_heartbeat(self) -> None:
+        redis_client = AsyncMock()
+        with (
+            patch(
+                "modulo.core.bundled_runner.health_probe.run_runner_health_probe",
+                new_callable=AsyncMock,
+                return_value={
+                    "machine_id": "m1",
+                    "reachable": True,
+                    "orgs_probed": 3,
+                    "orgs_failed": 0,
+                    "transitions": 0,
+                },
+            ) as probe,
+            patch.object(sw, "_cleanup_session_factory", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client) as from_url,
+        ):
+            result = await sw.runner_health_probe({})
+
+        assert result["reachable"] is True
+        probe.assert_awaited_once()
+        assert from_url.call_count == 2
+        assert redis_client.set.await_count == 2
+        stats_args = redis_client.set.await_args_list[0].args
+        assert stats_args[0] == sw.RUNNER_HEALTH_PROBE_STATS_KEY
+        assert redis_client.set.await_args_list[0].kwargs["ex"] == sw.RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS
+        assert sw.RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS > sw.RUNNER_HEALTH_PROBE_STALE_SECONDS
+        stats = json.loads(stats_args[1])
+        assert stats["orgs_probed"] == 3
+        assert stats["last_run_at"]
+        # FAR-538 per-machine cron heartbeat refreshed on each successful tick.
+        liveness_args = redis_client.set.await_args_list[1].args
+        assert liveness_args[0].startswith("saq:cron:heartbeat:runner_health_probe:")
+
+    @pytest.mark.asyncio
+    async def test_infra_failure_persists_partial_then_reraises(self) -> None:
+        redis_client = AsyncMock()
+        with (
+            patch(
+                "modulo.core.bundled_runner.health_probe.run_runner_health_probe",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("session factory down"),
+            ),
+            patch.object(sw, "_cleanup_session_factory", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client),
+            pytest.raises(RuntimeError),
+        ):
+            await sw.runner_health_probe({})
+
+        assert redis_client.set.await_count == 1
+        stats = json.loads(redis_client.set.await_args.args[1])
+        assert stats["error"] == "probe_failed"
+        assert stats["last_run_at"]
 
 
 class TestClaimExpiry:

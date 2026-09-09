@@ -825,13 +825,15 @@ def test_single_migration_head() -> None:
     # 0202_runs_error_code_claimed_by_indexes (from main) chains off 0201.
     chaining_off_0201 = [p for p in revisions if parents[p] == "0201_spend_anomaly_unique_org_date"]
     assert [_basename(p) for p in chaining_off_0201] == ["0202_runs_error_code_claimed_by_indexes.py"]
-    # 0195_hitl_claim_gate_config_json (FAR-634) chains off 0202 and is the
-    # single head.
+    # 0195_hitl_claim_gate_config_json (FAR-634, from main) chains off 0202.
     chaining_off_0202 = [p for p in revisions if parents[p] == "0202_runs_error_code_claimed_by_indexes"]
     assert [_basename(p) for p in chaining_off_0202] == ["0195_hitl_claim_gate_config_json.py"]
-    # Nothing chains off 0195 -> it is the single head.
+    # This PR's 0203_runner_probe_cache chains off 0195.
     chaining_off_0195 = [p for p in revisions if parents[p] == "0195_hitl_claim_gate_config_json"]
-    assert not chaining_off_0195
+    assert [_basename(p) for p in chaining_off_0195] == ["0203_runner_probe_cache.py"]
+    # Nothing chains off 0203 -> it is the single head.
+    chaining_off_0203 = [p for p in revisions if parents[p] == "0203_runner_probe_cache"]
+    assert chaining_off_0203 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
