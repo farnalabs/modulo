@@ -312,21 +312,19 @@ class Settings(BaseSettings):
     # absent-key Docker-tier default 4 activates counting Docker+Local
     # providers only, and the resume path converges onto the same namespace
     # and population. SHORT-LIVED: removed at GA.
-    runner_capacity_gate_enabled: bool = Field(default=False, alias="MODULO_RUNNER_CAPACITY_GATE_ENABLED")
+    runner_capacity_gate_enabled: bool = Field(default=False, alias="RUNNER_CAPACITY_GATE_ENABLED")
     # D8 degradation knob: the gate's transactional lock_timeout. A crowded
     # per-org advisory lock degrades to a RETRYABLE capacity denial
     # (SQLSTATE 55P03 → runner.capacity.lock_degraded) instead of hanging on
     # deadlock_timeout.
     runner_capacity_lock_timeout_ms: int = Field(
-        default=2000, alias="MODULO_RUNNER_CAPACITY_LOCK_TIMEOUT_MS", ge=100, le=30000
+        default=2000, alias="RUNNER_CAPACITY_LOCK_TIMEOUT_MS", ge=100, le=30000
     )
     # D8 marker staleness threshold for the reconciliation sweep: a non-fence
     # marker older than this (marker written_at; legacy tier-less markers fall
     # back to runs.updated_at) is cleared, and a stale non-terminal RUNNING run
     # is terminalised with it. Default 25h.
-    runner_marker_stale_seconds: int = Field(
-        default=90000, alias="MODULO_RUNNER_MARKER_STALE_SECONDS", ge=3600, le=604800
-    )
+    runner_marker_stale_seconds: int = Field(default=90000, alias="RUNNER_MARKER_STALE_SECONDS", ge=3600, le=604800)
     # Machine deployment identity for the runner workspace-identity label
     # (reconciler scoping; hostname fallback when unset).
     runner_machine_id: str = Field(default="", alias="MODULO_RUNNER_MACHINE_ID")

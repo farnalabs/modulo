@@ -1,7 +1,7 @@
 """FAR-634: ``hitl_claims.gate_config_json`` — claim-stamped gate config.
 
 Revision ID: 0195_hitl_claim_gate_config_json
-Revises: 0200_runs_runner_marker_sweep_index
+Revises: 0201_spend_anomaly_unique_org_date
 Create Date: 2026-09-08
 
 The executor's interrupt handler (``_handle_graph_interrupt``) resolves the
@@ -38,7 +38,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "0195_hitl_claim_gate_config_json"
-down_revision: str | None = "0200_runs_runner_marker_sweep_index"
+down_revision: str | None = "0201_spend_anomaly_unique_org_date"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

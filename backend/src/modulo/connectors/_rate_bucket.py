@@ -139,28 +139,26 @@ local tt = redis.call('TIME')
 local now = tt[1] + tt[2] / 1e6
 
 local st = redis.call('HMGET', key, 'tokens', 'ts')
--- A missing hash field comes back from Redis as Lua ``false`` (not ``nil``), so
--- a ``~= nil`` presence test also matches a brand-new bucket and would wedge
--- every first consume as corrupt. The granting path below always HSETs
--- ``tokens`` and ``ts`` together, so exactly two states are legitimate: BOTH
--- absent (fresh bucket -> start at full burst) or BOTH present and parseable.
--- Anything else is corrupt and must fail closed. Seeding ``burst`` for a
--- half-written bucket would hand a whole fresh burst to an already-spent
--- budget - the ``N x burst`` over-grant this shared limiter exists to prevent.
-local tokens
-local ts
-if st[1] == false and st[2] == false then
+local tokens_present = st[1] ~= false
+local ts_present = st[2] ~= false
+local tokens = tonumber(st[1])
+local ts = tonumber(st[2])
+-- A missing hash field comes back from Redis as Lua ``false`` (not ``nil``). A
+-- bucket is FRESH only when BOTH fields are absent (a never-seen destination,
+-- start full). If EXACTLY ONE field is present the bucket is half-written — a
+-- partial write, a per-field HEXPIRE, or a partial restore — and must fail
+-- closed rather than re-burst to full capacity (the one direction this script
+-- exists never to fail in: an exhausted budget handing out a fresh burst). A
+-- field that is present but unparseable (e.g. ``"garbage"``) is likewise corrupt.
+-- All three corrupt shapes return -1 so the caller fails closed instead of
+-- minting tokens from an uncounted budget.
+if not tokens_present and not ts_present then
     tokens = burst
     ts = now
-else
-    if st[1] == false or st[2] == false then
-        return -1
-    end
-    tokens = tonumber(st[1])
-    ts = tonumber(st[2])
-    if tokens == nil or ts == nil then
-        return -1
-    end
+elseif not tokens_present or not ts_present then
+    return -1
+elseif tokens == nil or ts == nil then
+    return -1
 end
 local elapsed = now - ts
 if elapsed < 0 then elapsed = 0 end

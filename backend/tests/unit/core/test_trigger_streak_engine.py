@@ -307,7 +307,7 @@ class TestMigrationBackfillGrace:
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
         # FAR-634 added 0195_hitl_claim_gate_config_json as the child of the
-        # prior head (0200_runs_runner_marker_sweep_index), so it is now the
+        # current head (0201_spend_anomaly_unique_org_date), so it is now the
         # single linear head of the chain.
         assert heads == ["0195_hitl_claim_gate_config_json"], f"expected a single head, got {heads}"
 

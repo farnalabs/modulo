@@ -2886,12 +2886,6 @@ elements:
       - testid: hitl-review-toggle-expand
         type: button
         dynamic_testid: false
-      - testid: hitl-review-pipeline-name
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-node-name
-        type: element
-        dynamic_testid: false
       - testid: hitl-gate-card
         type: element
         dynamic_testid: false
@@ -2933,6 +2927,12 @@ elements:
         dynamic_testid: false
       - testid: hitl-review-next-page
         type: button
+        dynamic_testid: false
+      - testid: hitl-review-pipeline-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-node-name
+        type: element
         dynamic_testid: false
     /settings/license:
       - testid: license-key-input

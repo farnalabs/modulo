@@ -1,4 +1,10 @@
-"""Admin feature flag inspection — lists all known flags and their current status."""
+"""Admin feature flag inspection — list, inspect, toggle, and org-override feature flags.
+
+Toggles and org overrides persist into the caller's organisation settings
+(``org.settings_json.feature_overrides``) so a change survives a fresh
+request/process; the registry's computed tier state is only the default that
+org overrides overlay on top of (both GET endpoints apply the overlay).
+"""
 
 from __future__ import annotations
 
@@ -101,6 +107,43 @@ async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None
             await redis.aclose()
 
 
+async def _read_org_overrides(session: AsyncSession, org_id: uuid.UUID) -> dict[str, bool]:
+    """Read the org's ``feature_overrides`` map (bool entries only).
+
+    Returns ``{}`` when the org or its settings are missing. Callers own the
+    error policy: both GET endpoints treat a failed read as best-effort and
+    fall back to the registry defaults.
+    """
+    async with session.begin():
+        org = await get_organisation(session, org_id)
+    if org is None or not isinstance(getattr(org, "settings_json", None), dict):
+        return {}
+    return {
+        key: bool(value)
+        for key, value in org.settings_json.get("feature_overrides", {}).items()
+        if isinstance(value, bool)
+    }
+
+
+async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_name: str, enabled: bool) -> None:
+    """Persist ``feature_overrides[flag_name] = enabled`` in the org's settings.
+
+    The single durable write path shared by the toggle (``PUT /{flag_name}``)
+    and org-override (``PUT /{flag_name}/org-override``) endpoints, so both
+    endpoints write the same truth. Raises 404 when the org does not exist.
+    """
+    async with session.begin():
+        org = await get_organisation(session, org_id)
+        if not org:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Org not found")
+        settings_dict = dict(org.settings_json or {})
+        overrides = dict(settings_dict.get("feature_overrides", {}))
+        overrides[flag_name] = enabled
+        settings_dict["feature_overrides"] = overrides
+        org.settings_json = settings_dict
+        session.add(org)
+
+
 @router.get("", response_model=None)
 @handle_db_errors("admin.feature_flags.list_feature_flags")
 async def list_feature_flags(
@@ -137,14 +180,7 @@ async def list_feature_flags(
         org_overrides: dict[str, bool] = {}
         if current_user.organisation_id is not None:
             try:
-                async with session.begin():
-                    org = await get_organisation(session, current_user.organisation_id)
-                if org is not None and isinstance(getattr(org, "settings_json", None), dict):
-                    org_overrides = {
-                        key: bool(value)
-                        for key, value in org.settings_json.get("feature_overrides", {}).items()
-                        if isinstance(value, bool)
-                    }
+                org_overrides = await _read_org_overrides(session, current_user.organisation_id)
             except Exception:
                 logger.warning("feature-flags.org_override_read_failed", exc_info=True)
 
@@ -244,11 +280,23 @@ async def get_feature_flag(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Unknown feature flag: {flag_name}",
             )
+        # Overlay the caller's org ``feature_overrides`` on the registry default
+        # so this endpoint reports the SAME effective ``currently_active`` as
+        # the list endpoint (which the frontend consumes). Best-effort: a
+        # failed org read falls back to the registry default.
+        currently_active = flag.currently_active
+        if current_user.organisation_id is not None:
+            try:
+                org_overrides = await _read_org_overrides(session, current_user.organisation_id)
+            except Exception:
+                logger.warning("feature-flags.org_override_read_failed", exc_info=True)
+            else:
+                currently_active = org_overrides.get(flag.name, flag.currently_active)
         return {
             "name": flag.name,
             "description": flag.description,
             "tier": flag.tier,
-            "currently_active": flag.currently_active,
+            "currently_active": currently_active,
             "depends_on": flag.depends_on,
         }
     except HTTPException:
@@ -301,6 +349,19 @@ async def toggle_feature_flag(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
+    """Toggle a feature flag for the caller's organisation — persists durably.
+
+    Writes ``feature_overrides[flag_name]`` into the org's settings (the same
+    persistence path as ``PUT /{flag_name}/org-override``) and invalidates the
+    list cache, so the toggle survives a fresh request/process and both
+    endpoints write the same truth. ``overridden: true`` is only returned
+    after the durable write has committed.
+    """
+    if current_user.organisation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_MSG_ORG_ID_REQUIRED,
+        )
     try:
         registry = await _build_registry(settings, session, current_user)
         flag = registry.get_flag(flag_name)
@@ -309,12 +370,13 @@ async def toggle_feature_flag(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Unknown feature flag: {flag_name}",
             )
-        registry.set_override(flag_name, req.enabled)
+        await _write_org_override(session, current_user.organisation_id, flag_name, req.enabled)
+        await _invalidate_cache(settings, current_user.organisation_id)
         return {
             "name": flag.name,
             "description": flag.description,
             "tier": flag.tier,
-            "currently_active": flag.currently_active,
+            "currently_active": req.enabled,
             "depends_on": flag.depends_on,
             "overridden": True,
         }
@@ -426,16 +488,7 @@ async def set_org_flag_override(
             detail=_MSG_ORG_ID_REQUIRED,
         )
     try:
-        async with session.begin():
-            org = await get_organisation(session, current_user.organisation_id)
-            if not org:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Org not found")
-            settings_dict = dict(org.settings_json or {})
-            overrides = dict(settings_dict.get("feature_overrides", {}))
-            overrides[flag_name] = req.enabled
-            settings_dict["feature_overrides"] = overrides
-            org.settings_json = settings_dict
-            session.add(org)
+        await _write_org_override(session, current_user.organisation_id, flag_name, req.enabled)
         await _invalidate_cache(settings, current_user.organisation_id)
         return {"override": req.enabled}
     except HTTPException:

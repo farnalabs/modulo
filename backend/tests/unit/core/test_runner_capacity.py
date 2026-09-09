@@ -1092,6 +1092,115 @@ async def test_sweep_org_failure_raises_typed_error(monkeypatch: pytest.MonkeyPa
         await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
 
 
+def test_sweep_sql_sandbox_id_asymmetry() -> None:
+    """Pin the sandbox_id asymmetry between the two CAS sweep UPDATEs.
+
+    ``_CLEAR_MARKER_SQL`` PRESERVES ``sandbox_id`` — a cleared marker's run is
+    already terminal (or parked), and the sandbox id is the evidence the D4
+    workspace reconciler needs to find and destroy the container.
+    ``_TRANSITION_STALE_RUNNING_SQL`` NULLS it — that run is killed, so its
+    workspace must NOT be re-adopted (FAR-595 pinning test).
+    """
+    from modulo.core import runner_capacity as rc
+
+    clear_sql = str(rc._CLEAR_MARKER_SQL)
+    transition_sql = str(rc._TRANSITION_STALE_RUNNING_SQL)
+    assert "sandbox_dispatch_state = NULL" in clear_sql
+    assert "sandbox_id" not in clear_sql
+    assert "sandbox_dispatch_state = NULL" in transition_sql
+    assert "sandbox_id = NULL" in transition_sql
+
+
+async def test_sweep_failed_org_pass_emits_no_marker_cleared_events(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Phantom-event guarantee (qa F14, FAR-595 pinning test): the
+    ``runner.capacity.marker_cleared`` event is emitted AFTER the org
+    transaction commits. An org pass that fails MID-TRANSACTION — even one
+    whose clear UPDATE already executed inside the doomed transaction — must
+    emit ZERO events: a rolled-back write never happened, and a phantom note
+    would send the D4 reconciler after a container the row no longer
+    references."""
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    stale_marker = json.dumps({"state": "cleared_at_hitl", "written_at": (_NOW - timedelta(hours=30)).isoformat()})
+    doomed_row = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
+    factory = _FakeSweepFactory([])
+    calls = {"n": 0}
+
+    def _factory() -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return factory._lock_session()
+        if calls["n"] == 2:
+            org_index = MagicMock()
+
+            async def _org_index_execute(stmt: Any, params: Any = None) -> Any:
+                result = MagicMock()
+                result.all.return_value = [(uuid.uuid4(),)]
+                return result
+
+            org_index.execute = AsyncMock(side_effect=_org_index_execute)
+            return factory._wrap(org_index)
+
+        org_session = MagicMock()
+
+        async def _org_execute(stmt: Any, params: Any = None) -> Any:
+            text_str = str(stmt)
+            # The clear UPDATE executes INSIDE the transaction that is about
+            # to fail — the outcome is classified but never committed.
+            if "SELECT id, status, error_code" in text_str:
+                result = MagicMock()
+                result.all.return_value = [doomed_row]
+                return result
+            if "sandbox_dispatch_state = NULL" in text_str:
+                result = MagicMock()
+                result.fetchone.return_value = (doomed_row.id,)
+                return result
+            raise RuntimeError("db down mid-transaction")
+
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=org_session)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        org_session.begin = MagicMock(return_value=begin_cm)
+        org_session.execute = AsyncMock(side_effect=_org_execute)
+        org_session.close = AsyncMock()
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=org_session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        session_cm.close = AsyncMock()
+        return session_cm
+
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
+        pytest.raises(RunnerMarkerSweepError) as excinfo,
+    ):
+        await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
+
+    # The failure is loud (F5) but carries no clear credit: the committed
+    # counts are zero even though the clear UPDATE ran inside the transaction.
+    assert excinfo.value.org_failures == 1
+    assert excinfo.value.scanned == 1
+    assert excinfo.value.cleared == 0
+    assert excinfo.value.transitioned == 0
+    assert any("runner.capacity.marker_sweep_org_failed" in r.message for r in caplog.records)
+    cleared_events = [r for r in caplog.records if r.message == "runner.capacity.marker_cleared"]
+    assert not cleared_events
+
+
 async def test_saq_cron_persists_partial_counts_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
     """F5 liveness contract: the SAQ cron wrapper persists the PARTIAL counts
     with ``error: sweep_failed`` BEFORE re-raising (SAQ retries engage)."""

@@ -87,6 +87,13 @@ def _with_credentials(database_url: str, user: str, password: str) -> str:
     return f"{prefix}://{quote(user)}:{quote(password)}@{host}/{db}"
 
 
+# NOTE (FAR-595, D6 fix-Worker lesson): under heavy machine load, the
+# container's postgres initdb can exceed testcontainers' default wait and the
+# fixture fails before Postgres accepts connections. testcontainers reads
+# TC_MAX_TRIES from the environment (env-only, no code change): raise it (e.g.
+# TC_MAX_TRIES=300) for LOCAL integration runs, and give the local pytest
+# invocation a wide per-test budget (--timeout=1800). CI runners are not
+# contended and need neither.
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
     with PostgresContainer("postgres:16-alpine") as pg:

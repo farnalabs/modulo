@@ -210,6 +210,14 @@ may decide.
   folded into `bdd:` here: that feature file ships but no step module registers
   it via `scenarios(...)`, so citing it would claim BDD coverage for scenarios
   that never execute. Status: covered.
+- 2026-09-08: **improve-architecture (product-map walk)** — registered the
+  FAR-727 HITL review queue testids (`hitl-review-column-headers`,
+  `hitl-review-node-name`, `hitl-review-pipeline-name`) in the manifest
+  `/settings/hitl-review` `elements` list. They shipped in the view
+  (`SettingsHitlReviewView.vue`) without a manifest entry, failing the reverse
+  element-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`);
+  the elements list now covers the owning view's testids exactly. Status:
+  covered.
 - 2026-09-07: **improve-architecture (product-map walk)** — closed the stale-BDD
   drift: removed the never-executed, superseded feature files
   (`hitl/approval_gate.feature` marked `@deprecated`, `hitl/human_only_gate.feature`,
