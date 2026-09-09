@@ -15,7 +15,11 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.core.bundled_runner.health_probe import (
+    NOTIFICATION_ACTION_URL,
+    NOTIFICATION_CATEGORY,
     EngineProbeOutcome,
+    _emit_unreachable_transition,
+    _EngineBoundary,
     aggregate_image_presence,
     aggregate_strip_state,
     run_runner_health_probe,
@@ -167,6 +171,71 @@ def _fake_boundary(reachable: bool, image_ok: bool = True) -> Any:
     boundary.probe_engine = AsyncMock(return_value=outcome)
     boundary.image_present = AsyncMock(return_value=image_ok)
     boundary.close = AsyncMock()
+    return boundary
+
+
+class _FakeAioDockerClient:
+    """Minimal aiodocker client stand-in for the real ``_EngineBoundary``."""
+
+    def __init__(
+        self,
+        info: dict[str, Any] | None = None,
+        info_exc: Exception | None = None,
+        inspect_result: Any = None,
+        inspect_exc: Exception | None = None,
+    ) -> None:
+        self._info = info
+        self._info_exc = info_exc
+        self._inspect_result = inspect_result
+        self._inspect_exc = inspect_exc
+        self.closed = False
+
+    class _System:
+        def __init__(self, info: dict[str, Any] | None, info_exc: Exception | None) -> None:
+            self._info = info
+            self._info_exc = info_exc
+
+        async def info(self) -> dict[str, Any]:
+            if self._info_exc is not None:
+                raise self._info_exc
+            return self._info or {}
+
+    @property
+    def system(self) -> _System:
+        return self._System(self._info, self._info_exc)
+
+    class _Images:
+        def __init__(self, result: Any, exc: Exception | None) -> None:
+            self._result = result
+            self._exc = exc
+
+        async def inspect(self, ref: str) -> Any:
+            if self._exc is not None:
+                raise self._exc
+            return self._result
+
+    @property
+    def images(self) -> _Images:
+        return self._Images(self._inspect_result, self._inspect_exc)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _make_aiodocker_client(
+    info: dict[str, Any] | None = None,
+    info_exc: Exception | None = None,
+    inspect_result: Any = None,
+    inspect_exc: Exception | None = None,
+) -> _FakeAioDockerClient:
+    return _FakeAioDockerClient(info=info, info_exc=info_exc, inspect_result=inspect_result, inspect_exc=inspect_exc)
+
+
+def _real_boundary(client: _FakeAioDockerClient) -> _EngineBoundary:
+    """A real ``_EngineBoundary`` whose ``aiodocker.Docker`` ctor is stubbed to
+    return ``client`` — so the REAL engine-probe code paths run."""
+    boundary = _EngineBoundary("tcp://placeholder:2375")
+    boundary._client = client  # inject without touching the socket proxy
     return boundary
 
 
@@ -369,34 +438,148 @@ class TestRunRunnerHealthProbe:
         assert placeholder_ref not in kwargs["image_checks"]
         assert kwargs["image_checks"][real_ref] is True
 
+
+class TestEngineBoundaryRealClient:
+    """Exercise the REAL ``_EngineBoundary`` methods (the orchestration tests
+    above mock ``probe_engine``/``image_present``, so these engine-boundary
+    lines are otherwise uncovered). A fake aiodocker client is injected in
+    place of the real socket proxy."""
+
     @pytest.mark.asyncio
-    async def test_poisoned_org_infra_error_isolates_and_reraises(self) -> None:
-        """qa F2: a poisoned org's infra failure ROLLS BACK ONLY ITSELF —
-        org #2 still upserts in the same tick — and the tick re-raises so
-        SAQ's retries engage (qa F3)."""
-        session = _make_session()
-        boundary = _fake_boundary(reachable=True)
-        other_org = uuid.UUID("00000000-0000-0000-0000-000000000002")
+    async def test_probe_engine_happy_path_reads_engine_info(self) -> None:
+        info = {"NCPU": 8, "MemTotal": 16384 * 1024 * 1024}
+        client = _make_aiodocker_client(info=info)
+        boundary = _real_boundary(client)
+        outcome = await boundary.probe_engine()
+        assert outcome.reachable is True
+        assert outcome.engine_info == {"cpu_count": 8, "mem_total_mb": 16384}
+        assert outcome.error is None
 
-        async def _list_orgs(s: Any) -> list[uuid.UUID]:
-            return [_ORG_ID, other_org]
+    @pytest.mark.asyncio
+    async def test_probe_engine_skips_non_positive_resource_values(self) -> None:
+        # Negative/zero engine values must not be recorded as engine_info.
+        info = {"NCPU": 0, "MemTotal": -1}
+        client = _make_aiodocker_client(info=info)
+        boundary = _real_boundary(client)
+        outcome = await boundary.probe_engine()
+        assert outcome.reachable is True
+        assert outcome.engine_info == {}
 
-        upserted_orgs: list[uuid.UUID] = []
+    @pytest.mark.asyncio
+    async def test_probe_engine_scrubs_credentials_on_failure(self) -> None:
+        exc = RuntimeError("connect failed tcp://admin:s3cret@proxy.internal:2375")
+        client = _make_aiodocker_client(info_exc=exc)
+        boundary = _real_boundary(client)
+        outcome = await boundary.probe_engine()
+        assert outcome.reachable is False
+        assert "s3cret" not in outcome.error
+        assert "***@" in outcome.error
 
-        async def _upsert(_session: Any, **kwargs: Any) -> None:
-            upserted_orgs.append(kwargs["org_id"])
-            if kwargs["org_id"] == _ORG_ID:
-                raise SQLAlchemyError("statement poisoned")
+    @pytest.mark.asyncio
+    async def test_image_present_true_when_inspect_succeeds(self) -> None:
+        client = _make_aiodocker_client(inspect_result={"Id": "abc"})
+        boundary = _real_boundary(client)
+        assert await boundary.image_present("ref") is True
 
+    @pytest.mark.asyncio
+    async def test_image_present_false_on_404(self) -> None:
+        exc = RuntimeError("not found")
+        exc.status = 404  # type: ignore[attr-defined]
+        client = _make_aiodocker_client(inspect_exc=exc)
+        boundary = _real_boundary(client)
+        assert await boundary.image_present("ref") is False
+
+    @pytest.mark.asyncio
+    async def test_image_present_none_on_transient_inspect_failure(self) -> None:
+        # A non-404 inspect failure must read UNKNOWN (qa F4), never absent.
+        exc = RuntimeError("proxy hiccup")
+        exc.status = 500  # type: ignore[attr-defined]
+        client = _make_aiodocker_client(inspect_exc=exc)
+        boundary = _real_boundary(client)
+        assert await boundary.image_present("ref") is None
+
+    @pytest.mark.asyncio
+    async def test_close_releases_client(self) -> None:
+        client = _make_aiodocker_client(info={})
+        boundary = _real_boundary(client)
+        await boundary.probe_engine()
+        await boundary.close()
+        assert client.closed is True
+
+
+class TestEmitUnreachableTransitionReal:
+    """Exercise the REAL ``_emit_unreachable_transition`` — the orchestration
+    tests above mock it out, so its emit + notification paths are otherwise
+    uncovered."""
+
+    @pytest.mark.asyncio
+    async def test_emits_signal_event_and_notification(self) -> None:
+        session = AsyncMock()
+        emit = AsyncMock()
+        notify = AsyncMock()
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
-            pytest.raises(SQLAlchemyError),
+            patch("modulo.core.error_tracking.emit_signal_event", new=emit),
+            patch("modulo.db.crud.notifications.create_notification", new=notify),
         ):
-            await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
-        assert other_org in upserted_orgs
+            await _emit_unreachable_transition(session, _ORG_ID, "machine-1", "boom")
+        emit.assert_awaited_once()
+        assert emit.await_args.kwargs["signal"] == "runner_unavailable"
+        notify.assert_awaited_once()
+        assert notify.await_args.kwargs["category"] == NOTIFICATION_CATEGORY
+        assert notify.await_args.kwargs["action_url"] == NOTIFICATION_ACTION_URL
+
+    @pytest.mark.asyncio
+    async def test_signal_event_failure_does_not_block_notification(self) -> None:
+        session = AsyncMock()
+        emit = AsyncMock(side_effect=RuntimeError("event store down"))
+        notify = AsyncMock()
+        with (
+            patch("modulo.core.error_tracking.emit_signal_event", new=emit),
+            patch("modulo.db.crud.notifications.create_notification", new=notify),
+        ):
+            # Must not raise — both emit paths are fail-open.
+            await _emit_unreachable_transition(session, _ORG_ID, "machine-1", "boom")
+        notify.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_notification_failure_is_swallowed(self) -> None:
+        session = AsyncMock()
+        emit = AsyncMock()
+        notify = AsyncMock(side_effect=RuntimeError("notify store down"))
+        with (
+            patch("modulo.core.error_tracking.emit_signal_event", new=emit),
+            patch("modulo.db.crud.notifications.create_notification", new=notify),
+        ):
+            await _emit_unreachable_transition(session, _ORG_ID, "machine-1", "boom")
+        emit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_poisoned_org_infra_error_isolates_and_reraises() -> None:
+    """qa F2: a poisoned org's infra failure ROLLS BACK ONLY ITSELF —
+    org #2 still upserts in the same tick — and the tick re-raises so
+    SAQ's retries engage (qa F3)."""
+    session = _make_session()
+    boundary = _fake_boundary(reachable=True)
+    other_org = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+    async def _list_orgs(s: Any) -> list[uuid.UUID]:
+        return [_ORG_ID, other_org]
+
+    upserted_orgs: list[uuid.UUID] = []
+
+    async def _upsert(_session: Any, **kwargs: Any) -> None:
+        upserted_orgs.append(kwargs["org_id"])
+        if kwargs["org_id"] == _ORG_ID:
+            raise SQLAlchemyError("statement poisoned")
+
+    with (
+        patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
+        patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+        patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+        patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
+        patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
+        pytest.raises(SQLAlchemyError),
+    ):
+        await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
+    assert other_org in upserted_orgs
