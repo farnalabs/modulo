@@ -100,7 +100,21 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: backend
-        run: uv run --no-build --no-sync playwright install --with-deps chromium
+        run: |
+          # `playwright install --with-deps` runs `apt-get update` across every
+          # configured apt source. The runner image ships a google-chrome apt
+          # source (dl.google.com) that intermittently returns a hash-sum
+          # mismatch, which makes the unrelated system-dep install fail and takes
+          # down the whole BDD suite. Chromium does not need google-chrome-stable,
+          # so drop that source and retry to ride out any transient mirror errors.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome-stable.list 2>/dev/null || true
+          for i in 1 2 3; do
+            if uv run --no-build --no-sync playwright install --with-deps chromium; then
+              break
+            fi
+            echo "Playwright browser install attempt $i failed, retrying..."
+            sleep 5
+          done
 
       - name: Pre-create alembic_version table
         shell: bash
