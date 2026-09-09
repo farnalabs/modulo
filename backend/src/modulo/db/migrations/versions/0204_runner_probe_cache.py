@@ -1,8 +1,5 @@
 """runner_probe_cache — cached per-(org, machine) runner health probe (FAR-591 / D5).
 
-Renamed from 0203_* to 0204_* to avoid a prefix collision with main's
-0203_triggers_add_name; re-parented onto 0203_triggers_add_name (main head).
-
 Revision ID: 0204_runner_probe_cache
 Revises: 0203_triggers_add_name
 Create Date: 2026-09-09
