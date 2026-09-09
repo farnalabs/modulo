@@ -103,7 +103,18 @@ may decide.
       (deliver_manual.feature, `test_output_delivery_audit`)
 - [x] `human_only` gates refuse automation/MCP clients entirely
       (team_hitl_gate.feature, `test_mcp_security`, `test_mcp_runtime_tools`,
-      `test_node_runner_hitl`)
+      `test_node_runner_hitl`). REST enforcement keys on the credential
+      class: a principal is denied when it is an API key OR its JWT
+      `client_kind` claim is not `browser` (FAR-634 — every access/refresh
+      token carries `client_kind` stamped at mint time; legacy tokens without
+      the claim decode as `browser`). MCP denies outright regardless of
+      credential class. Every denial (REST + MCP) emits a warning log and the
+      `hitl.human_only_denied` audit event, failure-isolated so an audit
+      failure never changes the denial outcome. Honest limitation: agent
+      sessions hold the admin password, so a password-minted JWT is
+      indistinguishable from a browser login at issuance — the credential
+      class is defense-in-depth, and the FAR-611 sweep alarm is the detective
+      control (`test_hitl_resilience`, `test_mcp_runtime_tools`)
 - [x] Team-scoped gates restrict claiming to members whose team role is
       `runner`/`operator` — otherwise `NotTeamMemberError` (`_TEAM_CLAIM_ROLES`)
 - [x] Stale gates warn their owners and expired claims are reset to unclaimed

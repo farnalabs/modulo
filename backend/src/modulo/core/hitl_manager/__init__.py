@@ -205,16 +205,24 @@ class HITLManager:
         org_id: uuid.UUID,
         required_team_id: uuid.UUID | None = None,
         context_json: dict[str, Any] | None = None,
+        gate_config_json: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Insert a new unclaimed gate row. Idempotent if called again for same key.
 
         ``context_json`` (FAR-613) is the fire-time decision briefing captured
-        by the executor's interrupt handler — the resolved gate description,
+        by the executor's interrupt handler - the resolved gate description,
         condition, trigger kind, source node, bounded artifact excerpts, and
         the raising output's reason. Persisted on the claim row so the
         reviewer's briefing reflects the graph state at FIRE time. An
         idempotent re-entry (existing row) leaves the original context
-        untouched — a replay must never overwrite the first fire's briefing.
+        untouched - a replay must never overwrite the first fire's briefing.
+
+        ``gate_config_json`` (FAR-634) is the resolved ``hitl_gate_config``
+        stamped by the executor at fire time so the human_only resolver reads
+        it in one claim-row lookup instead of the snapshot/live walk (legacy
+        rows without a stamp keep the walk as fallback). Same idempotent
+        contract as ``context_json``: a replay never overwrites the first
+        fire's stamp.
         """
         # Check for existing row first (unique constraint: run_id + gate_id).
         # Race: a concurrent caller may insert between our check and flush.
@@ -230,6 +238,7 @@ class HITLManager:
             required_team_id=required_team_id,
             expires_at=datetime.now(UTC) + timedelta(minutes=_DEFAULT_EXPIRY_MINUTES),
             context_json=context_json,
+            gate_config_json=gate_config_json,
         )
         session.add(gate)
         try:

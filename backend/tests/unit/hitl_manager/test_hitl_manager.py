@@ -232,6 +232,31 @@ async def test_create_gate_inserts_new_row():
     assert added.account_id is None
 
 
+async def test_create_gate_stamps_gate_config_json():
+    """FAR-634: the executor's fire-time resolved config rides onto the claim
+    row so the human_only resolver reads it in one lookup at decision time."""
+    session = _session_get(return_value=None)
+    mgr = HITLManager()
+    await mgr.create_gate(
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        pipeline_id=_PIPELINE,
+        org_id=_ORG,
+        gate_config_json={"human_only": True},
+    )
+    added = session.add.call_args[0][0]
+    assert added.gate_config_json == {"human_only": True}
+
+
+async def test_create_gate_without_stamp_leaves_gate_config_null():
+    session = _session_get(return_value=None)
+    mgr = HITLManager()
+    await mgr.create_gate(session, run_id=_RUN, gate_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG)
+    added = session.add.call_args[0][0]
+    assert added.gate_config_json is None
+
+
 async def test_create_gate_idempotent_if_exists():
     existing = _gate()
     session = _session_get(return_value=existing)
