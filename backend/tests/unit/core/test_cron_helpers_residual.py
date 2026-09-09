@@ -1583,8 +1583,11 @@ def test_is_nodeless_zombie_row_rejects_missing_started_at():
 
 async def test_fail_nodeless_run_noop_when_run_missing_or_not_running():
     session = _MockSession()
-    await ch._fail_nodeless_run(session, uuid.uuid4(), ORG)
+    summary: dict[str, Any] = {"claimed_but_never_dispatched": 0}
+    await ch._fail_nodeless_run(session, uuid.uuid4(), ORG, summary)
     assert not session.added
+    # FAR-714: a no-op repair (run missing) never bumps the detection counter.
+    assert summary["claimed_but_never_dispatched"] == 0
 
 
 # ---------------------------------------------------------------------------
