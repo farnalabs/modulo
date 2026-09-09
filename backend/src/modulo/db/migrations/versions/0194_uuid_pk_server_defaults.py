@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from alembic import op
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 revision: str = "0194_uuid_pk_server_defaults"
 down_revision: str | None = "0193_run_node_outputs_sweep_index"
@@ -110,6 +111,7 @@ _UPGRADE_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE remy_skills ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE run_daily_facts ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE runs ALTER COLUMN id SET DEFAULT gen_random_uuid()",
+    "ALTER TABLE runner_probe_cache ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE saved_views ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE scheduled_reports ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE schema_folders ALTER COLUMN id SET DEFAULT gen_random_uuid()",
@@ -196,6 +198,7 @@ _DOWNGRADE_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE remy_skills ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE run_daily_facts ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE runs ALTER COLUMN id DROP DEFAULT",
+    "ALTER TABLE runner_probe_cache ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE saved_views ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE scheduled_reports ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE schema_folders ALTER COLUMN id DROP DEFAULT",
@@ -222,10 +225,21 @@ _DOWNGRADE_STATEMENTS: tuple[str, ...] = (
 def upgrade() -> None:
     bind = op.get_bind()
     for stmt in _UPGRADE_STATEMENTS:
-        bind.execute(text(stmt))
+        # ``runner_probe_cache`` is created by a LATER migration (0202) that also
+        # supplies its uuid-PK server default at CREATE time; guard against the
+        # table not yet existing when this frozen enum runs (post-0194 tables).
+        try:
+            bind.execute(text(stmt))
+        except ProgrammingError as exc:
+            if getattr(exc.orig, "sqlstate", "") != "42P01":  # undefined_table
+                raise
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     for stmt in _DOWNGRADE_STATEMENTS:
-        bind.execute(text(stmt))
+        try:
+            bind.execute(text(stmt))
+        except ProgrammingError as exc:
+            if getattr(exc.orig, "sqlstate", "") != "42P01":  # undefined_table
+                raise

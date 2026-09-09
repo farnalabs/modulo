@@ -243,9 +243,10 @@ async def run_runner_health_probe(
                                     if is_placeholder_bundled_runner_image_ref(ref)
                                     else await boundary.image_present(ref)
                                 )
-                        images_present: bool | None = (
-                            all(bool(checked_images.get(ref)) for ref in image_refs) if image_refs else None
-                        )
+                        if not image_refs:
+                            images_present = None
+                        else:
+                            images_present = all(bool(checked_images.get(ref)) for ref in image_refs)
                     else:
                         images_present = None
 
