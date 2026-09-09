@@ -926,7 +926,7 @@ class TestValidateParameterSchema(AuthContext):
         mock_session.return_value = make_session_context(AsyncMock())
         result = await validate_parameter_schema(schema_id=str(schema.id), values={"region": "us-east-1"})
         assert result["data"]["valid"] is True
-        assert result["data"]["errors"] == []
+        assert not result["data"]["errors"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
