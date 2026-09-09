@@ -2924,12 +2924,6 @@ elements:
       - testid: hitl-review-claim-failure-banner
         type: element
         dynamic_testid: false
-      - testid: hitl-review-node-name
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-pipeline-name
-        type: element
-        dynamic_testid: false
       - testid: hitl-review-prev-page
         type: button
         dynamic_testid: false
