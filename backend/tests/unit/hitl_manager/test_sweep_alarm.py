@@ -3,7 +3,7 @@
 Covers: threshold crossing (6th approve across 2 pipelines alarms), the
 single-pipeline non-alarm, cooldown suppression within the hour, failure
 isolation (detection/notifier raising never fails the decision), the
-manager wiring (approve / approve_with_modification invoke the alarm), the
+  manager wiring (approve / approve_with_modification / deliver_manual invoke the alarm), the
 aggregate detection query covering BOTH decision surfaces (approve +
 manual delivery, FAR-611 review fix), the detection savepoint (a DB error
 on the detection SELECT never aborts the decision transaction), and the
@@ -386,6 +386,38 @@ class TestManagerWiring:
 
         mock_alarm.assert_awaited_once()
         assert mock_alarm.await_args.kwargs["actor_id"] == _USER
+
+    async def test_deliver_manual_invokes_sweep_alarm(self):
+        """deliver_manual() runs the sweep alarm too (FAR-611 review fix).
+
+        A pure manual-delivery sweep (REST /runs/{run}/hitl/{gate}/deliver-manual,
+        MCP deliver_manual) writes a ``hitl.manual_delivery`` event counted by
+        the detection aggregate, so it must trip the same alarm as an approve.
+        """
+        future = datetime.now(UTC) + timedelta(minutes=5)
+        gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+        gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="deliver_manual")
+        session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
+
+        with (
+            patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock),
+            patch("modulo.core.hitl_manager.maybe_alarm_approve_sweep", new_callable=AsyncMock) as mock_alarm,
+        ):
+            mgr = HITLManager()
+            await mgr.deliver_manual(
+                session,
+                run_id=_RUN,
+                gate_id=_GATE,
+                org_id=_ORG,
+                claim_token="tok",
+                output={"value": 42},
+                actor_id=_USER,
+            )
+
+        mock_alarm.assert_awaited_once()
+        assert mock_alarm.await_args.kwargs["org_id"] == _ORG
+        assert mock_alarm.await_args.kwargs["actor_id"] == _USER
+        assert mock_alarm.await_args.kwargs["gate"].id == gate_decided.id
 
     async def test_alarm_failure_does_not_fail_the_decision(self):
         """The no-throw alarm contract holds through the manager path."""

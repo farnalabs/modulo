@@ -47,10 +47,10 @@ contract (only ``asyncio.CancelledError`` propagates) — a broken alarm
 must never fail the human's decision. The detection SELECT and the
 emission audit write each run inside a SAVEPOINT so a DB error on either
 rolls back only that work, leaving the surrounding decision transaction
-healthy. Callers (``HITLManager.approve`` / ``approve_with_modification``)
-invoke it right after the decision's audit events are committed to the
-session, so the just-made decision is visible to the detection query
-within the same transaction.
+healthy. Callers (``HITLManager.approve`` / ``approve_with_modification``
+/ ``deliver_manual``) invoke it right after the decision's audit events are
+committed to the session, so the just-made decision is visible to the
+detection query within the same transaction.
 """
 
 from __future__ import annotations
@@ -242,7 +242,7 @@ async def maybe_alarm_approve_sweep(
     """Detect and alarm an approve sweep for *actor_id*. Returns True when alarmed.
 
     Runs after a decision (approve plain/with-modification, or a manual
-    delivery once the manager wires it) has committed its decision audit
+    delivery via ``deliver_manual``) has committed its decision audit
     event on *session*, so the detection count includes the just-made
     decision. The count covers ``hitl.output_delivered`` AND
     ``hitl.manual_delivery`` events. No-throw by contract: every failure

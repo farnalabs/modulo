@@ -687,6 +687,12 @@ class HITLManager:
                 )
             ],
         )
+        # FAR-611: approve-sweep anomaly alarm — failure-isolated so a broken
+        # alarm can never fail the committed decision. A pure manual-delivery
+        # sweep (REST /runs/{run}/hitl/{gate}/deliver-manual, MCP deliver_manual)
+        # writes a ``hitl.manual_delivery`` event counted by the detection
+        # aggregate, so it must trip the same alarm as an approve.
+        await self._run_sweep_alarm(session, org_id=org_id, actor_id=actor_id, gate=gate)
 
         return gate
 
