@@ -1,11 +1,9 @@
-"""``modulo apply`` orchestration + CLI registration (FAR-681, slice 1).
+"""``modulo apply`` orchestration + CLI registration (FAR-681, slices 1+2).
 
 Declarative configuration: ``modulo apply -f config.yaml`` plans name-based
-upserts against the live org and executes them idempotently. This slice
-covers schemas (+versions) and model_backends; pipelines and triggers land
-in slices 2/3.
-
-Exit-code semantics:
+upserts against the live org and executes them idempotently. Slices 1+2
+cover schemas (+versions), model_backends, pipelines (agent name-refs in
+graphs) and triggers ((pipeline, name) identity). Exit-code semantics:
 - dry-run (--dry-run/--plan): always exit 0
 - real apply: exit 1 if any entity was blocked or failed, else 0
 """
@@ -39,13 +37,14 @@ def run_apply(
     api_key: str,
     dry_run: bool,
     client: Any = None,
+    refresh_secrets: bool = False,
 ) -> dict[str, Any]:
     """Plan (and unless dry-run, execute) an ApplyConfig; returns the report."""
     from modulo.cli.apply.executor import ApplyExecutor
 
     executor = ApplyExecutor(base_url, api_key, client=client)
     try:
-        return executor.run(config, dry_run=dry_run)
+        return executor.run(config, dry_run=dry_run, refresh_secrets=refresh_secrets)
     finally:
         executor.close()
 
@@ -105,6 +104,18 @@ def register_apply(group: click.Group) -> None:
         help="Compute and report the plan without applying changes",
     )
     @click.option(
+        "--refresh-secrets",
+        "refresh_secrets",
+        is_flag=True,
+        default=False,
+        help=(
+            "Always re-send config_json for triggers declaring secret-shaped entries. "
+            "The server masks stored secrets on read, so a rotated ${env:SECRET} value "
+            "is invisible to the drift hash (the plan reports 'unchanged' and no PUT "
+            "is sent) — this flag re-sends those configs every run."
+        ),
+    )
+    @click.option(
         "--output",
         "output_format",
         type=click.Choice(["json", "table"]),
@@ -121,10 +132,11 @@ def register_apply(group: click.Group) -> None:
     def apply_cmd(
         config_path: Path,
         dry_run: bool,
+        refresh_secrets: bool,
         output_format: str,
         json_flag: bool,
     ) -> None:
-        """Apply a declarative config file (schemas, model backends)."""
+        """Apply a declarative config file (schemas, model backends, pipelines, triggers)."""
         try:
             config = load_apply_file(config_path)
         except ApplyLoadError as exc:
@@ -135,7 +147,9 @@ def register_apply(group: click.Group) -> None:
             msg = f"{_ENV_URL} and {_ENV_API_KEY} environment variables are required"
             raise click.ClickException(msg)
         try:
-            report = run_apply(config, base_url=base_url, api_key=api_key, dry_run=dry_run)
+            report = run_apply(
+                config, base_url=base_url, api_key=api_key, dry_run=dry_run, refresh_secrets=refresh_secrets
+            )
         except ApplyHttpError as exc:
             raise click.ClickException(_http_error_message(exc)) from None
         except (httpx.HTTPError, KeyError, ValueError) as exc:

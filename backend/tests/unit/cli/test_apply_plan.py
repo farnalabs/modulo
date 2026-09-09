@@ -37,6 +37,129 @@ class TestPlanDecisionTable:
         assert decision.status == "created"
         assert decision.reason is None
 
+    def test_absent_pipeline_is_created(self) -> None:
+        view = {"description": None, "max_concurrent_runs": 5}
+        decision = plan_entity("pipeline", "sample", view, None)
+        assert decision.status == "created"
+
+    def test_pipeline_unchanged_when_managed_fields_match(self) -> None:
+        view = {"max_concurrent_runs": 3, "graph": {"nodes": [{"id": "n1"}], "edges": []}}
+        current = {"description": None, "max_concurrent_runs": 3, "graph": {"nodes": [{"id": "n1"}], "edges": []}}
+        decision = plan_entity("pipeline", "sample", view, current)
+        assert decision.status == "unchanged"
+
+    def test_pipeline_graphless_desired_view_ignores_current_graph(self) -> None:
+        """A graph-less config does not manage the graph: UI graph drift never
+        marks the entity updated."""
+        view = {"description": "Sample pipeline", "max_concurrent_runs": 5}
+        current = {
+            "description": "Sample pipeline",
+            "max_concurrent_runs": 5,
+            "graph": {"nodes": [{"id": "ui-node"}], "edges": []},
+        }
+        decision = plan_entity("pipeline", "sample", view, current)
+        assert decision.status == "unchanged"
+
+    def test_pipeline_drift_is_updated(self) -> None:
+        view = {"description": None, "max_concurrent_runs": 5}
+        current = {"description": None, "max_concurrent_runs": 9}
+        decision = plan_entity("pipeline", "sample", view, current)
+        assert decision.status == "updated"
+
+    def test_trigger_unchanged_with_canonicalised_spend_limit(self) -> None:
+        view = {
+            "trigger_type": "cron",
+            "active": True,
+            "max_concurrent_runs": 1,
+            "daily_spend_limit": 10.5,
+            "config_json": {"scan_interval": 30},
+        }
+        current = {
+            "trigger_type": "cron",
+            "active": True,
+            "max_concurrent_runs": 1,
+            # the API serialises the Numeric column as float
+            "daily_spend_limit": 10.5,
+            "config_json": {"scan_interval": 30},
+        }
+        decision = plan_entity("trigger", "report/nightly", view, current)
+        assert decision.status == "unchanged"
+
+    def test_trigger_high_precision_spend_limit_converges(self) -> None:
+        """A declaration with more than 4dp quantizes to the column's Numeric
+        (12, 4) scale, so the stored 4dp value compares equal instead of
+        drifting as a permanent 'updated'."""
+        from modulo.cli.apply.models import TriggerEntity
+
+        entity = TriggerEntity.model_validate(
+            {"pipeline": "p", "name": "hook", "trigger_type": "ongoing", "daily_spend_limit": 10.55555}
+        )
+        current = {
+            "trigger_type": "ongoing",
+            "active": True,
+            "max_concurrent_runs": 1,
+            # the stored 4dp value
+            "daily_spend_limit": 10.5556,
+            "cron_expression": None,
+            "cron_timezone": None,
+            "config_json": {},
+        }
+        decision = plan_entity("trigger", "p/hook", entity.managed_view(), current)
+        assert decision.status == "unchanged"
+
+    def test_trigger_secret_shaped_entries_excluded_both_sides(self) -> None:
+        """hmac_secret (server Fernet-encrypted + read-masked) is excluded: the
+        real desired value never drifts against the read mask."""
+        from modulo.cli.apply.models import TriggerEntity
+
+        entity = TriggerEntity.model_validate(
+            {
+                "pipeline": "report",
+                "name": "hook",
+                "trigger_type": "webhook",
+                "config_json": {"hmac_secret": "${env:HS}"},
+            }
+        )
+        # Simulate the executor's client-side env resolution (the load-time
+        # validator only accepts refs; the resolved literal is what reaches
+        # managed_view at plan time).
+        entity.config_json = {"hmac_secret": "resolved-secret"}
+        current = {
+            "trigger_type": "webhook",
+            "active": True,
+            "max_concurrent_runs": 1,
+            "daily_spend_limit": None,
+            "cron_expression": None,
+            "cron_timezone": None,
+            "config_json": {"hmac_secret": "••••••"},
+            "next_fire_at": None,
+            "in_flight": 0,
+        }
+        decision = plan_entity("trigger", "hook", entity.managed_view(), current)
+        assert decision.status == "unchanged"
+
+    def test_trigger_foreign_config_keys_do_not_drift(self) -> None:
+        """Stored config keys undeclared by the config are NOT compared (apply
+        merges declared keys and never deletes foreign ones)."""
+        from modulo.cli.apply.models import TriggerEntity
+
+        entity = TriggerEntity.model_validate(
+            {"pipeline": "report", "name": "hook", "trigger_type": "webhook", "config_json": {"note": "kept"}}
+        )
+        current = {
+            "trigger_type": "webhook",
+            "active": True,
+            "max_concurrent_runs": 1,
+            "daily_spend_limit": None,
+            "cron_expression": None,
+            "cron_timezone": None,
+            # a key the UI added that apply does not declare
+            "config_json": {"ui_added": True, "note": "kept"},
+        }
+        decision = plan_entity("trigger", "report/hook", entity.managed_view(), current)
+        assert decision.status == "unchanged"
+        assert decision.reason is None
+
     def test_matching_entity_is_unchanged(self) -> None:
         current = {
             "name": "alpha",
