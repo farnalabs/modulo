@@ -500,6 +500,37 @@ def _collection_response(prim: LibraryPrimitive) -> CollectionResponse:
     )
 
 
+async def _load_draft_collection(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    primitive_id: uuid.UUID,
+) -> LibraryPrimitive:
+    """Fetch a collection primitive and enforce it is a draft collection.
+
+    Raises 404 when the primitive is absent, 400 when it is not a
+    ``library_collection`` primitive, and 400 when it is not in the ``draft``
+    state (only draft collections can be mutated or published). Centralised so
+    the update/publish endpoints share a single validation path.
+    """
+    prim = await get_primitive(session, org_id, primitive_id)
+    if prim is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Primitive {primitive_id} not found",
+        )
+    if prim.primitive_type != "library_collection":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not a collection primitive",
+        )
+    if prim.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot mutate a collection with status '{prim.status}'",
+        )
+    return prim
+
+
 # ---------------------------------------------------------------------------
 # List / Browse
 # ---------------------------------------------------------------------------
@@ -1964,22 +1995,7 @@ async def update_collection_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            prim = await get_primitive(session, org_id, primitive_id)
-            if prim is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Primitive {primitive_id} not found",
-                )
-            if prim.primitive_type != "library_collection":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Not a collection primitive",
-                )
-            if prim.status != "draft":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Cannot update a collection with status '{prim.status}'",
-                )
+            prim = await _load_draft_collection(session, org_id, primitive_id)
             prim.manifest_pins = [p.model_dump() for p in req.manifest_pins]
             prim.content_json = {"pins": prim.manifest_pins}
             await session.flush()
@@ -2010,22 +2026,7 @@ async def publish_collection_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            prim = await get_primitive(session, org_id, primitive_id)
-            if prim is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Primitive {primitive_id} not found",
-                )
-            if prim.primitive_type != "library_collection":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Not a collection primitive",
-                )
-            if prim.status != "draft":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Cannot publish a collection with status '{prim.status}'",
-                )
+            prim = await _load_draft_collection(session, org_id, primitive_id)
 
             pins = prim.manifest_pins or []
             errors = await _validate_manifest_pins(pins, session, org_id)

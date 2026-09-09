@@ -4,6 +4,7 @@ Unit tier: no DB — CRUD/service functions are patched at the route-module
 boundary and the SQLAlchemy session is a contract-correct AsyncMock.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -11,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -77,6 +79,30 @@ def _build_client(principal: AuthenticatedPrincipal) -> tuple[TestClient, AsyncM
     # Feature flag registry with library_collection enabled
     mock_registry = FeatureFlagRegistry(current_tier="community")
     mock_registry.set_override("library_collection", True)
+
+    with patch("modulo.api.routes.library.get_registry", return_value=mock_registry):
+        test_client = TestClient(app)
+    test_client.mock_session = mock_session  # type: ignore[attr-defined]
+    return test_client, mock_session
+
+
+def _build_client_flag(principal: AuthenticatedPrincipal, *, enabled: bool) -> tuple[TestClient, AsyncMock]:
+    """Like ``_build_client`` but lets the caller toggle the library_collection flag."""
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: principal
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+
+    mock_registry = FeatureFlagRegistry(current_tier="community")
+    mock_registry.set_override("library_collection", enabled)
 
     with patch("modulo.api.routes.library.get_registry", return_value=mock_registry):
         test_client = TestClient(app)
@@ -387,3 +413,207 @@ class TestPublishCollectionEndpoint:
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
             )
         assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Feature flag gate (library_collection must be enabled)
+# ---------------------------------------------------------------------------
+
+
+class TestCollectionFeatureFlag:
+    def test_create_collection_flag_disabled_returns_404(self) -> None:
+        client, _ = _build_client_flag(_principal(), enabled=False)
+        resp = client.post(
+            "/api/v1/libraries/collections",
+            json={"name": "My Collection", "slug": "my-collection"},
+        )
+        assert resp.status_code == 404
+
+    def test_update_collection_flag_disabled_returns_404(self) -> None:
+        client, _ = _build_client_flag(_principal(), enabled=False)
+        resp = client.patch(
+            f"/api/v1/libraries/collections/{uuid.uuid4()}",
+            json={"manifest_pins": []},
+        )
+        assert resp.status_code == 404
+
+    def test_publish_collection_flag_disabled_returns_404(self) -> None:
+        client, _ = _build_client_flag(_principal(), enabled=False)
+        resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/publish")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Create collection — DB error paths
+# ---------------------------------------------------------------------------
+
+
+class TestCreateCollectionErrorPaths:
+    def test_create_integrity_error_returns_409(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+            patch(
+                "modulo.api.routes.library.create_library_primitive",
+                new_callable=AsyncMock,
+                side_effect=IntegrityError("stmt", {}, RuntimeError("conflict")),
+            ),
+        ):
+            resp = client.post(
+                "/api/v1/libraries/collections",
+                json={"name": "My Collection", "slug": "my-collection"},
+            )
+        assert resp.status_code == 409
+
+    def test_create_programming_error_returns_501(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+            patch(
+                "modulo.api.routes.library.create_library_primitive",
+                new_callable=AsyncMock,
+                side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
+            ),
+        ):
+            resp = client.post(
+                "/api/v1/libraries/collections",
+                json={"name": "My Collection", "slug": "my-collection"},
+            )
+        assert resp.status_code == 501
+
+    def test_create_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+            patch(
+                "modulo.api.routes.library.create_library_primitive",
+                new_callable=AsyncMock,
+                side_effect=SQLAlchemyError("db down"),
+            ),
+        ):
+            resp = client.post(
+                "/api/v1/libraries/collections",
+                json={"name": "My Collection", "slug": "my-collection"},
+            )
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Update collection — DB error paths
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateCollectionErrorPaths:
+    def test_update_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
+        ):
+            resp = client.patch(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}",
+                json={"manifest_pins": []},
+            )
+        assert resp.status_code == 501
+
+    def test_update_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.patch(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}",
+                json={"manifest_pins": []},
+            )
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Publish collection — DB error paths
+# ---------------------------------------------------------------------------
+
+
+class TestPublishCollectionErrorPaths:
+    def test_publish_programming_error_returns_501(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/publish")
+        assert resp.status_code == 501
+
+    def test_publish_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/publish")
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Manifest pin validation (ADR 032)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateManifestPins:
+    def test_empty_slug_or_version_rejected(self) -> None:
+        from modulo.api.routes.library import _validate_manifest_pins
+
+        async def run() -> list[str]:
+            with patch("modulo.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock):
+                return await _validate_manifest_pins(
+                    [{"slug": "", "version": "1.0"}, {"slug": "s", "version": ""}],
+                    MagicMock(),
+                    _ORG_ID,
+                )
+
+        errors = asyncio.run(run())
+        assert len(errors) == 2
+        assert any("non-empty slug and version" in e for e in errors)
+
+    def test_unknown_primitive_rejected(self) -> None:
+        from modulo.api.routes.library import _validate_manifest_pins
+
+        async def run() -> list[str]:
+            with patch(
+                "modulo.api.routes.library._lookup_pin_primitive",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                return await _validate_manifest_pins([{"slug": "ghost", "version": "1.0"}], MagicMock(), _ORG_ID)
+
+        errors = asyncio.run(run())
+        assert any("unknown primitive" in e for e in errors)
+
+    def test_disallowed_pin_type_rejected(self) -> None:
+        from modulo.api.routes.library import _validate_manifest_pins
+
+        pinned = _make_collection_pin_primitive("my-composite", "1.0", primitive_type="composite")
+
+        async def run() -> list[str]:
+            with patch(
+                "modulo.api.routes.library._lookup_pin_primitive",
+                new_callable=AsyncMock,
+                return_value=pinned,
+            ):
+                return await _validate_manifest_pins([{"slug": "my-composite", "version": "1.0"}], MagicMock(), _ORG_ID)
+
+        errors = asyncio.run(run())
+        assert any("not allowed" in e for e in errors)
+
+    def test_valid_pin_accepted(self) -> None:
+        from modulo.api.routes.library import _validate_manifest_pins
+
+        pinned = _make_collection_pin_primitive("my-schema", "1.0", primitive_type="schema")
+
+        async def run() -> list[str]:
+            with patch(
+                "modulo.api.routes.library._lookup_pin_primitive",
+                new_callable=AsyncMock,
+                return_value=pinned,
+            ):
+                return await _validate_manifest_pins([{"slug": "my-schema", "version": "1.0"}], MagicMock(), _ORG_ID)
+
+        errors = asyncio.run(run())
+        assert errors == []

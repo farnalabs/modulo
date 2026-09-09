@@ -62,7 +62,7 @@
             <span class="block text-sm font-medium">
               {{ $t('views.LibraryView.collection_manifest_pins') }}
             </span>
-            <Button type="button" class="px-3 py-1 text-sm" @click="addPin">
+            <Button type="button" class="px-3 py-1 text-sm" data-testid="collection-add-pin" @click="addPin">
               {{ $t('views.LibraryView.collection_add_pin') }}
             </Button>
           </div>
@@ -88,7 +88,7 @@
               :placeholder="$t('views.LibraryView.collection_pin_version')"
               class="w-32 rounded-lg border border-input bg-background px-3 py-2 text-sm"
             />
-            <Button type="button" class="px-3 py-1 text-sm" @click="removePin(i)">
+            <Button type="button" class="px-3 py-1 text-sm" data-testid="collection-remove-pin" @click="removePin(i)">
               {{ $t('views.LibraryView.collection_remove_pin') }}
             </Button>
           </div>
