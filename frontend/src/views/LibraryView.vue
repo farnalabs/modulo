@@ -96,21 +96,41 @@
         >
           {{ $t('views.LibraryView.community_tab') }}
         </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="section === 'collections'"
+          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
+          :class="section === 'collections' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+          data-testid="library-section-collections"
+          @click="switchSection('collections')"
+        >
+          {{ $t('views.LibraryView.collections_tab') }}
+        </button>
       </div>
 
       <p v-if="section === 'community'" class="text-sm text-muted-foreground" data-testid="library-community-disclaimer">
         {{ $t('views.LibraryView.community_disclaimer') }}
       </p>
 
-      <div v-if="loading" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
+      <div v-if="loading && section !== 'collections'" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
+      <div v-if="collectionsLoading && section === 'collections'" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
 
       <div
-        v-else-if="error"
+        v-else-if="error && section !== 'collections'"
         class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
         role="alert"
         data-testid="library-error"
       >
         {{ error }}
+      </div>
+      <div
+        v-else-if="collectionsError && section === 'collections'"
+        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        role="alert"
+        data-testid="library-collections-error"
+      >
+        {{ collectionsError }}
       </div>
 
       <EmptyState
@@ -170,6 +190,34 @@
           @view-details="viewPrimitive"
           @toggle-auto-update="toggleAutoUpdate"
         />
+      </div>
+
+      <div v-if="section === 'collections'" class="space-y-4">
+        <div class="flex justify-end">
+          <Button
+            as="router-link"
+            to="/library/collections/new"
+            class="px-4 py-1.5"
+            data-testid="library-create-collection"
+          >
+            {{ $t('views.LibraryView.create_collection') }}
+          </Button>
+        </div>
+        <EmptyState
+          v-if="collectionPrimitives.length === 0"
+          :title="$t('views.LibraryView.no_collections_found')"
+        />
+        <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <LibraryPrimitiveCard
+            v-for="prim in collectionPrimitives"
+            :key="prim.id"
+            :prim="prim"
+            badge="collection"
+            :show-tags="false"
+            :adapting="adapting"
+            @view-details="viewCollection"
+          />
+        </div>
       </div>
 
       <div v-if="total > pageSize" class="flex justify-center items-center gap-2 mt-8">
@@ -239,6 +287,7 @@ const typeOptions = [
   { value: 'integration', labelKey: 'views.LibraryView.type_integrations' },
   { value: 'composite', labelKey: 'views.LibraryView.type_composites' },
   { value: 'lifecycle_map', labelKey: 'views.LibraryView.type_lifecycle_maps' },
+  { value: 'library_collection', labelKey: 'views.LibraryView.type_library_collections' },
 ]
 
 function typeLabel(type: string): string {
@@ -265,7 +314,7 @@ function removeType(value: string) {
   onFilterChange()
 }
 
-type LibrarySection = 'native' | 'community'
+type LibrarySection = 'native' | 'community' | 'collections'
 const section = ref<LibrarySection>('native')
 
 const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
@@ -306,7 +355,11 @@ function switchSection(next: LibrarySection) {
   if (section.value === next) return
   section.value = next
   page.value = 1
-  loadPrimitives()
+  if (next === 'collections') {
+    loadCollections()
+  } else {
+    loadPrimitives()
+  }
 }
 
 function applyTypeFilter(items: LibraryPrimitive[]): LibraryPrimitive[] {
@@ -318,10 +371,41 @@ const nativePrimitives = computed(() => applyTypeFilter(primitives.value.filter(
 const previewPrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => p.tier === 'preview')))
 const communityPrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => p.source === 'community')))
 
+const collectionPrimitives = ref<LibraryPrimitive[]>([])
+
+const { loading: collectionsLoading, error: collectionsError, data: collectionsLoadResp, load: loadCollections } = useDataFetch<ListResponse>(
+  async () => {
+    const params = new URLSearchParams({
+      page: String(page.value),
+      page_size: String(pageSize.value),
+      primitive_type: 'library_collection',
+    })
+    if (search.value) params.set('search', search.value)
+
+    const { data, error: err } = await api.GET('/api/v1/libraries', {
+      params: { query: Object.fromEntries(params) as any },
+    })
+    if (err) return { data: undefined, error: err }
+    return { data: data as unknown as ListResponse, error: undefined }
+  },
+  { initialValue: { items: [] as LibraryPrimitive[], total: 0, page: 1, page_size: 12 } },
+)
+
+watch(collectionsLoadResp, (d) => {
+  if (d) {
+    collectionPrimitives.value = d.items
+    total.value = d.total
+  }
+}, { immediate: true })
+
 function onFilterChange() {
   page.value = 1
   showTypeDropdown.value = false
-  loadPrimitives()
+  if (section.value === 'collections') {
+    loadCollections()
+  } else {
+    loadPrimitives()
+  }
 }
 
 function onClickOutside(e: MouseEvent) {
@@ -373,6 +457,10 @@ async function createLifecycleMap(prim: LibraryPrimitive): Promise<void> {
 
 function viewPrimitive(prim: LibraryPrimitive) {
   router.push({ name: 'library-pipeline-wizard', params: { id: prim.id } })
+}
+
+function viewCollection(prim: LibraryPrimitive) {
+  router.push({ name: 'library-collection-detail', params: { id: prim.id } })
 }
 
 const toggleLoading = ref<Record<string, boolean>>({})

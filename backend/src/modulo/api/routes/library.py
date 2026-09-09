@@ -33,6 +33,11 @@ from modulo.core.library_service import (
     list_primitives,
     publish_contribution,
 )
+from modulo.core.library_service.primitive_types import (
+    COLLECTION_PIN_TYPES,
+    MAX_COLLECTION_PINS,
+    PRIMITIVE_TYPES,
+)
 from modulo.core.lifecycle_map.import_export import (
     PRIMITIVE_TYPE as LIFECYCLE_MAP_PRIMITIVE_TYPE,
 )
@@ -215,6 +220,9 @@ class LibraryPrimitiveResponse(BaseModel):
     visibility: str
     created_by: uuid.UUID | None = Field(default=None, validation_alias="account_id")
     auto_update: bool = True
+    status: str | None = None
+    manifest_pins: list[dict[str, Any]] | None = None
+    trust_header: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -235,8 +243,11 @@ class LibraryPrimitiveListResponse(BaseModel):
     has_more: bool = False
 
 
+_PRIMITIVE_TYPE_PATTERN = f"^({'|'.join(PRIMITIVE_TYPES)})$"
+
+
 class LibraryPrimitiveCreate(TeamVisibilityMixin):
-    primitive_type: str = Field(pattern=r"^(schema|workflow|agent|integration|test_fixture|composite|lifecycle_map)$")
+    primitive_type: str = Field(pattern=_PRIMITIVE_TYPE_PATTERN)
     name: str = Field(min_length=1, max_length=255)
     slug: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
@@ -356,6 +367,78 @@ class PipelineFromTemplateResponse(BaseModel):
     ready_to_run: bool
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Library Collection authoring (FAR-760)
+# ---------------------------------------------------------------------------
+
+_COLLECTION_PIN_TYPES_ALLOWED = COLLECTION_PIN_TYPES
+
+
+class CollectionPin(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=255)
+    version: str = Field(..., min_length=1, max_length=50)
+
+
+class CollectionCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    slug: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    manifest_pins: list[CollectionPin] = Field(default_factory=list)
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = Field(default="org", pattern=r"^(org|team)$")
+
+
+class CollectionUpdateRequest(BaseModel):
+    manifest_pins: list[CollectionPin] = Field(default_factory=list)
+
+
+class CollectionResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    name: str
+    slug: str
+    description: str | None
+    status: str | None
+    manifest_pins: list[dict[str, Any]] | None
+    trust_header: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+def _validate_manifest_pins(
+    pins: list[dict[str, Any]],
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> list[str]:
+    """Validate collection manifest pins per ADR 032.
+
+    Returns a list of error messages (empty = valid).
+    """
+    errors: list[str] = []
+    if not pins:
+        errors.append("manifest_pins must not be empty")
+        return errors
+    if len(pins) > MAX_COLLECTION_PINS:
+        errors.append(f"manifest_pins must not exceed {MAX_COLLECTION_PINS} items")
+        return errors
+
+    seen: set[tuple[str, str]] = set()
+    for pin in pins:
+        slug = pin.get("slug", "")
+        version = pin.get("version", "")
+        if not slug or not version:
+            errors.append(f"pin must have non-empty slug and version: {pin}")
+            continue
+        key = (slug, version)
+        if key in seen:
+            errors.append(f"duplicate pin: {slug}@{version}")
+        seen.add(key)
+
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -1596,7 +1679,7 @@ async def create_lifecycle_map_from_primitive_endpoint(
 class CommunityContributeRequest(BaseModel):
     primitive_type: str = Field(
         ...,
-        pattern=r"^(schema|workflow|agent|integration|test_fixture|composite|lifecycle_map)$",
+        pattern=_PRIMITIVE_TYPE_PATTERN,
     )
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=255)
@@ -1739,3 +1822,207 @@ async def admin_publish_contribution_endpoint(
         _log.exception("admin_publish_contribution_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
     return LibraryPrimitiveResponse.model_validate(result)
+
+
+# ---------------------------------------------------------------------------
+# Collection authoring lifecycle (FAR-760)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/collections", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("library.create_collection_endpoint")
+async def create_collection_endpoint(
+    req: CollectionCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.write"),
+) -> CollectionResponse:
+    """Create a new library collection (status=draft)."""
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            existing = await get_primitive_by_slug(session, org_id, "library_collection", req.slug)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Collection with slug '{req.slug}' already exists",
+                )
+            prim = await create_library_primitive(
+                session,
+                org_id=org_id,
+                source="local",
+                primitive_type="library_collection",
+                name=req.name,
+                slug=req.slug,
+                description=req.description,
+                author=principal.account_id.hex,
+                version="1.0",
+                tags=[],
+                content_json={"pins": [p.model_dump() for p in req.manifest_pins]},
+                source_url=None,
+                forked_from=None,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=req.owner_team_id,
+                visibility=req.visibility,
+                account_id=principal.account_id,
+                tier="native",
+            )
+            prim.status = "draft"
+            prim.manifest_pins = [p.model_dump() for p in req.manifest_pins]
+            await session.flush()
+    except IntegrityError:
+        _log.exception("library.create_collection_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Collection with slug '{req.slug}' already exists",
+        ) from None
+    except ProgrammingError:
+        _log.exception("library.create_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("create_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return CollectionResponse(
+        id=prim.id,
+        organisation_id=prim.organisation_id,
+        name=prim.name,
+        slug=prim.slug,
+        description=prim.description,
+        status=prim.status,
+        manifest_pins=prim.manifest_pins,
+        trust_header=prim.trust_header,
+        created_at=prim.created_at,
+        updated_at=prim.updated_at,
+    )
+
+
+@router.patch("/collections/{primitive_id}")
+@handle_db_errors("library.update_collection_endpoint")
+async def update_collection_endpoint(
+    primitive_id: uuid.UUID,
+    req: CollectionUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.write"),
+) -> CollectionResponse:
+    """Update a draft collection's manifest pins."""
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            prim = await get_primitive(session, org_id, primitive_id)
+            if prim is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Primitive {primitive_id} not found",
+                )
+            if prim.primitive_type != "library_collection":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Not a collection primitive",
+                )
+            if prim.status != "draft":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot update a collection with status '{prim.status}'",
+                )
+            prim.manifest_pins = [p.model_dump() for p in req.manifest_pins]
+            prim.content_json = {"pins": prim.manifest_pins}
+            await session.flush()
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception("library.update_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("update_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return CollectionResponse(
+        id=prim.id,
+        organisation_id=prim.organisation_id,
+        name=prim.name,
+        slug=prim.slug,
+        description=prim.description,
+        status=prim.status,
+        manifest_pins=prim.manifest_pins,
+        trust_header=prim.trust_header,
+        created_at=prim.created_at,
+        updated_at=prim.updated_at,
+    )
+
+
+@router.post(
+    "/collections/{primitive_id}/publish",
+    status_code=status.HTTP_200_OK,
+)
+@handle_db_errors("library.publish_collection_endpoint")
+async def publish_collection_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.write"),
+) -> CollectionResponse:
+    """Publish a draft collection — validates pins and sets status=published."""
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            prim = await get_primitive(session, org_id, primitive_id)
+            if prim is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Primitive {primitive_id} not found",
+                )
+            if prim.primitive_type != "library_collection":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Not a collection primitive",
+                )
+            if prim.status != "draft":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot publish a collection with status '{prim.status}'",
+                )
+
+            pins = prim.manifest_pins or []
+            errors = _validate_manifest_pins(pins, session, org_id)
+            if errors:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Validation failed: {'; '.join(errors)}",
+                )
+
+            for pin in pins:
+                pin_type = pin.get("primitive_type")
+                if pin_type and pin_type not in _COLLECTION_PIN_TYPES_ALLOWED:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Pin type '{pin_type}' is not allowed in collections. "
+                        f"Allowed types: {', '.join(sorted(_COLLECTION_PIN_TYPES_ALLOWED))}",
+                    )
+
+            prim.status = "published"
+            await session.flush()
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception("library.publish_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("publish_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return CollectionResponse(
+        id=prim.id,
+        organisation_id=prim.organisation_id,
+        name=prim.name,
+        slug=prim.slug,
+        description=prim.description,
+        status=prim.status,
+        manifest_pins=prim.manifest_pins,
+        trust_header=prim.trust_header,
+        created_at=prim.created_at,
+        updated_at=prim.updated_at,
+    )

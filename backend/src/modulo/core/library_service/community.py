@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.library_service.primitive_types import PRIMITIVE_TYPES
 from modulo.core.library_sync import LibraryClient, get_cached_manifest, is_revoked
 from modulo.core.library_sync.manifest import parse_manifest
 from modulo.db.crud.library_primitive import create_library_primitive
@@ -37,16 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Values accepted by the ``ck_library_primitives_type`` CHECK constraint on
 # ``library_primitives.primitive_type``.
-_VALID_PRIMITIVE_TYPES = {
-    "schema",
-    "workflow",
-    "agent",
-    "integration",
-    "test_fixture",
-    "pipeline_template",
-    "composite",
-    "lifecycle_map",
-}
+_VALID_PRIMITIVE_TYPES = frozenset(PRIMITIVE_TYPES)
 
 
 # Error message for an unresolvable registry entry (missing manifest, unknown/

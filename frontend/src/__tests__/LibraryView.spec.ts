@@ -26,6 +26,8 @@ const router = createRouter({
   routes: [
     { path: '/library', name: 'library', component: LibraryView },
     { path: '/library/:id/create-pipeline', name: 'library-pipeline-wizard', component: { template: '<div/>' } },
+    { path: '/library/collections/new', name: 'library-collection-create', component: { template: '<div/>' } },
+    { path: '/library/collections/:id', name: 'library-collection-detail', component: { template: '<div/>' } },
     { path: '/lifecycle-maps/:id', name: 'lifecycle-map-detail', component: { template: '<div/>' } },
   ],
 })
@@ -310,5 +312,19 @@ describe('LibraryView responsive layout (FAR-640)', () => {
     expect(classes).not.toContain('sm:flex-row')
     expect(classes).not.toContain('sm:items-center')
     expect(classes).not.toContain('sm:justify-between')
+  })
+
+  it('shows collections tab and create button', async () => {
+    getMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
+    const wrapper = await mountLibrary()
+
+    const collectionsTab = wrapper.find('[data-testid="library-section-collections"]')
+    expect(collectionsTab.exists()).toBe(true)
+
+    await collectionsTab.trigger('click')
+    await nextTick()
+
+    const createBtn = wrapper.find('[data-testid="library-create-collection"]')
+    expect(createBtn.exists()).toBe(true)
   })
 })
