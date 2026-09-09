@@ -306,7 +306,10 @@ class TestMigrationBackfillGrace:
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
-        assert heads == ["0200_runs_runner_marker_sweep_index"], f"expected a single head, got {heads}"
+        # FAR-634 added 0195_hitl_claim_gate_config_json as the child of the
+        # prior head (0200_runs_runner_marker_sweep_index), so it is now the
+        # single linear head of the chain.
+        assert heads == ["0195_hitl_claim_gate_config_json"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
