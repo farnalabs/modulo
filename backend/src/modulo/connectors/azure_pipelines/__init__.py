@@ -161,11 +161,7 @@ class AzurePipelinesConnector(ConnectorBase):
             return self._parse_run(data)
 
     async def get_run_status(self, run_id: str) -> CIRun:
-        parts = run_id.split("/", 1)
-        pipeline_id = parts[0] if len(parts) == 2 else ""
-        if not pipeline_id:
-            raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'pipeline_id/run_id'.")
-        run_identifier = parts[1] if len(parts) == 2 else run_id
+        pipeline_id, run_identifier = self._split_run_id(run_id)
         async with self._client() as client:
             r = await client.get(
                 f"{self._pipelines_base()}/{pipeline_id}/runs/{run_identifier}",
@@ -174,12 +170,18 @@ class AzurePipelinesConnector(ConnectorBase):
             r.raise_for_status()
             return self._parse_run(r.json())
 
-    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+    @staticmethod
+    def _split_run_id(run_id: str) -> tuple[str, str]:
+        """Split a ``pipeline_id/run_id`` composite into its two parts."""
         parts = run_id.split("/", 1)
         pipeline_id = parts[0] if len(parts) == 2 else ""
         if not pipeline_id:
             raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'pipeline_id/run_id'.")
         run_identifier = parts[1] if len(parts) == 2 else run_id
+        return pipeline_id, run_identifier
+
+    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+        pipeline_id, run_identifier = self._split_run_id(run_id)
         async with self._client() as client:
             logs_r = await client.get(
                 f"{self._pipelines_base()}/{pipeline_id}/runs/{run_identifier}/logs",
@@ -188,31 +190,40 @@ class AzurePipelinesConnector(ConnectorBase):
             logs_r.raise_for_status()
             logs_body = logs_r.json()
             if isinstance(logs_body, list):
-                logs_data: list[Any] = logs_body
+                logs_data: Any = logs_body
             else:
                 logs_data = _safe_records(logs_body, "value")
 
-            all_lines: list[str] = []
-            for log_entry in logs_data if isinstance(logs_data, list) else []:
-                if not isinstance(log_entry, dict):
-                    continue
-                log_id = log_entry.get("id", "")
-                log_url = log_entry.get("url", "")
-                log_name = log_entry.get("name", f"log-{log_id}")
-                all_lines.append(f"--- Log: {log_name} ({log_id}) ---")
-                if log_url:
-                    log_content_r = await client.get(log_url)
-                    if log_content_r.status_code == 200:
-                        content = log_content_r.text
-                        if content:
-                            all_lines.extend(f"  {line}" for line in content.splitlines())
-                all_lines.append("")
+            all_lines = await self._collect_log_lines(client, logs_data)
 
             return CIRunLog(
                 run_id=run_id,
                 lines=all_lines,
                 next_cursor=str(len(all_lines)) if cursor else None,
             )
+
+    async def _collect_log_lines(self, client: httpx.AsyncClient, logs_data: Any) -> list[str]:
+        """Fetch each log entry's content and assemble the combined line list."""
+        all_lines: list[str] = []
+        for log_entry in logs_data if isinstance(logs_data, list) else []:
+            if not isinstance(log_entry, dict):
+                continue
+            log_id = log_entry.get("id", "")
+            log_url = log_entry.get("url", "")
+            log_name = log_entry.get("name", f"log-{log_id}")
+            all_lines.append(f"--- Log: {log_name} ({log_id}) ---")
+            if log_url:
+                await self._append_log_content(client, log_url, all_lines)
+            all_lines.append("")
+        return all_lines
+
+    @staticmethod
+    async def _append_log_content(client: httpx.AsyncClient, log_url: str, all_lines: list[str]) -> None:
+        log_content_r = await client.get(log_url)
+        if log_content_r.status_code == 200:
+            content = log_content_r.text
+            if content:
+                all_lines.extend(f"  {line}" for line in content.splitlines())
 
     async def list_runs(
         self,

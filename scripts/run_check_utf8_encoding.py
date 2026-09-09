@@ -57,6 +57,43 @@ def _write_utf8_no_bom(path: str) -> None:
         fh.write(content)
 
 
+def _check_file(rel: str, fix: bool) -> bool:
+    """Check one tracked file for BOMs. Returns True when blocking."""
+    ext = Path(rel).suffix.lower()
+    if ext not in _EXTENSIONS:
+        return False
+    full = str(Path(REPO_ROOT) / rel)
+    if not Path(full).is_file():
+        return False
+    try:
+        with Path(full).open("rb") as fh:
+            data = fh.read()
+    except OSError:
+        # Skip files we can't read.
+        return False
+
+    is_workflow = "/.github/workflows/" in "/" + rel
+
+    if data.startswith(_UTF8_BOM):
+        if is_workflow:
+            print(f"BLOCKING: UTF-8 BOM in workflow file: {rel}", file=sys.stderr)
+        else:
+            print(f"Non-blocking BOM: {rel}", file=sys.stderr)
+        if fix:
+            _write_utf8_no_bom(full)
+            print("  Fixed: removed UTF-8 BOM", file=sys.stderr)
+        return is_workflow
+
+    if data.startswith((_UTF16_LE_BOM, _UTF16_BE_BOM)):
+        print(f"UTF-16 BOM found: {rel}", file=sys.stderr)
+        if fix:
+            _write_utf8_no_bom(full)
+            print("  Fixed: converted to UTF-8", file=sys.stderr)
+        return True
+
+    return False
+
+
 def main() -> int:
     fix = "--fix" in sys.argv
     found = False
@@ -67,38 +104,8 @@ def main() -> int:
         return 0
 
     for rel in tracked:
-        ext = Path(rel).suffix.lower()
-        if ext not in _EXTENSIONS:
-            continue
-        full = str(Path(REPO_ROOT) / rel)
-        if not Path(full).is_file():
-            continue
-        try:
-            with Path(full).open("rb") as fh:
-                data = fh.read()
-        except OSError:
-            # Skip files we can't read.
-            continue
-
-        is_workflow = "/.github/workflows/" in "/" + rel
-
-        if data.startswith(_UTF8_BOM):
-            if is_workflow:
-                print(f"BLOCKING: UTF-8 BOM in workflow file: {rel}", file=sys.stderr)
-                found = True
-            else:
-                print(f"Non-blocking BOM: {rel}", file=sys.stderr)
-            if fix:
-                _write_utf8_no_bom(full)
-                print("  Fixed: removed UTF-8 BOM", file=sys.stderr)
-            continue
-
-        if data.startswith((_UTF16_LE_BOM, _UTF16_BE_BOM)):
-            print(f"UTF-16 BOM found: {rel}", file=sys.stderr)
+        if _check_file(rel, fix):
             found = True
-            if fix:
-                _write_utf8_no_bom(full)
-                print("  Fixed: converted to UTF-8", file=sys.stderr)
 
     if found:
         print(

@@ -18,6 +18,13 @@ from modulo.core.ssrf import pinned_async_client_sync
 
 _SHORTCUT_API = "https://api.app.shortcut.com/api/v3"
 
+# singular query resource -> (plural resource, filter key, missing-id error message)
+_SINGULAR_RESOURCES: dict[str, tuple[str, str, str]] = {
+    "story": ("stories", "story_id", "Shortcut story query requires 'story_id' filter"),
+    "project": ("projects", "project_id", "Shortcut project query requires 'project_id' filter"),
+    "epic": ("epics", "epic_id", "Shortcut epic query requires 'epic_id' filter"),
+}
+
 
 class ShortcutConnector(ConnectorBase):
     """Read/write Shortcut stories, epics, projects via the REST API v3.
@@ -114,68 +121,40 @@ class ShortcutConnector(ConnectorBase):
             body: dict[str, Any] = r.json()
             return body
 
+    async def _query_list(self, resource: str, params: dict[str, Any] | None = None) -> ConnectorResult:
+        records = await self._get_list(resource, params=params)
+        return ConnectorResult(records=records, total=len(records))
+
+    async def _query_list_collection(self, q: ConnectorQuery, resource: str) -> ConnectorResult:
+        """List a filterable collection (stories/projects/epics)."""
+        params: dict[str, Any] = {}
+        if resource == "stories":
+            for key in ("project_id", "workflow_state_id", "owner_id"):
+                if key in q.filters:
+                    params[key] = q.filters[key]
+            if q.limit:
+                params["limit"] = q.limit
+        elif "suspended" in q.filters:
+            params["suspended"] = str(q.filters["suspended"]).lower()
+        return await self._query_list(resource, params=params)
+
+    async def _query_single_by_resource(self, q: ConnectorQuery, resource: str) -> ConnectorResult:
+        """Fetch one item of a singular resource (story/project/epic)."""
+        plural, id_key, error_message = _SINGULAR_RESOURCES[resource]
+        item_id = q.filters.get(id_key)
+        if not item_id:
+            raise ValueError(error_message)
+        record = await self._get_by_resource(plural, item_id=str(item_id))
+        return ConnectorResult(records=[record])
+
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        if q.resource in ("workflows", "members", "teams"):
+            return await self._query_list(q.resource)
         match q.resource:
-            case "stories":
-                params: dict[str, Any] = {}
-                if "project_id" in q.filters:
-                    params["project_id"] = q.filters["project_id"]
-                if "workflow_state_id" in q.filters:
-                    params["workflow_state_id"] = q.filters["workflow_state_id"]
-                if "owner_id" in q.filters:
-                    params["owner_id"] = q.filters["owner_id"]
-                if q.limit:
-                    params["limit"] = q.limit
-                records = await self._get_list("stories", params=params)
-                return ConnectorResult(records=records, total=len(records))
-
-            case "story":
-                story_id = q.filters.get("story_id")
-                if not story_id:
-                    raise ValueError("Shortcut story query requires 'story_id' filter")
-                record = await self._get_by_resource("stories", item_id=str(story_id))
-                return ConnectorResult(records=[record])
-
-            case "projects":
-                params = {}
-                if "suspended" in q.filters:
-                    params["suspended"] = str(q.filters["suspended"]).lower()
-                records = await self._get_list("projects", params=params)
-                return ConnectorResult(records=records, total=len(records))
-
-            case "project":
-                project_id = q.filters.get("project_id")
-                if not project_id:
-                    raise ValueError("Shortcut project query requires 'project_id' filter")
-                record = await self._get_by_resource("projects", item_id=str(project_id))
-                return ConnectorResult(records=[record])
-
-            case "epics":
-                params = {}
-                if "suspended" in q.filters:
-                    params["suspended"] = str(q.filters["suspended"]).lower()
-                records = await self._get_list("epics", params=params)
-                return ConnectorResult(records=records, total=len(records))
-
-            case "epic":
-                epic_id = q.filters.get("epic_id")
-                if not epic_id:
-                    raise ValueError("Shortcut epic query requires 'epic_id' filter")
-                record = await self._get_by_resource("epics", item_id=str(epic_id))
-                return ConnectorResult(records=[record])
-
-            case "workflows":
-                records = await self._get_list("workflows")
-                return ConnectorResult(records=records, total=len(records))
-
-            case "members":
-                records = await self._get_list("members")
-                return ConnectorResult(records=records, total=len(records))
-
-            case "teams":
-                records = await self._get_list("teams")
-                return ConnectorResult(records=records, total=len(records))
-
+            case "stories" | "projects" | "epics":
+                return await self._query_list_collection(q, q.resource)
+            case "story" | "project" | "epic":
+                return await self._query_single_by_resource(q, q.resource)
             case _:
                 raise ValueError(f"Unsupported Shortcut query resource: {q.resource!r}")
 
