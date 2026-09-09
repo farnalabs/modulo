@@ -69,6 +69,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "run_daily_facts",
         "run_evidence",
         "run_node_outputs",
+        "runner_probe_cache",
         "runs",
         "saved_views",
         "scheduled_reports",

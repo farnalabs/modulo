@@ -89,7 +89,6 @@ const AdminViewsView = () => import('../views/AdminViewsView.vue')
 const AdminModelBackendsView = () => import('../views/AdminModelBackendsView.vue')
 const AdminOrgSettingsView = () => import('../views/AdminOrgSettingsView.vue')
 const AdminRunRetentionView = () => import('../views/AdminRunRetentionView.vue')
-const AdminSandboxConcurrencyView = () => import('../views/AdminSandboxConcurrencyView.vue')
 const NotificationsPage = () => import('../views/NotificationsPage.vue')
 const MyProfileView = () => import('../views/MyProfileView.vue')
 const SettingsLicenseView = () => import('../views/SettingsLicenseView.vue')
@@ -115,7 +114,9 @@ const ModelBackendSetupView = () => import('../views/setup/ModelBackendSetupView
 const LifecycleMapList = () => import('../views/lifecycle-map/LifecycleMapList.vue')
 const LifecycleMapView = () => import('../views/lifecycle-map/LifecycleMapView.vue')
 const DevMetricsView = () => import('../views/DevMetricsView.vue')
-const EnvironmentProfileList = () => import('../views/environment-profiles/EnvironmentProfileList.vue')
+const AdminRunnersView = () => import('../views/AdminRunnersView.vue')
+const RunnersProfilesTab = () => import('../views/runners/RunnersProfilesTab.vue')
+const RunnersConcurrencyTab = () => import('../views/runners/RunnersConcurrencyTab.vue')
 const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
 const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
 const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
@@ -431,9 +432,10 @@ const router = createRouter({
       component: AdminRunRetentionView,
     },
     {
+      // FAR-591 D5: the Runners page replaced the standalone Sandbox
+      // Concurrency surface (now the Concurrency tab).
       path: '/admin/sandbox-concurrency',
-      name: 'admin-sandbox-concurrency',
-      component: AdminSandboxConcurrencyView,
+      redirect: '/admin/runners/concurrency',
     },
     {
       path: '/admin/parameter-schemas',
@@ -557,26 +559,66 @@ const router = createRouter({
       },
     },
     {
+      // FAR-591 D5: the Runners page (CONFIGURE). Route-per-tab:
+      // /admin/runners/profiles + /admin/runners/concurrency share the
+      // AdminRunnersView layout (PageTabs + persistent status strip).
+      // Profile create/edit keep real nested editor routes under the
+      // profiles tab so legacy deep links map 1:1.
+      path: '/admin/runners/profiles',
+      name: 'admin-runners-profiles',
+      component: AdminRunnersView,
+      children: [
+        {
+          path: '',
+          component: RunnersProfilesTab,
+        },
+        {
+          path: 'new',
+          name: 'admin-runners-profile-new',
+          component: EnvironmentProfileForm,
+          meta: { breadcrumb: 'New Profile', parent: 'admin-runners-profiles' },
+        },
+        {
+          path: ':id',
+          redirect: (to) => ({ path: `/admin/runners/profiles/${String(to.params.id)}/edit` }),
+        },
+        {
+          path: ':id/edit',
+          name: 'admin-runners-profile-edit',
+          component: EnvironmentProfileForm,
+          meta: { breadcrumb: 'Edit Profile', parent: 'admin-runners-profiles' },
+          props: true,
+        },
+      ],
+    },
+    {
+      path: '/admin/runners/concurrency',
+      name: 'admin-runners-concurrency',
+      component: AdminRunnersView,
+      children: [
+        {
+          path: '',
+          component: RunnersConcurrencyTab,
+        },
+      ],
+    },
+    {
+      // FAR-591 D5: the Environment Profiles surface folded into the
+      // Runners page — every legacy route keeps working via redirect.
       path: '/environment-profiles',
-      name: 'environment-profiles',
-      component: EnvironmentProfileList,
+      redirect: '/admin/runners/profiles',
     },
     {
       path: '/environment-profiles/new',
-      name: 'environment-profiles-new',
-      component: EnvironmentProfileForm,
-      meta: { breadcrumb: 'New Profile', parent: 'environment-profiles' },
+      redirect: '/admin/runners/profiles/new',
     },
     {
       path: '/environment-profiles/:id',
-      redirect: (to) => ({ path: `/environment-profiles/${to.params.id}/edit` }),
+      redirect: (to) => ({ path: `/admin/runners/profiles/${String(to.params.id)}` }),
     },
     {
       path: '/environment-profiles/:id/edit',
-      name: 'environment-profiles-edit',
-      component: EnvironmentProfileForm,
-      meta: { breadcrumb: 'Edit Profile', parent: 'environment-profiles' },
-      props: true,
+      redirect: (to) => ({ path: `/admin/runners/profiles/${String(to.params.id)}/edit` }),
     },
     {
       path: '/remy',

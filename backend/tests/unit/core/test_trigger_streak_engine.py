@@ -309,9 +309,10 @@ class TestMigrationBackfillGrace:
         # FAR-634 added 0195_hitl_claim_gate_config_json as the child of the
         # current head (0202_runs_error_code_claimed_by_indexes after re-merge
         # with main); FAR-681 slice 2 added 0203_triggers_add_name on top of
-        # 0195, FAR-681 slice 2 added 0204_runner_probe_cache on top of
-        # 0203_triggers_add_name, and FAR-760's 0205_library_collection_type chains on
-        # top of 0204_runner_probe_cache, so it is now the single linear head of the chain.
+        # 0195, FAR-681 slice 2 (#289/#293) added 0204_runner_probe_cache on top
+        # of 0203_triggers_add_name, and FAR-760's 0205_library_collection_type
+        # chains on top of 0204_runner_probe_cache, so it is now the single linear
+        # head of the chain.
         assert heads == ["0205_library_collection_type"], f"expected a single head, got {heads}"
 
 

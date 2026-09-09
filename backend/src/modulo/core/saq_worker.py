@@ -68,7 +68,7 @@ from saq import CronJob, Worker
 from saq.queue.redis import RedisQueue
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.core.cron_helpers import SAQ_TASK_FIRE_SUITE_RUN
+from modulo.core.cron_helpers import CRON_LIVENESS_STATS_TTL_SECONDS, SAQ_TASK_FIRE_SUITE_RUN
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -1175,6 +1175,14 @@ RUNNER_MARKER_SWEEP_STATS_KEY = "saq:cron:stats:runner_marker_sweep"
 RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
 RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS = RUNNER_MARKER_SWEEP_STALE_SECONDS + 60
 
+# Cross-process stats key for the FAR-591 D5 runner health probe (qa F3).
+# The probe runs on a 60s cadence (not the siblings' 5 min), so the stale
+# window is 3x the cadence (180s — one missed tick never alerts) and the
+# TTL is stale + one tick, matching the sibling arithmetic.
+RUNNER_HEALTH_PROBE_STATS_KEY = "saq:cron:stats:runner_health_probe"
+RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
+RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS = RUNNER_HEALTH_PROBE_STALE_SECONDS + 60
+
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
     """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
@@ -1403,6 +1411,88 @@ async def runner_workspace_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
         RUNNER_WORKSPACE_RECONCILE_STATS_TTL_SECONDS,
     )
     return result
+
+
+async def runner_health_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-591 D5 per-machine runner health probe (every 60s).
+
+    Probes the deployment's Docker engine THROUGH the socket-proxy (engine
+    reachability + pinned image presence + ``/info`` resources) and upserts
+    one probe-cache row per (organisation, machine). The Runners page + node
+    editor read ONLY the cache — never a synchronous probe on the request
+    path. A healthy→unreachable transition emits the error-dashboard entry +
+    the ``runner_unavailable`` in-app notification. Cross-org: uses the
+    system session factory on PostgreSQL (modulo_app is NOBYPASSRLS).
+
+    Liveness contract (qa F3, mirrors the sibling sweeps): the outcome
+    (last_run_at + orgs probed/failed + transitions) is persisted to the
+    shared Redis key every tick — on SUCCESS with the tick's counts, and
+    on FAILURE with zero counts + ``"error": "probe_failed"`` (the
+    ``last_run_at`` refresh is what keeps /healthz/ready's staleness
+    warning honest) — so /healthz/ready can warn when the probe is stale
+    or missing. An infrastructure failure is persisted (zero counts +
+    the error flag) and then RE-RAISED so SAQ's ``retries=2`` engages — a
+    swallowed probe failure would leave every org's strip aging to
+    "status unknown" invisibly. The FAR-538 per-machine cron heartbeat
+    (``saq:cron:heartbeat:runner_health_probe``) is refreshed on every
+    successful tick.
+    """
+    from modulo.core.bundled_runner.health_probe import run_runner_health_probe
+
+    try:
+        result = await run_runner_health_probe(_cleanup_session_factory())
+    except Exception:
+        await _persist_sweep_stats(
+            RUNNER_HEALTH_PROBE_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "orgs_probed": 0,
+                "orgs_failed": 0,
+                "transitions": 0,
+                "error": "probe_failed",
+            },
+            RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS,
+        )
+        raise
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "orgs_probed": result["orgs_probed"],
+        "orgs_failed": result.get("orgs_failed", 0),
+        "transitions": result["transitions"],
+        "reachable": result["reachable"],
+    }
+    await _persist_sweep_stats(RUNNER_HEALTH_PROBE_STATS_KEY, stats, RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS)
+    await _touch_probe_cron_liveness()
+    return result
+
+
+async def _touch_probe_cron_liveness() -> None:
+    """Refresh the per-machine cron liveness heartbeat (FAR-538, qa F3).
+
+    Written on every SUCCESSFUL ``runner_health_probe`` tick so
+    /healthz/ready can tell a silently dead cron scheduler from a live one
+    (the worker loop can stay alive while its cron scheduler is stuck).
+    Best-effort: a Redis write failure must never fail the probe.
+    """
+    try:
+        from redis.asyncio import Redis as AsyncRedis
+
+        from modulo.core.cron_helpers import _cron_liveness_key
+
+        redis_client = AsyncRedis.from_url(get_settings().redis_url, socket_connect_timeout=5)
+        try:
+            await redis_client.set(
+                _cron_liveness_key("runner_health_probe"),
+                int(time.time()),
+                ex=CRON_LIVENESS_STATS_TTL_SECONDS,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.runner_health_probe liveness heartbeat write failed", exc_info=True)
 
 
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -1696,6 +1786,7 @@ def _system_functions() -> list[Any]:
         hitl_park_sweep,
         runner_workspace_reconcile,
         runner_marker_sweep,
+        runner_health_probe,
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
@@ -1868,6 +1959,23 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         CronJob(
             runner_marker_sweep,
             cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # runner_health_probe: every 60s (FAR-591 D5) — per-machine engine
+        # reachability + pinned-image presence + /info resources cached in
+        # runner_probe_cache per (organisation, machine). Per-org DB errors
+        # are SAVEPOINT-isolated (one poisoned org never aborts the tick)
+        # but infrastructure failures ARE re-raised so retries=2 engages —
+        # engine-level Docker failures are recorded as unreachable rows,
+        # never retried (qa F3). unique=True so overlapping ticks cannot
+        # double-probe.
+        CronJob(
+            runner_health_probe,
+            cron=_CRON_EVERY_MINUTE,
             unique=True,
             timeout=120,
             heartbeat=30,

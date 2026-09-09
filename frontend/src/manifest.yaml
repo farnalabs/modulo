@@ -647,13 +647,13 @@ routes:
         deprecated: false
 
         <<: *team
-    /admin/sandbox-concurrency:
-        name: admin-sandbox-concurrency
-        breadcrumb: Sandbox Concurrency
-        parent: /
+    /admin/runners/concurrency:
+        name: admin-runners-concurrency
+        breadcrumb: Runner Concurrency
+        parent: /admin/runners/profiles
         product_map: [feat-runtime, feat-environments]
-        sidebar_group: configure
-        sidebar_order: 9
+        sidebar_group:
+        sidebar_order:
         type: form_page
         <<: *team
         deprecated: false
@@ -804,22 +804,22 @@ routes:
         <<: *community
         deprecated: false
 
-    /environment-profiles:
-        name: environment-profiles
-        breadcrumb: Environment Profiles
+    /admin/runners/profiles:
+        name: admin-runners-profiles
+        breadcrumb: Runners
         parent: /
-        product_map: [feat-environments]
+        product_map: [feat-environments, feat-runtime]
         sidebar_group: configure
         sidebar_order: 8
-        type: list_page
+        type: page
         <<: *team
         deprecated: false
         exact: true
 
-    /environment-profiles/new:
-        name: environment-profiles-new
+    /admin/runners/profiles/new:
+        name: admin-runners-profile-new
         breadcrumb: New Profile
-        parent: /environment-profiles
+        parent: /admin/runners/profiles
         product_map: [feat-environments]
         sidebar_group:
         sidebar_order:
@@ -827,15 +827,15 @@ routes:
         <<: *team
         deprecated: false
 
-    /environment-profiles/:id/edit:
-        name: environment-profiles-edit
+    /admin/runners/profiles/:id/edit:
+        name: admin-runners-profile-edit
         breadcrumb: Edit Profile
-        parent: /environment-profiles
+        parent: /admin/runners/profiles
         product_map: [feat-environments]
         sidebar_group:
         sidebar_order:
         type: form_page
-        pattern: /environment-profiles/:id/edit
+        pattern: /admin/runners/profiles/:id/edit
         dynamic_params:
           - id
         <<: *team
@@ -1644,7 +1644,7 @@ elements:
       - testid: admin-run-retention-reset
         type: button
         dynamic_testid: false
-    /admin/sandbox-concurrency:
+    /admin/runners/concurrency:
       - testid: admin-sandbox-concurrency-save
         type: button
         dynamic_testid: false
@@ -1822,7 +1822,7 @@ elements:
       - testid: analytics-group-by-hour
         type: button
         dynamic_testid: false
-    /environment-profiles:
+    /admin/runners/profiles:
       - testid: envprofile-list-search
         type: input
         dynamic_testid: false
@@ -1856,7 +1856,7 @@ elements:
       - testid: envprofile-test-dismiss
         type: button
         dynamic_testid: false
-    /environment-profiles/:id/edit:
+    /admin/runners/profiles/:id/edit:
       - testid: envprofile-form-back
         type: button
         dynamic_testid: false
@@ -1887,7 +1887,7 @@ elements:
       - testid: envprofile-form-cancel
         type: button
         dynamic_testid: false
-    /environment-profiles/new:
+    /admin/runners/profiles/new:
       - testid: envprofile-form-back
         type: button
         dynamic_testid: false
@@ -3694,7 +3694,23 @@ features:
             - "[x] The runs-list item (GET /api/v1/runs) carries warnings_count so the runs table renders a warning badge without loading the full run (computed from a single deferred cost_breakdown load, never N+1)"
             - "[x] The run detail page surfaces run-level warnings in a single top strip (id=warnings) that scrolls into view when navigated from the list badge (?warn=1) or a #warnings deep link"
     feat-runtime:
-        description: Runtime configuration, rate limits, retention, and sandbox concurrency
+        description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
+        status: covered
+        behaviours:
+            # FAR-591 D5: Runners page + health-probe cache
+            - "[x] A per-machine health-probe system cron (runner_health_probe, every 60s, retries=2, unique=True) probes the deployment's Docker engine THROUGH the socket-proxy and upserts one runner_probe_cache row per (organisation, machine): engine reachability, pinned-image presence, and the engine's /info CPU/memory for the concurrency preflight — the Runners page and node editor read ONLY this cache, never a synchronous engine probe on the request path"
+            - "[x] The probe tick is three-phase (engine probe + image inspects run BEFORE any DB transaction opens; the write tx is scoped to the upserts), prunes (org, machine) rows not refreshed within a 24h retention window, and upserts per org inside a SAVEPOINT so one poisoned org rolls back only itself; a per-org infrastructure error (SQLAlchemyError) marks the org failed and re-raises at the end of the tick so SAQ's retries engage, while the wrapper persists the saq:cron:stats:runner_health_probe liveness key on success AND failure (failure records zero counts + error=probe_failed; the last_run_at refresh keeps the /healthz/ready staleness check honest; the FAR-538 per-machine cron heartbeat is refreshed per successful tick)"
+            - "[x] Pinned-image presence aggregates over NON-placeholder refs only — a placeholder-digest org reads unknown (None), never a permanent false 'image not pulled'; a non-404 inspect failure records unknown (a transient error must not read as absent); the worst-of strip state is stale > engine_unreachable > image_not_pulled > healthy, and a stale cache can never read green — a dead probe renders 'status unknown (last checked Xs ago)'"
+            - "[x] A healthy→unreachable transition emits BOTH an error-dashboard entry (signal runner_unavailable) and an in-app notification (category runner, action URL /admin/runners/concurrency) — detected against the previous cached row so a dead probe never loops alerts, the FIRST down probe also alerts (no previous row defaults to was-reachable), and re-alerting requires a recovery in between"
+            - "[x] GET /api/v1/runners/status (environment_profile.list, environment_profiles feature) returns the per-machine strip states with server-side staleness, the worst-of aggregate, per-profile health + live template drift, and the org's sandbox-concurrency contract with the engine-resource preflight; multi-machine preflight sizes against WORST-OF (min reported CPU, min reported memory) because dispatches can land on any machine; corpse rows beyond the 24h retention window are invisible to both the tick and the read; the profile read paginates instead of silently capping at 100"
+            - "[x] POST /api/v1/runners/profiles/{profile_id}/apply-template (environment_profile.update) refreshes the template-owned fields of a drifted seeded Bundled Runner row (image_ref/network_policy/persistence_policy + drifted config_json keys), preserving operator-owned ones; a non-template or cross-org row 404s (404 must not leak other orgs' rows — pinned by the two-org RLS integration tests)"
+            - "[x] The Runners page (route-per-tab under /admin/runners/profiles + /admin/runners/concurrency) renders a persistent status strip (60s auto-refetch, worst-of across machines, loading/unknown/unavailable states never render confident green, probe error surfaced with remediation copy pointing at docs/security/bundled-runner-operator-guide.md), the Profiles tab (health badges, per-row template-apply, sandbox-agent style test-connection events), and the Concurrency tab (the D3b org sandbox-concurrency cap with the ge=0 le=100 clamp, effective-cap display refetched after a successful save, preflight warnings); every legacy route (/environment-profiles, /environment-profiles/new, /environment-profiles/:id, /admin/sandbox-concurrency) redirects"
+            - "[x] A hung socket-proxy cannot stall the probe: the aiodocker client carries a bounded timeout (total 10s, connect 5s), so the hang becomes a recorded unreachable with a real transition alert well under the 120s job timeout, and any Docker URL userinfo in engine error strings is scrubbed to ***@ before persisting or logging (credential-bearing MODULO_DOCKER_HOST)"
+        deferrals:
+            - The node-editor sandbox-agent panel slices its runner-health display against this cache (D5 node-editor slice — follow-up: pipeline editor consume)
+            - Housekeeping is NOT exempt from the concurrency cap (dispatch gate unchanged); the Runners page surfaces the cap only (follow-up: housekeeping exemption decision)
+            - The strip does not surface the org-wide ACTIVE workspace count (probe cache carries engine state only; follow-up: extend the cache row)
+            - Compose-file e2e coverage of the probe is deferred (unit + integration crud tests pin the contract; follow-up: compose e2e)
     feat-schemas:
         description: Typed JSON schemas, schema editor, inference, and parameter schemas
     feat-sso:
