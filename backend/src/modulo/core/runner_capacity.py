@@ -869,11 +869,13 @@ def _marker_sweep_lock_engine(factory: Any) -> Any:
     """The engine that owns the sweep dedup lock connection.
 
     Uses the session factory's bound engine (the SAME engine the sweep's org
-    sessions use) so the lock lives on a sibling connection of the same pool. The
-    caller always passes a real ``async_sessionmaker`` (whose ``.bind`` is the
-    engine) or the test double (which sets ``.bind``); ``modulo.core`` must not
-    depend on ``modulo.api``, so there is deliberately no app-engine fallback."""
-    engine = getattr(factory, "bind", None)
+    sessions use) so the lock lives on a sibling connection of the same pool. Real
+    callers (``saq_worker._make_session_factory`` / ``cron_helpers._open_factory``)
+    pass a real ``async_sessionmaker`` whose engine lives in ``factory.kw['bind']``
+    (SQLAlchemy 2.0 does NOT expose ``.bind`` on ``async_sessionmaker`` — verified
+    empirically against the pinned 2.0.52). ``modulo.core`` must not depend on
+    ``modulo.api``, so there is deliberately no app-engine fallback."""
+    engine = factory.kw.get("bind") if hasattr(factory, "kw") else None
     if engine is None:
         raise RuntimeError("reconcile_runner_dispatch_markers requires a session factory with a bound engine")
     return engine
@@ -889,7 +891,16 @@ async def _acquire_sweep_dedup_lock(factory: Any, k1: int, k2: int) -> tuple[boo
     codebase convention); if the lock cannot be acquired the connection is closed
     and ``(False, None)`` is returned (fail-open)."""
     engine = _marker_sweep_lock_engine(factory)
-    lock_conn = await engine.connect()
+    # ``engine.connect()`` sits INSIDE the try so a connection-establishment
+    # failure fails open (the documented behaviour) rather than propagating out of
+    # the sweep and killing the dispatcher reconcile / cron liveness write.
+    try:
+        lock_conn = await engine.connect()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("runner.capacity.marker_sweep_lock_failed", exc_info=True)
+        return False, None
     try:
         for _ in range(_SWEEP_LOCK_POLL_ATTEMPTS):
             result = await lock_conn.execute(

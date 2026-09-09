@@ -9,6 +9,7 @@ from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.runner_capacity import (
@@ -20,6 +21,7 @@ from modulo.core.runner_capacity import (
     RunnerCapacityDecision,
     RunnerCapacityDeniedError,
     RunnerMarkerSweepError,
+    _marker_sweep_lock_engine,
     acquire_runner_dispatch_slot,
     build_dispatch_marker,
     build_hitl_tombstone,
@@ -887,8 +889,9 @@ class _FakeSweepFactory:
     """Minimal factory double for the sweep.
 
     The DEDUP lock is acquired by production on a DEDICATED connection obtained
-    from ``engine.connect()`` (this double exposes that engine as ``.bind``); the
-    factory call cycle is therefore org-index (call 1) then per-org passes
+    from ``engine.connect()`` (this double exposes that engine under ``kw['bind']``
+    exactly like a real ``async_sessionmaker``); the factory call cycle is
+    therefore org-index (call 1) then per-org passes
     (cursor-paged candidate rows + recorded writes)."""
 
     def __init__(self, rows: list[_Row]) -> None:
@@ -897,7 +900,9 @@ class _FakeSweepFactory:
         self.transitioned: list[uuid.UUID] = []
         self.calls = 0
         # The dedicated connection the production code acquires the dedup lock on.
-        self.bind = _FakeLockEngine()
+        # Mirrors a real ``async_sessionmaker``: the bound engine lives in
+        # ``kw['bind']`` (SQLAlchemy 2.0 does NOT expose ``.bind`` on it).
+        self.kw = {"bind": _FakeLockEngine()}
 
     def _wrap(self, session: MagicMock) -> MagicMock:
         begin_cm = MagicMock()
@@ -943,7 +948,7 @@ class _FakeSweepFactory:
 
     def __call__(self) -> Any:
         self.calls += 1
-        # The lock is acquired on ``self.bind.connect()`` (no factory session
+        # The lock is acquired on ``self.kw['bind'].connect()`` (no factory session
         # slot); the factory cycle here is org-index then per-org passes.
         position = (self.calls - 1) % 2
         if position == 0:
@@ -1061,7 +1066,7 @@ async def test_sweep_cas_guards_against_concurrent_fresh_marker(monkeypatch: pyt
         return org_cm
 
     # The dedup lock is acquired on a dedicated engine connection, not a factory call.
-    _factory.bind = _FakeLockEngine()  # type: ignore[attr-defined]
+    _factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
 
     result = await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
     assert result["cleared"] == 0, "a CAS-defeated clear counts nothing"
@@ -1120,7 +1125,7 @@ async def test_sweep_org_failure_raises_typed_error(monkeypatch: pytest.MonkeyPa
         return session_cm
 
     # The dedup lock is acquired on a dedicated engine connection, not a factory call.
-    _factory.bind = _FakeLockEngine()  # type: ignore[attr-defined]
+    _factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
 
     with pytest.raises(RunnerMarkerSweepError):
         await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
@@ -1161,7 +1166,7 @@ async def test_sweep_acquires_marker_lock_on_dedicated_connection(
 
     parent_factory = _FakeSweepFactory([stale_awaiting])
     # Route the dedup lock to the dedicated fake connection engine.
-    parent_factory.bind = lock_engine  # type: ignore[attr-defined]
+    parent_factory.kw["bind"] = lock_engine  # type: ignore[attr-defined]
 
     result = await reconcile_runner_dispatch_markers(parent_factory)  # type: ignore[arg-type]
 
@@ -1206,7 +1211,7 @@ async def test_sweep_fails_open_when_dedup_lock_unavailable(
     )
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
     factory = _FakeSweepFactory([stale_awaiting])
-    factory.bind = lock_engine  # type: ignore[attr-defined]
+    factory.kw["bind"] = lock_engine  # type: ignore[attr-defined]
 
     # Patch the poll interval to near-zero so the bounded poll budget returns fast.
     monkeypatch.setattr(rc, "_SWEEP_LOCK_POLL_ATTEMPTS", 3)
@@ -1273,7 +1278,7 @@ async def test_sweep_serialises_contending_sweeps_via_polling(
     )
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
     factory = _FakeSweepFactory([stale_awaiting])
-    factory.bind = lock_engine  # type: ignore[attr-defined]
+    factory.kw["bind"] = lock_engine  # type: ignore[attr-defined]
     monkeypatch.setattr(rc, "_SWEEP_LOCK_POLL_INTERVAL", 0.0)
 
     await asyncio.gather(
@@ -1286,6 +1291,20 @@ async def test_sweep_serialises_contending_sweeps_via_polling(
     assert lock_engine.try_calls >= 2
     assert lock_engine.unlock_calls >= 1
     assert factory.cleared, "a serialised sweep must still clear its stale marker"
+
+
+async def test_marker_sweep_lock_engine_reads_real_sessionmaker_bind() -> None:
+    """FAR-2171 (prove-the-fix): ``_marker_sweep_lock_engine`` must extract the
+    bound engine from a REAL ``async_sessionmaker`` — SQLAlchemy 2.0.52 does NOT
+    expose ``.bind`` on it, so reading ``getattr(factory, 'bind')`` returns None and
+    raises ``RuntimeError`` at every sweep tick (the production breaker this fixes).
+    The engine lives in ``factory.kw['bind']``."""
+    engine = create_async_engine("sqlite+aiosqlite://")
+    factory = async_sessionmaker(engine)
+    try:
+        assert _marker_sweep_lock_engine(factory) is engine
+    finally:
+        await engine.dispose()
 
 
 def test_sweep_sql_sandbox_id_asymmetry() -> None:
@@ -1379,7 +1398,7 @@ async def test_sweep_failed_org_pass_emits_no_marker_cleared_events(
         return session_cm
 
     # The dedup lock is acquired on a dedicated engine connection, not a factory call.
-    _factory.bind = _FakeLockEngine()  # type: ignore[attr-defined]
+    _factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
 
     with (
         caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
