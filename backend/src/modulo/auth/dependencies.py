@@ -147,10 +147,11 @@ async def get_current_tenant_user_or_api_key(
     ``recover_run_node``) and other write endpoints still require a user
     JWT, so API keys cannot approve gates or modify pipelines.
 
-    Note that team-scoped keys (``team_id`` set) behave like org-wide keys
-    here: ``TenantPrincipal`` carries no team info and these routes do not
-    call ``set_rls_user_context``, so team restriction is not enforced for
-    run trigger/read — consistent with the existing user-JWT behaviour.
+    Note that FAR-681 threads a team-scoped key's ``team_id`` into the
+    returned principal: team-scoped keys carry a hard team boundary enforced
+    by the team-gate dependency (and the RLS org context still applies
+    everywhere), while org-wide keys and user JWTs carry ``team_id=None`` and
+    behave exactly as before.
 
     API keys are resolved by first looking up the key's organisation through a
     SECURITY DEFINER function (owned by the migration role, so it can read
@@ -264,6 +265,13 @@ async def get_current_tenant_user_or_api_key(
             account_id=key.account_id,
             org_role=clamped_role,
             is_system_admin=False,
+            # FAR-681: thread the key's team scope into the principal so the
+            # team-gate dependency can enforce the boundary (a team-A-scoped
+            # key must not mutate team-B resources even when its OWNER is a
+            # member of team B). Org-wide keys carry team_id=None. getattr for
+            # duck-typed key fakes in existing tests (the real OrgApiKey row
+            # always carries the column).
+            team_id=getattr(key, "team_id", None),
             # FAR-610: the credential is an org API key, not a browser-login
             # JWT. human_only HITL gates deny API-key principals on decision
             # actions; this marker is the mechanism that distinguishes them.

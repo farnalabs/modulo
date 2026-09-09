@@ -797,7 +797,29 @@ entities:
       api_key: ${env:SK}
       default_params:
         temperature: 0.5
+  pipelines:
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+      graph:
+        nodes:
+          - id: 00000000-0000-0000-0000-0000000000a1
+            node_type: agent
+            agent: worker
+            position: {x: 0, y: 0}
+        edges: []
+  triggers:
+    - pipeline: sample
+      name: nightly
+      trigger_type: cron
+      cron_expression: "0 3 * * *"
+    - pipeline: sample
+      name: hook
+      trigger_type: webhook
 """
+
+_GOLDEN_AGENT_ID = "00000000-0000-0000-0000-0000000000ff"
+_GOLDEN_PIPELINE_ID = "00000000-0000-0000-0000-0000000000bb"
 
 _STABLE_CURRENT = {
     "name": "stable",
@@ -807,11 +829,73 @@ _STABLE_CURRENT = {
 }
 
 
+def _mock_new_kind_lists(empty_state: bool) -> None:
+    """Mock /pipelines, /agents, /triggers for the golden configs.
+
+    empty_state=True -> nothing exists (all new entities plan as created);
+    False -> the post-apply state (rerun reports all unchanged).
+    """
+    pipelines_payload = (
+        []
+        if empty_state
+        else [
+            {
+                "id": _GOLDEN_PIPELINE_ID,
+                "organisation_id": str(uuid.uuid4()),
+                "name": "sample",
+                "description": "Sample pipeline",
+                "max_concurrent_runs": 3,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    respx.get("https://api.test/api/v1/pipelines", params={"page": "1", "page_size": "100"}).respond(
+        json={"items": pipelines_payload, "total": len(pipelines_payload), "page": 1, "page_size": 100}
+    )
+    respx.get("https://api.test/api/v1/agents", params={"page": "1", "page_size": "100"}).respond(
+        json={"items": [{"id": _GOLDEN_AGENT_ID, "name": "worker"}], "total": 1, "page": 1, "page_size": 100}
+    )
+    triggers_payload = (
+        []
+        if empty_state
+        else [
+            {
+                "id": "00000000-0000-0000-0000-0000000000cc",
+                "pipeline_id": _GOLDEN_PIPELINE_ID,
+                "name": "nightly",
+                "trigger_type": "cron",
+                "active": True,
+                "max_concurrent_runs": 1,
+                "daily_spend_limit": None,
+                "config_json": {},
+                "cron_expression": "0 3 * * *",
+                "cron_timezone": None,
+            },
+            {
+                "id": "00000000-0000-0000-0000-0000000000dd",
+                "pipeline_id": _GOLDEN_PIPELINE_ID,
+                "name": "hook",
+                "trigger_type": "webhook",
+                "active": True,
+                "max_concurrent_runs": 1,
+                "daily_spend_limit": None,
+                "config_json": {},
+                "cron_expression": None,
+                "cron_timezone": None,
+            },
+        ]
+    )
+    respx.get("https://api.test/api/v1/triggers", params={"page": "1", "page_size": "100"}).respond(
+        json={"items": triggers_payload, "total": len(triggers_payload), "page": 1, "page_size": 100}
+    )
+
+
 def _golden_plan_report(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Deterministic plan report for the golden fixture config.
 
-    'stable' exists with identical managed fields -> unchanged; 'fresh' and
-    the backend are absent -> created.
+    'stable' exists with identical managed fields -> unchanged; 'fresh', the
+    backend, the pipeline and both triggers are absent -> created.
     """
     monkeypatch.setenv("SK", "golden-secret")
     with respx.mock:
@@ -821,6 +905,7 @@ def _golden_plan_report(monkeypatch: pytest.MonkeyPatch) -> dict:
         respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
             json={"items": [], "total": 0, "page": 1, "page_size": 100}
         )
+        _mock_new_kind_lists(empty_state=True)
         config = parse_apply_documents(GOLDEN_CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -857,12 +942,26 @@ class TestGoldenSnapshot:
             respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
                 json={"items": [created_state], "total": 1, "page": 1, "page_size": 100}
             )
+            _mock_new_kind_lists(empty_state=False)
+            graph_payload = {
+                "nodes": [
+                    {
+                        "id": "00000000-0000-0000-0000-0000000000a1",
+                        "node_type": "agent",
+                        "agent_id": _GOLDEN_AGENT_ID,
+                        "position": {"x": 0, "y": 0},
+                    }
+                ],
+                "edges": [],
+                "validation_issues": [],
+            }
+            respx.get(f"https://api.test/api/v1/pipelines/{_GOLDEN_PIPELINE_ID}/graph").respond(json=graph_payload)
             config = parse_apply_documents(GOLDEN_CONFIG_TEXT)
             with httpx.Client() as client:
                 executor = ApplyExecutor("https://api.test", "key", client=client)
                 report = executor.run(config, dry_run=True)
         unchanged_names = sorted(e["name"] for e in report["unchanged"])
-        assert unchanged_names == ["fresh", "openai", "stable"]
+        assert unchanged_names == ["fresh", "openai", "sample", "sample/hook", "sample/nightly", "stable"]
         assert not report["created"]
         assert not report["updated"]
         assert not report["blocked"]

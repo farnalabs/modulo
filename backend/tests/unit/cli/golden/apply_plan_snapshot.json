@@ -1,1 +1,1 @@
-{"blocked": [], "created": [{"kind": "schema", "name": "fresh"}, {"kind": "model_backend", "name": "openai"}], "dry_run": true, "failed": [], "unchanged": [{"kind": "schema", "name": "stable"}], "updated": []}
+{"blocked": [], "created": [{"kind": "schema", "name": "fresh"}, {"kind": "model_backend", "name": "openai"}, {"kind": "pipeline", "name": "sample"}, {"kind": "trigger", "name": "sample/nightly"}, {"kind": "trigger", "name": "sample/hook"}], "dry_run": true, "failed": [], "unchanged": [{"kind": "schema", "name": "stable"}], "updated": []}

@@ -9,11 +9,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,6 +46,18 @@ class Trigger(SoftDeleteMixin, OrgScoped):
         # FAR-377 run-kind discriminator: 'run' (the existing behaviour, fires a
         # pipeline Run) or 'suite_run' (fires a SuiteRun execution instead).
         CheckConstraint("run_kind IN ('run', 'suite_run')", name="ck_triggers_run_kind"),
+        # FAR-681 slice 2: (organisation, pipeline, name) is the declarative-
+        # apply trigger identity — unique among LIVE rows (soft-deleted rows
+        # release their name, the 0127 pattern). Matches migration 0201.
+        Index(
+            "uq_triggers_org_pipeline_name",
+            "organisation_id",
+            "pipeline_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND name IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND name IS NOT NULL"),
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
@@ -52,6 +66,10 @@ class Trigger(SoftDeleteMixin, OrgScoped):
         nullable=False,
         index=True,
     )
+    # FAR-681 slice 2: declarative-apply identity within (pipeline, name).
+    # Nullable — pre-0200 rows carry NULL and are invisible to name-based
+    # apply (they stay UI/MCP-managed only).
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

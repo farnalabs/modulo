@@ -37,7 +37,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0201_spend_anomaly_unique_org_date (from main) chains off 0200, 0202_runs_error_code_claimed_by_indexes
 # (from main) chains off 0201, and this PR's 0195_hitl_claim_gate_config_json (FAR-634) chains off
 # 0202 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0195_hitl_claim_gate_config_json"
+_CHAIN_HEAD_MIGRATION = "0203_triggers_add_name"
 
 
 def _source(name: str) -> str:
