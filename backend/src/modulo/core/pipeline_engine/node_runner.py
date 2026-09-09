@@ -479,6 +479,45 @@ async def _resolve_egress_allowlist(
 _SANDBOX_RATE_LIMIT_MAX_RETRIES = 3
 _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S = 5
 
+# FAR-766 module-level fallbacks. The runtime values are read at call time from
+# settings so tests can patch them without a full settings round-trip; a settings
+# read/parse failure falls back to these defaults (fail-open in the FAILED-
+# direction of a too-tight bound, never an unbounded provisioning hang).
+_SANDBOX_PROVISIONING_TIMEOUT_DEFAULT_S = 90.0
+_SANDBOX_BINDING_RESOLVE_TIMEOUT_DEFAULT_S = 30.0
+
+
+def _sandbox_provisioning_timeout() -> float:
+    """FAR-766: the pre-sandbox-create provisioning watchdog bound (seconds).
+
+    Bound the phase from the ``dispatching`` dispatch marker to a created
+    sandbox so a stuck ``AsyncSandbox.create`` fails the node RETRYABLY within
+    this window instead of riding the 35-min ``dispatcher_reconcile`` nodeless
+    sweep. Read at call time (patchable); a settings error falls back to the
+    safe default.
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().sandbox_provisioning_timeout_seconds)
+    except Exception:
+        return _SANDBOX_PROVISIONING_TIMEOUT_DEFAULT_S
+
+
+def _sandbox_binding_resolve_timeout() -> float:
+    """FAR-766: bound for ``resolve_agent_bindings`` at provision time (seconds).
+
+    Previously unbounded — a hard secrets-backend / DB stall also rode to the
+    node timeout. A timeout classifies as a retryable binding resolution
+    failure (never the terminal ``harness.unknown`` path).
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().sandbox_binding_resolve_timeout_seconds)
+    except Exception:
+        return _SANDBOX_BINDING_RESOLVE_TIMEOUT_DEFAULT_S
+
 
 # The raw returned value is a non-metric Python number (int/float, not bool).
 def _is_real_number(value: Any) -> TypeGuard[int | float]:
@@ -6370,14 +6409,34 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _runner_bindings: dict[str, str] = {}
         if agent_id is not None:
             try:
-                _runner_bindings = await resolve_agent_bindings(
-                    session_factory=session_factory,
-                    org_id=org_id,
-                    agent_id=agent_id,
-                    environment_profile_id=_runner_binding_env_profile_id(),
-                    run_id=run_id,
-                    node_id=node_id,
+                _runner_bindings = await asyncio.wait_for(
+                    resolve_agent_bindings(
+                        session_factory=session_factory,
+                        org_id=org_id,
+                        agent_id=agent_id,
+                        environment_profile_id=_runner_binding_env_profile_id(),
+                        run_id=run_id,
+                        node_id=node_id,
+                    ),
+                    # FAR-766: bound the previously-unbounded pre-claim secrets
+                    # backend / DB read. A hard stall here also used to ride the
+                    # slow nodeless sweep — a timeout is a retryable binding
+                    # resolution failure (never terminal harness.unknown).
+                    timeout=_sandbox_binding_resolve_timeout(),
                 )
+            except TimeoutError:
+                _log.warning(
+                    "sandbox_agent.bindings_resolution_timed_out",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "timeout_seconds": _sandbox_binding_resolve_timeout(),
+                    },
+                )
+                raise SandboxBindingResolutionError(
+                    f"Runner binding resolution timed out after {_sandbox_binding_resolve_timeout()}s "
+                    f"for node '{node_id}'"
+                ) from None
             except LocalProviderBindingsRefusedError as exc:
                 _log.warning(
                     "sandbox_agent.bindings_local_refused",
@@ -6435,64 +6494,89 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # (sandbox.rate_limited) — it must NOT permanently fail as
         # harness.unknown.
         _rate_limit_attempt = 0
-        while True:
-            try:
-                sandbox = await asyncio.wait_for(
-                    AsyncSandbox.create(
-                        template=template_id,
-                        # FAR-487: lifetime STRICTLY greater than the command
-                        # timeout (+ _SANDBOX_LIFETIME_GRACE_S) so the platform
-                        # endAt kill can never preempt the runner's own timeout
-                        # path — a mid-command sandbox death fabricated a
-                        # zero-exit completion and misreported the failure as
-                        # "no parseable output.json (exit code 0)".
-                        # FAR-489: int() — the e2b SDK's attrs model does NOT
-                        # coerce a float, and E2B's Go server rejects
-                        # "1320.0" with 400 (int32 unmarshal), instantly
-                        # failing every sandbox create.
-                        timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
-                        allow_internet_access=(egress_policy not in ("deny_all", "selected")),
-                        # deny_all/selected -> no internet; default/None ->
-                        # internet allowed (e2b default). IMPORTANT
-                        # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
-                        # at this boolean level — the host:port egress_allowlist
-                        # is carried only as metadata and is NOT yet honored by
-                        # any enforcement point (no template-side mechanism
-                        # exists; the e2b SDK has no native allowlist control).
-                        # ``selected`` is functionally equivalent to ``deny_all``
-                        # until that point lands.
-                        metadata=_metadata or None,
-                    ),
-                    timeout=min(sandbox_timeout, 120),
-                )
-                break
-            except RateLimitException as _rle:
-                _rate_limit_attempt += 1
-                if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
-                    raise SandboxQueueTimeoutError(
-                        f"E2B rate-limited after {_rate_limit_attempt} attempts creating sandbox for node '{node_id}'"
-                    ) from None
-                _backoff = _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S * (2 ** (_rate_limit_attempt - 1))
-                _log.warning(
-                    "sandbox_agent.e2b_rate_limited_retrying",
-                    extra={
-                        "run_id": run_id,
-                        "node_id": node_id,
-                        "attempt": _rate_limit_attempt,
-                        "backoff_seconds": _backoff,
-                    },
-                )
-                _emit_script_span_event(
-                    "script.rate_limited_retry",
-                    {
-                        "attempt": _rate_limit_attempt,
-                        "backoff_seconds": _backoff,
-                    },
-                )
-                await asyncio.wait_for(
-                    asyncio.sleep(_backoff),
-                    timeout=min(sandbox_timeout, 120),
-                )
+        # FAR-766: provisioning watchdog. The dispatch marker is written
+        # ("dispatching") BEFORE ``AsyncSandbox.create``; if create never returns
+        # (E2B provider degradation observed 06:05-13:58), the node never reaches
+        # "script_executing" and sits claimed-but-never-dispatched until the
+        # slow 35-min ``dispatcher_reconcile`` nodeless sweep. Bound the
+        # provisioning await so the node fails RETRYABLY within this window.
+        # The bound applies to the create await AND the rate-limit backoff sleeps
+        # so a retry train cannot stack past the window.
+        _provision_timeout = _sandbox_provisioning_timeout()
+        try:
+            while True:
+                try:
+                    sandbox = await asyncio.wait_for(
+                        AsyncSandbox.create(
+                            template=template_id,
+                            # FAR-487: lifetime STRICTLY greater than the command
+                            # timeout (+ _SANDBOX_LIFETIME_GRACE_S) so the platform
+                            # endAt kill can never preempt the runner's own timeout
+                            # path — a mid-command sandbox death fabricated a
+                            # zero-exit completion and misreported the failure as
+                            # "no parseable output.json (exit code 0)".
+                            # FAR-489: int() — the e2b SDK's attrs model does NOT
+                            # coerce a float, and E2B's Go server rejects
+                            # "1320.0" with 400 (int32 unmarshal), instantly
+                            # failing every sandbox create.
+                            timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
+                            allow_internet_access=(egress_policy not in ("deny_all", "selected")),
+                            # deny_all/selected -> no internet; default/None ->
+                            # internet allowed (e2b default). IMPORTANT
+                            # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
+                            # at this boolean level — the host:port egress_allowlist
+                            # is carried only as metadata and is NOT yet honored by
+                            # any enforcement point (no template-side mechanism
+                            # exists; the e2b SDK has no native allowlist control).
+                            # ``selected`` is functionally equivalent to ``deny_all``
+                            # until that point lands.
+                            metadata=_metadata or None,
+                        ),
+                        timeout=min(sandbox_timeout, _provision_timeout),
+                    )
+                    break
+                except RateLimitException as _rle:
+                    _rate_limit_attempt += 1
+                    if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
+                        raise SandboxQueueTimeoutError(
+                            f"E2B rate-limited after {_rate_limit_attempt} attempts "
+                            f"creating sandbox for node '{node_id}'"
+                        ) from None
+                    _backoff = _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S * (2 ** (_rate_limit_attempt - 1))
+                    _log.warning(
+                        "sandbox_agent.e2b_rate_limited_retrying",
+                        extra={
+                            "run_id": run_id,
+                            "node_id": node_id,
+                            "attempt": _rate_limit_attempt,
+                            "backoff_seconds": _backoff,
+                        },
+                    )
+                    _emit_script_span_event(
+                        "script.rate_limited_retry",
+                        {
+                            "attempt": _rate_limit_attempt,
+                            "backoff_seconds": _backoff,
+                        },
+                    )
+                    await asyncio.wait_for(
+                        asyncio.sleep(_backoff),
+                        timeout=min(sandbox_timeout, _provision_timeout),
+                    )
+        except TimeoutError:
+            _log.warning(
+                "sandbox_agent.provisioning_watchdog_fired",
+                extra={
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "timeout_seconds": _provision_timeout,
+                    "state": "dispatching",
+                },
+            )
+            raise SandboxQueueTimeoutError(
+                f"Sandbox provisioning for node '{node_id}' exceeded {_provision_timeout}s bound "
+                "(AsyncSandbox.create never returned — stuck dispatching; provider may be degraded)"
+            ) from None
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
         _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
