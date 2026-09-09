@@ -941,8 +941,13 @@ async def reconcile_runner_dispatch_markers(
             # Fail-open: the sweep proceeds; the per-row CAS guards + SAQ
             # unique=True remain the overlap guards.
         if not acquired:
-            _log.info("runner.capacity.marker_sweep_skipped_locked")
-            return {"scanned": 0, "cleared": 0, "transitioned": 0, "violations": 0, "orgs_failed": 0}
+            # Fail-open: NEVER skip the safety net. A skipped sweep lets stale
+            # terminal/leaked markers accumulate as phantom capacity (the D8
+            # rollback signal goes dark) — the worse failure mode than a
+            # concurrent re-process, which the per-row CAS guards make
+            # idempotent. So proceed without the dedup lock rather than
+            # returning early; the documented overlap guards hold.
+            _log.warning("runner.capacity.marker_sweep_lock_not_acquired_proceeding")
 
         recovery_or, exclusion = _sweep_recoverability_predicate()
 
