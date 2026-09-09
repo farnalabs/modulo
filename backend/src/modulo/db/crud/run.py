@@ -1989,7 +1989,7 @@ async def write_run_outputs_from_run(
     is the ONLY store, and it FAILS LOUDLY when it fails. The pre-B1 name was
     ``dual_write_run_node_outputs``; renamed to reflect primacy.
 
-    FAT-583-ERA semantics that survive the cut:
+    FAR-583-ERA semantics that survive the cut:
 
     * ``inherited_outputs`` / ``inherited_telemetry`` still carry the
       caller-captured PRE-WRITE legacy dicts (qa M19) so inherited
@@ -2007,11 +2007,15 @@ async def write_run_outputs_from_run(
       half-written (the core-side orchestrator terminalizes the run and
       re-raises past the caller's transaction).
     * The former org-less silent skip is GONE: with the legacy columns no
-      longer written, a silently skipped store write would be data loss. A
-      session with NO RLS org context raises :class:`OutputsRlsMismatch`
-      (fail-closed — must be wrapped in an org-bindable transaction); a
-      MISMATCHED org context raises the same (never silently skip a
-      cross-tenant anomaly).
+      longer written, a silently skipped store write would be data loss. An
+      ORG-CONTEXT failure raises :class:`DualWriteError` too (qa iteration 1
+      Major 1): a session with NO RLS org context or a MISMATCHED one is
+      wrapped as ``DualWriteError(..., origin='rls_precheck')`` (carrying both
+      orgs in the message) so every chokepoint failure shape flows through the
+      SAME catch/rollback/orchestrate contract — an un-orchestrated
+      ``OutputsRlsMismatch`` escape (no terminalize, no event, no counter)
+      would violate the guard obligation below. The raw
+      :class:`OutputsRlsMismatch` is chained as ``__cause__`` for diagnostics.
     * The kill-switch check is REMOVED (it dies with the legacy writes at
       B2a) — per the B1 design there is no emergency OFF for this write: the
       fallback readers still serve pre-B1 legacy rows so a genuinely broken
@@ -2024,15 +2028,36 @@ async def write_run_outputs_from_run(
     from modulo.core.run_outputs_dualwrite import bump_dual_write_counter, note_dual_write_retry
 
     session_org = await read_rls_org(session)
+    # qa iteration 1 (Major 1): the org-context precheck failures are wrapped
+    # as DualWriteError (origin='rls_precheck') so the guardDualWrite-style
+    # catch/rollback/orchestrate contract covers them exactly like an
+    # in-savepoint store failure. The OutputsRlsMismatch is chained as
+    # __cause__ for diagnostics; both orgs are carried in the message.
     if session_org is None:
-        raise OutputsRlsMismatch(
+        raise DualWriteError(
             f"run_node_outputs store write requires a bound RLS organisation context "
-            f"(origin={origin}); wrap the call in an org-bound transaction"
+            f"(origin={origin}); wrap the call in an org-bound transaction",
+            run_id=run_id,
+            organisation_id=organisation_id,
+            claim_token=claim_token,
+            sqlstate=None,
+            origin="rls_precheck",
+        ) from OutputsRlsMismatch(
+            "run_node_outputs store write requires a bound RLS organisation context; "
+            "wrap the call in `async with session.begin():` + set_rls_org(session, org)"
         )
     if organisation_id is None:
         organisation_id = session_org
     if session_org != organisation_id:
-        raise OutputsRlsMismatch(
+        raise DualWriteError(
+            f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org "
+            f"{organisation_id} (origin={origin})",
+            run_id=run_id,
+            organisation_id=organisation_id,
+            claim_token=claim_token,
+            sqlstate=None,
+            origin="rls_precheck",
+        ) from OutputsRlsMismatch(
             f"run_node_outputs org mismatch on run {run_id}: session org {session_org} != row org {organisation_id}"
         )
 
@@ -2170,7 +2195,12 @@ async def update_run_status(
     pre_write_outputs: Any = None
     pre_write_telemetry: Any = None
     if update.outputs_json is not None or update.node_telemetry_json is not None:
-        legacy = await read_legacy_run_blobs(session, run_id=run_id)
+        # getattr mirrors the store write below (a fake Run stand-in in unit
+        # tests carries no organisation_id; an org-less capture reads across
+        # the row set the reader's tenant compensation covers).
+        legacy = await read_legacy_run_blobs(
+            session, run_id=run_id, organisation_id=getattr(run, "organisation_id", None)
+        )
         pre_write_outputs = legacy.outputs
         pre_write_telemetry = legacy.telemetry
     _apply_run_claim_fields(run, status, update)
@@ -2251,18 +2281,14 @@ async def _update_run_status_fenced(
     guards rejected the write (superseded / wrong source state /
     cancelled-and-not-a-cancel-write / missing).
     """
-    # FAR-583 qa-M19: capture the PRE-WRITE legacy blob dicts BEFORE the
-    # fenced UPDATE (the store write's inherited-key filter compares against
-    # exactly these; post-B1 filters pre-B1-carried legacy sentinels only).
-    # One extra SELECT, read through the raw parameterised SQL reader (the
-    # ORM mapping is cut), only when the payload actually carries blobs —
-    # a fenced write without outputs/telemetry never needs the pre-state.
-    pre_write_outputs: Any = None
-    pre_write_telemetry: Any = None
-    if update.outputs_json is not None or update.node_telemetry_json is not None:
-        legacy = await read_legacy_run_blobs(session, run_id=run_id)
-        pre_write_outputs = legacy.outputs
-        pre_write_telemetry = legacy.telemetry
+    # FAR-583 qa-M19: the PRE-WRITE legacy blob dicts for the fenced branch
+    # are captured AFTER the fenced UPDATE (just below, next to the store
+    # write, where *refreshed_run* carries the row's organisation_id): the
+    # fenced UPDATE's SET clauses never touch the legacy blob columns, so the
+    # capture is pre-write-equivalent while still binding the tenant
+    # predicate the raw reader compensates with. Only when the payload
+    # actually carries blobs — a fenced write without outputs/telemetry never
+    # needs the pre-state.
     result = await session.execute(
         _UPDATE_STATUS_FENCED_SQL,
         {
@@ -2300,6 +2326,14 @@ async def _update_run_status_fenced(
     refreshed_run = refreshed.scalar_one_or_none()
     if refreshed_run is None:
         return None
+    # The pre-write legacy capture (FAR-583 qa-M19): the inherited-key filter
+    # compares against these; the tenant predicate binds the row's org.
+    pre_write_outputs: Any = None
+    pre_write_telemetry: Any = None
+    if update.outputs_json is not None or update.node_telemetry_json is not None:
+        legacy = await read_legacy_run_blobs(session, run_id=run_id, organisation_id=refreshed_run.organisation_id)
+        pre_write_outputs = legacy.outputs
+        pre_write_telemetry = legacy.telemetry
     # FAR-583 B1 primary write: fenced branch — the REPLACE leg runs ONLY when
     # the fence accepted the write (rowcount 1, checked above). The retry +
     # fail-loud contract is the shared helper's; a DualWriteError here rolls

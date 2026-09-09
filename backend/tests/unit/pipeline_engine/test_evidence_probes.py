@@ -41,6 +41,7 @@ from modulo.db.models.base import Base
 from modulo.db.models.run import Run
 from modulo.db.models.run_evidence import RunEvidence
 from modulo.db.models.run_node_outputs import RunNodeOutput
+from tests.unit._legacy_seed import seed_legacy_blobs
 
 # The run_evidence table is org-scoped (0133); unit tests run on SQLite where
 # RLS is absent but the NOT NULL organisation_id must still be supplied.
@@ -858,18 +859,10 @@ async def _seed_complete_run(
 ) -> Run:
     """Add a terminal run AND its legacy blob columns (FAR-583 B1: the ORM
     mapping is cut — the blobs land via the repo's raw Core legacy table)."""
-    from sqlalchemy import update as sa_update
-
-    from modulo.db.crud.run_node_outputs import RUNS_LEGACY_TABLE
-
     run = _complete_run(run_id, org_id, outputs_json, telemetry)
     session.add(run)
     await session.flush()
-    await session.execute(
-        sa_update(RUNS_LEGACY_TABLE)
-        .where(RUNS_LEGACY_TABLE.c.id == run.id)
-        .values(outputs_json=outputs_json, node_telemetry_json=telemetry)
-    )
+    await seed_legacy_blobs(session, run.id, outputs_json=outputs_json, node_telemetry_json=telemetry)
     return run
 
 

@@ -21,7 +21,8 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import event, select, update
+from sqlalchemy import event, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run_node_outputs import (
@@ -32,8 +33,8 @@ from modulo.db.crud.run_node_outputs import (
     UNKNOWN_NODE_ID,
     OutputsSentinelViolation,
     RunBlobs,
-    _dialect_insert,
     _jsonb_canonical_key,
+    dialect_insert,
     parse_marker_node_id,
     read_node_output_blob_bytes,
     read_run_blobs_with_fallback,
@@ -47,6 +48,7 @@ from modulo.db.models.base import Base
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.rls import OutputsRlsMismatch, set_rls_org
+from tests.unit._legacy_seed import seed_legacy_blobs
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
 
@@ -120,14 +122,12 @@ async def _seed_run(
         # (the same parameterised-SQL surface the production fallback readers
         # and sweep selection use; the SQLite round-trip is exercised here).
         if outputs is not None or telemetry is not None or markers is not None:
-            await session.execute(
-                update(RUNS_LEGACY_TABLE)
-                .where(RUNS_LEGACY_TABLE.c.id == run.id)
-                .values(
-                    outputs_json=outputs,
-                    node_telemetry_json=telemetry,
-                    raw_output_markers=markers,
-                )
+            await seed_legacy_blobs(
+                session,
+                run.id,
+                outputs_json=outputs,
+                node_telemetry_json=telemetry,
+                raw_output_markers=markers,
             )
     return run
 
@@ -154,7 +154,7 @@ async def _set_legacy_blobs(
     if not values:
         return
     async with session.begin():
-        await session.execute(update(RUNS_LEGACY_TABLE).where(RUNS_LEGACY_TABLE.c.id == run.id).values(**values))
+        await seed_legacy_blobs(session, run.id, **values)
 
 
 async def _quarantine_row_count(session: AsyncSession, run_id: uuid.UUID) -> int:
@@ -243,7 +243,7 @@ class TestTwinParser:
 class TestDialectGuard:
     def test_mariadb_is_guarded_out(self) -> None:
         with pytest.raises(NotImplementedError):
-            _dialect_insert("mysql")
+            dialect_insert("mysql")
 
 
 class TestRoundTripMatrix:
@@ -777,11 +777,7 @@ class TestFencedMarkersReader:
                 )
                 sess.add(run)
                 await sess.flush()
-                await sess.execute(
-                    update(RUNS_LEGACY_TABLE)
-                    .where(RUNS_LEGACY_TABLE.c.id == run.id)
-                    .values(raw_output_markers={"legacy-k": {"raw": "x"}})
-                )
+                await seed_legacy_blobs(sess, run.id, raw_output_markers={"legacy-k": {"raw": "x"}})
                 run_id = run.id
             before = len(statements)
             async with maker() as sess, sess.begin():
@@ -1213,3 +1209,40 @@ class TestBytesAccounting:
     async def test_empty_ids_request_is_cheap(self, session: AsyncSession) -> None:
         totals = await read_node_output_blob_bytes(session, [])
         assert not totals
+
+
+class TestRunsLegacyTableParity:
+    """Rider 8 (FAR-583 B1): the raw Core legacy table is the MIRROR of the
+    ``runs`` columns that survive B2b — every overlapping column's type must
+    equal the ORM Run column's type (or the run_node_outputs column's, for
+    the three blob sides whose ORM mapping was cut at B1). The table drops
+    at B2b; until then this one loop pins the parity."""
+
+    @pytest.mark.parametrize(
+        ("column_name", "orm_column_name"),
+        [
+            ("id", "id"),
+            ("organisation_id", "organisation_id"),
+            ("status", "status"),
+            ("claim_token", "claim_token"),
+            ("completed_at", "completed_at"),
+            ("updated_at", "updated_at"),
+        ],
+    )
+    def test_legacy_mirror_column_matches_orm_type(self, column_name: str, orm_column_name: str) -> None:
+        core_type = RUNS_LEGACY_TABLE.c[column_name].type
+        orm_type = Run.__table__.c[orm_column_name].type
+        assert type(core_type) is type(orm_type), f"{column_name}: {type(core_type)!r} != {type(orm_type)!r}"
+        core_length = getattr(core_type, "length", None)
+        orm_length = getattr(orm_type, "length", None)
+        assert core_length == orm_length
+
+    @pytest.mark.parametrize("column_name", ["outputs_json", "node_telemetry_json", "raw_output_markers"])
+    def test_legacy_blob_side_matches_store_column_type(self, column_name: str) -> None:
+        core_type = RUNS_LEGACY_TABLE.c[column_name].type
+        store_type = RunNodeOutput.__table__.c[column_name].type
+        assert type(core_type) is type(store_type)
+        # Postgres-side variant: the JSONB variant is what makes the raw
+        # statements round-trip jsonb values byte-identically to the ORM legs.
+        variant = core_type._variant_mapping.get("postgresql")
+        assert isinstance(variant, JSONB)

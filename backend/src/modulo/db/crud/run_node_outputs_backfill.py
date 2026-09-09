@@ -48,11 +48,11 @@ from modulo.db.crud.run_node_outputs import (
     QUARANTINE_TABLE,
     RUNS_LEGACY_TABLE,
     NodeOutputWrite,
-    _assert_write_org,
-    _dialect_insert,
-    _resolve_dialect,
-    _upsert_rows,
+    assert_write_org,
+    dialect_insert,
     parse_marker_node_id,
+    resolve_dialect,
+    upsert_rows,
 )
 from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, UNKNOWN_NODE_ID, RunNodeOutput
@@ -177,7 +177,7 @@ async def _quarantine_run(
     ``run_node_outputs_quarantine``), and the reason is logged — data
     anomalies never abort the sweep, and never silently re-select forever.
     """
-    insert_factory = _dialect_insert(_resolve_dialect(session))
+    insert_factory = dialect_insert(resolve_dialect(session))
     stmt = (
         insert_factory(QUARANTINE_TABLE)
         .values(
@@ -285,8 +285,8 @@ async def backfill_run_node_outputs_batch(
     markers leg lives in migration 0192 only: the sweep heals TERMINAL
     runs, whose markers are complete.
     """
-    await _assert_write_org(session, organisation_id)
-    dialect = _resolve_dialect(session)
+    await assert_write_org(session, organisation_id)
+    dialect = resolve_dialect(session)
 
     # The __final__ row kind carries the outputs/telemetry/metadata
     # representation; the marker rows carry non-__final__ attempt keys. The
@@ -490,9 +490,7 @@ async def backfill_run_node_outputs_batch(
             if fresh_updated.get(run_id) != captured_updated.get(run_id):
                 counts["runs_skipped_ghost"] += 1
                 continue
-            await _upsert_rows(
-                session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=True
-            )
+            await upsert_rows(session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=True)
             counts["runs_backfilled"] += 1
             counts["rows_written"] += len(rows)
 

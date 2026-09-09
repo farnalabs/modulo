@@ -4011,6 +4011,31 @@ def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> An
     )
 
 
+def _final_row_absent_expr() -> Any:
+    """The ONE correlated NOT-EXISTS expression for the run's far-583 store
+    finalisation marker: ``NOT EXISTS(run_node_output __final__ row)``.
+
+    Single definition shared by the nodeless zombie predicate (line-level
+    WHERE leg) and the reconcile org SELECT (the ``outputs_absent`` labeled
+    column — the label is applied at the call site) so the two correlated
+    subqueries can never drift (qa iteration 1 rider).
+    """
+    from sqlalchemy import exists as sa_exists
+    from sqlalchemy import select as sa_select
+
+    from modulo.db.models.run import Run
+    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
+
+    return ~sa_exists(
+        sa_select(1)
+        .select_from(RunNodeOutput)
+        .where(
+            RunNodeOutput.run_id == Run.id,
+            RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+        )
+    )
+
+
 def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     """Match a claimed-but-never-executed SAQ zombie.
 
@@ -4023,12 +4048,16 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
 
     FAR-583 B1: the legacy ``runs.outputs_json IS NULL`` leg is GONE (the
     column's ORM mapping is cut) — the ``NOT EXISTS(run_node_outputs
-    __final__ row)`` leg SUBSUMES it for running runs: a finalising write
-    feeds the new table in-transaction, and the catch-up sweep heals a
-    kill-switch-OFF/pre-B1 straggler within one tick, so a running run whose
-    legacy column still carries a blob but which has no ``__final__`` row yet
-    stays re-dispatch-eligible for at most one tick (marker-only runs remain
-    re-dispatch-eligible — markers never produce ``__final__`` rows).
+    __final__ row)`` leg SUBSUMES it for running runs. Healing note (qa
+    iteration 1 rider): the catch-up sweep selects TERMINAL runs ONLY
+    (``run_node_outputs_backfill`` filters ``status.in_(TERMINAL_STATUSES)``),
+    so it does NOT heal this RUNNING-run class. A running run is protected
+    from a spurious match by the other two legs: the ``node_token_usage``
+    leg (written at run finalisation) and the checkpoint leg (LangGraph
+    writes a checkpoint when a node COMPLETES a super-step) — the NOT-EXISTS
+    leg is the wedge backstop for a run that produced neither before stalling
+    (marker-only runs remain re-dispatch-eligible — markers never produce
+    ``__final__`` rows).
 
     The age gate MUST exceed the pipeline's max node timeout: a legitimate
     long-running first node writes its first checkpoint only after it finishes,
@@ -4053,7 +4082,6 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     from sqlalchemy import select as sa_select
 
     from modulo.db.models.run import Run
-    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
 
     checkpoint_subquery = (
         sa_select(1)
@@ -4066,21 +4094,13 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     # Parameterised through the model columns (a Select carries bound params
     # natively — a text()-leg would need bindparams() on a TextClause, which
     # a Select does not expose).
-    final_output_subquery = (
-        sa_select(1)
-        .select_from(RunNodeOutput)
-        .where(
-            RunNodeOutput.run_id == Run.id,
-            RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
-        )
-    )
     return and_(
         Run.status == "running",
         Run.dispatcher == "saq",
         Run.node_token_usage.is_(None),
         Run.started_at < func_now_minus(age_minutes * 60),
         ~sa_exists(checkpoint_subquery),
-        ~sa_exists(final_output_subquery),
+        _final_row_absent_expr(),
     )
 
 
@@ -5580,11 +5600,8 @@ async def _reconcile_org(
     terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop)."""
-    from sqlalchemy import exists as _sa_exists
-
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.run import Run
-    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
 
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
@@ -5646,17 +5663,9 @@ async def _reconcile_org(
                         # discriminates on whether the run still has NO
                         # ``__final__`` row in the per-node store (the
                         # finalisation-represented marker). Computed as a
-                        # correlated NOT EXISTS (see _nodeless_zombie_predicate).
-                        (
-                            ~_sa_exists(
-                                select(1)
-                                .select_from(RunNodeOutput)
-                                .where(
-                                    RunNodeOutput.run_id == Run.id,
-                                    RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
-                                )
-                            )
-                        ).label("outputs_absent"),
+                        # correlated NOT EXISTS (see _nodeless_zombie_predicate;
+                        # one shared expression — qa iteration 1 rider).
+                        _final_row_absent_expr().label("outputs_absent"),
                         Run.started_at,
                         Run.claim_count,
                         Run.dispatcher,

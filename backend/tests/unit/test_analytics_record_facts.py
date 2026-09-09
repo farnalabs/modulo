@@ -38,6 +38,7 @@ from modulo.core.analytics import (
 from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
+from tests.unit._legacy_seed import seed_legacy_blobs
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
 
@@ -66,10 +67,6 @@ async def db_session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
 
 
 async def _seed_run(session: AsyncSession, **blob_overrides: object) -> Run:
-    from sqlalchemy import update
-
-    from modulo.db.crud.run_node_outputs import RUNS_LEGACY_TABLE
-
     values: dict = {
         "organisation_id": uuid.uuid4(),
         "pipeline_id": uuid.uuid4(),
@@ -91,10 +88,7 @@ async def _seed_run(session: AsyncSession, **blob_overrides: object) -> Run:
     async with session.begin():
         session.add(run)
         await session.flush()
-        if legacy_values:
-            await session.execute(
-                update(RUNS_LEGACY_TABLE).where(RUNS_LEGACY_TABLE.c.id == run.id).values(**legacy_values)
-            )
+        await seed_legacy_blobs(session, run.id, **legacy_values)
     return run
 
 

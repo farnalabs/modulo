@@ -210,11 +210,20 @@ def _reassembled_bytes_expr(node_side: Any, legacy_side: Any, empty_flag: Any) -
     ``runs`` FROM entry and Postgres rejects "table name runs specified more
     than once"; a literal column binds to the statement's existing runs
     alias instead). Constant identifier text — never user input.
+
+    CONSTRAINT of this literal_column technique (qa iteration 1 rider): the host
+    statement must have exactly ONE, UNALIASED ``runs`` FROM entry — the
+    literal column text has no alias awareness and will bind to whatever
+    runs reference the compiled statement exposes. This module is
+    Postgres-only (AT TIME ZONE date math, jsonb operators), which keeps the
+    compilation surface predictable; never reuse the expression in a
+    statement that joins a second/aliased ``runs`` FROM.
     """
     agg = _side_agg_subq(node_side)
     return sa.case(
         (empty_flag.is_(True), sa.func.length(sa.cast(sa.literal("{}"), sa.Text))),
         (agg.is_not(None), sa.func.length(sa.cast(agg, sa.Text))),
+        # literal_column → the OUTER unaliased runs FROM (see docstring above).
         else_=sa.func.length(sa.cast(sa.literal_column(legacy_side), sa.Text)),
     )
 

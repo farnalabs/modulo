@@ -7,7 +7,7 @@ module. It provides:
   guarded out — no ``on_conflict`` support and deprecated) with an explicit
   ``updated_at = current_timestamp()`` in ``set_`` (the ``system_config``
   precedent: ``TimestampMixin.onupdate`` does not fire for Core upserts);
-* the REPLACE-write helpers the dual-write chokepoints call
+* the PRIMARY-write helpers the store chokepoints call
   (``replace_run_node_outputs`` / ``write_run_markers``) — upsert + delete-
   absent, delete-absent ordered AFTER upserts, metadata flags re-derived from
   full run state;
@@ -105,6 +105,12 @@ __all__ = [
     "DualWriteError",
     "OutputsSentinelViolation",
     "RunBlobs",
+    # The sanctioned internal seam between this storage module and its sibling
+    # sweep module (run_node_outputs_backfill): dialect/organisation/upsert
+    # primitives the sweep reuses. Not underscore-private — they are the
+    # de-facto internal API across the two sibling modules.
+    "assert_write_org",
+    "dialect_insert",
     "parse_marker_node_id",
     "read_legacy_raw_output_markers",
     "read_legacy_run_blobs",
@@ -116,6 +122,8 @@ __all__ = [
     "read_run_outputs_with_fallback",
     "read_run_telemetry_with_fallback",
     "replace_run_node_outputs",
+    "resolve_dialect",
+    "upsert_rows",
     "write_legacy_raw_output_markers",
     "write_run_markers",
 ]
@@ -263,14 +271,14 @@ def _sql_null() -> Any:
     return cast(null(), JSON)
 
 
-def _resolve_dialect(session: AsyncSession) -> str:
+def resolve_dialect(session: AsyncSession) -> str:
     """The bind's dialect name (SQLAlchemy 2.x ``AsyncSession.get_bind`` is
     sync — the defensive iscoroutine dance the 1.x habits suggested is dead
     code and was removed)."""
     return session.get_bind().dialect.name
 
 
-def _dialect_insert(dialect: str) -> Any:
+def dialect_insert(dialect: str) -> Any:
     """Dialect-guarded insert factory with ON CONFLICT support.
 
     MariaDB is explicitly guarded out: deprecated, untested, and its
@@ -331,6 +339,7 @@ RUNS_LEGACY_TABLE = Table(
     Column("status", String(30), nullable=False),
     Column("claim_token", String(128), nullable=False),
     Column("completed_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("outputs_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
     Column("node_telemetry_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
     Column("raw_output_markers", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
@@ -372,7 +381,7 @@ def _validate_sentinel_keys(
                 )
 
 
-async def _assert_write_org(session: AsyncSession, organisation_id: uuid.UUID | None) -> None:
+async def assert_write_org(session: AsyncSession, organisation_id: uuid.UUID | None) -> None:
     """WRITE paths REQUIRE a bound, matching RLS org context (fail-closed)."""
     session_org = await read_rls_org(session)
     if session_org is None:
@@ -401,7 +410,7 @@ def _assert_read_org(
         )
 
 
-async def _upsert_rows(
+async def upsert_rows(
     session: AsyncSession,
     *,
     run_id: uuid.UUID,
@@ -419,7 +428,7 @@ async def _upsert_rows(
     """
     if not rows:
         return
-    insert_factory = _dialect_insert(_resolve_dialect(session))
+    insert_factory = dialect_insert(resolve_dialect(session))
     groups: dict[tuple[bool, bool, bool], list[NodeOutputWrite]] = {}
     for row in rows:
         flags = (
@@ -541,7 +550,7 @@ async def replace_run_node_outputs(
     """
     filtered = _split_inherited_sentinel_keys(outputs, inherited_outputs, kind="outputs node id")
     filtered |= _split_inherited_sentinel_keys(telemetry, inherited_telemetry, kind="telemetry node id")
-    await _assert_write_org(session, organisation_id)
+    await assert_write_org(session, organisation_id)
 
     outputs_map: dict[str, Any] = {k: v for k, v in (outputs or {}).items() if k not in filtered}
     telemetry_map: dict[str, Any] = {k: v for k, v in (telemetry or {}).items() if k not in filtered}
@@ -555,7 +564,7 @@ async def replace_run_node_outputs(
             row_kwargs["telemetry"] = telemetry_map[node_id]
         rows.append(NodeOutputWrite(**row_kwargs))
     if rows:
-        await _upsert_rows(session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=False)
+        await upsert_rows(session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=False)
 
     # Delete-absent AFTER upserts (design order): blank shrinking sides, then
     # drop rows left with no value at all. The blanking key sets are the
@@ -640,7 +649,7 @@ async def _refresh_metadata_row(
 
     if empty_outputs or empty_telemetry:
         payload = {"empty_outputs": empty_outputs, "empty_telemetry": empty_telemetry}
-        await _upsert_rows(
+        await upsert_rows(
             session,
             run_id=run_id,
             organisation_id=organisation_id,
@@ -677,14 +686,14 @@ async def write_run_markers(
     upserts (delete-absent ordering).
     """
     _validate_sentinel_keys(markers, kind="marker attempt key", attempt_keys=True)
-    await _assert_write_org(session, organisation_id)
+    await assert_write_org(session, organisation_id)
 
     rows = [
         NodeOutputWrite(node_id=parse_marker_node_id(key), attempt_key=key, markers=value)
         for key, value in markers.items()
     ]
     if rows:
-        await _upsert_rows(session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=False)
+        await upsert_rows(session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=False)
 
     marker_delete = delete(RunNodeOutput).where(
         RunNodeOutput.run_id == run_id,
@@ -887,20 +896,34 @@ async def read_legacy_raw_output_markers(
     return _ensure_dict((await session.execute(stmt)).scalar_one_or_none())
 
 
-async def write_legacy_raw_output_markers(session: AsyncSession, *, run_id: uuid.UUID, markers: dict[str, Any]) -> None:
+async def write_legacy_raw_output_markers(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    markers: dict[str, Any],
+    organisation_id: uuid.UUID | None = None,
+) -> None:
     """Parameterised UPDATE of the legacy ``runs.raw_output_markers`` column.
 
     The marker dual-write's legacy leg after the ORM mapping was cut at B1
     (the column exists in the database until B2b; the caller holds the run row
-    FOR UPDATE, so this serialises exactly like the former ORM assignment).
-    A ``*markers* of ``{}`` writes SQL NULL (the legacy no-markers state) —
-    the JSON null VALUE is not used for the markers column.
+    FOR UPDATE, so this serialises exactly like the former ORM assignment —
+    including the ``updated_at`` stamp the former ORM leg fired via
+    ``TimestampMixin.onupdate``, written explicitly here as
+    ``current_timestamp()``). The *organisation_id* predicate applies when
+    given (mirrors :func:`read_legacy_raw_output_markers`'s tenant
+    compensation). A ``*markers* of ``{}`` writes SQL NULL (the legacy
+    no-markers state) — the JSON null VALUE is not used for the markers
+    column.
     """
-    await session.execute(
+    stmt = (
         update(RUNS_LEGACY_TABLE)
         .where(RUNS_LEGACY_TABLE.c.id == run_id)
-        .values(raw_output_markers=markers or _sql_null())
+        .values(raw_output_markers=markers or _sql_null(), updated_at=func.current_timestamp())
     )
+    if organisation_id is not None:
+        stmt = stmt.where(RUNS_LEGACY_TABLE.c.organisation_id == organisation_id)
+    await session.execute(stmt)
 
 
 def _direction_aware_side(

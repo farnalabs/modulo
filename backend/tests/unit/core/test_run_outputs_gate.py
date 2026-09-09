@@ -36,9 +36,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, select, text, update
+from sqlalchemy import event, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from tests.unit._legacy_seed import seed_legacy_blobs
 
 from modulo.core.pipeline_engine.node_runner import (
     _read_connector_idempotency_gate_state,
@@ -532,14 +533,8 @@ class TestFenceStatusVisibilityDuringCancel:
         # The markers land via the repo's raw Core legacy table (FAR-583 B1 —
         # the ORM mapping of the column is cut) so the raw-SQL fenced reader
         # sees the JSON payload exactly as the migrated database stores it.
-        from modulo.db.crud.run_node_outputs import RUNS_LEGACY_TABLE
-
         async with maker() as session, session.begin():
-            await session.execute(
-                update(RUNS_LEGACY_TABLE)
-                .where(RUNS_LEGACY_TABLE.c.id == run_id)
-                .values(raw_output_markers=self._MARKERS)
-            )
+            await seed_legacy_blobs(session, run_id, raw_output_markers=self._MARKERS)
         return run_id
 
     @pytest.mark.asyncio
@@ -816,16 +811,14 @@ class TestRecoveryInheritedSentinelKeys:
         await _seed_run(sqlite_sessionmaker, run_id)
         # Pre-0176 inherited junk lands in the legacy blobs through the raw
         # Core legacy table (FAR-583 B1 — the ORM mapping is cut).
-        from modulo.db.crud.run_node_outputs import RUNS_LEGACY_TABLE, read_legacy_run_blobs
+        from modulo.db.crud.run_node_outputs import read_legacy_run_blobs
 
         async with sqlite_sessionmaker() as seed_session, seed_session.begin():
-            await seed_session.execute(
-                update(RUNS_LEGACY_TABLE)
-                .where(RUNS_LEGACY_TABLE.c.id == run_id)
-                .values(
-                    outputs_json={"__sneaky__": {"v": 0}, "a": {"v": 1}},
-                    node_telemetry_json={"a": {"ms": 1}},
-                )
+            await seed_legacy_blobs(
+                seed_session,
+                run_id,
+                outputs_json={"__sneaky__": {"v": 0}, "a": {"v": 1}},
+                node_telemetry_json={"a": {"ms": 1}},
             )
         async with sqlite_sessionmaker() as session, session.begin():
             loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()

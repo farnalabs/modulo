@@ -597,6 +597,8 @@ async def _seed_run(
     status: str = "running",
     claim_token: str | None = "tok-a",
     organisation_id: uuid.UUID = _ORG,
+    run_id_text: str | None = None,
+    org_id_text: str | None = None,
 ) -> None:
     async with maker() as session, session.begin():
         await session.execute(
@@ -604,7 +606,7 @@ async def _seed_run(
                 "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
                 "VALUES (:id, 'mark-run-failed org', :slug, '{}', '{}')"
             ),
-            {"id": str(organisation_id), "slug": f"mark-run-failed-{organisation_id.hex[:12]}"},
+            {"id": org_id_text or organisation_id.hex, "slug": f"mark-run-failed-{organisation_id.hex[:12]}"},
         )
         await session.execute(
             text(
@@ -613,8 +615,8 @@ async def _seed_run(
                 "VALUES (:id, :oid, :pid, :sid, 'manual', :status, 1, 'ih', :thread, :tok, 0)"
             ),
             {
-                "id": run_id.hex,
-                "oid": organisation_id.hex,
+                "id": run_id_text or run_id.hex,
+                "oid": org_id_text or organisation_id.hex,
                 "pid": _PIPELINE.hex,
                 "sid": _SNAPSHOT.hex,
                 "status": status,
@@ -624,12 +626,17 @@ async def _seed_run(
         )
 
 
-async def _read_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> dict[str, Any]:
+async def _read_run(
+    maker: async_sessionmaker[AsyncSession],
+    run_id: uuid.UUID,
+    *,
+    run_id_text: str | None = None,
+) -> dict[str, Any]:
     async with maker() as session, session.begin():
         row = (
             await session.execute(
                 text("SELECT status, error_code, claim_token FROM runs WHERE id = :rid"),
-                {"rid": run_id.hex},
+                {"rid": run_id_text or run_id.hex},
             )
         ).fetchone()
     assert row is not None
@@ -756,15 +763,13 @@ class TestMarkRunFailedGuard:
 
 class TestDualWriteHelperSkipsWithoutRlsOrg:
     @pytest.mark.asyncio
-    async def test_no_rls_org_raises_fail_closed(self, sqlite_sessionmaker: Any) -> None:
-        """B1 contract cut: a session with NO bound RLS org raises
-        :class:`OutputsRlsMismatch` fail-closed.
-
-        With the legacy ``runs`` blob columns no longer written, a silently
-        skipped store write would be DATA LOSS — the org-less skip (qa rider
-        g) is gone; the caller must wrap the write in an org-bound
-        transaction.
-        """
+    async def test_no_rls_org_raises_orchestratable_dual_write_error(self, sqlite_sessionmaker: Any) -> None:
+        """B1 contract cut + qa iteration 1 Major 1: a session with NO bound
+        RLS org raises :class:`DualWriteError` (origin='rls_precheck') — NOT a
+        raw :class:`OutputsRlsMismatch` — so the chokepoint's catch/rollback/
+        orchestrate contract covers the org-context failure shape exactly like
+        an in-savepoint store failure (an un-orchestrated escape would skip
+        terminalize/event/counter)."""
         from modulo.db.crud.run import write_run_outputs_from_run
         from modulo.db.rls import OutputsRlsMismatch
 
@@ -772,7 +777,7 @@ class TestDualWriteHelperSkipsWithoutRlsOrg:
         run_id = uuid.uuid4()
         await _seed_run(maker, run_id)
         async with maker() as session, session.begin():
-            with pytest.raises(OutputsRlsMismatch, match="requires a bound RLS organisation context"):
+            with pytest.raises(DualWriteError, match="requires a bound RLS organisation context") as err:
                 await write_run_outputs_from_run(
                     session,
                     run_id=run_id,
@@ -780,8 +785,82 @@ class TestDualWriteHelperSkipsWithoutRlsOrg:
                     outputs={"n1": {"a": 1}},
                     telemetry=None,
                 )
+        assert err.value.origin == "rls_precheck"
+        assert not isinstance(err.value, OutputsRlsMismatch)
+        assert err.value.run_id == run_id
+        assert err.value.claim_token is None
+        assert err.value.sqlstate is None
         row = await _read_run(maker, run_id)
         assert row["status"] == "running"
+
+    @pytest.mark.asyncio
+    async def test_mismatched_org_raises_dual_write_error_with_both_orgs(self, sqlite_sessionmaker: Any) -> None:
+        """qa iteration 1 Major 1: a MISMATCHED RLS org context also raises
+        :class:`DualWriteError` (origin='rls_precheck') carrying BOTH orgs in
+        the message (never silently skip a cross-tenant anomaly)."""
+        from modulo.db.crud.run import write_run_outputs_from_run
+
+        maker = sqlite_sessionmaker
+        run_id = uuid.uuid4()
+        await _seed_run(maker, run_id)
+        other_org = uuid.uuid4()
+        async with maker() as session, session.begin():
+            await set_rls_org_for_test(session, _ORG)
+            with pytest.raises(DualWriteError) as err:
+                await write_run_outputs_from_run(
+                    session,
+                    run_id=run_id,
+                    organisation_id=other_org,
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
+        message = str(err.value)
+        assert str(_ORG) in message
+        assert str(other_org) in message
+        assert err.value.origin == "rls_precheck"
+
+    @pytest.mark.asyncio
+    async def test_org_less_failure_flows_through_guard_and_orchestrator(self, sqlite_sessionmaker: Any) -> None:
+        """The FULL orchestration contract on the rls_precheck shape: the
+        org-less DualWriteError is caught by ``guard_dual_write`` (rollback
+        first), terminalized ``dual_write_failed`` via the separate-session
+        ``_mark_run_failed``, and the failure event is emitted — no
+        un-orchestrated escape."""
+        from modulo.db.crud.run import write_run_outputs_from_run
+
+        maker = sqlite_sessionmaker
+        run_id = uuid.uuid4()
+        # The orchestrate terminalize leg binds str(run_id) AND str(org) (DASHED);
+        # the raw text seeds store ids verbatim, so seeds here use the dashed
+        # forms and read them back dashed (a Postgres Uuid bind normalises
+        # both — test-harness-only distinction).
+        await _seed_run(maker, run_id, run_id_text=str(run_id), org_id_text=str(_ORG))
+
+        async def _write_through_guard() -> None:
+            async with maker() as session, session.begin(), guard_dual_write(session):
+                await write_run_outputs_from_run(
+                    session,
+                    run_id=run_id,
+                    organisation_id=_ORG,
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
+
+        with (
+            patch.object(saq_hooks, "_open_factory", return_value=maker),
+            patch(
+                "modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event",
+                new_callable=AsyncMock,
+            ) as emit,
+            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock),
+            pytest.raises(DualWriteError) as err,
+        ):
+            await _write_through_guard()
+        assert err.value.origin == "rls_precheck"
+        emit.assert_awaited_once()
+        row = await _read_run(maker, run_id, run_id_text=str(run_id))
+        assert row["status"] == "failed"
+        assert row["error_code"] == "dual_write_failed"
 
 
 class TestDualWriteHelperKillSwitchOff:
@@ -1406,20 +1485,21 @@ class TestFailureEventDetailHygiene:
 class TestOrgLessSkipCounter:
     """qa rider (g), retired by the B1 contract cut: the org-less dual-write
     skip counter is GONE — the org-less write raises fail-closed instead of
-    skipping, so there is no skip to count. The pin verifies the raise (the
-    counter can never fire again)."""
+    skipping, so there is no skip to count. Since qa iteration 1 Major 1 the
+    raise is a DualWriteError (origin='rls_precheck', see
+    TestDualWriteHelperSkipsWithoutRlsOrg); the precheck failure itself bumps
+    NO counter before the guard orchestrates."""
 
     @pytest.mark.asyncio
     async def test_no_rls_org_raises_instead_of_skipping(self, sqlite_sessionmaker: Any) -> None:
         from modulo.db.crud.run import write_run_outputs_from_run
-        from modulo.db.rls import OutputsRlsMismatch
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
         await _seed_run(maker, run_id)
         with patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock) as bump:
             async with maker() as session, session.begin():
-                with pytest.raises(OutputsRlsMismatch):
+                with pytest.raises(DualWriteError):
                     await write_run_outputs_from_run(
                         session,
                         run_id=run_id,

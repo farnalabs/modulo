@@ -51,6 +51,7 @@ from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
+from tests.unit._legacy_seed import seed_legacy_blobs
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -615,21 +616,19 @@ async def _seed_run(
     # FAR-583 B1: the legacy blob columns no longer map on the ORM — the
     # seeding writes them through the repo's raw Core legacy table (the same
     # parameterised-SQL surface the production fallback readers use).
-    from sqlalchemy import update as sa_update
-
-    from modulo.db.crud.run_node_outputs import RUNS_LEGACY_TABLE
-
-    legacy_values: dict[str, Any] = {}
-    if outputs is not None:
-        legacy_values["outputs_json"] = outputs
-    if telemetry is not None:
-        legacy_values["node_telemetry_json"] = telemetry
-    if markers is not None:
-        legacy_values["raw_output_markers"] = markers
-    if legacy_values:
-        await session.execute(
-            sa_update(RUNS_LEGACY_TABLE).where(RUNS_LEGACY_TABLE.c.id == run.id).values(**legacy_values)
-        )
+    await seed_legacy_blobs(
+        session,
+        run.id,
+        **{
+            key: value
+            for key, value in (
+                ("outputs_json", outputs),
+                ("node_telemetry_json", telemetry),
+                ("raw_output_markers", markers),
+            )
+            if value is not None
+        },
+    )
     return run
 
 
