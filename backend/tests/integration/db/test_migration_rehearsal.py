@@ -48,8 +48,6 @@ BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 #: matching what a deploy rehearses (prod at revision N, image at N+k).
 _INTERMEDIATE = "0194_uuid_pk_server_defaults"
 
-_REHEARSAL_PROBE_TABLE = "far717_rehearsal_rollback_probe"
-
 
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
@@ -288,32 +286,56 @@ def test_rehearsal_failure_rolls_back_and_reraises(
     monkeypatch,
     capfd,
 ) -> None:
-    """Mid-run failure: probe DDL before the failure MUST vanish, then re-raise."""
-    from modulo.db.migrations import env as migration_env
+    """A rehearsal that fails MUST roll the DB back to byte-identical and re-raise.
 
+    The failure is induced by the real autocommit escape-hatch refusal (the
+    only RuntimeError-raising rehearsal path): re-narrowing ``alembic_version``
+    forces the pre-flight widening to need its side autocommit connection, which
+    rehearsal refuses because its effects would persist outside the rehearsal
+    transaction.
+
+    NOTE: the original test monkeypatched ``do_run_migrations`` to inject a
+    failure, but alembic loads ``env.py`` as a *fresh* module during
+    ``command.upgrade`` (``util.load_python_file`` builds a brand-new module
+    object, never ``modulo.db.migrations.env``), so a monkeypatch on the
+    imported module could never reach the code alembic actually ran. The failure
+    is therefore triggered through the real DB, which exercises the same
+    rollback + re-raise + report contract against the genuine run.
+    """
     raw, config = rehearsal_migration_db
     sync = _sync_url(raw)
     version_before = _alembic_version(sync)
     counts_before = _table_counts(sync)
+    assert version_before == _INTERMEDIATE
 
-    def _explode(connection: sa.Connection) -> None:
-        connection.execute(sa.text(f"CREATE TABLE {_REHEARSAL_PROBE_TABLE} (id INTEGER)"))
-        raise RuntimeError("far-717 induced rehearsal failure")
+    # Representative committed rows the rehearsal must NOT touch.
+    _seed_representative_data(sync)
+    counts_before = _table_counts(sync)
 
-    monkeypatch.setattr(migration_env, "do_run_migrations", _explode)
+    # Re-narrow alembic_version to the legacy VARCHAR(32) so the pre-flight
+    # widening needs its autocommit side connection -> rehearsal refuses it.
+    engine = sa.create_engine(sync)
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(32)"))
+    finally:
+        engine.dispose()
+    assert _version_column_max_len(sync) == 32
+
     monkeypatch.setenv("ALEMBIC_REHEARSAL", "1")
 
-    with pytest.raises(RuntimeError, match="far-717 induced rehearsal failure"):
+    with pytest.raises(RuntimeError, match="escape hatch"):
         command.upgrade(config, "heads")
 
-    assert version_before == _INTERMEDIATE
+    # Nothing persisted: version unchanged, widening NOT applied, every base
+    # table byte-identical (the refusal happens before any migration DDL).
     assert _alembic_version(sync) == _INTERMEDIATE, "failed rehearsal must leave alembic_version unchanged"
+    assert _version_column_max_len(sync) == 32, "the refused widening must NOT have persisted"
     assert _table_counts(sync) == counts_before, "failed rehearsal must leave every table byte-identical"
-    assert not _table_exists(sync, _REHEARSAL_PROBE_TABLE), "DDL executed before the failure must roll back"
 
     captured = capfd.readouterr()
     assert "REHEARSAL FAILED" in captured.out
-    assert "far-717 induced rehearsal failure" in captured.out
+    assert "escape hatch" in captured.out
     assert "Failing step:" in captured.out
     assert "ALL CHANGES ROLLED BACK" in captured.out
 
