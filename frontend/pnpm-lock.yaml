@@ -20,7 +20,7 @@ importers:
   .:
     dependencies:
       '@lucide/vue':
-        specifier: ^1.43.0
+        specifier: ^1.41.0
         version: 1.43.0(vue@3.5.42(@typescript/typescript6@6.0.2))
       '@primeuix/styled':
         specifier: ^1.0.0
@@ -117,7 +117,7 @@ importers:
         specifier: ^4.0.0
         version: 4.3.3
       '@types/node':
-        specifier: ^26.5.0
+        specifier: ^26.1.1
         version: 26.5.0
       '@types/qrcode':
         specifier: ^1.5.5
