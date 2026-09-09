@@ -86,13 +86,8 @@ def test_non_numeric_output_fails_closed():
     assert verdict == "fail-closed"
 
 
-def test_missing_repo_fails_closed():
+def test_missing_repo_fails_closed(monkeypatch):
     mod = _load()
-    saved = mod.os.environ.get("GITHUB_REPOSITORY")
-    mod.os.environ.pop("GITHUB_REPOSITORY", None)
-    try:
-        rc = mod.main([])
-    finally:
-        if saved is not None:
-            mod.os.environ["GITHUB_REPOSITORY"] = saved
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    rc = mod.main([])
     assert rc == 2
