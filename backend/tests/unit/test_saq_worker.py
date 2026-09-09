@@ -1738,9 +1738,7 @@ class TestRunnerHealthProbeWrapper:
         assert stats_args[0] == sw.RUNNER_HEALTH_PROBE_STATS_KEY
         assert redis_client.set.await_args_list[0].kwargs["ex"] == sw.RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS
         assert sw.RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS > sw.RUNNER_HEALTH_PROBE_STALE_SECONDS
-        import json as _json
-
-        stats = _json.loads(stats_args[1])
+        stats = json.loads(stats_args[1])
         assert stats["orgs_probed"] == 3
         assert stats["last_run_at"]
         # FAR-538 per-machine cron heartbeat refreshed on each successful tick.

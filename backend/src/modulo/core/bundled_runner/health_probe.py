@@ -32,9 +32,9 @@ inside a SAVEPOINT (``begin_nested``) so one poisoned org rolls back only
 itself — the other orgs still land their rows in the same tick. A
 per-org *infrastructure* failure (SQLAlchemyError) marks the org failed and
 is RE-RAISED at the end of the tick so SAQ's ``retries=2`` engages (the
-partial counts are persisted by the saq_worker wrapper first); non-infra
-per-org errors stay fail-open (logged, org skipped, tick continues). The
-60s cadence is itself the retry for fail-open orgs.
+saq_worker wrapper persists its failure stats first — zero counts + the
+error flag); non-infra per-org errors stay fail-open (logged, org skipped,
+tick continues). The 60s cadence is itself the retry for fail-open orgs.
 
 System cron: uses the modulo_system role (LOGIN, BYPASSRLS) for cross-org
 access — modulo_app is NOBYPASSRLS.
@@ -406,8 +406,9 @@ async def run_runner_health_probe(
         await boundary.close()
     if first_infra_error is not None:
         # qa F3: an infra failure must reach SAQ's retry machinery, not be
-        # swallowed by the per-org fail-open. The partial counts are already
-        # in the return path of the saq_worker wrapper's stats persist.
+        # swallowed by the per-org fail-open. The saq_worker wrapper's
+        # failure-path stats persist records zero counts + the error flag
+        # before the re-raise.
         raise first_infra_error
     return {
         "machine_id": identity,

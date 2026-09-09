@@ -1668,6 +1668,7 @@ export default {
       "max_concurrent_runner_runs": "Max concurrent Runner runs",
       "semantics_hint": "Applies to Runner-tier workspace dispatch. Leave empty for unlimited.",
       "concurrent_run_limit": "Concurrent Runner run limit",
+      "concurrency_limit_aria": "Concurrency limit (0-100)",
       "save": "Save",
       "saving": "Saving\u2026",
       "limit_updated": "Runner concurrency limit updated.",

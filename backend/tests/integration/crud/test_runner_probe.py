@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.db.bundled_runner_template import BUNDLED_RUNNER_IMAGE_REF, TEMPLATE_CONFIG_JSON
@@ -119,6 +120,67 @@ class TestProbeCacheRlsIsolation:
             probed_at=datetime.now(UTC),
         )
         assert row.organisation_id == test_org
+
+
+class TestPoisonedOrgSavepoint:
+    async def test_poisoned_org_rolls_back_only_itself(self, db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
+        """(qa F2, real Postgres) one org's poisoned upsert raises
+        mid-transaction; the SAVEPOINT rolls back only that org — the other
+        org's row (flushed earlier in the same outer tx) persists and the
+        poisoned org's does not. Mirrors the probe tick's phase-3 write
+        shape: one transaction, per-org ``begin_nested`` upserts."""
+        org_a = uuid.uuid4()
+        org_b = uuid.uuid4()
+        await _seed_org(db_engine, org_a, "sp-a")
+        await _seed_org(db_engine, org_b, "sp-b")
+
+        # The probe tick writes cross-org on the modulo_system role
+        # (BYPASSRLS); the superuser db_engine is the test stand-in for
+        # that role plumbing (as in TestProbeRetentionPrune).
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
+            # org_b's row is flushed BEFORE the poisoned savepoint opens.
+            await upsert_runner_probe_cache(
+                session,
+                org_id=org_b,
+                machine_id="machine-sp",
+                engine_reachable=True,
+                images_present=True,
+            )
+            with pytest.raises(SQLAlchemyError):
+                # org_a's machine_id overflows String(255) — the INSERT
+                # fails at flush with a server-side truncation error.
+                async with session.begin_nested():
+                    await upsert_runner_probe_cache(
+                        session,
+                        org_id=org_a,
+                        machine_id="x" * 256,
+                        engine_reachable=True,
+                        images_present=True,
+                    )
+
+        # The outer tx stayed usable: org_b's row committed; org_a's did not.
+        async with factory() as session:
+            org_b_rows = (
+                (await session.execute(select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_b)))
+                .scalars()
+                .all()
+            )
+            org_a_rows = (
+                (await session.execute(select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_a)))
+                .scalars()
+                .all()
+            )
+        assert len(org_b_rows) == 1
+        assert org_b_rows[0].machine_id == "machine-sp"
+        assert not org_a_rows
+
+        # The surviving row is org-scoped-visible to its own org under RLS.
+        app_factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with app_factory() as session, session.begin():
+            await set_rls_org(session, org_b)
+            rows = await list_runner_probe_cache(session, org_id=org_b)
+        assert [row.machine_id for row in rows] == ["machine-sp"]
 
 
 class TestProbeRetentionPrune:

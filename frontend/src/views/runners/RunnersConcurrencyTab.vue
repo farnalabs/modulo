@@ -17,7 +17,7 @@
               </label>
               <InputText
                 id="runner-concurrency-limit"
-                aria-label="Form control"
+                :aria-label="$t('views.RunnersConcurrencyTab.concurrency_limit_aria')"
                 :model-value="limitInput == null ? '' : String(limitInput)"
                 @update:model-value="(v: any) => limitInput = v === '' ? null : Number(v)"
                 type="number"
@@ -150,7 +150,6 @@ const preflightClass = computed(() => {
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const saveSuccess = ref(false)
-const savedOnce = ref(false)
 
 async function saveLimit() {
   // The REST boundary enforces ge=0 le=100 (FAR-589 D3b); 0 is a meaningful
@@ -169,7 +168,6 @@ async function saveLimit() {
       saveError.value = `${t('views.RunnersConcurrencyTab.save_failed')}: ${formatApiError(err)}`
     } else {
       saveSuccess.value = true
-      savedOnce.value = true
       // qa F6: the effective-cap panel reads the limit via limitData; a
       // successful PUT must refetch the LIMIT SOURCE too (or the panel
       // shows the PRE-save cap until the next manual reload).

@@ -1426,14 +1426,16 @@ async def runner_health_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
 
     Liveness contract (qa F3, mirrors the sibling sweeps): the outcome
     (last_run_at + orgs probed/failed + transitions) is persisted to the
-    shared Redis key every tick — on SUCCESS and on FAILURE (the partial
-    counts the tick achieved, with ``"error": "probe_failed"``) — so
-    /healthz/ready can warn when the probe is stale or missing. An
-    infrastructure failure is persisted (partial counts) and then
-    RE-RAISED so SAQ's ``retries=2`` engages — a swallowed probe failure
-    would leave every org's strip aging to "status unknown" invisibly. The
-    FAR-538 per-machine cron heartbeat (``saq:cron:heartbeat:
-    runner_health_probe``) is refreshed on every successful tick.
+    shared Redis key every tick — on SUCCESS with the tick's counts, and
+    on FAILURE with zero counts + ``"error": "probe_failed"`` (the
+    ``last_run_at`` refresh is what keeps /healthz/ready's staleness
+    warning honest) — so /healthz/ready can warn when the probe is stale
+    or missing. An infrastructure failure is persisted (zero counts +
+    the error flag) and then RE-RAISED so SAQ's ``retries=2`` engages — a
+    swallowed probe failure would leave every org's strip aging to
+    "status unknown" invisibly. The FAR-538 per-machine cron heartbeat
+    (``saq:cron:heartbeat:runner_health_probe``) is refreshed on every
+    successful tick.
     """
     from modulo.core.bundled_runner.health_probe import run_runner_health_probe
 
