@@ -5,10 +5,11 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar, Self
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.runner_capacity import (
@@ -20,6 +21,7 @@ from modulo.core.runner_capacity import (
     RunnerCapacityDecision,
     RunnerCapacityDeniedError,
     RunnerMarkerSweepError,
+    _marker_sweep_lock_engine,
     acquire_runner_dispatch_slot,
     build_dispatch_marker,
     build_hitl_tombstone,
@@ -544,13 +546,13 @@ class _CaplogCtx:
 def caplog_at_level_warning() -> Any:
     """Minimal caplog shim: capture warning-level records for the gate logger."""
     messages: list[str] = []
-    _logger = logging.getLogger("modulo.core.runner_capacity")
-    _prev_level = _logger.level
 
     class _Handler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
             messages.append(record.getMessage())
 
+    _logger = logging.getLogger("modulo.core.runner_capacity")
+    _prev_level = _logger.level
     handler = _Handler(level=logging.WARNING)
     _logger.addHandler(handler)
     _logger.setLevel(logging.WARNING)
@@ -568,13 +570,13 @@ def caplog_at_level_warning() -> Any:
 
 def caplog_at_level_error() -> Any:
     messages: list[str] = []
-    _logger = logging.getLogger("modulo.core.runner_capacity")
-    _prev_level = _logger.level
 
     class _Handler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
             messages.append(record.getMessage())
 
+    _logger = logging.getLogger("modulo.core.runner_capacity")
+    _prev_level = _logger.level
     handler = _Handler(level=logging.ERROR)
     _logger.addHandler(handler)
     _logger.setLevel(logging.ERROR)
@@ -842,42 +844,71 @@ class _Row:
         self.updated_at = kw.get("updated_at", _NOW - timedelta(hours=30))
 
 
+class _FakeLockConn:
+    """A fake dedicated ``engine.connect()`` connection for the sweep dedup lock.
+
+    Answers ``pg_try_advisory_lock`` with :attr:`try_lock_returns` and records the
+    ``pg_advisory_unlock`` on the SAME handle so tests can assert same-connection
+    unlock (the production fix must never unlock on a different pool connection)."""
+
+    def __init__(self, engine: "_FakeLockEngine") -> None:
+        self.engine = engine
+        self.unlocked = False
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_a: object, **_k: Any) -> bool:
+        return False
+
+    async def execute(self, stmt: Any, params: Any = None) -> Any:
+        text_str = str(stmt)
+        result = MagicMock()
+        if "pg_try_advisory_lock" in text_str:
+            result.scalar_one.return_value = self.engine.try_lock_returns
+        elif "pg_advisory_unlock" in text_str:
+            self.unlocked = True
+            self.engine.unlock_calls += 1
+        return result
+
+    async def close(self) -> None:
+        self.engine.close_calls += 1
+
+
+class _FakeLockEngine:
+    """Fake AsyncEngine whose ``.connect()`` yields a dedicated ``_FakeLockConn``."""
+
+    def __init__(self, try_lock_returns: bool = True) -> None:
+        self.try_lock_returns = try_lock_returns
+        self.unlock_calls = 0
+        self.close_calls = 0
+        self.connect_calls = 0
+        self.last_conn: Any = None
+
+    async def connect(self) -> Any:
+        self.connect_calls += 1
+        self.last_conn = _FakeLockConn(self)
+        return self.last_conn
+
+
 class _FakeSweepFactory:
-    """Minimal factory double for the sweep: call 1 returns the DEDUP-lock
-    session (a ``connection()`` that answers the session-scoped
-    ``pg_try_advisory_lock``), call 2 the org-index session, later calls the
-    per-org passes (cursor-paged candidate rows + recorded writes)."""
+    """Minimal factory double for the sweep.
+
+    The DEDUP lock is acquired by production on a DEDICATED connection obtained
+    from ``engine.connect()`` (this double exposes that engine under ``kw['bind']``
+    exactly like a real ``async_sessionmaker``); the factory call cycle is
+    therefore org-index (call 1) then per-org passes
+    (cursor-paged candidate rows + recorded writes)."""
 
     def __init__(self, rows: list[_Row]) -> None:
         self.rows = rows
         self.cleared: list[uuid.UUID] = []
         self.transitioned: list[uuid.UUID] = []
         self.calls = 0
-
-    def _lock_session(self) -> MagicMock:
-        """The DEDUP-lock session — the sweep uses it DIRECTLY (no ``async
-        with``): ``begin()`` + ``connection()`` + ``close()`` on what
-        ``factory()`` returned. ``begin()`` mirrors the fix that acquires the
-        session-scoped advisory lock in an EXPLICIT transaction (an
-        ``autobegin=False`` session cannot resolve ``connection()`` without an
-        active transaction)."""
-        conn = MagicMock()
-
-        async def _conn_execute(stmt: Any, params: Any = None) -> Any:
-            result = MagicMock()
-            result.scalar_one.return_value = True
-            return result
-
-        conn.execute = AsyncMock(side_effect=_conn_execute)
-        conn.commit = AsyncMock()
-        session = MagicMock()
-        session.connection = AsyncMock(return_value=conn)
-        session.close = AsyncMock()
-        begin_cm = MagicMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=session)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin = MagicMock(return_value=begin_cm)
-        return session
+        # The dedicated connection the production code acquires the dedup lock on.
+        # Mirrors a real ``async_sessionmaker``: the bound engine lives in
+        # ``kw['bind']`` (SQLAlchemy 2.0 does NOT expose ``.bind`` on it).
+        self.kw = {"bind": _FakeLockEngine()}
 
     def _wrap(self, session: MagicMock) -> MagicMock:
         begin_cm = MagicMock()
@@ -923,12 +954,10 @@ class _FakeSweepFactory:
 
     def __call__(self) -> Any:
         self.calls += 1
-        # Each sweep invocation follows the same session sequence:
-        # dedup-lock → org-index → one org pass (single-org fakes).
-        position = (self.calls - 1) % 3
+        # The lock is acquired on ``self.kw['bind'].connect()`` (no factory session
+        # slot); the factory cycle here is org-index then per-org passes.
+        position = (self.calls - 1) % 2
         if position == 0:
-            return self._lock_session()
-        if position == 1:
             return self._org_session()
         return self._org_session()
 
@@ -1031,8 +1060,6 @@ async def test_sweep_cas_guards_against_concurrent_fresh_marker(monkeypatch: pyt
     def _factory() -> Any:
         calls["n"] += 1
         if calls["n"] == 1:
-            return factory._lock_session()
-        if calls["n"] == 2:
             org_index = MagicMock()
 
             async def _org_index_execute(stmt: Any, params: Any = None) -> Any:
@@ -1043,6 +1070,9 @@ async def test_sweep_cas_guards_against_concurrent_fresh_marker(monkeypatch: pyt
             org_index.execute = AsyncMock(side_effect=_org_index_execute)
             return factory._wrap(org_index)
         return org_cm
+
+    # The dedup lock is acquired on a dedicated engine connection, not a factory call.
+    _factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
 
     result = await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
     assert result["cleared"] == 0, "a CAS-defeated clear counts nothing"
@@ -1073,8 +1103,6 @@ async def test_sweep_org_failure_raises_typed_error(monkeypatch: pytest.MonkeyPa
     def _factory() -> Any:
         calls["n"] += 1
         if calls["n"] == 1:
-            return factory._lock_session()
-        if calls["n"] == 2:
             org_index = MagicMock()
 
             async def _org_index_execute(stmt: Any, params: Any = None) -> Any:
@@ -1102,31 +1130,25 @@ async def test_sweep_org_failure_raises_typed_error(monkeypatch: pytest.MonkeyPa
         session_cm.close = AsyncMock()
         return session_cm
 
+    # The dedup lock is acquired on a dedicated engine connection, not a factory call.
+    _factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
+
     with pytest.raises(RunnerMarkerSweepError):
         await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
 
 
-async def test_sweep_acquires_marker_lock_in_explicit_transaction(
+async def test_sweep_acquires_marker_lock_on_dedicated_connection(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """FAR-766 (prove-the-fix): the marker sweep acquires the session-scoped
-    advisory lock inside an EXPLICIT transaction.
+    """FAR-766 (prove-the-fix): the marker sweep acquires the SESSION-scoped
+    dedup advisory lock on a DEDICATED ``engine.connect()`` connection using
+    ``pg_try_advisory_lock`` (never the blocking ``pg_advisory_lock``), and
+    releases it on THAT SAME connection — not a freshly-checked-out pool
+    connection — so a leaked lock can never hang a later sweep indefinitely.
 
-    The session factory is ``autobegin=False`` (the codebase DI convention), so
-    a bare ``session.connection()`` with no active transaction raises
-    ``Autobegin is disabled``. That exception previously landed in the fail-open
-    ``except Exception`` every tick, so NO tick ever held the lock and concurrent
-    ticks re-processed the same zombie markers. This test models that exact
-    ``autobegin=False`` double: ``connection()`` raises unless a ``begin()``
-    transaction is currently open. The OLD code (calling ``connection()`` before
-    ``begin()``) hits the raise -> ``marker_sweep_lock_failed`` -> ``acquired``
-    stays False -> the OLD code returned the ``skipped_locked`` early zero result
-    (cleared == 0). The FIXED code enters ``begin()`` first, so ``connection()``
-    resolves, the lock is acquired and the sweep proceeds to clear the stale
-    marker. Fail-open contract: even when the lock is NOT acquired for any other
-    reason (e.g. ``pg_try_advisory_lock`` returns False under contention), the
-    sweep STILL proceeds to clear stale markers rather than returning
-    ``skipped_locked`` — see ``test_sweep_proceeds_when_advisory_lock_not_acquired``.
+    With the lock held the sweep proceeds to clear the stale marker; a leaked
+    lock (unlock on a different connection) would leave the clear to happen once
+    but the lock would silently persist on the pooled connection.
     """
     _patch_gate(monkeypatch, flag_on=False)
 
@@ -1142,66 +1164,24 @@ async def test_sweep_acquires_marker_lock_in_explicit_transaction(
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
     monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
 
-    class _AutobeginDisabledLockSession:
-        """Models an ``autobegin=False`` session: ``.connection()`` only works
-        while a ``begin()`` transaction is open."""
-
-        def __init__(self) -> None:
-            self.in_transaction = False
-            self.connection_calls: list[bool] = []
-            conn = MagicMock()
-
-            async def _execute(stmt: Any, params: Any = None) -> Any:
-                result = MagicMock()
-                result.scalar_one.return_value = True
-                return result
-
-            conn.execute = AsyncMock(side_effect=_execute)
-            conn.commit = AsyncMock()
-            self.conn = conn
-
-        async def connection(self) -> Any:
-            self.connection_calls.append(self.in_transaction)
-            if not self.in_transaction:
-                raise RuntimeError("Autobegin is disabled — call begin() first to open a transaction")
-            return self.conn
-
-        async def close(self) -> None:  # test double
-            return None
-
-        def begin(self) -> Any:
-            self.in_transaction = True
-
-            async def _aexit(*_a: Any, **_k: Any) -> bool:
-                self.in_transaction = False
-                return False
-
-            cm = MagicMock()
-            cm.__aenter__ = AsyncMock(return_value=self)
-            cm.__aexit__ = _aexit
-            return cm
-
-    _lock_session = _AutobeginDisabledLockSession()
+    lock_engine = _FakeLockEngine(try_lock_returns=True)
     stale_marker = json.dumps(
         {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
     )
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
 
     parent_factory = _FakeSweepFactory([stale_awaiting])
-    calls = {"n": 0}
+    # Route the dedup lock to the dedicated fake connection engine.
+    parent_factory.kw["bind"] = lock_engine  # type: ignore[attr-defined]
 
-    def _factory() -> Any:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return _lock_session
-        return parent_factory._org_session()
+    result = await reconcile_runner_dispatch_markers(parent_factory)  # type: ignore[arg-type]
 
-    result = await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
-
-    # The lock session was ONLY ever asked for a connection inside a begin()
-    # transaction — the OLD buggy path would have recorded a False (no-txn)
-    # connection attempt before raising.
-    assert _lock_session.connection_calls and all(_lock_session.connection_calls)
+    # One dedicated connection was opened for the lock, and it was released on
+    # that SAME handle (the unlock ran and the connection closed).
+    assert lock_engine.connect_calls == 1, "the dedup lock must use exactly one dedicated connection"
+    assert lock_engine.unlock_calls == 1, "the lock must be released on the acquiring connection"
+    assert lock_engine.last_conn is not None and lock_engine.last_conn.unlocked
+    assert lock_engine.close_calls == 1, "the dedicated connection must be closed after the sweep"
     assert not any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records), (
         "the advisory lock must be acquired — the lock_failed fail-open path must not fire"
     )
@@ -1237,36 +1217,16 @@ async def test_sweep_proceeds_when_advisory_lock_not_acquired(
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
     monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
-
-    class _LockNotAcquiredFactory(_FakeSweepFactory):
-        """Lock session whose ``pg_try_advisory_lock`` returns False — the lock
-        is NOT acquired, exercising the fail-open proceed path."""
-
-        def _lock_session(self) -> MagicMock:
-            session = MagicMock()
-            conn = MagicMock()
-
-            async def _conn_execute(stmt: Any, params: Any = None) -> Any:
-                result = MagicMock()
-                result.scalar_one.return_value = False  # lock NOT acquired
-                return result
-
-            conn.execute = AsyncMock(side_effect=_conn_execute)
-            conn.commit = AsyncMock()
-            session.connection = AsyncMock(return_value=conn)
-            session.close = AsyncMock()
-            begin_cm = MagicMock()
-            begin_cm.__aenter__ = AsyncMock(return_value=session)
-            begin_cm.__aexit__ = AsyncMock(return_value=False)
-            session.begin = MagicMock(return_value=begin_cm)
-            return session
+    # Simulate the dedup lock NOT being acquired — exercise the fail-open proceed path.
+    monkeypatch.setattr(rc, "_acquire_sweep_dedup_lock", AsyncMock(return_value=(False, None)))
 
     stale_marker = json.dumps(
         {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
     )
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
 
-    factory = _LockNotAcquiredFactory([stale_awaiting])
+    factory = _FakeSweepFactory([stale_awaiting])
+
     with caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"):
         result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
 
@@ -1278,6 +1238,238 @@ async def test_sweep_proceeds_when_advisory_lock_not_acquired(
     )
     assert result["cleared"] == 1, "fail-open: the sweep still clears the stale marker without the lock"
     assert stale_awaiting.id in factory.cleared
+
+
+async def test_sweep_serialises_contending_sweeps_via_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two sweeps sharing one dedup lock must SERIALISE via the
+    ``pg_try_advisory_lock`` poll: the first acquires immediately, the second
+    polls until the first releases, then acquires and runs. Neither skips the
+    tick (the pre-fix flaky behaviour), and the second must still clear its
+    markers once the lock is free."""
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    # Shared lock engine: pg_try_advisory_lock returns False the first time only
+    # (a contending sweep holds it), then True — so the second sweep must poll.
+    class _ContendedLockEngine(_FakeLockEngine):
+        def __init__(self) -> None:
+            super().__init__(try_lock_returns=True)
+            self.try_calls = 0
+
+        async def connect(self) -> Any:  # type: ignore[override]
+            self.connect_calls += 1
+            self.last_conn = _FakeLockConn(self)
+
+            async def _execute(stmt: Any, params: Any = None) -> Any:
+                result = MagicMock()
+                if "pg_try_advisory_lock" in str(stmt):
+                    self.try_calls += 1
+                    # First-ever poll across both sweeps: simulate a held lock.
+                    result.scalar_one.return_value = self.try_calls > 1
+                elif "pg_advisory_unlock" in str(stmt):
+                    self.last_conn.unlocked = True
+                    self.unlock_calls += 1
+                return result
+
+            self.last_conn.execute = AsyncMock(side_effect=_execute)
+            return self.last_conn
+
+    lock_engine = _ContendedLockEngine()
+    stale_marker = json.dumps(
+        {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
+    )
+    stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
+    factory = _FakeSweepFactory([stale_awaiting])
+    factory.kw["bind"] = lock_engine  # type: ignore[attr-defined]
+    monkeypatch.setattr(rc, "_SWEEP_LOCK_POLL_INTERVAL", 0.0)
+
+    await asyncio.gather(
+        reconcile_runner_dispatch_markers(factory),  # type: ignore[arg-type]
+        reconcile_runner_dispatch_markers(factory),  # type: ignore[arg-type]
+    )
+
+    # The second sweep had to poll at least twice (once while held, once free),
+    # proving bounded polling serialises rather than skipping.
+    assert lock_engine.try_calls >= 2
+    assert lock_engine.unlock_calls >= 1
+    assert factory.cleared, "a serialised sweep must still clear its stale marker"
+
+
+async def test_marker_sweep_lock_engine_reads_real_sessionmaker_bind() -> None:
+    """FAR-2171 (prove-the-fix): ``_marker_sweep_lock_engine`` must extract the
+    bound engine from a REAL ``async_sessionmaker`` — SQLAlchemy 2.0.52 does NOT
+    expose ``.bind`` on it, so reading ``getattr(factory, 'bind')`` returns None and
+    raises ``RuntimeError`` at every sweep tick (the production breaker this fixes).
+    The engine lives in ``factory.kw['bind']``."""
+    engine = create_async_engine("sqlite+aiosqlite://")
+    factory = async_sessionmaker(engine)
+    try:
+        assert _marker_sweep_lock_engine(factory) is engine
+    finally:
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Sweep dedup-lock error branches (prove the fail-open + cleanup paths)
+# ---------------------------------------------------------------------------
+
+
+def test_marker_sweep_lock_engine_requires_bound_engine() -> None:
+    """``_marker_sweep_lock_engine`` must refuse a factory with no bound engine
+    (no ``kw['bind']``) rather than leaking a broken connection later in the sweep."""
+    import modulo.core.runner_capacity as rc
+
+    class _NoBind:
+        pass
+
+    with pytest.raises(RuntimeError):
+        rc._marker_sweep_lock_engine(_NoBind())
+
+
+async def test_acquire_sweep_lock_connect_failure_fails_open(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If the dedicated connection cannot even be opened, the acquisition FAILS
+    OPEN (``(False, None)``) and logs ``marker_sweep_lock_failed`` — never hangs or
+    raises into the cron tick. ``engine.connect()`` sits inside the lock-acquire
+    try, so a pool-exhaustion error is swallowed into fail-open."""
+    import modulo.core.runner_capacity as rc
+
+    class _FailConnectEngine:
+        async def connect(self) -> Any:
+            raise RuntimeError("pool exhausted")
+
+    class _Factory:
+        kw: ClassVar[dict[str, Any]] = {"bind": _FailConnectEngine()}
+
+    caplog.set_level(logging.WARNING, logger="modulo.core.runner_capacity")
+    acquired, lock_conn = await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
+    assert acquired is False
+    assert lock_conn is None
+    assert any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records)
+
+
+async def test_acquire_sweep_lock_execute_failure_fails_open_and_closes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If ``pg_try_advisory_lock`` itself raises on the open connection, the lock
+    acquisition fails open AND the dedicated connection is still closed (no leak)
+    — covering the acquire-side cleanup branch."""
+    import modulo.core.runner_capacity as rc
+
+    class _FailExecConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            raise RuntimeError("exec down")
+
+        async def close(self) -> None:
+            raise RuntimeError("close down")
+
+    class _Engine:
+        async def connect(self) -> Any:
+            return _FailExecConn()
+
+    class _Factory:
+        kw: ClassVar[dict[str, Any]] = {"bind": _Engine()}
+
+    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    acquired, lock_conn = await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
+    assert acquired is False
+    assert lock_conn is None
+    assert any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records)
+    # The acquire-side cleanup must still log the close failure rather than raise.
+    assert any("runner.capacity.marker_sweep_lock_conn_close_failed" in r.message for r in caplog.records)
+
+
+async def test_acquire_sweep_lock_cancelled_reraises() -> None:
+    """The acquire loop must propagate ``asyncio.CancelledError`` so the sweep
+    task can be cancelled cleanly (it must NOT be swallowed into fail-open)."""
+    import modulo.core.runner_capacity as rc
+
+    class _CancelConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            raise asyncio.CancelledError
+
+        async def close(self) -> None:
+            return None
+
+    class _Engine:
+        async def connect(self) -> Any:
+            return _CancelConn()
+
+    class _Factory:
+        kw: ClassVar[dict[str, Any]] = {"bind": _Engine()}
+
+    with pytest.raises(asyncio.CancelledError):
+        await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
+
+
+async def test_release_sweep_lock_unlock_failure_logs_and_closes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If ``pg_advisory_unlock`` raises on the dedicated connection, the release
+    logs ``marker_sweep_unlock_failed`` and STILL closes the connection (the
+    close is the backstop that actually frees the lock)."""
+    import modulo.core.runner_capacity as rc
+
+    class _UnlockFailConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            raise RuntimeError("unlock down")
+
+        async def close(self) -> None:
+            return None
+
+    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    await rc._release_sweep_dedup_lock(_UnlockFailConn(), 1, 2)
+    assert any("runner.capacity.marker_sweep_unlock_failed" in r.message for r in caplog.records)
+
+
+async def test_release_sweep_lock_close_failure_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If the dedicated connection's ``close`` raises, the release must log
+    ``marker_sweep_lock_conn_close_failed`` rather than propagate (the lock is
+    already released by the unlock or will be reclaimed on disconnect)."""
+    import modulo.core.runner_capacity as rc
+
+    class _CloseFailConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            return MagicMock()
+
+        async def close(self) -> None:
+            raise RuntimeError("close down")
+
+    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    await rc._release_sweep_dedup_lock(_CloseFailConn(), 1, 2)
+    assert any("runner.capacity.marker_sweep_lock_conn_close_failed" in r.message for r in caplog.records)
+
+
+async def test_release_sweep_lock_cancelled_reraises() -> None:
+    """The release must propagate ``asyncio.CancelledError`` so a cancelled
+    sweep task tears down without swallowing the cancellation."""
+    import modulo.core.runner_capacity as rc
+
+    class _CancelConn:
+        async def execute(self, stmt: Any, params: Any = None) -> Any:
+            raise asyncio.CancelledError
+
+        async def close(self) -> None:
+            return None
+
+    with pytest.raises(asyncio.CancelledError):
+        await rc._release_sweep_dedup_lock(_CancelConn(), 1, 2)
 
 
 def test_sweep_sql_sandbox_id_asymmetry() -> None:
@@ -1332,8 +1524,6 @@ async def test_sweep_failed_org_pass_emits_no_marker_cleared_events(
     def _factory() -> Any:
         calls["n"] += 1
         if calls["n"] == 1:
-            return factory._lock_session()
-        if calls["n"] == 2:
             org_index = MagicMock()
 
             async def _org_index_execute(stmt: Any, params: Any = None) -> Any:
@@ -1371,6 +1561,9 @@ async def test_sweep_failed_org_pass_emits_no_marker_cleared_events(
         session_cm.__aexit__ = AsyncMock(return_value=False)
         session_cm.close = AsyncMock()
         return session_cm
+
+    # The dedup lock is acquired on a dedicated engine connection, not a factory call.
+    _factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
 
     with (
         caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),

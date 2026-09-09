@@ -124,6 +124,16 @@ _RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS = 15 * 60
 _RUNNER_MARKER_SWEEP_STATS_KEY = "saq:cron:stats:runner_marker_sweep"
 _RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
 
+# runner_health_probe (FAR-591 D5, qa F3): the per-machine runner health
+# probe runs every 60s on the system worker and persists its outcome to
+# this Redis key. Same advisory contract as its siblings, with the stale
+# window tuned to the 60s cadence (3x = 180s — a single missed tick never
+# alerts): a dead probe stops refreshing the Runners page's cache, so every
+# org's strip silently ages to "status unknown" — a missing or stale key
+# warns without gating readiness.
+_RUNNER_HEALTH_PROBE_STATS_KEY = "saq:cron:stats:runner_health_probe"
+_RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
+
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
 # 2x the cadence has a silently dead cron scheduler and fails readiness so Fly
@@ -781,6 +791,27 @@ async def _check_runner_marker_sweep() -> CheckResult:
     )
 
 
+async def _check_runner_health_probe() -> CheckResult:
+    """ADVISORY — last runner_health_probe outcome (never gates readiness).
+
+    The FAR-591 D5 per-machine runner health probe
+    (``saq_worker.runner_health_probe``) runs in the SYSTEM WORKER process
+    every 60s and persists its outcome (``orgs_probed`` + ``orgs_failed`` +
+    ``transitions`` + ``last_run_at``) to
+    ``saq:cron:stats:runner_health_probe`` (qa F3). A silently dead probe
+    stops refreshing the probe cache, so every org's Runners strip ages to
+    "status unknown" and transition alerts (``runner_unavailable``) stop
+    firing — a missing or >180s-stale key reports "degraded" to alert
+    operators while the app remains healthy. Fail-open on Redis read
+    errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _RUNNER_HEALTH_PROBE_STATS_KEY,
+        _RUNNER_HEALTH_PROBE_STALE_SECONDS,
+        "orgs_probed",
+    )
+
+
 async def _check_fleet_system_crons() -> CheckResult:
     """Fleet-wide system-cron liveness for ``app`` machines (plan F8, PR dist/separate-workers).
 
@@ -917,6 +948,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         hps_check,
         rwr_check,
         rms_check,
+        rhp_check,
     ) = await asyncio.gather(
         _check_database(),
         _check_redis(),
@@ -930,6 +962,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_hitl_park_sweep(),
         _check_runner_workspace_reconcile(),
         _check_runner_marker_sweep(),
+        _check_runner_health_probe(),
     )
     bg_check = _check_break_glass()
 
@@ -967,6 +1000,11 @@ async def readiness(response: Response) -> ReadinessResponse:
         # accumulate as phantom capacity and the rollback signal goes dark;
         # the gate fails open, so it stays alert-only.
         "runner_marker_sweep": rms_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-591 D5 (qa F3): a dead health probe stops refreshing the
+        # probe cache (strips age to "status unknown") and silences the
+        # transition alerts, so it stays alert-only.
+        "runner_health_probe": rhp_check,
     }
 
     # Aggregate over the NON-advisory checks only.

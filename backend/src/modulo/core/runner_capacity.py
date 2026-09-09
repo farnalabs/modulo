@@ -47,9 +47,13 @@ hashed with the org id — NEVER the shared ``_uuid_to_lock_keys`` keyspace
 (the legacy derivation hashes the raw UUID, so its keys collide with every
 connector/trigger lock for the same id) and never a single global key. The
 sweep dedup lock uses a DISTINCT derivation suffix so it can never deadlock
-against a per-org gate key; it is taken SESSION-scoped (``pg_try_advisory_lock``
-on a connection held for the sweep's lifetime — the previous transaction-
-scoped take released the lock before the sweep body ran, protecting nothing).
+against a per-org gate key; it is taken SESSION-scoped on a DEDICATED
+``engine.connect()`` connection held for the sweep's lifetime, using
+``pg_try_advisory_lock`` + bounded polling (the codebase convention shared by
+``api.main._migration_advisory_lock`` and ``db.migrations.env._migration_advisory_lock``
+— a bare blocking ``pg_advisory_lock`` races server-side acquisition against the
+client timeout). The lock is released on THAT SAME connection in the sweep's
+finally, so a leaked lock can never hang a later sweep indefinitely.
 
 Failure policy (per class): at-capacity and lock-timeout (SQLSTATE 55P03)
 denials raise :class:`RunnerCapacityDeniedError` (retryable — the caller maps
@@ -852,6 +856,91 @@ class RunnerMarkerSweepError(RuntimeError):
     org_failures: int
 
 
+# Bounded polling for the SESSION-scoped sweep dedup advisory lock. Mirrors
+# ``api.main._migration_advisory_lock`` / ``db.migrations.env._migration_advisory_lock``:
+# a bare blocking ``pg_advisory_lock`` under a client timeout races server-side
+# acquisition against the client (AGENTS.md), so we poll ``pg_try_advisory_lock``
+# on a DEDICATED engine connection and fail open if it never becomes free.
+_SWEEP_LOCK_POLL_ATTEMPTS = 240
+_SWEEP_LOCK_POLL_INTERVAL = 1.0
+
+
+def _marker_sweep_lock_engine(factory: Any) -> Any:
+    """The engine that owns the sweep dedup lock connection.
+
+    Uses the session factory's bound engine (the SAME engine the sweep's org
+    sessions use) so the lock lives on a sibling connection of the same pool. Real
+    callers (``saq_worker._make_session_factory`` / ``cron_helpers._open_factory``)
+    pass a real ``async_sessionmaker`` whose engine lives in ``factory.kw['bind']``
+    (SQLAlchemy 2.0 does NOT expose ``.bind`` on ``async_sessionmaker`` — verified
+    empirically against the pinned 2.0.52). ``modulo.core`` must not depend on
+    ``modulo.api``, so there is deliberately no app-engine fallback."""
+    engine = factory.kw.get("bind") if hasattr(factory, "kw") else None
+    if engine is None:
+        raise RuntimeError("reconcile_runner_dispatch_markers requires a session factory with a bound engine")
+    return engine
+
+
+async def _acquire_sweep_dedup_lock(factory: Any, k1: int, k2: int) -> tuple[bool, Any]:
+    """Acquire the SESSION-scoped sweep dedup lock on a dedicated connection.
+
+    The lock is held on the connection returned here for the WHOLE sweep and
+    released on that SAME handle by :func:`_release_sweep_dedup_lock` — never on a
+    freshly-checked-out pool connection — so a leaked lock can never hang a later
+    sweep indefinitely. Uses ``pg_try_advisory_lock`` + bounded polling (the
+    codebase convention); if the lock cannot be acquired the connection is closed
+    and ``(False, None)`` is returned (fail-open)."""
+    engine = _marker_sweep_lock_engine(factory)
+    # ``engine.connect()`` sits INSIDE the try so a connection-establishment
+    # failure fails open (the documented behaviour) rather than propagating out of
+    # the sweep and killing the dispatcher reconcile / cron liveness write.
+    try:
+        lock_conn = await engine.connect()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("runner.capacity.marker_sweep_lock_failed", exc_info=True)
+        return False, None
+    try:
+        for _ in range(_SWEEP_LOCK_POLL_ATTEMPTS):
+            result = await lock_conn.execute(
+                text("SELECT pg_try_advisory_lock(:k1, :k2)"),
+                {"k1": k1, "k2": k2},
+            )
+            if bool(result.scalar_one()):
+                return True, lock_conn
+            await asyncio.sleep(_SWEEP_LOCK_POLL_INTERVAL)
+        # Lock never freed within the poll budget: fail open (do not hang).
+        _log.info("runner.capacity.marker_sweep_skipped_locked")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("runner.capacity.marker_sweep_lock_failed", exc_info=True)
+    try:
+        await lock_conn.close()
+    except Exception:
+        _log.debug("runner.capacity.marker_sweep_lock_conn_close_failed", exc_info=True)
+    return False, None
+
+
+async def _release_sweep_dedup_lock(lock_conn: Any, k1: int, k2: int) -> None:
+    """Release the sweep dedup lock on the SAME connection that acquired it."""
+    try:
+        await lock_conn.execute(
+            text("SELECT pg_advisory_unlock(:k1, :k2)"),
+            {"k1": k1, "k2": k2},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.debug("runner.capacity.marker_sweep_unlock_failed", exc_info=True)
+    finally:
+        try:
+            await lock_conn.close()
+        except Exception:
+            _log.debug("runner.capacity.marker_sweep_lock_conn_close_failed", exc_info=True)
+
+
 async def reconcile_runner_dispatch_markers(
     factory: async_sessionmaker[AsyncSession],
     *,
@@ -880,11 +969,13 @@ async def reconcile_runner_dispatch_markers(
     ONLY on a genuine breach (a cap-less org never violates).
 
     A sweep tick takes the DEDUP advisory lock (distinct derivation suffix)
-    SESSION-scoped on a connection held for the sweep's lifetime — the
-    previous transaction-scoped take released the lock before the sweep body
-    ran. Belt-and-braces against double-sweep (the cron cadence AND the 60s
-    dispatcher_reconcile path can overlap — SAQ's ``unique=True`` dedupes
-    only the cron job itself) on top of the per-row CAS guards.
+    SESSION-scoped on a DEDICATED ``engine.connect()`` connection held for the
+    sweep's lifetime — the lock is acquired with ``pg_try_advisory_lock`` +
+    bounded polling and released on that SAME connection (not a freshly-checked
+    out pool connection) in the sweep's finally. Belt-and-braces against
+    double-sweep (the cron cadence AND the 60s dispatcher_reconcile path can
+    overlap — SAQ's ``unique=True`` dedupes only the cron job itself) on top of
+    the per-row CAS guards.
 
     Returns ``{"scanned", "cleared", "transitioned", "violations",
     "orgs_failed"}``. Raises :class:`RunnerMarkerSweepError` when the org
@@ -907,48 +998,21 @@ async def reconcile_runner_dispatch_markers(
     orgs_failed = 0
 
     k1, k2 = runner_marker_sweep_lock_keys()
-    acquired = False
-    lock_session = factory()
-    lock_conn: Any = None
-    try:
-        try:
-            # The session factory is ``autobegin=False`` (the codebase DI
-            # convention, see ``_make_session_factory``/``_open_factory``), so a
-            # bare ``session.connection()`` raises ``InvalidRequestError``
-            # ("Autobegin is disabled") — there is no active transaction under
-            # which to resolve a connection. That exception was being caught by
-            # the fail-open ``except Exception`` EVERY tick, so no tick ever
-            # actually held the advisory lock and every concurrent tick
-            # re-processed the same zombie runs. Acquire the session-scoped
-            # advisory lock in an EXPLICIT transaction instead: the lock is
-            # SESSION-scoped (not xact-scoped), so it survives this transaction's
-            # commit and is released only by ``pg_advisory_unlock`` (finally
-            # block) or ``session.close()``.
-            async with lock_session.begin():
-                lock_conn = await lock_session.connection()
-                acquired = bool(
-                    (
-                        await lock_conn.execute(
-                            text("SELECT pg_try_advisory_lock(:k1, :k2)"),
-                            {"k1": k1, "k2": k2},
-                        )
-                    ).scalar_one()
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning("runner.capacity.marker_sweep_lock_failed", exc_info=True)
-            # Fail-open: the sweep proceeds; the per-row CAS guards + SAQ
-            # unique=True remain the overlap guards.
-        if not acquired:
-            # Fail-open: NEVER skip the safety net. A skipped sweep lets stale
-            # terminal/leaked markers accumulate as phantom capacity (the D8
-            # rollback signal goes dark) — the worse failure mode than a
-            # concurrent re-process, which the per-row CAS guards make
-            # idempotent. So proceed without the dedup lock rather than
-            # returning early; the documented overlap guards hold.
-            _log.warning("runner.capacity.marker_sweep_lock_not_acquired_proceeding")
+    # Hold the SESSION-scoped dedup lock on a DEDICATED engine connection for the
+    # sweep's lifetime. ``pg_try_advisory_lock`` + bounded polling (the codebase
+    # convention) serialises two contending sweeps instead of letting one skip
+    # the tick; the lock is released on the SAME connection in the finally below.
+    acquired, lock_conn = await _acquire_sweep_dedup_lock(factory, k1, k2)
+    if not acquired:
+        # Fail-open: NEVER skip the safety net. A skipped sweep lets stale
+        # terminal/leaked markers accumulate as phantom capacity (the D8
+        # rollback signal goes dark) — the worse failure mode than a
+        # concurrent re-process, which the per-row CAS guards make
+        # idempotent. So proceed without the dedup lock rather than
+        # returning early; the documented overlap guards hold.
+        _log.warning("runner.capacity.marker_sweep_lock_not_acquired_proceeding")
 
+    try:
         recovery_or, exclusion = _sweep_recoverability_predicate()
 
         try:
@@ -1078,26 +1142,15 @@ async def reconcile_runner_dispatch_markers(
             "orgs_failed": 0,
         }
     finally:
+        # Release the SESSION-scoped dedup lock on the SAME dedicated connection
+        # that acquired it (never a freshly-checked-out pool connection) so a
+        # leaked lock can never hang a later sweep indefinitely. The
+        # ``pg_try_advisory_lock`` + bounded-polling convention (above) means the
+        # lock only engages when free, and this release is on the acquiring
+        # handle — closing the connection also releases it as a backstop if the
+        # explicit unlock is skipped (fail-open) or the connection dies.
         if acquired and lock_conn is not None:
-            try:
-                # The factory is ``autobegin=False`` (see the acquisition
-                # block) — an unguarded ``lock_conn.execute`` outside a
-                # transaction raises ``InvalidRequestError`` and the SESSION-
-                # scoped lock leaks back into the pool, so every subsequent
-                # sweep call in the same process fails ``pg_try_advisory_lock``
-                # and skips. Release inside an explicit transaction.
-                async with lock_session.begin():
-                    await lock_conn.execute(text("SELECT pg_advisory_unlock(:k1, :k2)"), {"k1": k1, "k2": k2})
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.debug("runner.capacity.marker_sweep_unlock_failed", exc_info=True)
-        try:
-            await lock_session.close()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.debug("runner.capacity.marker_sweep_lock_session_close_failed", exc_info=True)
+            await _release_sweep_dedup_lock(lock_conn, k1, k2)
 
 
 __all__ = [
