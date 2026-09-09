@@ -136,17 +136,38 @@ class HitlGateContext(TypedDict, total=False):
     pipeline_name: str | None
 
 
-def _serialize(value: Any) -> str:
+def serialize_value(value: Any) -> str:
     """Serialise *value* deterministically (``sort_keys=True``, ``default=str``).
 
     Never raises: ``default=str`` degrades every non-JSON value (UUID,
     datetime, LangChain message objects) to its string form, and any residual
-    serialisation error falls back to ``repr``.
+    serialisation error falls back to ``repr``. The ONE deterministic
+    serializer for the briefing bundle and its surfaces (FAR-688) — e.g.
+    ``node_runner._serialize_condition_value`` reuses it instead of
+    re-implementing the body.
     """
     try:
         return json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
     except Exception:  # pragma: no cover - defensive: default=str makes this near-impossible
         return repr(value)
+
+
+def slice_with_marker(text: str, cap: int) -> str:
+    """Slice *text* to at most *cap* characters, marking a cut (FAR-688).
+
+    Marker-WITHIN-cap semantics: the marker is carved out of the slice, so
+    the returned string NEVER exceeds *cap* characters — one length
+    semantics for every bounded field across all surfaces (previously some
+    call sites sliced to ``cap`` and appended the marker past it, exceeding
+    their nominal cap by ``len(TRUNCATION_MARKER)``). A string already
+    within the cap is returned unchanged (no marker).
+    """
+    if len(text) <= cap:
+        return text
+    head = cap - len(TRUNCATION_MARKER)
+    if head <= 0:
+        return text[:cap]
+    return text[:head] + TRUNCATION_MARKER
 
 
 def _bound_text(value: Any, cap: int = _TEXT_FIELD_MAX_CHARS) -> str | None:
@@ -159,12 +180,10 @@ def _bound_text(value: Any, cap: int = _TEXT_FIELD_MAX_CHARS) -> str | None:
     """
     if value is None:
         return None
-    text = value.strip() if isinstance(value, str) else _serialize(value).strip()
+    text = value.strip() if isinstance(value, str) else serialize_value(value).strip()
     if not text:
         return None
-    if len(text) <= cap:
-        return text
-    return text[: cap - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+    return slice_with_marker(text, cap)
 
 
 def extract_condition_node_ids(condition: str | None) -> list[str]:
@@ -244,11 +263,9 @@ def _artifact_entry(node_id: str, output: Any) -> dict[str, str]:
     shared redaction primitive BEFORE truncation (FAR-163: a secret
     straddling the cut point must still be removed; FAR-188: credentials
     never enter persistence unmasked). A sliced summary carries
-    :data:`TRUNCATION_MARKER`.
+    :data:`TRUNCATION_MARKER` WITHIN the per-entry cap.
     """
-    summary = sanitize_error_text(_serialize(output))
-    if len(summary) > _ARTIFACT_ENTRY_MAX_CHARS:
-        summary = summary[:_ARTIFACT_ENTRY_MAX_CHARS] + TRUNCATION_MARKER
+    summary = slice_with_marker(sanitize_error_text(serialize_value(output)), _ARTIFACT_ENTRY_MAX_CHARS)
     return {
         "node_id": node_id,
         "summary": summary,
@@ -461,4 +478,6 @@ __all__ = (
     "HitlGateContext",
     "build_hitl_gate_context",
     "extract_condition_node_ids",
+    "serialize_value",
+    "slice_with_marker",
 )

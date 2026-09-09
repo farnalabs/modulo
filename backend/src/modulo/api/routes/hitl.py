@@ -872,6 +872,21 @@ async def list_run_pending_gates(
                         for g in gates
                     }
 
+            if not gate_description_map and gates:
+                # FAR-688: when the snapshot is unavailable (no snapshot_id,
+                # retention pruned the row, or a non-dict graph) the
+                # context-first pass above never ran — resolve from the claim
+                # row's captured briefing ALONE (context-first, no snapshot
+                # fallback) so this surface agrees with the org-level
+                # ``resolve_gate_descriptions`` resolver instead of muting a
+                # description the capture carries.
+                gate_description_map = {
+                    g.gate_id: resolve_gate_description(
+                        g.context_json if isinstance(g.context_json, dict) else None, None
+                    )
+                    for g in gates
+                }
+
             # FAR-691: batched claimant display names + the caller-owns-claim
             # stamp, resolved inside the same transaction/RLS context.
             claimant_names = await _load_claimant_name_map(session, gates)

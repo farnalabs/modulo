@@ -314,7 +314,12 @@
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
               <p class="font-medium">{{ $t('views.PipelineEditorView.legacy_hitl_description_title') }}</p>
-              <p class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.legacy_hitl_description_hint') }}</p>
+              <!-- FAR-688 per-kind hint: edge gates are fixable in this editor
+                   ("open the edge"); node-level gates have no hitl_config
+                   panel here (documented deferral), so they get a distinct,
+                   truthful hint instead of an unactionable one. -->
+              <p v-if="hasLegacyEdgeIssues" class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.legacy_hitl_description_hint') }}</p>
+              <p v-if="hasLegacyNodeIssues" class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.legacy_hitl_hint_node') }}</p>
               <ul class="mt-1 list-inside list-disc space-y-0.5">
                 <li v-for="issue in legacyHitlIssues" :key="issue.key" class="max-w-full truncate" :title="issue.label">
                   {{ $t(issue.kind === 'node' ? 'views.PipelineEditorView.legacy_hitl_item_node' : 'views.PipelineEditorView.legacy_hitl_item_edge', { label: issue.label }) }}
@@ -1755,6 +1760,12 @@ function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitl
 // clears the banner; a reverted graph brings it back.
 const legacyHitlIssues = computed(() => findLegacyHitlDescriptionIssues(rawNodes.value, rawEdges.value))
 const showLegacyHitlBanner = ref(true)
+
+// FAR-688: which KINDS of violations are present drives the per-kind hints —
+// edge gates keep the "open the edge and add one" hint; node-level gates get
+// the API/MCP hint because the editor cannot edit their hitl_config yet.
+const hasLegacyEdgeIssues = computed(() => legacyHitlIssues.value.some(issue => issue.kind === 'edge'))
+const hasLegacyNodeIssues = computed(() => legacyHitlIssues.value.some(issue => issue.kind === 'node'))
 
 const selectedAgent = computed(() => agents.value.find(a => a.id === pickerAgentId.value) || null)
 

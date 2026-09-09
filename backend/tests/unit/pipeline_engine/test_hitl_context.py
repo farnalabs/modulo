@@ -24,6 +24,8 @@ from modulo.core.pipeline_engine.hitl_context import (
     TRUNCATION_MARKER,
     build_hitl_gate_context,
     extract_condition_node_ids,
+    serialize_value,
+    slice_with_marker,
 )
 
 _UUID_SRC = "550e8400-e29b-41d4-a716-446655440000"
@@ -345,7 +347,8 @@ class TestTruncationBounds:
         assert summary.endswith(TRUNCATION_MARKER)
 
     async def test_oversized_entry_summary_carries_truncation_marker(self):
-        """FAR-688: the per-entry slice in _artifact_entry is marked too."""
+        """FAR-688: the per-entry slice in _artifact_entry is marked too —
+        marker-WITHIN-cap, so a sliced summary is exactly the entry cap."""
         output = {"blob": "y" * 5000}
         config = {"description": "Approve the deploy.", "condition": f"node_id=='{_UUID_OTHER}'"}
         context = await _build(
@@ -354,7 +357,7 @@ class TestTruncationBounds:
         )
         assert context is not None
         assert context["artifacts"][0]["summary"].endswith(TRUNCATION_MARKER)
-        assert len(context["artifacts"][0]["summary"]) <= 1200 + len(TRUNCATION_MARKER)
+        assert len(context["artifacts"][0]["summary"]) == 1200
 
     async def test_deterministic_capture_same_inputs_same_bundle(self):
         config = {"description": "Approve the deploy.", "condition": f"node_id=='{_UUID_OTHER}'"}
@@ -440,3 +443,48 @@ async def test_non_topology_gate_ids_still_build_minimal_bundle(gate_id):
     context = await _build(graph, gate_id=gate_id)
     assert context is not None
     assert context["source_node_id"] is None
+
+
+class TestSliceWithMarker:
+    """FAR-688: the ONE truncation idiom — marker-WITHIN-cap semantics."""
+
+    def test_short_string_unchanged_without_marker(self):
+        text = "a short string"
+        assert slice_with_marker(text, 100) == text
+
+    def test_string_exactly_at_cap_unchanged(self):
+        text = "e" * 50
+        assert slice_with_marker(text, 50) == text
+
+    def test_long_string_never_exceeds_cap_and_ends_with_marker(self):
+        text = "x" * 5000
+        sliced = slice_with_marker(text, 1200)
+        assert len(sliced) == 1200
+        assert sliced.endswith(TRUNCATION_MARKER)
+        assert sliced.startswith("x" * (1200 - len(TRUNCATION_MARKER)))
+
+    def test_cap_respected_for_very_long_strings(self):
+        text = "z" * 100_000
+        assert len(slice_with_marker(text, 2048)) == 2048
+
+    def test_empty_string_unchanged(self):
+        assert not slice_with_marker("", 100)
+
+    def test_degenerate_cap_never_exceeds_it(self):
+        """A cap smaller than the marker still cannot produce an over-cap
+        string — the guard slices without the marker instead."""
+        sliced = slice_with_marker("abcdef", 4)
+        assert len(sliced) == 4
+
+
+class TestSerializeValue:
+    """The shared deterministic serializer behind the briefing bundle."""
+
+    def test_sorts_keys_and_stringifies_non_json_values(self):
+        assert serialize_value({"b": 1, "a": uuid.UUID("00000000-0000-0000-0000-000000000001")}) == (
+            '{"a": "00000000-0000-0000-0000-000000000001", "b": 1}'
+        )
+
+    def test_matches_dumps_sort_keys_default_str(self):
+        value = {"k": 2, "z": [1, 2], "n": None}
+        assert serialize_value(value) == json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)

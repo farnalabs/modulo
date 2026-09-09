@@ -1093,6 +1093,7 @@ export default {
       "hitl_description_required": "HITL gate requires a description (min 20 chars) explaining why this gate exists.",
       "legacy_hitl_description_title": "HITL gates are missing descriptions",
       "legacy_hitl_description_hint": "These gates were saved before descriptions were required (min 20 chars). Open each gate and add one — it is the reviewer's briefing.",
+      "legacy_hitl_hint_node": "Node-level gates cannot be edited in this editor yet — set their description via the API or an MCP-authored graph edit.",
       "legacy_hitl_item_edge": "Gate on edge {label}",
       "legacy_hitl_item_node": "HITL node {label}",
       "aria_checkbox": "checkbox",

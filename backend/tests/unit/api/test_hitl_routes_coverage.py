@@ -712,6 +712,46 @@ def test_list_run_pending_gates_prefers_the_captured_description(client: tuple[T
     assert gate_payload["description"] == "Captured fire-time briefing."
 
 
+def test_list_run_pending_gates_resolves_context_description_without_a_snapshot(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-688 review fix: when the run carries NO snapshot (legacy run,
+    retention pruned the row, or a non-dict graph) the context-first pass
+    inside the snapshot branch never ran and the captured briefing was muted
+    behind the no-description fallback. The empty-map fallback now resolves
+    from the claim row ALONE (context-first, no snapshot fallback) — the same
+    behaviour the org-level ``resolve_gate_descriptions`` resolver applies."""
+    http, session = client
+    context = {
+        "trigger": "condition",
+        "description": "Captured fire-time briefing without a snapshot.",
+        "condition": "output.severity == 'high'",
+    }
+    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
+
+    run = MagicMock()
+    run.snapshot_id = None
+    claims_result = MagicMock()
+    claims_result.scalars.return_value = [gate]
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        assert "pipeline_snapshots" not in str(stmt), "no snapshot read is expected without a snapshot_id"
+        if "hitl_claims" in str(stmt):
+            return claims_result
+        return MagicMock()
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gate_payload = resp.json()["gates"][0]
+    assert gate_payload["description"] == "Captured fire-time briefing without a snapshot."
+
+
 def test_list_org_pending_gates_carries_description_and_context(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     gate = _briefed_gate("hitl_gate_src-1_tgt-2", context={"trigger": "node", "reason": "two failures"})

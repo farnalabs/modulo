@@ -2666,7 +2666,8 @@ class TestResourceGaps(_AuthContext):
 
     async def test_resource_hitl_gate_truncates_the_fire_context_with_a_marker(self) -> None:
         """FAR-688: the fire-context dump is a fixed slice, marked when
-        truncated so the agent can tell a partial dump from a complete one."""
+        truncated so the agent can tell a partial dump from a complete one —
+        marker-WITHIN-cap, so the line is exactly the prefix plus the cap."""
         gate = MagicMock()
         gate.pipeline_id = uuid.uuid4()
         gate.decision = None
@@ -2686,7 +2687,7 @@ class TestResourceGaps(_AuthContext):
             result = await resource_hitl_gate(str(uuid.uuid4()), "gate")
         fire_context_line = next(line for line in result.splitlines() if line.startswith("Fire context: "))
         assert fire_context_line.endswith("…(truncated)")
-        assert len(fire_context_line) < 2048 + 60
+        assert len(fire_context_line) == len("Fire context: ") + 2048
 
     async def test_resource_hitl_gate_falls_back_to_the_snapshot_description(self) -> None:
         """FAR-688: a capture with no usable description falls back to the

@@ -7638,11 +7638,10 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     # (FAR-688) so the agent can tell a partial dump from a complete one.
     parts.append(f"Description: {description or 'No description provided for this gate'}")
     if context is not None:
-        fire_context = json.dumps(context, sort_keys=True, default=str)
-        if len(fire_context) > _FIRE_CONTEXT_MAX_CHARS:
-            from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
+        from modulo.core.pipeline_engine.hitl_context import slice_with_marker
 
-            fire_context = fire_context[:_FIRE_CONTEXT_MAX_CHARS] + TRUNCATION_MARKER
+        # Marker WITHIN the cap: the slice never exceeds _FIRE_CONTEXT_MAX_CHARS.
+        fire_context = slice_with_marker(json.dumps(context, sort_keys=True, default=str), _FIRE_CONTEXT_MAX_CHARS)
         parts.append("Fire context: " + fire_context)
     return "\n".join(parts)
 

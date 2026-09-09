@@ -1510,16 +1510,42 @@ describe('PipelineEditorView — edge properties panel', () => {
     expect(banner.text()).toContain('HITL gates are missing descriptions')
     expect(banner.text()).toContain('Gate on edge')
 
-    // A FAR-402 HITL node with an empty description is listed as a node issue.
+    // Per-kind hint (FAR-688 review fix): an edge violation carries the
+    // actionable "open the edge" hint; the node-level API/MCP hint is absent.
+    expect(banner.text()).toContain('Open each gate and add one')
+    expect(banner.text()).not.toContain('Node-level gates cannot be edited')
+
+    // A FAR-402 HITL node with an empty description is listed as a node issue
+    // AND swaps in the node-specific hint (the edge hint stays — the edge
+    // violation is still listed).
     const vm = wrapper.vm as any
     vm.rawNodes = [{ id: 'node-9', node_type: 'hitl', hitl_config: {}, label: 'Escalation' }]
     await nextTick()
-    expect(wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]').text()).toContain('HITL node Escalation')
+    const mixedBanner = wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]')
+    expect(mixedBanner.text()).toContain('HITL node Escalation')
+    expect(mixedBanner.text()).toContain('Node-level gates cannot be edited')
+    expect(mixedBanner.text()).toContain('Open each gate and add one')
 
     // Dismissible — the operator can hide it without leaving the editor.
     await wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner-dismiss"]').trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows only the node-level API/MCP hint when just HITL nodes violate the minimum', async () => {
+    // The editor has no hitl_config panel for FAR-402 HITL nodes (documented
+    // deferral), so the edge hint ("Open each gate and add one") would be
+    // unactionable — a node-only violation must NOT render it.
+    const wrapper = await mountWithEdge(edgeFixture())
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'node-9', node_type: 'hitl', hitl_config: {}, label: 'Escalation' }]
+    await nextTick()
+    const banner = wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('HITL node Escalation')
+    expect(banner.text()).toContain('Node-level gates cannot be edited')
+    expect(banner.text()).not.toContain('Open each gate and add one')
     wrapper.unmount()
   })
 

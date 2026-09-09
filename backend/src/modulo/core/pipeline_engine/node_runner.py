@@ -95,7 +95,7 @@ from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
-from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
+from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
 from modulo.core.pipeline_engine.idempotency import (
     node_idempotency_key,
     read_before_write_ambiguous,
@@ -3500,17 +3500,11 @@ def _serialize_condition_value(value: Any) -> str:
     state (node outputs — agent/connector content), so it runs through the
     shared redaction primitive BEFORE truncation (FAR-163: a secret
     straddling the cut point must still be removed) and is then bounded,
-    marked when sliced. ``default=str`` degrades non-JSON values the same way
-    the briefing's serializer does.
+    marked when sliced. Serialisation reuses the briefing's deterministic
+    serializer (:func:`modulo.core.pipeline_engine.hitl_context.serialize_value`)
+    instead of re-implementing it; the slice carries the marker WITHIN the cap.
     """
-    try:
-        serialized = json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
-    except Exception:  # pragma: no cover - defensive: default=str makes this near-impossible
-        serialized = repr(value)
-    serialized = sanitize_error_text(serialized)
-    if len(serialized) > _CONDITION_RESULT_FIELD_MAX_CHARS:
-        serialized = serialized[: _CONDITION_RESULT_FIELD_MAX_CHARS - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
-    return serialized
+    return slice_with_marker(sanitize_error_text(serialize_value(value)), _CONDITION_RESULT_FIELD_MAX_CHARS)
 
 
 def _bound_condition_expression(expression: str) -> str:
@@ -3518,11 +3512,10 @@ def _bound_condition_expression(expression: str) -> str:
 
     User-authored (save-time) text, so redaction does not apply — but the cap
     does: an MCP-authored graph bypasses the REST 500-char condition cap and
-    the expression rides into checkpointer-persisted payloads.
+    the expression rides into checkpointer-persisted payloads. The marker is
+    carved out of the slice (WITHIN the cap).
     """
-    if len(expression) <= _CONDITION_RESULT_FIELD_MAX_CHARS:
-        return expression
-    return expression[: _CONDITION_RESULT_FIELD_MAX_CHARS - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+    return slice_with_marker(expression, _CONDITION_RESULT_FIELD_MAX_CHARS)
 
 
 def _hitl_gate_condition_evaluate(
