@@ -2688,6 +2688,50 @@ class TestResourceGaps(_AuthContext):
         assert fire_context_line.endswith("…(truncated)")
         assert len(fire_context_line) < 2048 + 60
 
+    async def test_resource_hitl_gate_falls_back_to_the_snapshot_description(self) -> None:
+        """FAR-688: a capture with no usable description falls back to the
+        snapshot config's description — the same context-first/snapshot-
+        fallback precedence the REST pending surfaces apply via
+        ``resolve_gate_description``."""
+        gate = MagicMock()
+        gate.pipeline_id = uuid.uuid4()
+        gate.decision = None
+        gate.account_id = None
+        gate.required_team_id = None
+        gate.expires_at = None
+        # A capture that predates fire-time descriptions (legacy shape).
+        gate.context_json = {"trigger": "node"}
+        run = MagicMock()
+        run.owner_team_id = None
+        snapshot_run = MagicMock()
+        snapshot_run.snapshot_id = uuid.uuid4()
+        graph = {
+            "nodes": [{"id": "src-1", "label": "Generator"}],
+            "edges": [
+                {
+                    "source": "src-1",
+                    "target": "tgt-2",
+                    "hitl_gate_config": {"description": "Snapshot briefing."},
+                }
+            ],
+        }
+        snapshot = MagicMock()
+        snapshot.graph_json = graph
+        session = _mock_session()
+        session.execute.side_effect = [
+            _make_execute_result(scalar_one_or_none=gate),
+            _make_execute_result(scalar_one_or_none=snapshot),
+        ]
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+            patch.object(ms, "get_run", new=AsyncMock(return_value=run)),
+            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.hitl_gate_config.get_run", new=AsyncMock(return_value=snapshot_run)),
+        ):
+            result = await resource_hitl_gate(str(uuid.uuid4()), "hitl_gate_src-1_tgt-2")
+        assert "Description: Snapshot briefing." in result
+
     async def test_hitl_required_team_name_unknown_team(self) -> None:
         gate = MagicMock()
         gate.required_team_id = uuid.uuid4()
