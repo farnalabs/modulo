@@ -9,11 +9,12 @@ import pytest
 from langgraph.errors import GraphInterrupt
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
+from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
 from modulo.core.pipeline_engine.node_runner import (
     _build_hitl_gate_artifact,
     _evaluate_eval_condition,
     _hitl_gate_autonomy_result,
-    _hitl_gate_condition_skip,
+    _hitl_gate_condition_evaluate,
     make_hitl_gate_fn,
     make_manual_node_fn,
 )
@@ -401,6 +402,74 @@ async def test_condition_truthy_proceeds_to_interrupt():
 
     interrupt_list = exc_info.value.args[0]
     assert interrupt_list[0].value["gate_id"] == "cond-gate"
+
+
+async def test_condition_fire_carries_matched_value_in_interrupt_payload():
+    """FAR-688: on the fire (truthy) path the MATCHED value rides in the
+    interrupt payload as ``condition_result`` {expression, value} — the
+    briefing capture's PRIMARY evidence instead of a regex guess."""
+    gate_config = {"gate_id": "cond-gate", "condition": "output.review"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    with pytest.raises(GraphInterrupt) as exc_info:
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "output": {"review": {"score": 0.9, "summary": "looks good"}},
+            }
+        )
+
+    payload = exc_info.value.args[0][0].value
+    condition_result = payload["condition_result"]
+    assert condition_result["expression"] == "output.review"
+    assert condition_result["value"] == '{"score": 0.9, "summary": "looks good"}'
+
+
+async def test_condition_fire_serialises_a_boolean_match():
+    """A comparison condition matches to a boolean — the serialised value
+    records it deterministically."""
+    gate_config = {"gate_id": "cond-gate", "condition": "score > `0.5`"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    with pytest.raises(GraphInterrupt) as exc_info:
+        await node_fn({"artifacts": [], "_hitl_gates": [], "score": 0.8})
+
+    condition_result = exc_info.value.args[0][0].value["condition_result"]
+    assert condition_result["expression"] == "score > `0.5`"
+    assert condition_result["value"] == "true"
+
+
+async def test_condition_without_condition_carries_null_condition_result():
+    """A gate with no condition fires with ``condition_result=None``."""
+    gate_config = {"gate_id": "plain-gate"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    with pytest.raises(GraphInterrupt) as exc_info:
+        await node_fn({"artifacts": [], "_hitl_gates": []})
+
+    assert exc_info.value.args[0][0].value["condition_result"] is None
+
+
+async def test_condition_fire_value_is_redacted_and_bounded():
+    """FAR-188: the matched value is derived from run state (node outputs),
+    so it is redacted before it can enter persistence (the checkpointer
+    persists interrupt payloads) and bounded."""
+    gate_config = {"gate_id": "cond-gate", "condition": "output.token"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    with pytest.raises(GraphInterrupt) as exc_info:
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "output": {"token": f"deployed with ghp_{'a' * 30} embedded"},
+            }
+        )
+
+    value = exc_info.value.args[0][0].value["condition_result"]["value"]
+    assert "ghp_" not in value
+    assert "<redacted>" in value
 
 
 async def test_condition_falsy_skips_gate():
@@ -1345,18 +1414,23 @@ class TestBuildHitlGateArtifact:
         ]
 
 
-class TestHitlGateConditionSkip:
-    def test_returns_none_when_no_condition_configured(self) -> None:
-        assert _hitl_gate_condition_skip("g1", None, {}) is None
+class TestHitlGateConditionEvaluate:
+    """FAR-688: ``(skip_artifact, condition_result)`` — the truthy path
+    returns the matched-value payload instead of dropping it."""
 
-    def test_returns_none_when_condition_is_truthy(self) -> None:
+    def test_returns_none_none_when_no_condition_configured(self) -> None:
+        assert _hitl_gate_condition_evaluate("g1", None, {}) == (None, None)
+
+    def test_returns_payload_when_condition_is_truthy(self) -> None:
         state = {"config": {"flag": True, "score": 5}}
-        assert _hitl_gate_condition_skip("g1", "config.flag", state) is None
-        assert _hitl_gate_condition_skip("g1", "config.score > `3`", state) is None
+        skip, result = _hitl_gate_condition_evaluate("g1", "config.score", state)
+        assert skip is None
+        assert result == {"expression": "config.score", "value": "5"}
 
     def test_returns_skip_artifact_when_condition_is_falsy(self) -> None:
         state = {"config": {"flag": False, "score": 0}}
-        skip = _hitl_gate_condition_skip("g1", "config.flag", state)
+        skip, result = _hitl_gate_condition_evaluate("g1", "config.flag", state)
+        assert result is None
         assert skip == {
             "artifacts": [
                 {
@@ -1370,14 +1444,34 @@ class TestHitlGateConditionSkip:
 
     def test_returns_skip_artifact_for_null_result(self) -> None:
         """A JMESPath that matches nothing resolves to None — treated as falsy."""
-        skip = _hitl_gate_condition_skip("g1", "config.missing", {"config": {}})
+        skip, result = _hitl_gate_condition_evaluate("g1", "config.missing", {"config": {}})
+        assert result is None
         assert skip is not None
         assert skip["artifacts"][0]["status"] == "condition_skipped"
         assert skip["artifacts"][0]["condition_result"] is None
 
+    def test_matched_value_is_redacted_and_bounded(self) -> None:
+        leaked = {"token": f"ghp_{'a' * 30}"}
+        _skip, result = _hitl_gate_condition_evaluate("g1", "config.leak", {"config": {"leak": leaked}})
+        assert result is not None
+        assert "ghp_" not in result["value"]
+        assert "<redacted>" in result["value"]
+        assert len(result["value"]) <= 2000
+
+    def test_expression_is_bounded_in_the_payload(self) -> None:
+        """FAR-688: an MCP-authored graph bypasses the REST 500-char condition
+        cap, so the payload's expression member is bounded too (the checkpointer
+        persists interrupt payloads)."""
+        long_expression = "'" + "x" * 3000 + "'"
+        _skip, result = _hitl_gate_condition_evaluate("g1", long_expression, {"config": {}})
+        assert result is not None
+        assert result["expression"].startswith("'xxx")
+        assert result["expression"].endswith(TRUNCATION_MARKER)
+        assert len(result["expression"]) <= 2000
+
     def test_invalid_jmespath_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match=r"Invalid HITL gate condition expression: foo\["):
-            _hitl_gate_condition_skip("g1", "foo[", {})
+            _hitl_gate_condition_evaluate("g1", "foo[", {})
 
 
 class TestHitlGateAutonomyResult:
