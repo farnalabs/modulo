@@ -1303,14 +1303,37 @@ async def runner_marker_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
     the sweep evaluates the reconciler's own predicates). Breaches of the org
     cap are logged as ``runner.capacity.violation`` (the D8 rollback signal).
 
+    Liveness contract (qa F5, mirrors the ``runner_workspace_reconcile``
+    sibling): the outcome is persisted to the shared Redis key every tick. A
+    FAILED sweep (org-index or any org pass) persists the PARTIAL counts with
+    ``"error": "sweep_failed"`` and then RE-RAISES so SAQ's ``retries=2``
+    engages — a swallowed sweep failure is a silently dead safety net (stale
+    markers accumulate as phantom capacity and the rollback signal goes dark).
+
     The sweep is ALSO wired into ``dispatcher_reconcile`` (60s cadence via
     ``_run_reconcile_sweeps``); this dedicated cron is the independent
     periodic path with a liveness key so a silently dead sweep is visible to
-    /healthz/ready. The dedup advisory lock makes concurrent ticks a no-op.
+    /healthz/ready. The session-scoped dedup advisory lock makes concurrent
+    ticks a no-op.
     """
-    from modulo.core.runner_capacity import reconcile_runner_dispatch_markers
+    from modulo.core.runner_capacity import RunnerMarkerSweepError, reconcile_runner_dispatch_markers
 
-    result = await reconcile_runner_dispatch_markers(_make_session_factory())
+    try:
+        result = await reconcile_runner_dispatch_markers(_make_session_factory())
+    except RunnerMarkerSweepError as exc:
+        await _persist_sweep_stats(
+            RUNNER_MARKER_SWEEP_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "scanned": exc.scanned,
+                "cleared": exc.cleared,
+                "transitioned": exc.transitioned,
+                "orgs_failed": exc.org_failures,
+                "error": "sweep_failed",
+            },
+            RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
+        )
+        raise
     await _persist_sweep_stats(
         RUNNER_MARKER_SWEEP_STATS_KEY,
         {
@@ -1319,6 +1342,7 @@ async def runner_marker_sweep(_ctx: dict[str, Any]) -> dict[str, Any]:
             "cleared": result["cleared"],
             "transitioned": result["transitioned"],
             "violations": result["violations"],
+            "orgs_failed": result.get("orgs_failed", 0),
         },
         RUNNER_MARKER_SWEEP_STATS_TTL_SECONDS,
     )
@@ -1825,9 +1849,10 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # terminal runs and stale (>25h) markers, transitions stale
         # non-terminal RUNNING runs terminal, and never clears
         # script_executing fence components or reconciler-recoverable rows.
-        # unique=True so overlapping ticks cannot double-clear (the guarded
-        # UPDATEs are idempotent regardless; the sweep's dedup advisory lock
-        # is belt-and-braces).
+        # unique=True so overlapping cron ticks cannot double-clear; the
+        # sweep's session-scoped dedup advisory lock also guards the 60s
+        # dispatcher_reconcile path overlapping this cron (a failed sweep
+        # persists the partial counts + re-raises — retries=2 engages).
         CronJob(
             runner_marker_sweep,
             cron=_CRON_EVERY_5_MINUTES,

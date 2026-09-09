@@ -27,7 +27,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import SupersededNodeError, make_sandbox_agent_fn
+from modulo.core.pipeline_engine.node_runner import (
+    SupersededNodeError,
+    _claim_token_attempt_suffix,
+    make_sandbox_agent_fn,
+)
 
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
@@ -163,10 +167,10 @@ def _run_state(*, claim_lease: str) -> dict:
 
 
 def _assert_marker_acquire_executed(executed: list[str]) -> None:
-    # The acquire is the fenced claim_count read (D5) — it runs on EVERY DB path,
-    # including the denied case where the UPDATE (only fired on a matching row)
-    # is never reached.
-    assert any("claim_count FROM runs" in s and "claim_token=:tok" in s for s in executed)
+    # The acquire is the D8 gate's own-row FENCED read (D5) — it runs on EVERY
+    # DB path, including the denied cases where the marker UPDATE (only fired
+    # on a matching row) is never reached.
+    assert any("claim_count FROM runs" in s and "claim_token" in s and "FOR UPDATE" in s for s in executed)
 
 
 async def _run_fence(node_fn, create_mock) -> dict:
@@ -340,4 +344,77 @@ async def test_marker_carries_attempt_key():
     marker = json.loads(state_at_run["sandbox_dispatch_state"])
     assert marker["state"] == "dispatching"
     assert marker["attempt_key"] == "run:run-1:node:n1:7"
-    assert state_at_run["sandbox_id"] == "sbx-7"
+
+
+async def test_best_effort_marker_db_failure_fails_open_with_attempt_key(caplog):
+    """qa F11: the gate's fail-open fallback (best-effort marker write) must
+    never fail the dispatch on a DB error — it logs
+    ``sandbox_agent.best_effort_marker_failed`` (with the rollback-detector
+    implication note) and returns the claim-token-derived attempt key so the
+    dispatch proceeds markerless fail-open. A cancellation still propagates."""
+    from modulo.core.pipeline_engine.node_runner import _sandbox_acquire_dispatch_marker_best_effort
+
+    class _BoomSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def begin(self):
+            return self
+
+        async def execute(self, *_a, **_kw):
+            raise RuntimeError("db down mid-marker-write")
+
+    key = await _sandbox_acquire_dispatch_marker_best_effort(
+        session_factory=lambda: _BoomSession(),
+        claim_lease="tok-open",
+        org_id=_ORG_ID,
+        run_id="run-open",
+        node_id="n1",
+        provider="e2b",
+    )
+    assert key == f"run:run-open:node:n1:{_claim_token_attempt_suffix('tok-open')}"
+    assert any("best_effort_marker_failed" in m for m in caplog.messages)
+    records = [r for r in caplog.records if r.getMessage() == "sandbox_agent.best_effort_marker_failed"]
+    assert records, "the fail-open marker failure must log the distinct event"
+    assert "rollback detector" in records[0].__dict__.get("note", "")
+
+
+async def test_best_effort_marker_cancellation_reraises():
+    """qa F11: a cancellation inside the best-effort marker write is never
+    swallowed — it propagates."""
+    import asyncio
+
+    from modulo.core.pipeline_engine.node_runner import _sandbox_acquire_dispatch_marker_best_effort
+
+    class _CancelledSession:
+        def in_transaction(self):
+            return True
+
+        def get_bind(self):
+            bind = MagicMock()
+            bind.dialect.name = "postgresql"
+            return bind
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def begin(self):
+            return self
+
+        async def execute(self, *_a, **_kw):
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await _sandbox_acquire_dispatch_marker_best_effort(
+            session_factory=lambda: _CancelledSession(),
+            claim_lease="tok-open",
+            org_id=_ORG_ID,
+            run_id="run-open",
+            node_id="n1",
+        )

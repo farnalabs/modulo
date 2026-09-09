@@ -28,7 +28,14 @@ the atomic replacement:
   ``script_executing`` fence components or runs ``dispatcher_reconcile``
   considers recoverable (checked with the reconciler's OWN SQL predicates —
   parity by construction), and asserts the live count ≤ cap (the D8 rollback
-  signal).
+  signal). Every per-row clear/transition UPDATE is CAS-guarded on the
+  classified marker text (a concurrent fresh-marker commit makes the UPDATE
+  match 0 rows — the sweep never clobbers a marker it did not classify), the
+  candidate scan is batched with a cursor, recoverability is evaluated lazily
+  (never for terminal rows — the recovery predicates are status-scoped), and
+  any org-index or org-pass failure raises :class:`RunnerMarkerSweepError`
+  carrying the partial counts (the SAQ cron wrapper persists them and
+  re-raises so SAQ retries engage).
 * :func:`mark_runner_dispatch_cleared_at_hitl` — the HITL-boundary tombstone:
   at interrupt handling (before the run enters ``awaiting_human``) any
   remaining dispatch marker becomes ``{"state": "cleared_at_hitl"}`` —
@@ -40,7 +47,9 @@ hashed with the org id — NEVER the shared ``_uuid_to_lock_keys`` keyspace
 (the legacy derivation hashes the raw UUID, so its keys collide with every
 connector/trigger lock for the same id) and never a single global key. The
 sweep dedup lock uses a DISTINCT derivation suffix so it can never deadlock
-against a per-org gate key.
+against a per-org gate key; it is taken SESSION-scoped (``pg_try_advisory_lock``
+on a connection held for the sweep's lifetime — the previous transaction-
+scoped take released the lock before the sweep body ran, protecting nothing).
 
 Failure policy (per class): at-capacity and lock-timeout (SQLSTATE 55P03)
 denials raise :class:`RunnerCapacityDeniedError` (retryable — the caller maps
@@ -62,11 +71,13 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.db.models.run import TERMINAL_STATUSES
+from modulo.db.sqlstates import sqlstate_of
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -136,17 +147,13 @@ HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset({RUNNER_PROVIDER_DOCKER, RUN
 # attributed from it; legacy tier-less markers (pre-D8 JSON without the key,
 # and the bare "dispatching" literal) attribute to runner_docker — fail-safe
 # (they can only be E2B-legacy or Docker, and Docker is the tier the
-# default-cap bucket must not undercount). Compile-time constants only —
-# nothing user-controlled is interpolated.
-_RUNNER_PROVIDER_SQL = (
-    "COALESCE("
-    "CASE WHEN runs.sandbox_dispatch_state LIKE '%\"provider\"%' "
-    "THEN substring(runs.sandbox_dispatch_state from "
-    '\'"provider"[[:space:]]*:[[:space:]]*"([a-z_]+)"\') END, '
-    "'runner_docker')"
-)
-# Tombstoned markers (cleared at the HITL boundary) hold no slot.
-_RUNNER_TOMBSTONE_EXCLUSION_SQL = "runs.sandbox_dispatch_state NOT LIKE '%cleared_at_hitl%'"
+# default-cap bucket must not undercount). The single-sourced SQL fragments
+# live in ``modulo.db.crud.run`` (the DB layer owns the count body; core
+# imports db, never the reverse) — ``RUNNER_TOMBSTONE_EXCLUSION_SQL`` and
+# ``RUNNER_HOST_RESOURCE_FILTER_SQL`` there. The tombstone exclusion matches
+# the ``state`` field PRECISELY (``"state": "cleared_at_hitl"``) — a bare
+# ``%cleared_at_hitl%`` substring would also exclude a hypothetical marker
+# whose attempt key merely contains the literal.
 
 
 def build_dispatch_marker(attempt_key: str, provider: str | None = None) -> str:
@@ -241,15 +248,18 @@ def marker_is_fence_component(marker_json: str | None) -> bool:
 class RunnerCapacityDecision:
     """The resolved capacity decision shared by all four capacity paths.
 
-    ``cap is None`` = no gate. ``host_resource_only`` marks the Docker-tier
-    default scope (the count must filter to ``HOST_RESOURCE_PROVIDERS``);
-    legacy tier-less markers count into that bucket via the SQL attribution.
+    ``cap is None`` = no gate (``active`` short-circuits to 0 — the count is
+    only consumed for the breach verdict). ``host_resource_only`` marks the
+    Docker-tier default scope (the count must filter to
+    ``HOST_RESOURCE_PROVIDERS``); legacy tier-less markers count into that
+    bucket via the SQL attribution. The count POPULATION is flag-dependent:
+    flag-on narrows to ``running``-only with the tombstone exclusion (D8);
+    flag-off keeps the pre-D8 ``ACTIVE_RUN_STATUSES`` population exactly.
     """
 
     cap: int | None
     active: int
     host_resource_only: bool
-    flag_on: bool
 
 
 async def read_runner_cap_contract(session: AsyncSession, org_id: uuid.UUID) -> tuple[int | None, bool]:
@@ -301,12 +311,18 @@ async def resolve_runner_capacity_decision(
 ) -> RunnerCapacityDecision:
     """Read the cap AND the matching count in one call (lock-free reads).
 
-    Used by the lock-free paths (HITL pre-check, claim-time read) and by the
-    gate AFTER the advisory lock. The count population is ALWAYS the narrowed
-    D8 one (``running`` runs with a live marker, own marker excluded) — the
-    only status a marker can legally exist on.
+    The SINGLE decision path for every capacity consumer (the gate after its
+    advisory lock, the lock-free HITL pre-check, the claim-time read, the
+    sweep's violation assert). The count POPULATION is flag-dependent inside
+    the count body: flag-on = the narrowed D8 population (``running`` runs
+    with a live marker, tombstone-excluded, own marker excluded); flag-off =
+    the pre-D8 ``ACTIVE_RUN_STATUSES`` population exactly. ``cap is None``
+    short-circuits to ``active=0`` — no gate means no count is needed (the
+    only consumer of ``active`` is the breach verdict).
     """
     cap, host_resource_only = await read_runner_cap_contract(session, org_id)
+    if cap is None:
+        return RunnerCapacityDecision(cap=None, active=0, host_resource_only=host_resource_only)
     active = await count_active_runner_dispatches_for_decision(
         session,
         org_id,
@@ -317,7 +333,6 @@ async def resolve_runner_capacity_decision(
         cap=cap,
         active=active,
         host_resource_only=host_resource_only,
-        flag_on=get_settings().runner_capacity_gate_enabled,
     )
 
 
@@ -347,15 +362,9 @@ class RunnerDispatchSlot:
     dispatches (fail-open, matching the pre-D8 behaviour).
     """
 
-    status: str
+    status: Literal["acquired", "fenced", "fail_open"]
     attempt_key: str | None
     marker_set: bool
-
-
-def _sqlstate(exc: BaseException) -> str | None:
-    """Best-effort SQLSTATE from a SQLAlchemy DBAPIError wrapper."""
-    orig = getattr(exc, "orig", None)
-    return getattr(orig, "sqlstate", None)
 
 
 async def acquire_runner_dispatch_slot(
@@ -390,7 +399,9 @@ async def acquire_runner_dispatch_slot(
 
     Never raises for DB failures: they fail OPEN (``fail_open``) with a
     ``runner.capacity.gate_error`` event; the caller's best-effort marker
-    write still runs so a fail-open dispatch is never markerless.
+    write still runs so a fail-open dispatch stays counted wherever the
+    marker write can commit (and markerless fail-open when even that write
+    fails — qa F11; a DB hiccup must never become a dispatch outage).
     """
     if session_factory is None or not claim_token:
         # Fail-open: no claim context — the legacy fail-open marker path in
@@ -399,6 +410,13 @@ async def acquire_runner_dispatch_slot(
     settings = get_settings()
     lock_timeout_ms = settings.runner_capacity_lock_timeout_ms
     flag_on = settings.runner_capacity_gate_enabled
+    # Tier attribution normalisation: a tier-less caller (provider omitted)
+    # attributes to the Docker tier — EXACTLY matching the count body's SQL
+    # attribution (``COALESCE(provider_key, 'runner_docker')``), so the skip
+    # condition below can never admit a dispatch the count will count. An
+    # UNKNOWN provider value (e.g. a future tier) is likewise skipped by the
+    # Docker-tier default gate — the host-resource count does not count it.
+    provider = provider or RUNNER_PROVIDER_DOCKER
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     try:
@@ -440,36 +458,23 @@ async def acquire_runner_dispatch_slot(
                     text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
                     {"k1": k1, "k2": k2},
                 )
-                # (4) lock-free count + tier-scoped cap (own marker excluded —
-                # a re-dispatch of a run still carrying a fence-carrying stale
-                # marker cannot self-block).
-                decision = await resolve_runner_capacity_decision(session, org_id, exclude_run_id=run_uuid)
-            else:
-                # Flag-off: the pre-D8 RACY check-then-act decision (no
-                # advisory lock, no tier scoping) over the new unified
-                # running-only population — exactly the flag-off enumeration.
-                cap, host_resource_only = await read_runner_cap_contract(session, org_id)
-                active = (
-                    await count_active_runner_dispatches_for_decision(
-                        session, org_id, exclude_run_id=run_uuid, host_resource_only=host_resource_only
-                    )
-                    if cap is not None
-                    else 0
-                )
-                decision = RunnerCapacityDecision(
-                    cap=cap,
-                    active=active,
-                    host_resource_only=host_resource_only,
-                    flag_on=False,
-                )
+            # (4) lock-free count + tier-scoped cap (own marker excluded —
+            # a re-dispatch of a run still carrying a fence-carrying stale
+            # marker cannot self-block). The SINGLE decision path for both
+            # flag states: the count body owns the flag-dependent population
+            # (flag-off = the pre-D8 ACTIVE_RUN_STATUSES population, no
+            # advisory lock, no lock_timeout — the pre-D8 racy check-then-act
+            # semantics exactly).
+            decision = await resolve_runner_capacity_decision(session, org_id, exclude_run_id=run_uuid)
             if decision.cap is not None and decision.active >= decision.cap:
                 # The Docker-tier default (absent key) gates ONLY host-resource
-                # dispatches: an e2b dispatch is neither counted into that
-                # bucket nor denied by it (e2b carries its own platform-side
-                # concurrency quota). Legacy tier-less dispatchers attribute
-                # to Docker and stay gated.
-                docker_default_skips_e2b = decision.host_resource_only and provider == RUNNER_PROVIDER_E2B
-                if not docker_default_skips_e2b:
+                # dispatches: the skip condition mirrors the count scope — any
+                # provider NOT counted into the host-resource bucket (e2b, and
+                # unknown future tiers) is neither counted into that bucket nor
+                # denied by it. Legacy tier-less dispatchers normalise to
+                # Docker above and stay gated.
+                docker_default_skips_gate = decision.host_resource_only and provider not in HOST_RESOURCE_PROVIDERS
+                if not docker_default_skips_gate:
                     _log.warning(
                         "runner.capacity.denied",
                         extra={
@@ -512,7 +517,7 @@ async def acquire_runner_dispatch_slot(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        sqlstate = _sqlstate(exc)
+        sqlstate = sqlstate_of(exc)
         if sqlstate == "55P03":
             # lock_not_available — what SET LOCAL lock_timeout actually raises.
             # Designed degradation: retryable denial + the distinct event the
@@ -558,9 +563,21 @@ async def mark_runner_dispatch_cleared_at_hitl(
     ``cleared_at_hitl`` tombstone instead of surviving as a live marker on a
     parked run. Fenced on the claim token (a superseded original cannot write)
     and guarded on ``sandbox_dispatch_state IS NOT NULL`` (never resurrects a
-    marker on a run that dispatched nothing).
+    marker on a run that dispatched nothing). The ``script_executing`` fence
+    is EXCLUDED: the tombstone must never overwrite the exactly-once fence —
+    a fence-carrying marker proves a script PROCESS may have started, and
+    replacing it with a capacity-neutral tombstone would let the fence be
+    re-acquired (double-execute) — the sweep owns stale fences, not the
+    tombstone.
+
+    Flag-off contract (D8 rollout): the tombstone vocabulary is flag-gated —
+    with ``runner_capacity_gate_enabled`` OFF this is a NO-OP (returns
+    False), so the flag-off window keeps the pre-D8 behaviour exactly (the
+    marker simply survives the park).
     """
     if session_factory is None or not claim_token:
+        return False
+    if not get_settings().runner_capacity_gate_enabled:
         return False
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
@@ -574,6 +591,7 @@ async def mark_runner_dispatch_cleared_at_hitl(
                     "WHERE id = :rid AND organisation_id = :oid "
                     "AND claim_token = :tok AND status = 'running' "
                     "AND sandbox_dispatch_state IS NOT NULL "
+                    'AND sandbox_dispatch_state NOT LIKE \'%"state": "script_executing"%\' '
                     "RETURNING id"
                 ),
                 {"rid": run_id, "oid": str(org_id), "tok": claim_token, "tombstone": build_hitl_tombstone()},
@@ -604,15 +622,35 @@ async def mark_runner_dispatch_cleared_at_hitl(
 # marker's written_at (legacy tier-less markers fall back to runs.updated_at).
 DEFAULT_MARKER_STALE_SECONDS = 25 * 3600
 
+# The candidate-scan batch size (F8). A per-org scan without a LIMIT degrades
+# to an unbounded row materialisation on an org with a large marker backlog;
+# the sweep pages with a cursor instead. Default 500. (An env-tunable knob
+# would belong in modulo.settings — left a module constant pending that.)
+SWEEP_CANDIDATE_BATCH = 500
+
 _SWEEP_CANDIDATE_SQL = text(
     "SELECT id, status, error_code, sandbox_dispatch_state, updated_at "
     "FROM runs "
-    "WHERE organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL"
+    "WHERE organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL "
+    "AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid)) "
+    "ORDER BY id "
+    "LIMIT :batch"
 )
 
+# CAS sweep updates (F2): every clear/transition re-checks the EXACT marker
+# text it classified (``marker_seen``). A concurrent fresh-marker commit
+# between the candidate SELECT and this UPDATE makes the UPDATE match 0 rows —
+# the sweep never clobbers (or terminalises over) a marker it did not
+# classify, and never nulls a just-refreshed reservation.
+
+# A clear keeps ``sandbox_id``: the run is already terminal (or parked), and
+# the sandbox id is the evidence the D4 workspace reconciler needs to find and
+# destroy the container. Only the stale-RUNNING transition nulls it (that run
+# is killed — its workspace must not be re-adopted).
 _CLEAR_MARKER_SQL = text(
-    "UPDATE runs SET sandbox_dispatch_state = NULL, sandbox_id = NULL "
+    "UPDATE runs SET sandbox_dispatch_state = NULL "
     "WHERE id = :rid AND organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL "
+    "AND sandbox_dispatch_state = :marker_seen "
     "RETURNING id"
 )
 
@@ -620,13 +658,14 @@ _CLEAR_MARKER_SQL = text(
 # (the house worker-death code) so no zombie
 # running-without-marker-without-workspace state can be minted. Status-guarded
 # for idempotency: a run that terminated between the candidate select and this
-# UPDATE is left alone.
+# UPDATE is left alone. CAS-guarded on the classified marker text.
 _TRANSITION_STALE_RUNNING_SQL = text(
     "UPDATE runs SET status = 'failed', error_code = 'worker_lost', "
     "error_detail = :detail, completed_at = now(), "
     "sandbox_dispatch_state = NULL, sandbox_id = NULL "
     "WHERE id = :rid AND organisation_id = :oid AND status = 'running' "
     "AND sandbox_dispatch_state IS NOT NULL "
+    "AND sandbox_dispatch_state = :marker_seen "
     "RETURNING id"
 )
 
@@ -657,108 +696,148 @@ def classify_sweep_action(
     now: datetime,
     stale_seconds: int,
     recoverable: bool,
+    row_fresh: bool = False,
 ) -> str:
     """The sweep's per-row decision (pure function — heavily unit-tested).
 
     Returns one of: ``"keep_fence"`` (a), ``"keep_recoverable"`` (b),
     ``"keep_anomaly"`` (c), ``"clear_terminal"`` (d1),
     ``"transition_stale_running"`` (d2), ``"clear_stale"`` (d3),
-    ``"keep_live"`` (e). Fence precedence outranks staleness; recoverability
-    and the anomaly-code exemption outrank both (the reconciler and the
-    rollback evaluator own those rows).
+    ``"keep_live"`` (e). Terminal rows are handled FIRST: the anomaly-code
+    exemption outranks the fence rule (the rollback evaluator owns those rows
+    even when the marker carries a crash-leaked fence), and a terminal
+    non-anomaly run's crash-leaked fence clears past the staleness cap (the
+    longer age cap — a just-terminalised run may still be mid-teardown) while
+    a terminal non-fence marker clears immediately (d1). Non-terminal rows
+    then follow fence → recoverable → staleness; only a STALE non-fence
+    marker is cleared, and a stale clear on a RUNNING run also transitions it
+    terminal (d2) UNLESS the row itself is fresh (``row_fresh`` — e.g. a
+    freshly-resumed long-parked run whose tombstone marker is old but whose
+    heartbeat/updated_at is live): a fresh row is alive, so the sweep only
+    clears the stale marker, never terminalises over a live attempt.
     """
+    if status in TERMINAL_STATUSES:
+        # Terminal rows: anomaly exemption BEFORE the fence rule (qa F14) —
+        # a crash-leaked fence on a terminal non-anomaly run must not pin its
+        # marker forever.
+        from modulo.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
+
+        if error_code in SCRIPT_ANOMALY_ERROR_CODES:
+            return "keep_anomaly"
+        if marker_is_fence_component(marker_json):
+            # Crash-leaked fence on a terminal non-anomaly run: clear only
+            # past the staleness cap (the longer age cap), never immediately —
+            # the teardown may legitimately still be writing the lease.
+            if stale_reference is None:
+                return "keep_live"
+            if (now - stale_reference).total_seconds() <= stale_seconds:
+                return "keep_live"
+            return "clear_terminal"
+        return "clear_terminal"
     if marker_is_fence_component(marker_json):
         return "keep_fence"
     if recoverable:
         return "keep_recoverable"
-    if status not in ("running", "awaiting_human", "claimed", "hitl_parked", "pending"):
-        # Genuinely terminal: a non-fence marker is cleared unless the run
-        # carries an anomaly error code (rollback_thresholds
-        # ._count_claim_without_marker requires those markers).
-        from modulo.core.rollback_thresholds import _SCRIPT_ANOMALY_ERROR_CODES
-
-        if error_code in _SCRIPT_ANOMALY_ERROR_CODES:
-            return "keep_anomaly"
-        return "clear_terminal"
     # Non-terminal: only a STALE non-fence marker is cleared. A stale clear on
-    # a RUNNING run also transitions it terminal (no zombie); the other
-    # non-terminal statuses keep their lifecycle (a parked/waiting run is not
-    # killed over a stale marker) — the marker clear alone makes them
-    # capacity-neutral.
+    # a RUNNING run also transitions it terminal (no zombie) — unless the row
+    # itself is FRESH (a freshly-resumed long-parked run: its tombstone /
+    # previous-attempt marker is old but the heartbeat is live), where the
+    # sweep clears only the marker. The other non-terminal statuses keep their
+    # lifecycle (a parked/waiting run is not killed over a stale marker) — the
+    # marker clear alone makes them capacity-neutral.
     if stale_reference is None:
         return "keep_live"
     age = (now - stale_reference).total_seconds()
     if age <= stale_seconds:
         return "keep_live"
-    return "transition_stale_running" if status == "running" else "clear_stale"
+    if status == "running" and not row_fresh:
+        return "transition_stale_running"
+    return "clear_stale"
 
 
-def _sweep_recoverability_predicate() -> Any:
-    """The reconciler's OWN re-dispatch predicate set (parity by construction).
+def _sweep_recoverability_predicate() -> tuple[Any, Any]:
+    """The reconciler's OWN recovery predicate set, pre-composed (parity by
+    construction).
 
-    The D8 sweep must never clear a marker on a run ``dispatcher_reconcile``
-    considers recoverable. Rather than re-implementing the multi-branch rule
-    set (silent-drift invitation), it evaluates the SAME predicate objects the
-    reconciler selects with — ``_build_re_dispatch_predicate`` + the nodeless
-    zombie branch + the capacity-marker exclusion — against each candidate
-    row. Lazy import: cron_helpers transitively reaches dispatch/pipeline
-    machinery that runner_capacity's importers (node_runner) must not pull at
-    module load.
+    Returns ``(recovery_or, exclusion)``: ``recovery_or`` is the SAME
+    OR-composition the reconciler's scan selects with
+    (``cron_helpers.reconciler_recovery_predicate`` — re-dispatch predicate OR
+    the nodeless zombie branch), and ``exclusion`` is the capacity-marker
+    exclusion applied AFTER the OR (exactly the scan's
+    ``WHERE recovery OR … AND NOT capacity-marker-excluded`` shape). Lazy
+    import: cron_helpers transitively reaches dispatch/pipeline machinery that
+    runner_capacity's importers (node_runner) must not pull at module load.
     """
     from modulo.core.cron_helpers import (
         CAPACITY_REDISPATCH_SECONDS,
         ENQUEUE_FAILED_REDISPATCH_SECONDS,
         RECONCILE_STALE_HEARTBEAT_FACTOR,
-        _build_re_dispatch_predicate,
-        _nodeless_zombie_predicate,
-        _reconcile_capacity_marker_exclusion,
+        reconcile_capacity_marker_exclusion,
+        reconciler_recovery_predicate,
     )
 
     settings = get_settings()
     stale_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
-    return (
-        _build_re_dispatch_predicate(
-            reenqueue_window=int(settings.saq_reenqueue_window),
-            stale_window=stale_window,
-            capacity_redispatch_seconds=CAPACITY_REDISPATCH_SECONDS,
-            enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
-        ),
-        _nodeless_zombie_predicate(int(settings.saq_claimed_nodeless_minutes)),
-        _reconcile_capacity_marker_exclusion(CAPACITY_REDISPATCH_SECONDS),
+    recovery_or = reconciler_recovery_predicate(
+        reenqueue_window=int(settings.saq_reenqueue_window),
+        stale_window=stale_window,
+        capacity_redispatch_seconds=CAPACITY_REDISPATCH_SECONDS,
+        nodeless_window=int(settings.saq_claimed_nodeless_minutes),
+        enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
     )
+    return recovery_or, reconcile_capacity_marker_exclusion(CAPACITY_REDISPATCH_SECONDS)
 
 
-async def _run_recoverable(session: AsyncSession, run_id: Any, predicates: tuple[Any, ...]) -> bool:
-    """True when the candidate row matches ANY reconciler recovery predicate."""
+async def _run_recoverable(session: AsyncSession, run_id: Any, recovery_or: Any, exclusion: Any) -> bool:
+    """True when the candidate row matches the reconciler's recovery predicate.
+
+    The composition is the reconciler's OWN OR (``re_dispatch OR nodeless
+    zombie``) with the capacity-marker exclusion applied after it — the
+    identical shape of the reconcile scan's WHERE (qa F3: the previous
+    AND-of-all-three evaluation misjudged a fresh-heartbeat nodeless zombie —
+    matched ONLY by the nodeless branch — as unrecoverable).
+    """
     from modulo.db.models.run import Run
 
     combined = func.count()
-    stmt = select(combined).select_from(Run).where(Run.id == run_id)
-    for predicate in predicates:
-        stmt = stmt.where(predicate)
+    stmt = select(combined).select_from(Run).where(Run.id == run_id).where(recovery_or).where(exclusion)
     result = await session.execute(stmt)
     return int(result.scalar_one() or 0) > 0
 
 
-async def _assert_capacity_within_cap(session: AsyncSession, org_id: uuid.UUID) -> int:
-    """Sweep rule (h): assert the live count ≤ cap; log a violation otherwise.
+async def _assert_capacity_within_cap(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Sweep rule (h): the breach VERDICT for the live count vs cap (qa F4).
 
-    Returns the live count. This is the D8 ROLLBACK signal — a sustained
-    breach means the atomic gate is not holding and the rollout flag must go
-    off.
+    Returns True only on a genuine breach (a cap exists AND the active count
+    exceeds it). A cap-less org (the overwhelmingly common case) is never a
+    violation — the previous caller-side ``active > 0`` read counted runner
+    ACTIVITY, not breaches, so every sweep tick on an uncapped org minted a
+    phantom violation. The caller logs ``runner.capacity.violation`` and
+    increments the violations counter ONLY on True. This is the D8 ROLLBACK
+    signal — a sustained breach means the atomic gate is not holding and the
+    rollout flag must go off.
     """
     decision = await resolve_runner_capacity_decision(session, org_id)
-    if decision.cap is not None and decision.active > decision.cap:
-        _log.error(
-            "runner.capacity.violation",
-            extra={
-                "org_id": str(org_id),
-                "active": decision.active,
-                "cap": decision.cap,
-                "host_resource_only": decision.host_resource_only,
-            },
-        )
-    return decision.active
+    return decision.cap is not None and decision.active > decision.cap
+
+
+@dataclass(frozen=True)
+class RunnerMarkerSweepError(RuntimeError):
+    """The marker sweep failed (partially or wholly) — qa F5 liveness contract.
+
+    Carries the PARTIAL counts the tick achieved (orgs after the failure were
+    still swept in the same tick) so the SAQ cron wrapper can persist them
+    with ``"error": "sweep_failed"`` before re-raising (SAQ ``retries=2``
+    engages — mirroring the ``runner_workspace_reconcile`` sibling contract).
+    A swallowed sweep failure is a silently dead safety net: stale markers
+    would accumulate as phantom capacity and the D8 rollback signal would go
+    dark without anyone noticing.
+    """
+
+    scanned: int
+    cleared: int
+    transitioned: int
+    org_failures: int
 
 
 async def reconcile_runner_dispatch_markers(
@@ -769,127 +848,225 @@ async def reconcile_runner_dispatch_markers(
     """Sweep stale/terminal non-fence runner dispatch markers (D8 rule set).
 
     Per org (RLS-scoped transaction): every run row carrying a marker is
-    classified by :func:`classify_sweep_action` — fence components survive
-    (a), reconciler-recoverable rows survive (b, evaluated with the
-    reconciler's OWN predicates), terminal runs carrying anomaly error codes
-    survive (c), genuinely terminal non-fence markers are cleared (d1), stale
-    markers on non-terminal rows are cleared with the RUNNING case also
-    terminalised (d2/d3), and live markers are untouched (e). Every clear
-    emits ``runner.capacity.marker_cleared`` (g) — the coordination note D4's
-    container reconciler can consume (the cleared run is terminal or
-    capacity-neutral, so its workspace becomes an orphan the D4 reconciler
-    owns destroying). After each org's pass the live count is asserted ≤ cap
-    with ``runner.capacity.violation`` on breach (h — the rollback signal).
+    classified by :func:`classify_sweep_action` — terminal runs carrying
+    anomaly error codes survive (c, evaluated BEFORE the fence rule),
+    genuinely terminal non-fence markers are cleared (d1) and terminal
+    crash-leaked fences clear past the staleness cap, fence components on
+    non-terminal rows survive (a), reconciler-recoverable rows survive (b,
+    evaluated with the reconciler's OWN OR-composed predicates — LAZILY, only
+    for non-terminal non-fence rows; terminal rows skip the check entirely
+    since the recovery predicates are status-scoped), stale markers on
+    non-terminal rows are cleared with the RUNNING case also terminalised
+    unless the row is fresh (d2/d3), and live markers are untouched (e).
+    Every clear/transition UPDATE is CAS-guarded on the classified marker
+    text (a concurrent fresh-marker commit makes it match 0 rows), the
+    candidate scan is batched with a cursor (``SWEEP_CANDIDATE_BATCH``), and
+    every committed clear emits ``runner.capacity.marker_cleared`` (g) AFTER
+    the org transaction commits — a rolled-back org pass emits nothing
+    (no phantom coordination notes for the D4 reconciler). The live count is
+    asserted against the cap per org (h); the violations counter increments
+    ONLY on a genuine breach (a cap-less org never violates).
 
     A sweep tick takes the DEDUP advisory lock (distinct derivation suffix)
-    in its own short transaction — belt-and-braces against double-sweep on
-    top of SAQ's ``unique=True``.
+    SESSION-scoped on a connection held for the sweep's lifetime — the
+    previous transaction-scoped take released the lock before the sweep body
+    ran. Belt-and-braces against double-sweep (the cron cadence AND the 60s
+    dispatcher_reconcile path can overlap — SAQ's ``unique=True`` dedupes
+    only the cron job itself) on top of the per-row CAS guards.
 
-    Returns ``{"scanned", "cleared", "transitioned", "violations"}``.
+    Returns ``{"scanned", "cleared", "transitioned", "violations",
+    "orgs_failed"}``. Raises :class:`RunnerMarkerSweepError` when the org
+    index fails or any org pass fails (carrying the partial counts).
     """
     settings = get_settings()
     stale_window = stale_seconds if stale_seconds is not None else settings.runner_marker_stale_seconds
+    # The "fresh row" window for the d2 exemption (qa F14): a run whose row
+    # was written more recently than the reconciler's stale-heartbeat window
+    # is alive (heartbeat writes refresh updated_at) — the sweep clears its
+    # stale marker but never terminalises over it.
+    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR
+
+    fresh_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
     now = datetime.now(UTC)
     scanned = 0
     cleared = 0
     transitioned = 0
     violations = 0
+    orgs_failed = 0
 
     k1, k2 = runner_marker_sweep_lock_keys()
+    acquired = False
+    lock_session = factory()
+    lock_conn: Any = None
     try:
-        async with factory() as lock_session, lock_session.begin():
-            acquired = (
-                await lock_session.execute(
-                    text("SELECT pg_try_advisory_xact_lock(:k1, :k2)"),
-                    {"k1": k1, "k2": k2},
-                )
-            ).scalar_one()
-        if not acquired:
-            _log.info("runner.capacity.marker_sweep_skipped_locked")
-            return {"scanned": 0, "cleared": 0, "transitioned": 0, "violations": 0}
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("runner.capacity.marker_sweep_lock_failed", exc_info=True)
-        # Fail-open: the sweep proceeds; SAQ unique=True remains the overlap guard.
-
-    predicates = _sweep_recoverability_predicate()
-
-    try:
-        async with factory() as org_index_session:
-            org_result = await org_index_session.execute(text("SELECT id FROM organisations"))
-            org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("runner.capacity.marker_sweep_org_index_failed")
-        return {"scanned": 0, "cleared": 0, "transitioned": 0, "violations": 0}
-
-    for org_id in org_ids:
         try:
-            async with factory() as session, session.begin():
-                from modulo.db.rls import set_rls_org
-
-                await set_rls_org(session, org_id)
-                candidates = (await session.execute(_SWEEP_CANDIDATE_SQL, {"oid": str(org_id)})).all()
-                for row in candidates:
-                    scanned += 1
-                    action = classify_sweep_action(
-                        status=row.status,
-                        error_code=row.error_code,
-                        marker_json=row.sandbox_dispatch_state,
-                        stale_reference=sweep_staleness_reference(row.sandbox_dispatch_state, row.updated_at),
-                        now=now,
-                        stale_seconds=stale_window,
-                        recoverable=await _run_recoverable(session, row.id, predicates),
+            lock_conn = await lock_session.connection()
+            acquired = bool(
+                (
+                    await lock_conn.execute(
+                        text("SELECT pg_try_advisory_lock(:k1, :k2)"),
+                        {"k1": k1, "k2": k2},
                     )
-                    if action in ("keep_fence", "keep_recoverable", "keep_anomaly", "keep_live"):
-                        continue
-                    if action in ("clear_terminal", "clear_stale"):
-                        result = await session.execute(_CLEAR_MARKER_SQL, {"rid": row.id, "oid": str(org_id)})
-                        if result.fetchone() is not None:
-                            cleared += 1
-                            _log.info(
-                                "runner.capacity.marker_cleared",
-                                extra={
-                                    "run_id": str(row.id),
-                                    "org_id": str(org_id),
-                                    "run_status": row.status,
-                                    "reason": action,
-                                    "note": "container destroy owned by the D4 reconciler",
-                                },
-                            )
-                    elif action == "transition_stale_running":
-                        result = await session.execute(
-                            _TRANSITION_STALE_RUNNING_SQL,
-                            {"rid": row.id, "oid": str(org_id), "detail": _SWEEP_STALE_DETAIL},
-                        )
-                        if result.fetchone() is not None:
-                            cleared += 1
-                            transitioned += 1
-                            _log.warning(
-                                "runner.capacity.marker_cleared",
-                                extra={
-                                    "run_id": str(row.id),
-                                    "org_id": str(org_id),
-                                    "run_status": row.status,
-                                    "reason": "transition_stale_running",
-                                    "note": "container destroy owned by the D4 reconciler",
-                                },
-                            )
-                if await _assert_capacity_within_cap(session, org_id) > 0:
-                    violations += 1
+                ).scalar_one()
+            )
+            await lock_conn.commit()
         except asyncio.CancelledError:
             raise
         except Exception:
-            _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
-    _log.info(
-        "runner.capacity.marker_swept scanned=%d cleared=%d transitioned=%d",
-        scanned,
-        cleared,
-        transitioned,
-    )
-    return {"scanned": scanned, "cleared": cleared, "transitioned": transitioned, "violations": violations}
+            _log.warning("runner.capacity.marker_sweep_lock_failed", exc_info=True)
+            # Fail-open: the sweep proceeds; the per-row CAS guards + SAQ
+            # unique=True remain the overlap guards.
+        if not acquired:
+            _log.info("runner.capacity.marker_sweep_skipped_locked")
+            return {"scanned": 0, "cleared": 0, "transitioned": 0, "violations": 0, "orgs_failed": 0}
+
+        recovery_or, exclusion = _sweep_recoverability_predicate()
+
+        try:
+            async with factory() as org_index_session:
+                org_result = await org_index_session.execute(text("SELECT id FROM organisations"))
+                org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("runner.capacity.marker_sweep_org_index_failed")
+            raise RunnerMarkerSweepError(
+                scanned=scanned, cleared=cleared, transitioned=transitioned, org_failures=orgs_failed
+            ) from None
+
+        for org_id in org_ids:
+            # Outcomes decided inside the org transaction, emitted AFTER its
+            # commit (qa F14 phantom-event fix): a rolled-back org pass must
+            # not leave ``runner.capacity.marker_cleared`` notes or counters
+            # describing writes that never committed.
+            committed_outcomes: list[tuple[uuid.UUID, str, str]] = []
+            org_breach = False
+            try:
+                async with factory() as session, session.begin():
+                    from modulo.db.rls import set_rls_org
+
+                    await set_rls_org(session, org_id)
+                    cursor: uuid.UUID | None = None
+                    while True:
+                        batch = (
+                            await session.execute(
+                                _SWEEP_CANDIDATE_SQL,
+                                {"oid": str(org_id), "after": cursor, "batch": SWEEP_CANDIDATE_BATCH},
+                            )
+                        ).all()
+                        if not batch:
+                            break
+                        for row in batch:
+                            scanned += 1
+                            marker_json = row.sandbox_dispatch_state
+                            is_terminal = row.status in TERMINAL_STATUSES
+                            # Lazy recoverability (F8): terminal rows skip the
+                            # check entirely (the recovery predicates are
+                            # status-scoped — they can never match a terminal
+                            # row); fence rows skip it too (rule (a) returns
+                            # before the recoverability branch would be read).
+                            if is_terminal or marker_is_fence_component(marker_json):
+                                recoverable = False
+                            else:
+                                recoverable = await _run_recoverable(session, row.id, recovery_or, exclusion)
+                            row_fresh = row.updated_at is not None and (
+                                (now - row.updated_at).total_seconds() <= fresh_window
+                            )
+                            action = classify_sweep_action(
+                                status=row.status,
+                                error_code=row.error_code,
+                                marker_json=marker_json,
+                                stale_reference=sweep_staleness_reference(marker_json, row.updated_at),
+                                now=now,
+                                stale_seconds=stale_window,
+                                recoverable=recoverable,
+                                row_fresh=row_fresh,
+                            )
+                            if action in ("keep_fence", "keep_recoverable", "keep_anomaly", "keep_live"):
+                                continue
+                            if action in ("clear_terminal", "clear_stale"):
+                                result = await session.execute(
+                                    _CLEAR_MARKER_SQL,
+                                    {"rid": row.id, "oid": str(org_id), "marker_seen": marker_json},
+                                )
+                                if result.fetchone() is not None:
+                                    committed_outcomes.append((row.id, row.status, action))
+                            elif action == "transition_stale_running":
+                                result = await session.execute(
+                                    _TRANSITION_STALE_RUNNING_SQL,
+                                    {
+                                        "rid": row.id,
+                                        "oid": str(org_id),
+                                        "detail": _SWEEP_STALE_DETAIL,
+                                        "marker_seen": marker_json,
+                                    },
+                                )
+                                if result.fetchone() is not None:
+                                    committed_outcomes.append((row.id, row.status, "transition_stale_running"))
+                        cursor = batch[-1].id
+                        if len(batch) < SWEEP_CANDIDATE_BATCH:
+                            break
+                    org_breach = await _assert_capacity_within_cap(session, org_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                orgs_failed += 1
+                _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
+                continue
+            # The org transaction COMMITTED — emit the outcomes + the breach
+            # verdict now (post-commit, never phantom).
+            for run_id, run_status, reason in committed_outcomes:
+                cleared += 1
+                if reason == "transition_stale_running":
+                    transitioned += 1
+                _log.warning(
+                    "runner.capacity.marker_cleared",
+                    extra={
+                        "run_id": str(run_id),
+                        "org_id": str(org_id),
+                        "run_status": run_status,
+                        "reason": reason,
+                        "note": "container destroy owned by the D4 reconciler",
+                    },
+                )
+            if org_breach:
+                violations += 1
+                _log.error(
+                    "runner.capacity.violation",
+                    extra={"org_id": str(org_id), "note": "the live count exceeded the org cap"},
+                )
+        _log.info(
+            "runner.capacity.marker_swept scanned=%d cleared=%d transitioned=%d",
+            scanned,
+            cleared,
+            transitioned,
+        )
+        if orgs_failed:
+            raise RunnerMarkerSweepError(
+                scanned=scanned, cleared=cleared, transitioned=transitioned, org_failures=orgs_failed
+            )
+        return {
+            "scanned": scanned,
+            "cleared": cleared,
+            "transitioned": transitioned,
+            "violations": violations,
+            "orgs_failed": 0,
+        }
+    finally:
+        if acquired and lock_conn is not None:
+            try:
+                await lock_conn.execute(text("SELECT pg_advisory_unlock(:k1, :k2)"), {"k1": k1, "k2": k2})
+                await lock_conn.commit()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.debug("runner.capacity.marker_sweep_unlock_failed", exc_info=True)
+        try:
+            await lock_session.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.debug("runner.capacity.marker_sweep_lock_session_close_failed", exc_info=True)
 
 
 __all__ = [
@@ -903,6 +1080,7 @@ __all__ = [
     "RunnerCapacityDecision",
     "RunnerCapacityDeniedError",
     "RunnerDispatchSlot",
+    "RunnerMarkerSweepError",
     "acquire_runner_dispatch_slot",
     "build_dispatch_marker",
     "build_hitl_tombstone",

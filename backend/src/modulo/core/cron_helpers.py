@@ -3922,6 +3922,10 @@ def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> An
     transaction) and the heartbeat gate throttles the sandbox-cap churn loop
     to one claim→demote attempt per window. Literal markers, matching the
     stale-run sweep.
+
+    Public alias (FAR-594 D8 qa F3): :func:`reconcile_capacity_marker_exclusion`
+    — the marker sweep composes the SAME predicates; public names keep the
+    shared vocabulary importable without underscore coupling.
     """
     from sqlalchemy import and_, or_
 
@@ -4227,6 +4231,48 @@ def _build_re_dispatch_predicate(
             Run.heartbeat_at < func_now_minus(stale_window),
         ),
     )
+
+
+def reconciler_recovery_predicate(
+    *,
+    reenqueue_window: int,
+    stale_window: int,
+    capacity_redispatch_seconds: int,
+    nodeless_window: int,
+    enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
+) -> Any:
+    """The reconciler's COMPOSED recovery predicate (single source, qa F3).
+
+    ``re_dispatch OR nodeless_zombie`` — the exact OR-composition the
+    60s ``dispatcher_reconcile`` scan selects with. The D8 marker sweep
+    composes the SAME object (imported from here — parity by construction),
+    so a run the reconciler would re-dispatch can never have its dispatch
+    marker swept: the composition lives in ONE place instead of being
+    re-assembled (and silently drifted) at both call sites. This also fixes
+    the sweep's recoverability evaluation: the previous sweep evaluated the
+    branches AND-composed, so a fresh-heartbeat nodeless zombie (matched ONLY
+    by the nodeless branch, excluded by the stale branch) was misjudged
+    unrecoverable and its marker cleared.
+    """
+    from sqlalchemy import or_
+
+    return or_(
+        _build_re_dispatch_predicate(
+            reenqueue_window=reenqueue_window,
+            stale_window=stale_window,
+            capacity_redispatch_seconds=capacity_redispatch_seconds,
+            enqueue_failed_redispatch_seconds=enqueue_failed_redispatch_seconds,
+        ),
+        _nodeless_zombie_predicate(nodeless_window),
+    )
+
+
+# Public aliases (qa F3): the leaf predicates are part of the shared
+# reconcile/sweep vocabulary now that the marker sweep composes them; the
+# private names stay for the existing in-module call sites and tests.
+build_re_dispatch_predicate = _build_re_dispatch_predicate
+nodeless_zombie_predicate = _nodeless_zombie_predicate
+reconcile_capacity_marker_exclusion = _reconcile_capacity_marker_exclusion
 
 
 def _reconcile_job_type(status: str) -> str:
@@ -4900,8 +4946,6 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     ``finalize_cost``, so without this the terminalised runs would be
     invisible to analytics.
     """
-    from sqlalchemy import or_
-
     settings = get_settings()
     queue_name = settings.saq_runs_queue
     reenqueue_window = int(settings.saq_reenqueue_window)
@@ -4937,25 +4981,15 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         q = RedisQueue(redis_client, name=queue_name)
         # Per-tick re-dispatch cap counter for the B3 enqueue-failed branch.
         enqueue_failed_redispatched = 0
-        re_dispatch_predicate = or_(
-            _build_re_dispatch_predicate(
-                reenqueue_window=reenqueue_window,
-                stale_window=stale_window,
-                capacity_redispatch_seconds=capacity_redispatch_seconds,
-                enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
-            ),
-            # Claimed-but-nodeless zombie branch: running + saq + FRESH
-            # heartbeat but ZERO node progress after the nodeless window.
-            # The fresh heartbeat excludes it from the stale branch above
-            # (that is the primary hang mechanism - a live heartbeat keeps
-            # the run 'running' forever), so it gets its own predicate.
-            # Repaired by re-dispatch — budget-bounded (claim-cycle budget,
-            # terminal-fail on exhaustion) and rate-throttled to one
-            # re-dispatch per nodeless window per run (see
-            # _reconcile_nodeless_repair). The throttle is enforced ROW-level
-            # in the repair branch (a row can match multiple branches), so
-            # this predicate deliberately admits throttled rows.
-            _nodeless_zombie_predicate(nodeless_window),
+        # qa F3: the composed recovery predicate is the SINGLE composition
+        # (re_dispatch OR nodeless zombie) — shared verbatim with the D8
+        # marker sweep's recoverability check.
+        re_dispatch_predicate = reconciler_recovery_predicate(
+            reenqueue_window=reenqueue_window,
+            stale_window=stale_window,
+            capacity_redispatch_seconds=capacity_redispatch_seconds,
+            nodeless_window=nodeless_window,
+            enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
         )
         for org_id in org_ids:
             enqueue_failed_redispatched = await _reconcile_org(
@@ -5223,6 +5257,7 @@ async def _reconcile_org(
                         Run.started_at,
                         Run.claim_count,
                         Run.dispatcher,
+                        Run.sandbox_dispatch_state,
                         text("runs.enqueue_failed_at AS enqueue_failed_at"),
                         Pipeline.retry_policy,
                     )
@@ -5344,24 +5379,41 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         # never touches script_executing fence components or reconciler-
         # recoverable rows (parity by construction: the sweep evaluates THIS
         # module's re-dispatch predicates), and asserts the live count ≤ cap
-        # (runner.capacity.violation — the D8 rollback signal).
-        from modulo.core.runner_capacity import reconcile_runner_dispatch_markers
+        # (runner.capacity.violation — the D8 rollback signal). A PARTIAL
+        # failure (qa F5) raises RunnerMarkerSweepError: the partial counts
+        # still land in the summary; the failure is logged loudly (the 5-min
+        # cron wrapper additionally persists the liveness key + re-raises).
+        from modulo.core.runner_capacity import RunnerMarkerSweepError, reconcile_runner_dispatch_markers
 
-        marker_result = await reconcile_runner_dispatch_markers(_open_factory())
-        summary["runner_markers_scanned"] = marker_result.get("scanned", 0)
-        summary["runner_markers_cleared"] = marker_result.get("cleared", 0)
-        summary["runner_markers_transitioned"] = marker_result.get("transitioned", 0)
-        summary["runner_capacity_violations"] = marker_result.get("violations", 0)
-        if marker_result.get("cleared") or marker_result.get("violations"):
-            _log.info(
-                "dispatcher_reconcile.runner_marker_sweep",
-                extra={
-                    "scanned": marker_result.get("scanned", 0),
-                    "cleared": marker_result.get("cleared", 0),
-                    "transitioned": marker_result.get("transitioned", 0),
-                    "violations": marker_result.get("violations", 0),
-                },
+        try:
+            marker_result = await reconcile_runner_dispatch_markers(_open_factory())
+        except RunnerMarkerSweepError as exc:
+            summary["runner_markers_scanned"] = exc.scanned
+            summary["runner_markers_cleared"] = exc.cleared
+            summary["runner_markers_transitioned"] = exc.transitioned
+            summary["runner_markers_orgs_failed"] = exc.org_failures
+            summary["runner_capacity_violations"] = 0
+            _log.warning(
+                "dispatcher_reconcile.runner_marker_sweep_partial_failure",
+                extra={"scanned": exc.scanned, "cleared": exc.cleared, "orgs_failed": exc.org_failures},
+                exc_info=True,
             )
+        else:
+            summary["runner_markers_scanned"] = marker_result.get("scanned", 0)
+            summary["runner_markers_cleared"] = marker_result.get("cleared", 0)
+            summary["runner_markers_transitioned"] = marker_result.get("transitioned", 0)
+            summary["runner_markers_orgs_failed"] = marker_result.get("orgs_failed", 0)
+            summary["runner_capacity_violations"] = marker_result.get("violations", 0)
+            if marker_result.get("cleared") or marker_result.get("violations"):
+                _log.info(
+                    "dispatcher_reconcile.runner_marker_sweep",
+                    extra={
+                        "scanned": marker_result.get("scanned", 0),
+                        "cleared": marker_result.get("cleared", 0),
+                        "transitioned": marker_result.get("transitioned", 0),
+                        "violations": marker_result.get("violations", 0),
+                    },
+                )
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -5520,6 +5572,40 @@ async def _resolve_hitl_resume_or_skip(
     return False, await _committed_decision_resume_data(session, org_id, row.id)
 
 
+async def _clear_previous_attempt_marker(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+) -> None:
+    """Refresh a re-dispatched RUNNING run's previous-attempt marker (qa F2).
+
+    A re-dispatch of a stale RUNNING run inherits the PREVIOUS attempt's
+    ``sandbox_dispatch_state`` — a stale marker that would otherwise survive
+    into the new attempt's running state and be terminalised by the D8
+    marker sweep's stale-RUNNING transition (killing the fresh attempt).
+    Clearing it here means: between the re-dispatch and the new attempt's own
+    fenced marker write the run is simply markerless (the count under-counts
+    by one slot for that window — the same fail-open window as a markerless
+    dispatch), and the sweep sees no stale marker to act on.
+
+    CAS-fenced on the marker text the scan saw: if a concurrent fresh
+    attempt already re-stamped the marker between the scan and this UPDATE,
+    the UPDATE matches 0 rows and the fresh reservation is untouched.
+    """
+    seen = getattr(row, "sandbox_dispatch_state", None)
+    if seen is None:
+        return
+    await session.execute(
+        text(
+            "UPDATE runs SET sandbox_dispatch_state = NULL "
+            "WHERE id = :rid AND organisation_id = :oid "
+            "AND sandbox_dispatch_state IS NOT NULL "
+            "AND sandbox_dispatch_state = :marker_seen"
+        ),
+        {"rid": row.id, "oid": str(org_id), "marker_seen": seen},
+    )
+
+
 async def _re_dispatch_reconciled_run(
     session: AsyncSession,
     q: RedisQueue,
@@ -5536,8 +5622,13 @@ async def _re_dispatch_reconciled_run(
 
     Returns the updated enqueue-failed counter. Every exception path ingests an
     error event and only bumps ``redis_errors`` — a re-dispatch never raises.
-    Extracted unchanged from ``_reconcile_one_row`` (complexity bound).
+    Extracted unchanged from ``_reconcile_one_row`` (complexity bound). A
+    re-dispatched RUNNING run has its previous attempt's stale marker
+    refreshed first (qa F2 — a stale marker must never survive into the new
+    attempt's running state).
     """
+    if getattr(row, "status", None) == "running":
+        await _clear_previous_attempt_marker(session, org_id, row)
     try:
         outcome, new_job_id = await _re_enqueue_run(
             q.name,
@@ -5726,8 +5817,11 @@ async def _redispatch_nodeless(
     skipped — not an error, not a terminal failure — so a later tick retries.
     Returns ``None`` — the branch always fully handles the row, so the caller
     passes its enqueue-failed counter through unchanged. Extracted from
-    ``_reconcile_one_row`` (complexity bound).
+    ``_reconcile_one_row`` (complexity bound). A re-dispatched zombie's
+    previous attempt's stale marker is refreshed first (qa F2).
     """
+    if getattr(row, "status", None) == "running":
+        await _clear_previous_attempt_marker(session, org_id, row)
     try:
         outcome, _ = await _re_enqueue_run(
             q.name,

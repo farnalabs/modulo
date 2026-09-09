@@ -2667,6 +2667,31 @@ async def count_active_sandbox_runs_for_org(
     return sum(1 for graph_json in rows if _graph_contains_sandbox_agent(graph_json))
 
 
+# ---------------------------------------------------------------------------
+# Runner-dispatch marker SQL fragments (FAR-594 D8) — the SINGLE source.
+#
+# The DB layer owns the count body (core imports db, never the reverse), so
+# these live here and every consumer — including core.runner_capacity's
+# documentation of the vocabulary — references this module. Compile-time
+# constants only: nothing user-controlled is ever interpolated.
+#
+# The tombstone exclusion matches the marker's ``state`` field PRECISELY
+# (qa F13): a bare ``%cleared_at_hitl%`` substring would also exclude a
+# marker whose attempt_key merely contains the literal. The provider
+# attribution treats legacy tier-less markers as runner_docker (fail-safe —
+# they can only be E2B-legacy or Docker, and Docker is the tier the
+# default-cap bucket must not undercount).
+# ---------------------------------------------------------------------------
+RUNNER_TOMBSTONE_EXCLUSION_SQL = 'runs.sandbox_dispatch_state NOT LIKE \'%"state": "cleared_at_hitl"%\''
+RUNNER_HOST_RESOURCE_FILTER_SQL = (
+    "COALESCE("
+    "CASE WHEN runs.sandbox_dispatch_state LIKE '%\"provider\"%' "
+    "THEN substring(runs.sandbox_dispatch_state from "
+    '\'"provider"[[:space:]]*:[[:space:]]*"([a-z_]+)"\') END, '
+    "'runner_docker') IN ('runner_docker', 'local')"
+)
+
+
 async def count_active_runner_dispatches_for_org(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -2680,15 +2705,23 @@ async def count_active_runner_dispatches_for_org(
     is marker-backed — it counts runs whose ``sandbox_dispatch_state`` holds a
     live dispatch marker.
 
-    D8 population (FAR-594): ``running`` runs ONLY — the only status a marker
-    can legally exist on (the fenced marker UPDATE requires
-    ``status = 'running'``). ``awaiting_human``/``pending``/``claimed``/
-    ``unknown`` hold NO slot: a parked HITL run cannot starve the org, and the
-    resume path re-acquires a slot when the HITL approval re-dispatches.
-    Tombstoned markers (``cleared_at_hitl``) are excluded — the HITL-boundary
-    tombstone is capacity-neutral. The count EXCLUDES the run's own marker
-    (``exclude_run_id``) so a re-dispatch of a run still carrying a
-    fence-carrying stale marker cannot self-block.
+    The POPULATION is flag-dependent (qa F6 — the flag-off window keeps the
+    pre-D8 behaviour EXACTLY):
+
+    - Flag ON (D8): ``running`` runs ONLY — the only status a marker can
+      legally exist on (the fenced marker UPDATE requires ``status =
+      'running'``). ``awaiting_human``/``pending``/``claimed``/``unknown``/
+      ``hitl_parked`` hold NO slot: a parked HITL run cannot starve the org,
+      and the resume path re-acquires a slot when the HITL approval
+      re-dispatches. Tombstoned markers (``cleared_at_hitl``) are excluded —
+      the HITL-boundary tombstone is capacity-neutral.
+    - Flag OFF: ``ACTIVE_RUN_STATUSES`` with NO tombstone exclusion — the
+      exact pre-D8 population (the D8 tombstone never fires with the flag
+      off, so there is nothing to exclude).
+
+    The count EXCLUDES the run's own marker (``exclude_run_id``) so a
+    re-dispatch of a run still carrying a fence-carrying stale marker cannot
+    self-block.
 
     ``host_resource_only=True`` scopes the count to the host-resource
     providers (Docker + Local) for the absent-key Docker-tier default; the
@@ -2696,30 +2729,27 @@ async def count_active_runner_dispatches_for_org(
     legacy tier-less markers attributed to ``runner_docker`` (fail-safe — see
     ``modulo.core.runner_capacity``).
     """
+    from modulo.settings import get_settings
+
     stmt = (
         select(func.count())
         .select_from(Run)
         .where(
             Run.organisation_id == org_id,
             Run.sandbox_dispatch_state.isnot(None),
-            # D8: running-only + tombstone exclusion (SQL fragment — the
-            # marker is a Text column holding our own JSON vocabulary).
-            Run.status == "running",
-            text("runs.sandbox_dispatch_state NOT LIKE '%cleared_at_hitl%'"),
         )
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Run.id != exclude_run_id)
+    if get_settings().runner_capacity_gate_enabled:
+        # D8: running-only + tombstone exclusion (SQL fragments — the marker
+        # is a Text column holding our own JSON vocabulary).
+        stmt = stmt.where(Run.status == "running", text(RUNNER_TOMBSTONE_EXCLUSION_SQL))
+    else:
+        # Flag-off: the pre-D8 population exactly.
+        stmt = stmt.where(Run.status.in_(ACTIVE_RUN_STATUSES))
     if host_resource_only:
-        stmt = stmt.where(
-            text(
-                "COALESCE("
-                "CASE WHEN runs.sandbox_dispatch_state LIKE '%\"provider\"%' "
-                "THEN substring(runs.sandbox_dispatch_state from "
-                '\'"provider"[[:space:]]*:[[:space:]]*"([a-z_]+)"\') END, '
-                "'runner_docker') IN ('runner_docker', 'local')"
-            )
-        )
+        stmt = stmt.where(text(RUNNER_HOST_RESOURCE_FILTER_SQL))
     result = (await session.execute(stmt)).scalar_one()
     return int(result) if result is not None else 0
 

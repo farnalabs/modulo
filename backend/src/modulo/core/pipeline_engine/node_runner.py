@@ -4647,7 +4647,9 @@ async def _sandbox_acquire_dispatch_marker(
     :class:`SandboxCapacityExceededError` (retryable, ``capacity.org``) when
     the org is at capacity or the advisory lock degraded (55P03). Fail-open
     on any other gate error: the legacy best-effort marker write below runs
-    in its OWN transaction so a fail-open dispatch is never markerless.
+    in its OWN transaction so a fail-open dispatch stays counted wherever the
+    marker write can commit (and markerless fail-open when even that write
+    fails — qa F11).
     """
     from modulo.core.runner_capacity import (
         RUNNER_PROVIDER_DOCKER,
@@ -4715,6 +4717,17 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
     re-checks the same fenced WHERE, so a concurrent claim rotation between
     them makes the UPDATE match zero rows and the attempt key is never
     persisted for a superseded claim.
+
+    Fail-open contract (qa F11): a DB error here must never fail the
+    dispatch — the marker write is best-effort BY DESIGN. Any exception
+    (never a cancellation) logs ``sandbox_agent.best_effort_marker_failed``
+    and returns the claim-token-derived attempt key so the dispatch proceeds
+    MARKERLESS fail-open. Rollback-detector implication (noted on the log
+    event): with no marker row, a script anomaly on this attempt cannot be
+    attributed by ``rollback_thresholds._count_claim_without_marker`` until
+    the sweep/heartbeat path heals the row — accepted, because failing the
+    dispatch over a marker write would turn a DB hiccup into a dispatch
+    outage.
     """
     from modulo.core.runner_capacity import RUNNER_PROVIDER_DOCKER, build_dispatch_marker
 
@@ -4731,38 +4744,56 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
 
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
-    async with session_factory() as session, session.begin():
-        await set_rls_org(session, org_uuid)
-        await set_rls_execution_context(session)
-        row = (
-            await session.execute(
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            row = (
+                await session.execute(
+                    _sql_text(
+                        "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
+                        "AND claim_token=:tok AND status='running'"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
+            result = await session.execute(
                 _sql_text(
-                    "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
-                    "AND claim_token=:tok AND status='running'"
+                    "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
+                    "RETURNING id"
                 ),
-                {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+                {
+                    "rid": run_id,
+                    "oid": str(org_uuid),
+                    "tok": claim_lease,
+                    "sid": None,
+                    "marker": build_dispatch_marker(key, provider or RUNNER_PROVIDER_DOCKER),
+                },
             )
-        ).fetchone()
-        if row is None:
-            return None
-        key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
-        result = await session.execute(
-            _sql_text(
-                "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
-                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
-                "RETURNING id"
-            ),
-            {
-                "rid": run_id,
-                "oid": str(org_uuid),
-                "tok": claim_lease,
-                "sid": None,
-                "marker": build_dispatch_marker(key, provider or RUNNER_PROVIDER_DOCKER),
+            if result.fetchone() is None:
+                return None
+            return key
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.best_effort_marker_failed",
+            extra={
+                "run_id": run_id,
+                "org_id": str(org_uuid),
+                "node_id": node_id,
+                "note": (
+                    "dispatch proceeds markerless (fail-open); the rollback detector cannot "
+                    "attribute a script anomaly to this attempt until the row is healed"
+                ),
             },
+            exc_info=True,
         )
-        if result.fetchone() is None:
-            return None
-        return key
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
 
 
 async def _sandbox_store_dispatch_marker_sandbox(

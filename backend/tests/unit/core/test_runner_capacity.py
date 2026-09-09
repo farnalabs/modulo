@@ -17,7 +17,9 @@ from modulo.core.runner_capacity import (
     MARKER_STATE_SCRIPT_EXECUTING,
     RUNNER_PROVIDER_DOCKER,
     RUNNER_PROVIDER_E2B,
+    RunnerCapacityDecision,
     RunnerCapacityDeniedError,
+    RunnerMarkerSweepError,
     acquire_runner_dispatch_slot,
     build_dispatch_marker,
     build_hitl_tombstone,
@@ -312,7 +314,7 @@ async def test_gate_flag_on_statement_class_set_and_ordering(monkeypatch: pytest
     async def _fake_decision(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
         from modulo.core.runner_capacity import RunnerCapacityDecision
 
-        return RunnerCapacityDecision(cap=2, active=1, host_resource_only=False, flag_on=True)
+        return RunnerCapacityDecision(cap=2, active=1, host_resource_only=False)
 
     monkeypatch.setattr(
         "modulo.core.runner_capacity.resolve_runner_capacity_decision",
@@ -387,7 +389,7 @@ async def test_gate_denies_at_capacity_with_marker_rolled_back(monkeypatch: pyte
     async def _fake_decision(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
         from modulo.core.runner_capacity import RunnerCapacityDecision
 
-        return RunnerCapacityDecision(cap=4, active=9, host_resource_only=True, flag_on=True)
+        return RunnerCapacityDecision(cap=4, active=9, host_resource_only=True)
 
     monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
 
@@ -594,7 +596,7 @@ async def test_gate_missing_claim_context_fails_open(monkeypatch: pytest.MonkeyP
 
 
 async def test_hitl_tombstone_fenced_and_only_when_marker_present(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_gate(monkeypatch, flag_on=False)
+    _patch_gate(monkeypatch, flag_on=True)
     executed: list[tuple[str, Any]] = []
     session = MagicMock()
 
@@ -623,6 +625,60 @@ async def test_hitl_tombstone_fenced_and_only_when_marker_present(monkeypatch: p
     assert "cleared_at_hitl" in json.dumps(marker_params[0])
     assert "sandbox_dispatch_state IS NOT NULL" in joined  # never resurrects
     assert "claim_token" in joined  # claim-token-fenced
+    # F1: the exactly-once fence is NEVER tombstoned — the WHERE excludes a
+    # live script_executing component (mirrors marker_is_fence_component).
+    assert 'NOT LIKE \'%"state": "script_executing"%\'' in joined
+
+
+async def test_hitl_tombstone_never_overwrites_live_fence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F1: a run with a LIVE script_executing fence + interrupt → the fence
+    SURVIVES; no tombstone is written (the UPDATE matches 0 rows because the
+    WHERE excludes the fence)."""
+    _patch_gate(monkeypatch, flag_on=True)
+    session = MagicMock()
+
+    async def _execute(stmt: Any, params: Any = None) -> Any:
+        result = MagicMock()
+        # Simulate Postgres: the fenced UPDATE's WHERE excludes the fence
+        # component → 0 rows matched → nothing written.
+        result.fetchone.return_value = None
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=session)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=session_cm)
+
+    tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM)
+    assert tombstoned is False, "a live script_executing fence must never be tombstoned"
+
+
+async def test_hitl_tombstone_flag_off_is_a_no_op(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F6 flag-off contract: the tombstone vocabulary is D8-only — with the
+    rollout flag OFF the interrupt path writes NOTHING (the pre-D8 marker
+    simply survives the park)."""
+    _patch_gate(monkeypatch, flag_on=False)
+    factory = _fake_session()
+    executed: list[str] = []
+
+    session = factory.return_value.__aenter__.return_value
+
+    async def _execute(stmt: Any, params: Any = None) -> Any:
+        executed.append(str(stmt))
+        result = MagicMock()
+        result.fetchone.return_value = (uuid.uuid4(),)
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM)
+    assert tombstoned is False
+    assert not any("UPDATE runs" in s for s in executed), "flag-off must not write the tombstone"
 
 
 # ---------------------------------------------------------------------------
@@ -642,14 +698,16 @@ def _sweep_kwargs(**overrides: Any) -> dict[str, Any]:
         "now": _NOW,
         "stale_seconds": 25 * 3600,
         "recoverable": False,
+        "row_fresh": False,
     }
     base.update(overrides)
     return base
 
 
 def test_sweep_a_fence_precedence_over_staleness() -> None:
-    """Rule (a): a script_executing fence component is NEVER cleared — even
-    when far staler than the threshold (precedence over the staleness rule)."""
+    """Rule (a): a script_executing fence component on a NON-terminal run is
+    NEVER cleared — even when far staler than the threshold (precedence over
+    the staleness rule)."""
     action = classify_sweep_action(
         **_sweep_kwargs(
             status="running",
@@ -674,13 +732,44 @@ def test_sweep_b_recoverable_beats_staleness() -> None:
 def test_sweep_c_terminal_anomaly_codes_exempt() -> None:
     """Rule (c): terminal runs carrying the rollback detector's anomaly error
     codes KEEP their markers."""
-    from modulo.core.rollback_thresholds import _SCRIPT_ANOMALY_ERROR_CODES
+    from modulo.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
 
-    for code in sorted(_SCRIPT_ANOMALY_ERROR_CODES):
+    for code in sorted(SCRIPT_ANOMALY_ERROR_CODES):
         action = classify_sweep_action(
             **_sweep_kwargs(status="failed", error_code=code, stale_reference=_NOW - timedelta(days=30))
         )
         assert action == "keep_anomaly", code
+
+
+def test_sweep_c_anomaly_outranks_the_fence_on_terminal_rows() -> None:
+    """qa F14: on TERMINAL rows the anomaly exemption is applied BEFORE the
+    fence rule — a crash-leaked fence on an anomaly-code run keeps its marker
+    (the rollback evaluator owns it)."""
+    fence = json.dumps({"state": MARKER_STATE_SCRIPT_EXECUTING, "attempt_key": "k"})
+    action = classify_sweep_action(
+        **_sweep_kwargs(
+            status="failed",
+            error_code="script.budget_killed",
+            marker_json=fence,
+            stale_reference=_NOW - timedelta(days=30),
+        )
+    )
+    assert action == "keep_anomaly"
+
+
+def test_sweep_d_terminal_crash_leaked_fence_clears_past_staleness() -> None:
+    """qa F14: a crash-leaked fence on a terminal NON-anomaly run is cleared
+    past the (longer) staleness cap — previously it was pinned forever by the
+    fence rule."""
+    fence = json.dumps({"state": MARKER_STATE_SCRIPT_EXECUTING, "attempt_key": "k"})
+    assert classify_sweep_action(**_sweep_kwargs(status="complete", marker_json=fence)) == "clear_terminal"
+    # A just-terminalised run (marker fresh) keeps it — mid-teardown.
+    assert (
+        classify_sweep_action(
+            **_sweep_kwargs(status="complete", marker_json=fence, stale_reference=_NOW - timedelta(hours=2))
+        )
+        == "keep_live"
+    )
 
 
 def test_sweep_d_terminal_non_fence_cleared() -> None:
@@ -693,11 +782,27 @@ def test_sweep_d_stale_running_transitions_terminal() -> None:
     assert action == "transition_stale_running"
 
 
+def test_sweep_d_fresh_row_never_terminalised() -> None:
+    """qa F14: a freshly-resumed long-parked run (old tombstone/previous-
+    attempt marker but a LIVE updated_at/heartbeat) is never terminalised by
+    the sweep — only its stale marker is cleared."""
+    action = classify_sweep_action(**_sweep_kwargs(status="running", row_fresh=True))
+    assert action == "clear_stale"
+
+
 def test_sweep_d_stale_awaiting_human_cleared_not_terminalised() -> None:
     """A teardown-failure leak parked in awaiting_human: the stale non-fence
     marker is cleared; the run keeps its lifecycle (only RUNNING rows
     transition terminal — a parked run is not killed over a stale marker)."""
     action = classify_sweep_action(**_sweep_kwargs(status="awaiting_human"))
+    assert action == "clear_stale"
+
+
+def test_sweep_d_unknown_status_is_non_terminal() -> None:
+    """qa F14: an ``unknown``-status run (FAR-410 recovery status) is
+    NON-terminal — its stale marker is cleared but the run is never
+    terminalised by the sweep (the operator re-runs it)."""
+    action = classify_sweep_action(**_sweep_kwargs(status="unknown"))
     assert action == "clear_stale"
 
 
@@ -732,16 +837,46 @@ class _Row:
 
 
 class _FakeSweepFactory:
-    """Minimal factory double for the sweep: the org-index session answers one
-    org; the per-org session yields seeded candidate rows and records writes."""
+    """Minimal factory double for the sweep: call 1 returns the DEDUP-lock
+    session (a ``connection()`` that answers the session-scoped
+    ``pg_try_advisory_lock``), call 2 the org-index session, later calls the
+    per-org passes (cursor-paged candidate rows + recorded writes)."""
 
     def __init__(self, rows: list[_Row]) -> None:
         self.rows = rows
         self.cleared: list[uuid.UUID] = []
         self.transitioned: list[uuid.UUID] = []
-        self._lock_answered = False
+        self.calls = 0
 
-    def _session(self, *, org_index: bool) -> MagicMock:
+    def _lock_session(self) -> MagicMock:
+        """The DEDUP-lock session — the sweep uses it DIRECTLY (no ``async
+        with``): ``connection()`` + ``close()`` on what ``factory()`` returned."""
+        conn = MagicMock()
+
+        async def _conn_execute(stmt: Any, params: Any = None) -> Any:
+            result = MagicMock()
+            result.scalar_one.return_value = True
+            return result
+
+        conn.execute = AsyncMock(side_effect=_conn_execute)
+        conn.commit = AsyncMock()
+        session = MagicMock()
+        session.connection = AsyncMock(return_value=conn)
+        session.close = AsyncMock()
+        return session
+
+    def _wrap(self, session: MagicMock) -> MagicMock:
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=session)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        session_cm.close = AsyncMock()
+        return session_cm
+
+    def _org_session(self) -> MagicMock:
         session = MagicMock()
         outer = self
 
@@ -750,10 +885,9 @@ class _FakeSweepFactory:
             result = MagicMock()
             if "FROM organisations" in text_str:
                 result.all.return_value = [(uuid.uuid4(),)]
-            elif "pg_try_advisory_xact_lock" in text_str:
-                result.scalar_one.return_value = True
             elif "SELECT id, status, error_code" in text_str:
-                result.all.return_value = list(outer.rows)
+                after = (params or {}).get("after")
+                result.all.return_value = [row for row in outer.rows if after is None or row.id > after]
             elif "count" in text_str.lower():
                 # The recoverability count + the live-capacity count.
                 result.scalar_one.return_value = 0
@@ -770,20 +904,19 @@ class _FakeSweepFactory:
             return result
 
         session.execute = AsyncMock(side_effect=_execute)
-        begin_cm = MagicMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=session)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin = MagicMock(return_value=begin_cm)
-        session_cm = MagicMock()
-        session_cm.__aenter__ = AsyncMock(return_value=session)
-        session_cm.__aexit__ = AsyncMock(return_value=False)
-        return session_cm
+        session.close = AsyncMock()
+        return self._wrap(session)
 
     def __call__(self) -> Any:
-        if not self._lock_answered:
-            self._lock_answered = True
-            return self._session(org_index=False)
-        return self._session(org_index=False)
+        self.calls += 1
+        # Each sweep invocation follows the same session sequence:
+        # dedup-lock → org-index → one org pass (single-org fakes).
+        position = (self.calls - 1) % 3
+        if position == 0:
+            return self._lock_session()
+        if position == 1:
+            return self._org_session()
+        return self._org_session()
 
 
 async def test_sweep_clears_terminal_and_stale_markers_and_transitions_running(
@@ -803,7 +936,8 @@ async def test_sweep_clears_terminal_and_stale_markers_and_transitions_running(
     # The recoverability predicate build (cron_helpers import) is stubbed out —
     # the sweep's DECISION rules are under test here; the predicate wiring is
     # asserted separately.
-    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: ())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
 
     terminal = _Row(status="complete")
     stale_running = _Row(status="running")
@@ -821,10 +955,172 @@ async def test_sweep_clears_terminal_and_stale_markers_and_transitions_running(
     assert set(factory.cleared) == {terminal.id, stale_awaiting.id}
     assert result["transitioned"] == 1
     assert set(factory.transitioned) == {stale_running.id}
+    assert result["violations"] == 0  # cap-less org: activity is never a breach (qa F4)
+    assert result["orgs_failed"] == 0
     # The fence component and the anomaly-code terminal run survive.
     assert fence.id not in factory.cleared
     assert anomaly.id not in factory.cleared
     assert fence.id not in factory.transitioned
+
+
+async def test_sweep_cas_guards_against_concurrent_fresh_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F2 CAS: the sweep's clear/transition UPDATEs re-check the EXACT marker
+    text they classified — a concurrent fresh-marker commit (the marker no
+    longer equals ``marker_seen``) makes the UPDATE match 0 rows and counts
+    nothing."""
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    stale_marker = json.dumps({"state": "cleared_at_hitl", "written_at": (_NOW - timedelta(hours=30)).isoformat()})
+    stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
+    factory = _FakeSweepFactory([stale_awaiting])
+    org_cm = factory._org_session()
+    org_session = org_cm.__aenter__.return_value
+    # Intercept: the CAS UPDATE answers 0 rows when marker_seen does not match
+    # the row's CURRENT marker (simulating a concurrent fresh-marker commit
+    # between the candidate SELECT and the UPDATE).
+    fresh_marker = build_dispatch_marker("fresh", "e2b")
+    stale_awaiting.sandbox_dispatch_state = fresh_marker
+
+    async def _execute(stmt: Any, params: Any = None) -> Any:
+        text_str = str(stmt)
+        result = MagicMock()
+        if "FROM organisations" in text_str:
+            result.all.return_value = [(uuid.uuid4(),)]
+        elif "SELECT id, status, error_code" in text_str:
+            result.all.return_value = [stale_awaiting]
+        elif "count" in text_str.lower():
+            result.scalar_one.return_value = 0
+        elif "sandbox_dispatch_state = NULL" in text_str:
+            assert params["marker_seen"] == fresh_marker, "the CAS guard must bind the CURRENT marker"
+            result.fetchone.return_value = None  # 0 rows: the classified text no longer matches
+        else:
+            result.all.return_value = []
+            result.fetchone.return_value = None
+            result.scalar_one.return_value = 0
+        return result
+
+    org_session.execute = AsyncMock(side_effect=_execute)
+    calls = {"n": 0}
+
+    def _factory() -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return factory._lock_session()
+        if calls["n"] == 2:
+            org_index = MagicMock()
+
+            async def _org_index_execute(stmt: Any, params: Any = None) -> Any:
+                result = MagicMock()
+                result.all.return_value = [(uuid.uuid4(),)]
+                return result
+
+            org_index.execute = AsyncMock(side_effect=_org_index_execute)
+            return factory._wrap(org_index)
+        return org_cm
+
+    result = await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
+    assert result["cleared"] == 0, "a CAS-defeated clear counts nothing"
+    assert not factory.cleared
+    assert result["transitioned"] == 0
+
+
+async def test_sweep_org_failure_raises_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F5: an org pass failure raises RunnerMarkerSweepError carrying the
+    PARTIAL counts — a swallowed sweep failure is a silently dead safety net."""
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    factory = _FakeSweepFactory([])
+    calls = {"n": 0}
+
+    def _factory() -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return factory._lock_session()
+        if calls["n"] == 2:
+            org_index = MagicMock()
+
+            async def _org_index_execute(stmt: Any, params: Any = None) -> Any:
+                result = MagicMock()
+                result.all.return_value = [(uuid.uuid4(),), (uuid.uuid4(),)]
+                return result
+
+            org_index.execute = AsyncMock(side_effect=_org_index_execute)
+            return factory._wrap(org_index)
+
+        org_session = MagicMock()
+
+        async def _org_execute(stmt: Any, params: Any = None) -> Any:
+            raise RuntimeError("db down mid-sweep")
+
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=org_session)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        org_session.begin = MagicMock(return_value=begin_cm)
+        org_session.execute = AsyncMock(side_effect=_org_execute)
+        org_session.close = AsyncMock()
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=org_session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        session_cm.close = AsyncMock()
+        return session_cm
+
+    with pytest.raises(RunnerMarkerSweepError):
+        await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
+
+
+async def test_saq_cron_persists_partial_counts_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F5 liveness contract: the SAQ cron wrapper persists the PARTIAL counts
+    with ``error: sweep_failed`` BEFORE re-raising (SAQ retries engage)."""
+    from modulo.core import saq_worker
+
+    persisted: list[tuple[str, dict[str, Any]]] = []
+
+    async def _persist(key: str, payload: dict[str, Any], ttl: int) -> None:
+        persisted.append((key, payload))
+
+    monkeypatch.setattr(saq_worker, "_persist_sweep_stats", _persist)
+
+    async def _boom(_factory: Any) -> dict[str, Any]:
+        raise RunnerMarkerSweepError(scanned=3, cleared=1, transitioned=0, org_failures=1)
+
+    monkeypatch.setattr(
+        "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+        _boom,
+    )
+    monkeypatch.setattr(saq_worker, "_make_session_factory", lambda: MagicMock())
+
+    with pytest.raises(RunnerMarkerSweepError):
+        await saq_worker.runner_marker_sweep({})
+    key, payload = persisted[0]
+    assert key == saq_worker.RUNNER_MARKER_SWEEP_STATS_KEY
+    assert payload["scanned"] == 3
+    assert payload["cleared"] == 1
+    assert payload["orgs_failed"] == 1
+    assert payload["error"] == "sweep_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -849,11 +1145,45 @@ async def test_sweep_wired_into_saq_cron(monkeypatch: pytest.MonkeyPatch) -> Non
     periodic path with a liveness key)."""
     from modulo.core import saq_worker
 
-    called = AsyncMock(return_value={"scanned": 1, "cleared": 1, "transitioned": 0, "violations": 0})
+    called = AsyncMock(return_value={"scanned": 1, "cleared": 1, "transitioned": 0, "violations": 0, "orgs_failed": 0})
     monkeypatch.setattr("modulo.core.runner_capacity.reconcile_runner_dispatch_markers", called)
     result = await saq_worker.runner_marker_sweep({})
     called.assert_awaited_once()
     assert result["cleared"] == 1
+
+
+async def test_sweep_violations_count_breach_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F4 (8 lenses): the violations counter counts a CAP BREACH, not runner
+    activity — a cap-less org with live markers is NEVER a violation."""
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    factory = _FakeSweepFactory([_Row(status="running", sandbox_dispatch_state=build_dispatch_marker("k", "e2b"))])
+
+    async def _uncapped(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
+        return RunnerCapacityDecision(cap=None, active=3, host_resource_only=False)
+
+    monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _uncapped)
+    result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
+    assert result["violations"] == 0, "a cap-less org's live markers are activity, not a breach"
+
+    async def _breached(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
+        return RunnerCapacityDecision(cap=1, active=2, host_resource_only=False)
+
+    monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _breached)
+    result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
+    assert result["violations"] == 1, "a genuine breach (active > cap) is counted exactly once per org"
 
 
 # ---------------------------------------------------------------------------
@@ -926,6 +1256,64 @@ async def test_resume_gate_converges_onto_reserved_namespace(monkeypatch: pytest
     k1, k2 = runner_capacity_lock_keys(_ORG)
     assert advisory[0][1] == {"k1": k1, "k2": k2}, "the resume gate uses the RESERVED namespace derivation"
     assert advisory[0][1]["k1"] != _uuid_to_lock_keys(_ORG)[0], "never the legacy keyspace"
+    # qa F7: SET LOCAL lock_timeout precedes the advisory lock.
+    assert any("set_config('lock_timeout'" in t for t, _p in executed)
+    lock_idx = next(i for i, (t, _p) in enumerate(executed) if "set_config('lock_timeout'" in t)
+    assert lock_idx < next(i for i, (t, _p) in enumerate(executed) if "pg_advisory_xact_lock" in t)
+
+
+async def test_resume_gate_lock_timeout_maps_to_retryable_capacity_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qa F7: a crowded per-org advisory lock raises SQLSTATE 55P03 (what
+    SET LOCAL lock_timeout actually produces) — mapped to the RETRYABLE
+    ``SandboxCapacityExceededError`` (the caller's ``capacity.org`` house
+    failure), never an unhandled DBAPIError."""
+    _patch_gate(monkeypatch, flag_on=True)
+
+    class _S(_FakeGateSettings):
+        runner_capacity_gate_enabled = True
+        runner_capacity_lock_timeout_ms = 750
+
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _S())
+
+    from sqlalchemy.exc import DBAPIError
+
+    from modulo.core.pipeline_engine.executor import PipelineExecutor, SandboxCapacityExceededError
+
+    executor = PipelineExecutor(MagicMock())
+    inner = Exception("lock timeout")
+    inner.sqlstate = "55P03"  # type: ignore[attr-defined]
+    session = MagicMock()
+
+    async def _execute(stmt: Any, params: Any = None) -> Any:
+        if "pg_advisory_xact_lock" in str(stmt):
+            raise DBAPIError("stmt", {}, inner)
+        result = MagicMock()
+        result.scalar_one.return_value = 0
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.executor._graph_contains_sandbox_agent",
+        lambda _graph: True,
+    )
+
+    async def _fake_contract(_session: Any, _org: uuid.UUID) -> tuple[int | None, bool]:
+        return 2, False
+
+    monkeypatch.setattr("modulo.core.runner_capacity.read_runner_cap_contract", _fake_contract)
+
+    with pytest.raises(SandboxCapacityExceededError) as exc_info:
+        await executor._enforce_resume_sandbox_capacity(
+            session, org_id=_ORG, run_id=uuid.uuid4(), snapshot_id=uuid.uuid4()
+        )
+    # The mapped error carries the 55P03 DBAPI chain (sqlstate_of extraction).
+    dbapi_cause = exc_info.value.__cause__
+    assert dbapi_cause is not None
+    from modulo.db.sqlstates import sqlstate_of
+
+    assert sqlstate_of(dbapi_cause) == "55P03"
 
 
 def _unused(*_a: Any, **_kw: Any) -> None:  # pragma: no cover

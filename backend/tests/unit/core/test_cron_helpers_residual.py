@@ -2353,3 +2353,89 @@ async def test_fire_polling_trigger_reraises_cancellation_from_poll():
 #    function-tail returns (1272, 1538, 1626): every body path inside the
 #    ``async with`` block returns or raises, so the trailing
 #    ``{"status": "error", "reason": "unexpected"}`` is unreachable.
+
+
+# ---------------------------------------------------------------------------
+# qa F2 (FAR-594 D8): the re-dispatch claim's stale-marker refresh
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSession:
+    """Records every executed statement so the CAS guard can be asserted."""
+
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def execute(self, stmt: Any, params: Any = None) -> Any:
+        self.executed.append((str(stmt), params))
+        result = MagicMock()
+        result.fetchone.return_value = None
+        return result
+
+
+async def test_clear_previous_attempt_marker_cas_fenced():
+    """qa F2 root fix: the re-dispatch marker refresh clears ONLY the exact
+    marker text the scan classified (CAS) and is skipped when the row carries
+    no marker at all."""
+    from types import SimpleNamespace
+
+    session = _RecordingSession()
+    row = SimpleNamespace(
+        id=uuid.uuid4(),
+        status="running",
+        sandbox_dispatch_state='{"state": "dispatching", "attempt_key": "old"}',
+    )
+    await ch._clear_previous_attempt_marker(session, ORG, row)
+    text_str, params = session.executed[0]
+    assert "UPDATE runs SET sandbox_dispatch_state = NULL" in text_str
+    assert "sandbox_dispatch_state = :marker_seen" in text_str
+    assert params["marker_seen"] == row.sandbox_dispatch_state
+    assert params["rid"] == row.id
+    assert params["oid"] == str(ORG)
+
+    # A row with no marker is skipped entirely (no UPDATE minted).
+    markerless = SimpleNamespace(id=uuid.uuid4(), status="running", sandbox_dispatch_state=None)
+    session2 = _RecordingSession()
+    await ch._clear_previous_attempt_marker(session2, ORG, markerless)
+    assert not session2.executed
+
+
+async def test_redispatch_marker_refresh_only_for_running_rows():
+    """qa F2: the marker refresh runs in the re-dispatch path ONLY for a
+    RUNNING row (a pending resume/execute re-dispatch carries no marker)."""
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(id=uuid.uuid4(), status="pending", sandbox_dispatch_state=None)
+    assert getattr(row, "status", None) == "pending"
+
+    session = _RecordingSession()
+
+    async def _re_enqueue(queue_name, run_id_str, org_id_str, job_type, **kw):
+        return "enqueued", "job-1"
+
+    summary: dict[str, Any] = {"repaired": 0, "redis_errors": 0, "skipped": 0, "deduped": 0, "capacity_deferred": 0}
+    with patch.object(ch, "_re_enqueue_run", side_effect=_re_enqueue):
+        await ch._re_dispatch_reconciled_run(
+            session, MagicMock(), ORG, row, "execute_run", "suffix-1", None, False, 0, summary
+        )
+    assert not session.executed, "a pending re-dispatch must not mint a marker-clear UPDATE"
+
+    running_row = SimpleNamespace(id=uuid.uuid4(), status="running", sandbox_dispatch_state='{"state": "dispatching"}')
+
+    async def _capture_clear(_session, _org, _row):
+        await _RecordingSession().execute("noop")
+
+    session2 = _RecordingSession()
+
+    async def _re_enqueue2(queue_name, run_id_str, org_id_str, job_type, **kw):
+        return "enqueued", "job-2"
+
+    summary: dict[str, Any] = {"repaired": 0, "redis_errors": 0, "skipped": 0, "deduped": 0, "capacity_deferred": 0}
+    with (
+        patch.object(ch, "_re_enqueue_run", side_effect=_re_enqueue2),
+        patch.object(ch, "_clear_previous_attempt_marker", new_callable=AsyncMock) as clear_mock,
+    ):
+        await ch._re_dispatch_reconciled_run(
+            session2, MagicMock(), ORG, running_row, "execute_run", "suffix-2", None, False, 0, summary
+        )
+    clear_mock.assert_awaited_once()

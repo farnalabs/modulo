@@ -725,3 +725,216 @@ async def test_sweep_emits_violation_on_breach(
     with caplog.at_level(logging.ERROR, logger="modulo.core.runner_capacity"):
         await _sweep(db_engine)
     assert any("runner.capacity.violation" in m for m in caplog.messages)
+
+
+# ---------------------------------------------------------------------------
+# qa fixes (FAR-594 D8): two-org isolation, flag-off fidelity, CAS, OR-composed
+# recoverability, precise tombstone exclusion
+# ---------------------------------------------------------------------------
+
+
+async def test_gate_two_org_isolation(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F12a: org A is at its cap; org B's dispatch is still admitted — the
+    count (and the advisory lock) never leaks across tenants."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_a, user_a = await _seed_org_account(db_engine, "D8OrgA", cap=1)
+    org_b, user_b = await _seed_org_account(db_engine, "D8OrgB", cap=1)
+    pipe_a = await _seed_pipeline(db_engine, org_a, "PipeA", user_a)
+    snap_a = await _seed_snapshot(db_engine, org_a, pipe_a)
+    pipe_b = await _seed_pipeline(db_engine, org_b, "PipeB", user_b)
+    snap_b = await _seed_snapshot(db_engine, org_b, pipe_b)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    # Org A saturates its cap of 1 with a live running marker.
+    await _seed_run(db_engine, org_a, pipe_a, snap_a, marker=build_dispatch_marker("k", "e2b"))
+    # Org B has NO active markers at all.
+    run_b = await _seed_run(db_engine, org_b, pipe_b, snap_b)
+
+    slot = await acquire_runner_dispatch_slot(
+        factory, org_id=org_b, run_id=str(run_b), claim_token=f"tok-{run_b.hex[:12]}", node_id="n1"
+    )
+    assert slot.status == "acquired", "org B must be admitted while org A sits at ITS OWN cap"
+
+
+async def test_sweep_two_org_isolation_byte_identical_live_fence(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F12b: org-1's stale terminal marker is cleared while org-2's live
+    fence marker stays byte-identical afterwards (updated_at untouched)."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    org1, user1 = await _seed_org_account(db_engine, "D8SweepO1", cap=None)
+    org2, user2 = await _seed_org_account(db_engine, "D8SweepO2", cap=None)
+    pipe1 = await _seed_pipeline(db_engine, org1, "PipeO1", user1)
+    snap1 = await _seed_snapshot(db_engine, org1, pipe1)
+    pipe2 = await _seed_pipeline(db_engine, org2, "PipeO2", user2)
+    snap2 = await _seed_snapshot(db_engine, org2, pipe2)
+
+    stale_marker = json.dumps(
+        {
+            "state": "dispatching",
+            "attempt_key": "old",
+            "written_at": (datetime.now(UTC) - timedelta(hours=30)).isoformat(),
+        }
+    )
+    org1_run = await _seed_run(db_engine, org1, pipe1, snap1, status="complete", marker=stale_marker)
+    org2_run = await _seed_run(db_engine, org2, pipe2, snap2, marker=build_dispatch_marker("k", "e2b"))
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async def _row_full(org_id: uuid.UUID, run_id: uuid.UUID) -> dict[str, Any]:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            result = await session.execute(
+                text("SELECT status, error_code, sandbox_dispatch_state, updated_at FROM runs WHERE id = :rid"),
+                {"rid": str(run_id)},
+            )
+            row = result.first()
+            return {
+                "status": row.status,
+                "error_code": row.error_code,
+                "marker": row.sandbox_dispatch_state,
+                "updated_at": row.updated_at,
+            }
+
+    before = await _row_full(org2, org2_run)
+    await _sweep(db_engine)
+
+    org1_row = await _row_full(org1, org1_run)
+    assert org1_row["marker"] is None, "org-1's stale terminal marker must be cleared"
+    org2_row = await _row_full(org2, org2_run)
+    assert org2_row["marker"] == before["marker"], "org-2's live marker must be byte-identical"
+    assert org2_row["status"] == "running"
+    assert org2_row["updated_at"] == before["updated_at"], "an untouched row must not be written by the sweep"
+
+
+async def test_sweep_fresh_heartbeat_nodeless_zombie_keeps_marker(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3: a fresh-heartbeat nodeless zombie is matched ONLY by the nodeless
+    recovery branch — the sweep's recoverability check must be the
+    OR-composition (the previous AND-of-all-three misjudged it unrecoverable
+    and cleared its stale marker while the reconciler would re-dispatch it)."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    org_id, user_id = await _seed_org_account(db_engine, "D8SweepNodeless", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeNodeless", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    # FRESH heartbeat (the stale branch requires a stale one) + nodeless window
+    # elapsed + a STALE marker (30h-old written_at — the old AND-bug case).
+    marker = json.dumps(
+        {
+            "state": "dispatching",
+            "attempt_key": "stale-attempt",
+            "written_at": (datetime.now(UTC) - timedelta(hours=30)).isoformat(),
+        }
+    )
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        marker=marker,
+        dispatcher="saq",
+        heartbeat_at=datetime.now(UTC) - timedelta(seconds=30),
+        started_at=datetime.now(UTC) - timedelta(minutes=30),
+    )
+
+    await _sweep(db_engine)
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["marker"] == marker, "a fresh-heartbeat nodeless zombie is reconciler-recoverable"
+    assert row["status"] == "running", "a recoverable run must never be terminalised by the sweep"
+
+
+async def test_gate_flag_off_population_and_tombstone_are_pre_d8(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F6: flag OFF keeps the pre-D8 behaviour EXACTLY — the count population
+    is ACTIVE_RUN_STATUSES (an awaiting_human run WITH a marker still counts
+    and can deny a dispatch) and the HITL tombstone never fires."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=False)
+
+    org_id, user_id = await _seed_org_account(db_engine, "D8PreD8", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipePreD8", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    claim = "tok-pred8"
+    parked = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="awaiting_human",
+        marker=build_dispatch_marker("k", "e2b"),
+        claim_token=claim,
+    )
+
+    # Pre-D8 population: the awaiting_human marker COUNTS → cap 1 is saturated.
+    other = await _seed_run(db_engine, org_id, pipe, snap)
+    with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
+        await acquire_runner_dispatch_slot(
+            factory, org_id=org_id, run_id=str(other), claim_token=f"tok-{other.hex[:12]}", node_id="n1"
+        )
+
+    # Flag-off tombstone is a NO-OP: the marker survives the park untouched.
+    tombstoned = await mark_runner_dispatch_cleared_at_hitl(
+        factory, org_id=org_id, run_id=str(parked), claim_token=claim
+    )
+    assert tombstoned is False
+    row = await _run_row(db_engine, org_id, parked)
+    assert row["marker"] is not None
+    assert json.loads(row["marker"])["state"] == "dispatching", "flag-off must not write the tombstone"
+
+
+async def test_count_tombstone_exclusion_matches_state_field_precisely(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F13: the tombstone exclusion matches the marker's ``state`` FIELD — a
+    live marker whose attempt_key merely CONTAINS the literal still counts
+    (the previous bare ``%cleared_at_hitl%`` substring would have excluded
+    it, silently under-counting)."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "D8Precise", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipePrecise", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    tricky_marker = json.dumps({"state": "dispatching", "attempt_key": "x-cleared_at_hitl-y"})
+    tricky_run = await _seed_run(db_engine, org_id, pipe, snap, marker=tricky_marker)
+
+    # The tricky marker COUNTS (its state is dispatching) → cap 1 saturated.
+    denied = await _seed_run(db_engine, org_id, pipe, snap)
+    with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
+        await acquire_runner_dispatch_slot(
+            factory, org_id=org_id, run_id=str(denied), claim_token=f"tok-{denied.hex[:12]}", node_id="n1"
+        )
+
+    # Swap the TRICKY marker for a REAL tombstone → capacity-neutral (the
+    # precise exclusion drops it) → the dispatch is admitted.
+    tombstone = json.dumps({"state": "cleared_at_hitl", "written_at": datetime.now(UTC).isoformat()})
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await session.execute(
+            text("UPDATE runs SET sandbox_dispatch_state = :marker WHERE id = :rid"),
+            {"marker": tombstone, "rid": str(tricky_run)},
+        )
+    slot = await acquire_runner_dispatch_slot(
+        factory, org_id=org_id, run_id=str(denied), claim_token=f"tok-{denied.hex[:12]}", node_id="n1"
+    )
+    assert slot.status == "acquired"
