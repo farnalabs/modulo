@@ -94,6 +94,9 @@ def _make_mock_primitive(**overrides: Any) -> MagicMock:
     p.auto_update = overrides.get("auto_update", True)
     p.created_at = overrides.get("created_at", datetime(2025, 1, 1, tzinfo=UTC))
     p.updated_at = overrides.get("updated_at", datetime(2025, 1, 1, tzinfo=UTC))
+    p.status = overrides.get("status")
+    p.manifest_pins = overrides.get("manifest_pins")
+    p.trust_header = overrides.get("trust_header")
     return p
 
 
