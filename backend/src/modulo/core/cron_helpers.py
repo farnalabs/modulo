@@ -4960,7 +4960,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         (fleet-wide, mirroring the B3 enqueue-failed cap — budget-exhausted
         rows still terminal-fail when the cap is hit); terminal-failed with
         ``executor_stalled`` once the budget is exhausted.
-      * awaiting_human/claimed: ``dispatcher='saq'``, heartbeat stale by
+      * awaiting_human/claimed/hitl_parked: ``dispatcher='saq'``, heartbeat stale by
         2*SAQ_JOB_HEARTBEAT, AND no SAQ job in Redis (F6a gated recovery — the
         no-job gate is applied per-row). A half-resumed run whose ``resume_run``
         job was lost (crash between the HITL decision commit and enqueue) would
@@ -5015,9 +5015,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     zset, queued/active lists) are read or written — the atomic claim UPDATE
     (``claim_run_async``) is the real at-most-once dedupe.
 
-    Re-dispatch type (discriminator): awaiting_human/claimed -> ``resume_run``;
-    pending/running -> ``execute_run``. Capacity-deferred runs are re-dispatched
-    only when their pipeline has free capacity.
+    Re-dispatch type (discriminator): awaiting_human/claimed/hitl_parked ->
+    ``resume_run``; pending/running -> ``execute_run``. Capacity-deferred runs
+    are re-dispatched only when their pipeline has free capacity.
 
     Every run terminalised this tick (``executor_superseded`` /
     ``claim_cap_exhausted`` / ``dispatch_failed`` / ``hitl_gate_expired``) gets
@@ -6048,7 +6048,7 @@ async def _reconcile_one_row(
         summary["skipped"] += 1
         return enqueue_failed_redispatched
 
-    # Discriminator (F6a): awaiting_human/claimed -> resume_run;
+    # Discriminator (F6a): awaiting_human/claimed/hitl_parked -> resume_run;
     # pending/running -> execute_run. Re-dispatch with a FRESH
     # key_suffix so SAQ key dedupe never suppresses the recovery
     # enqueue.

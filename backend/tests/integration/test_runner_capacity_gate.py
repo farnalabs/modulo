@@ -220,8 +220,8 @@ async def _clean_runs_between_tests(db_engine: AsyncEngine) -> None:
 
 
 def _gate_flags(monkeypatch: pytest.MonkeyPatch, *, flag_on: bool, lock_timeout_ms: int = 2000) -> None:
-    monkeypatch.setenv("MODULO_RUNNER_CAPACITY_GATE_ENABLED", "true" if flag_on else "false")
-    monkeypatch.setenv("MODULO_RUNNER_CAPACITY_LOCK_TIMEOUT_MS", str(lock_timeout_ms))
+    monkeypatch.setenv("RUNNER_CAPACITY_GATE_ENABLED", "true" if flag_on else "false")
+    monkeypatch.setenv("RUNNER_CAPACITY_LOCK_TIMEOUT_MS", str(lock_timeout_ms))
 
 
 # ---------------------------------------------------------------------------
