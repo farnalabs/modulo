@@ -59,15 +59,15 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
       principals are scoped per key policy (`test_run_api_key_auth.py`)
 - [x] Error-state handling: failed states, retries and recovery flows are covered by
       `backend/tests/bdd/features/errors/{failed_state,retry,recovery}.feature`
-- [x] Run lifecycle and sequencing are BDD-exercised end to end: a manual trigger
-      creates a pending run (202), the engine moves it pending → running, a clean
-      completion lands on `completed` with a `final_state`, an unhandled node
-      exception lands on `failed` with an `error_detail`, and a mid-run cancellation
-      is terminal (`cancelled`, no further nodes schedule). A node that returns
-      `None` output is a normal empty result — the run continues with no error — and
-      sequential pipelines complete nodes strictly in order. A pipeline capped at
-      `max_concurrent_runs` refuses an extra manual trigger with a 429
-      (`run_lifecycle.feature`, `run_sequential.feature` via
+- [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending run
+      (202), the engine moves it pending → running, a clean completion lands on
+      `completed` with a `final_state`, an unhandled node exception lands on `failed`
+      with an `error_detail`, and a mid-run cancellation is terminal (`cancelled`, no
+      further nodes execute). A node that returns `None` output is a normal empty
+      result — the run continues to the next node with no error — and sequential
+      pipelines complete nodes strictly in order. A trigger refused by
+      `max_concurrent_runs` while a pending run is already active surfaces 429
+      (`run_lifecycle.feature`, `run_sequential.feature`, registered for execution by
       `steps/test_pipelines.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
@@ -83,15 +83,16 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
 
 ## QA History
 
-- 2026-09-09: **improve-architecture (product-map walk)** — closed the stale
-  "dead BDD files" gap recorded 2026-09-08: `run_lifecycle.feature` /
-  `run_sequential.feature` are registered via `scenarios(...)` in
-  `steps/test_pipelines.py` and execute (the wiring landed 2026-09-09 in the
-  feat-pipelines walk). This entry now cites them, ticks the run-lifecycle /
-  sequencing behaviour, and drops the now-false known gap.
+- 2026-09-09: **improve-architecture (product-map walk)** — closed the dead-BDD-file
+  Known Gap recorded here on 2026-09-08: `run_lifecycle.feature` / `run_sequential.feature`
+  are no longer orphaned — they were wired into `steps/test_pipelines.py` (12 scenarios)
+  when the same gap was closed on the `feat-pipelines` tracker, but this entry was not
+  updated. Both files are now cited in `bdd:` and the run-lifecycle / sequential-ordering
+  behaviour is ticked. Status: covered.
 - 2026-09-08: **improve-architecture (product-map walk)** — recorded `run_lifecycle.feature`
   / `run_sequential.feature` as a dead-BDD-file known gap (run-time surfaces owned here that
-  no step module registers).
+  no step module registers). Superseded by the 2026-09-09 closure above once
+  `steps/test_pipelines.py` registered both files.
 - 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-runs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/runs.py`,
