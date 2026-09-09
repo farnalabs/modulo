@@ -6987,6 +6987,36 @@ def _log_tool_failure(tool: str) -> None:
     _log.exception("%s failed", tool)
 
 
+def _schema_to_dict(schema: Any, *, include_updated: bool = True) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "id": str(schema.id),
+        "name": schema.name,
+        "description": schema.description,
+        "version": schema.version,
+        "parameters": schema.parameters or [],
+        "created_at": schema.created_at.isoformat() if schema.created_at else None,
+    }
+    if include_updated:
+        data["updated_at"] = schema.updated_at.isoformat() if schema.updated_at else None
+    return data
+
+
+def _set_to_dict(ps: Any, *, include_updated: bool = True) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "id": str(ps.id),
+        "parameter_schema_id": str(ps.parameter_schema_id),
+        "name": ps.name,
+        "description": ps.description,
+        "version": ps.version,
+        "schema_version": ps.schema_version,
+        "values": ps.values or {},
+        "created_at": ps.created_at.isoformat() if ps.created_at else None,
+    }
+    if include_updated:
+        data["updated_at"] = ps.updated_at.isoformat() if ps.updated_at else None
+    return data
+
+
 @mcp.tool(
     description="Create a new parameter schema. Returns the created schema details.",
 )
@@ -7016,16 +7046,7 @@ async def create_parameter_schema(
                 account_id=account_id,
             )
 
-        return {
-            "data": {
-                "id": str(schema.id),
-                "name": schema.name,
-                "description": schema.description,
-                "version": schema.version,
-                "parameters": schema.parameters or [],
-                "created_at": schema.created_at.isoformat() if schema.created_at else None,
-            }
-        }
+        return {"data": _schema_to_dict(schema, include_updated=False)}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
@@ -7069,17 +7090,7 @@ async def get_parameter_schema(
         if schema is None or schema.organisation_id != org_id:
             return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
-        return {
-            "data": {
-                "id": str(schema.id),
-                "name": schema.name,
-                "description": schema.description,
-                "version": schema.version,
-                "parameters": schema.parameters or [],
-                "created_at": schema.created_at.isoformat() if schema.created_at else None,
-                "updated_at": schema.updated_at.isoformat() if schema.updated_at else None,
-            }
-        }
+        return {"data": _schema_to_dict(schema)}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -7133,17 +7144,7 @@ async def update_parameter_schema(
         if schema is None:
             return {"error": "conflict", "detail": "Schema was modified by another user. Refresh and retry."}
 
-        return {
-            "data": {
-                "id": str(schema.id),
-                "name": schema.name,
-                "description": schema.description,
-                "version": schema.version,
-                "parameters": schema.parameters or [],
-                "created_at": schema.created_at.isoformat() if schema.created_at else None,
-                "updated_at": schema.updated_at.isoformat() if schema.updated_at else None,
-            }
-        }
+        return {"data": _schema_to_dict(schema)}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
@@ -7388,22 +7389,7 @@ async def list_parameter_sets(
 
             sets = await db_list_sets(s, parameter_schema_id=sid, org_id=org_id)
 
-        return {
-            "data": [
-                {
-                    "id": str(ps.id),
-                    "parameter_schema_id": str(ps.parameter_schema_id),
-                    "name": ps.name,
-                    "description": ps.description,
-                    "version": ps.version,
-                    "schema_version": ps.schema_version,
-                    "values": ps.values or {},
-                    "created_at": ps.created_at.isoformat() if ps.created_at else None,
-                    "updated_at": ps.updated_at.isoformat() if ps.updated_at else None,
-                }
-                for ps in sets
-            ]
-        }
+        return {"data": [_set_to_dict(ps) for ps in sets]}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -7456,18 +7442,7 @@ async def create_parameter_set(
                 schema_version=schema.version,
             )
 
-        return {
-            "data": {
-                "id": str(ps.id),
-                "parameter_schema_id": str(ps.parameter_schema_id),
-                "name": ps.name,
-                "description": ps.description,
-                "version": ps.version,
-                "schema_version": ps.schema_version,
-                "values": ps.values or {},
-                "created_at": ps.created_at.isoformat() if ps.created_at else None,
-            }
-        }
+        return {"data": _set_to_dict(ps, include_updated=False)}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
@@ -7513,19 +7488,7 @@ async def get_parameter_set(
         if ps is None or ps.parameter_schema_id != sid or ps.organisation_id != org_id:
             return {"error": "not_found", "detail": _MSG_PARAM_SET_NOT_FOUND}
 
-        return {
-            "data": {
-                "id": str(ps.id),
-                "parameter_schema_id": str(ps.parameter_schema_id),
-                "name": ps.name,
-                "description": ps.description,
-                "version": ps.version,
-                "schema_version": ps.schema_version,
-                "values": ps.values or {},
-                "created_at": ps.created_at.isoformat() if ps.created_at else None,
-                "updated_at": ps.updated_at.isoformat() if ps.updated_at else None,
-            }
-        }
+        return {"data": _set_to_dict(ps)}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -7586,19 +7549,7 @@ async def update_parameter_set(
         if ps is None:
             return {"error": "conflict", "detail": "Parameter set was modified by another user. Refresh and retry."}
 
-        return {
-            "data": {
-                "id": str(ps.id),
-                "parameter_schema_id": str(ps.parameter_schema_id),
-                "name": ps.name,
-                "description": ps.description,
-                "version": ps.version,
-                "schema_version": ps.schema_version,
-                "values": ps.values or {},
-                "created_at": ps.created_at.isoformat() if ps.created_at else None,
-                "updated_at": ps.updated_at.isoformat() if ps.updated_at else None,
-            }
-        }
+        return {"data": _set_to_dict(ps)}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
@@ -7713,19 +7664,7 @@ async def restore_parameter_set(
         if ps is None:
             return {"error": "not_found", "detail": "Parameter set not found or not deleted"}
 
-        return {
-            "data": {
-                "id": str(ps.id),
-                "parameter_schema_id": str(ps.parameter_schema_id),
-                "name": ps.name,
-                "description": ps.description,
-                "version": ps.version,
-                "schema_version": ps.schema_version,
-                "values": ps.values or {},
-                "created_at": ps.created_at.isoformat() if ps.created_at else None,
-                "updated_at": ps.updated_at.isoformat() if ps.updated_at else None,
-            }
-        }
+        return {"data": _set_to_dict(ps)}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
