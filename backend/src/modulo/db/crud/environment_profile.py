@@ -168,3 +168,54 @@ async def delete_environment_profile(session: AsyncSession, profile_id: uuid.UUI
     await session.delete(profile)
     await session.flush()
     return True
+
+
+async def apply_bundled_runner_template(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile | None:
+    """Apply the shipped Bundled Runner template (FAR-591 D5 "template updated — apply").
+
+    Refreshes ONLY the template-owned fields the live drift helper reports as
+    diverged — top-level ``image_ref`` / ``network_policy`` /
+    ``persistence_policy`` and the drifted keys WITHIN ``config_json`` — so
+    operator-owned fields (name, description, secret refs, capabilities,
+    timeout tweaks the operator made) survive the refresh. Only
+    template-shaped ``runner_docker`` rows participate (drift helper's
+    ``is_seeded`` gate); a non-template row returns None.
+
+    Revalidates the runner_docker persistence policy after the merge — the
+    template always applies ``ephemeral``, so a previously-locked row stays
+    valid.
+    """
+    from modulo.db.bundled_runner_template import (
+        BUNDLED_RUNNER_IMAGE_REF,
+        TEMPLATE_CONFIG_JSON,
+        TEMPLATE_OWNED_FIELDS,
+        template_drift_fields,
+    )
+
+    profile = await get_environment_profile(session, profile_id)
+    if profile is None:
+        return None
+    drift = template_drift_fields(
+        provider_type=profile.provider_type,
+        image_ref=profile.image_ref,
+        network_policy=profile.network_policy,
+        persistence_policy=profile.persistence_policy,
+        config_json=profile.config_json,
+    )
+    if not drift["is_seeded"]:
+        return None
+
+    profile.image_ref = BUNDLED_RUNNER_IMAGE_REF
+    profile.network_policy = TEMPLATE_OWNED_FIELDS["network_policy"]
+    profile.persistence_policy = TEMPLATE_OWNED_FIELDS["persistence_policy"]
+
+    shipped_config = TEMPLATE_CONFIG_JSON
+    config = dict(profile.config_json or {})
+    for key, value in shipped_config.items():
+        if config.get(key) != value:
+            config[key] = value
+    profile.config_json = config
+
+    validate_runner_docker_persistence(profile.provider_type, profile.persistence_policy)
+    await session.flush()
+    return profile

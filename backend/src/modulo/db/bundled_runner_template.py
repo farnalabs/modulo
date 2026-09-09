@@ -105,3 +105,40 @@ def build_bundled_runner_profile_values() -> dict[str, Any]:
         "secret_refs_json": [],
         "persistence_policy": "ephemeral",
     }
+
+
+def template_drift_fields(
+    *,
+    provider_type: str | None,
+    image_ref: str | None,
+    network_policy: str | None,
+    persistence_policy: str | None,
+    config_json: Any,
+) -> dict[str, Any]:
+    """Compute template drift from RAW FIELD VALUES (DB-layer pure function).
+
+    Returns ``{"is_seeded": bool, "drifted": bool, "drifted_fields": [..]}``.
+    Lives in the DB layer so the crud apply helper (FAR-591 D5) and the
+    core-side live drift helper share ONE implementation — the core
+    ``template_drift_status`` delegates here.
+    """
+    if provider_type != BUNDLED_RUNNER_PROVIDER_TYPE:
+        # Only template-shaped runner_docker rows participate in drift.
+        return {"is_seeded": False, "drifted": False, "drifted_fields": []}
+    drifted_fields: list[str] = []
+    if (image_ref or "") != BUNDLED_RUNNER_IMAGE_REF:
+        drifted_fields.append("image_ref")
+    if network_policy != TEMPLATE_OWNED_FIELDS["network_policy"]:
+        drifted_fields.append("network_policy")
+    if persistence_policy != "ephemeral":
+        drifted_fields.append("persistence_policy")
+    cfg = config_json or {}
+    shipped = TEMPLATE_OWNED_FIELDS["config_json"]
+    for key, value in shipped.items():
+        if cfg.get(key) != value:
+            drifted_fields.append(f"config_json.{key}")
+    return {
+        "is_seeded": True,
+        "drifted": bool(drifted_fields),
+        "drifted_fields": drifted_fields,
+    }

@@ -28,6 +28,12 @@ interface DataFetchOptions<T> {
    * consumers keep today's behaviour.
    */
   silentRefetch?: boolean
+  /**
+   * FAR-591 D5 (qa F12): poll interval in ms. The status strip passes
+   * 60_000 so the runner health display auto-refreshes on the probe's own
+   * cadence without any user action.
+   */
+  refetchInterval?: number
 }
 
 type FetcherResult<T> = { data?: T; error?: { detail?: unknown } }
@@ -61,6 +67,7 @@ export function useDataFetch<T>(
     enabled: options?.immediate !== false,
     retry: false,
     staleTime: 30_000,
+    refetchInterval: options?.refetchInterval,
   })
 
   return {

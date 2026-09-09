@@ -564,11 +564,11 @@ async def _sweep(db_engine: AsyncEngine) -> dict[str, Any]:
     # ``reconcile_runner_dispatch_markers`` and both callers share the SAME global
     # dedup key (``runner_marker_sweep_lock_keys``). When the other worker holds it,
     # ``pg_try_advisory_lock`` returns False and the sweep returns the
-    # ``skipped_locked`` early-zero result -- leaving terminal/fence markers
+    # ``skipped_locked`` early-zero result — leaving terminal/fence markers
     # uncleared and emitting no violation, which fails the assertions below. Give
     # every test sweep its OWN lock key so it never contends with (and is never
     # skipped by) a concurrent production-like sweep on the shared DB. Test
-    # hermeticity only -- production still uses the single global dedup key.
+    # hermeticity only — production still uses the single global dedup key.
     n = next(_SWEEP_LOCK_SEQ)
     with unittest.mock.patch.object(_rc, "runner_marker_sweep_lock_keys", return_value=(n, -n)):
         factory = async_sessionmaker(db_engine, expire_on_commit=False)

@@ -831,9 +831,13 @@ def test_single_migration_head() -> None:
     # 0203_triggers_add_name (FAR-681 slice 2) chains off 0195.
     chaining_off_0195 = [p for p in revisions if parents[p] == "0195_hitl_claim_gate_config_json"]
     assert [_basename(p) for p in chaining_off_0195] == ["0203_triggers_add_name.py"]
-    # Nothing chains off 0203 -> it is the single head.
+    # This PR's 0204_runner_probe_cache chains off 0203_triggers_add_name
+    # (renumbered from its original 0203 prefix to avoid colliding with main).
     chaining_off_0203 = [p for p in revisions if parents[p] == "0203_triggers_add_name"]
-    assert not chaining_off_0203
+    assert [_basename(p) for p in chaining_off_0203] == ["0204_runner_probe_cache.py"]
+    # Nothing chains off 0204 -> it is the single head.
+    chaining_off_0204 = [p for p in revisions if parents[p] == "0204_runner_probe_cache"]
+    assert chaining_off_0204 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

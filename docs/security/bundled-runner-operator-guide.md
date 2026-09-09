@@ -173,3 +173,50 @@ deployments sharing one engine.
   downgrade by design.
 - One-way door: a GHCR-published image once pulled + pinned becomes the
   deployment's runner identity (see ADR 029's one-way door table).
+
+## 10. Health probe (Runners page status strip)
+
+A per-machine system cron (`runner_health_probe`, every 60s) probes the
+engine THROUGH the same endpoint chain (`MODULO_DOCKER_HOST` →
+`DOCKER_HOST` → local socket) and caches per-(org, machine) results in
+the `runner_probe_cache` table: engine reachability, pinned-image
+presence, and the engine's `/info` CPU/memory. **The Runners page reads
+only this cache — it never probes the engine synchronously on the request
+path.**
+
+The probe's own liveness is observed like every other system cron:
+
+- `/healthz/ready` carries the advisory `runner_health_probe` check
+  (the `saq:cron:stats:runner_health_probe` outcome key) — a dead probe
+  degrades, never gates; the per-machine FAR-538 cron heartbeat
+  (`saq:cron:heartbeat:runner_health_probe`) also refreshes per tick.
+- The probe prunes cache rows not refreshed within a 24h retention window
+  (a decommissioned machine's corpse row cannot pin the strip to a
+  permanent unknown); the read side bounds by the same window.
+
+### Strip states — remediation
+
+The persistent strip on the Runners page aggregates worst-of across the
+org's machine rows:
+
+| State | Meaning | Remediation |
+|---|---|---|
+| ✓ healthy | Engine reachable, pinned image present | — |
+| ⚠ engine unreachable | The engine did not answer | Check `docker-socket-proxy` is running and `MODULO_DOCKER_HOST` resolves; the probe error text (scrubbed of any URL credentials) is shown inline |
+| ⚠ image not pulled | A non-placeholder pinned digest has no image on the engine | Pull the pinned image on this machine (`deploy/docker/runner-opencode.Dockerfile`) or advance the digest (/§3) |
+| stale | The cache is older than 2x the probe interval — the probe itself is suspended, the state is **never green** | Restart the SAQ system worker; the advisory `runner_health_probe` readiness check alerts too |
+
+A healthy→unreachable transition emits a `runner_unavailable`
+error-dashboard entry and an in-app notification (category `runner`)
+linking to /admin/runners/concurrency; re-alerting requires a recovery in
+between. A bounded aiodocker timeout (10s total / 5s connect) turns a hung
+proxy into a recorded unreachable (a real alert) instead of a silent 120s
+job timeout.
+
+### Concurrency preflight
+
+The Concurrency tab sizes the org's sandbox-concurrency cap against the
+engine's reported `/info` resources (1.0 CPU / 1 GiB per container, worst
+across machines): a cap whose `limit × 1 GiB` exceeds reported memory
+surfaces `exceeds_mem` (analogous for CPU). `uncapped` = no cap set;
+`unknown` = no recent probe result (no engine info cached yet).
