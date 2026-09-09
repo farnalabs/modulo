@@ -5,6 +5,7 @@ discriminator, durable-dispatch recovery (B3) and safe terminalizers (B4/B5).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -155,6 +156,13 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_run_claim_cap": 20,
         "hitl_gate_cancel_grace_seconds": 3600,
         "modulo_telemetry_enabled": False,
+        # FAR-746 knobs as REAL ints — the product code uses
+        # _int_setting's coded default for anything that is not literally
+        # an int (MagicMock attributes would otherwise coerce oddly), and
+        # the deadline tests need to override the budget with a real value.
+        "dispatcher_reconcile_budget_seconds": 95,
+        "dispatcher_reconcile_terminalize_max_per_tick": 25,
+        "dispatcher_reconcile_facts_max_per_tick": 25,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -2469,3 +2477,301 @@ class TestRecordFactForTerminalizedRun:
         happened)."""
         record = await self._invoke(monkeypatch, status="awaiting_human")
         record.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-746 resilience tests
+# ---------------------------------------------------------------------------
+
+
+class TestDispatcherReconcileInnerDeadline:
+    """FAR-746 inner deadline: the sweep manages its own time budget INSIDE
+    the SAQ job.  On deadline expiry the current per-org transaction rolls
+    back, failure stats are persisted (status='timeout'), and the function
+    returns gracefully — the SAQ outer timeout must never fire."""
+
+    @pytest.mark.asyncio
+    async def test_inner_deadline_persists_timeout_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When asyncio.timeout fires, the stats blob must carry
+        status='timeout' and a fresh last_run_at — not a stale blob."""
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        async def _slow_body(*_a: Any, **_kw: Any) -> None:
+            await asyncio.sleep(10)  # simulate long-running tick
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(ch, "_open_system_factory", return_value=factory))
+            stack.enter_context(
+                patch.object(ch, "get_settings", return_value=_settings(dispatcher_reconcile_budget_seconds=0))
+            )
+            stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
+            stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
+            stack.enter_context(patch.object(ch, "_dispatcher_reconcile_body", _slow_body))
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["status"] == "timeout"
+        assert summary["last_error"] is not None
+        assert "TimeoutError" in summary["last_error"]
+        # The in-process mirror (worker-process view) carries the failure too.
+        assert ch._dispatcher_reconcile_stats["status"] == "timeout"
+        # Stats were persisted to Redis (the write was called).
+        redis_client.set.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_inner_deadline_does_not_leak_sessions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When the inner deadline fires, no session factory should be
+        called after the timeout — the session was closed by the context
+        manager before the timeout propagated."""
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        async def _slow_body(*_a: Any, **_kw: Any) -> None:
+            # Simulate a slow tick that exceeds the budget.
+            await asyncio.sleep(10)
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(ch, "_open_system_factory", return_value=factory))
+            stack.enter_context(
+                patch.object(ch, "get_settings", return_value=_settings(dispatcher_reconcile_budget_seconds=0))
+            )
+            stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
+            stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
+            stack.enter_context(patch.object(ch, "_dispatcher_reconcile_body", _slow_body))
+            await ch.dispatcher_reconcile()
+
+        # The session factory was only called once (by _open_system_factory)
+        # for the empty-org path — no leaked session.
+        assert factory.call_count <= 1
+
+
+class TestDispatcherReconcileUnexpectedException:
+    """FAR-746 failure heartbeat: an unexpected exception persists
+    status='failed' + last_error and re-raises."""
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_persists_failed_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        async def _exploding_body(*_a: Any, **_kw: Any) -> None:
+            raise RuntimeError("boom")
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(ch, "_open_system_factory", return_value=factory))
+            stack.enter_context(patch.object(ch, "get_settings", return_value=_settings()))
+            stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
+            stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
+            stack.enter_context(patch.object(ch, "_dispatcher_reconcile_body", _exploding_body))
+            with pytest.raises(RuntimeError, match="boom"):
+                await ch.dispatcher_reconcile()
+
+        # The failure heartbeat was persisted to Redis.
+        redis_client.set.assert_awaited()
+        # The failure reached the in-process mirror too.
+        assert ch._dispatcher_reconcile_stats["status"] == "failed"
+        assert "RuntimeError" in (ch._dispatcher_reconcile_stats["last_error"] or "")
+
+
+class TestDispatcherReconcileFactsBatchCap:
+    """FAR-746 batch cap: the compensating daily-fact writes are bounded by
+    dispatcher_reconcile_facts_max_per_tick.  Overflow is counted in
+    facts_deferred and drains on subsequent ticks."""
+
+    @pytest.mark.asyncio
+    async def test_facts_deferred_when_over_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The REAL body applies the cap: 5 terminalized ids with facts_max=2
+        means exactly 2 facts are written and 3 are deferred."""
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+        facts_org = uuid.uuid4()
+
+        async def _five_terminalized(
+            _factory: Any,
+            _q: Any,
+            _rc: Any,
+            org_id: uuid.UUID,
+            _pred: Any,
+            _nw: Any,
+            _mam: Any,
+            _cc: Any,
+            _sw: Any,
+            _crs: Any,
+            _efr: Any,
+            _summary: Any,
+            terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+            _grace: Any,
+            **_kw: Any,
+        ) -> int:
+            terminalized_run_ids.extend((uuid.uuid4(), org_id) for _ in range(5))
+            return 0
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(ch, "_open_system_factory", return_value=factory))
+            stack.enter_context(
+                patch.object(
+                    ch,
+                    "get_settings",
+                    return_value=_settings(dispatcher_reconcile_facts_max_per_tick=2),
+                )
+            )
+            stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
+            stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
+            stack.enter_context(patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=[facts_org]))
+            stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=_five_terminalized))
+            stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
+            stack.enter_context(patch.object(ch, "_overlay_dual_write_counters", new_callable=AsyncMock))
+            stack.enter_context(patch.object(ch, "_update_reconcile_telemetry", new_callable=AsyncMock))
+            record_facts = stack.enter_context(
+                patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)
+            )
+            summary = await ch.dispatcher_reconcile()
+
+        # Only 2 facts were written (the cap); 3 were deferred.
+        assert record_facts.await_count == 2
+        assert summary["facts_deferred"] == 3
+        # The success path keeps the ok status (never a failure heartbeat).
+        assert summary["status"] == "ok"
+        # The tick's outcome was persisted (success path).
+        redis_client.set.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_facts_all_written_under_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Under the cap every terminalized run gets its fact — the cap must
+        not silently drop writes the budget could have covered."""
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+        facts_org = uuid.uuid4()
+
+        async def _two_terminalized(
+            _factory: Any,
+            _q: Any,
+            _rc: Any,
+            org_id: uuid.UUID,
+            _pred: Any,
+            _nw: Any,
+            _mam: Any,
+            _cc: Any,
+            _sw: Any,
+            _crs: Any,
+            _efr: Any,
+            _summary: Any,
+            terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+            _grace: Any,
+            **_kw: Any,
+        ) -> int:
+            terminalized_run_ids.extend((uuid.uuid4(), org_id) for _ in range(2))
+            return 0
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(ch, "_open_system_factory", return_value=factory))
+            stack.enter_context(patch.object(ch, "get_settings", return_value=_settings()))
+            stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
+            stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
+            stack.enter_context(patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=[facts_org]))
+            stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=_two_terminalized))
+            stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
+            stack.enter_context(patch.object(ch, "_overlay_dual_write_counters", new_callable=AsyncMock))
+            stack.enter_context(patch.object(ch, "_update_reconcile_telemetry", new_callable=AsyncMock))
+            record_facts = stack.enter_context(
+                patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)
+            )
+            summary = await ch.dispatcher_reconcile()
+
+        assert record_facts.await_count == 2
+        assert summary["facts_deferred"] == 0
+        redis_client.set.assert_awaited()
+
+
+class TestTerminalizeBatchCap:
+    """FAR-746 batch caps: the per-tick terminalizer row caps bound the
+    heavy per-org UPDATEs so a big zombie backlog drains across 60s ticks."""
+
+    @pytest.mark.asyncio
+    async def test_mid_graph_wedge_update_carries_limit_param(self) -> None:
+        session = _MockSession([])
+        await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135, max_rows=7)
+        stmt, params = session.executed[-1]
+        assert "LIMIT :max_rows" in str(stmt)
+        assert params["max_rows"] == 7
+
+    @pytest.mark.asyncio
+    async def test_terminalizer_updates_uncapped_by_default(self) -> None:
+        """Direct calls without max_rows stay uncapped (the LIMIT sentinel
+        never truncates a realistic backlog)."""
+        session = _MockSession([])
+        await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
+        _stmt, params = session.executed[-1]
+        assert params["max_rows"] == ch._TERMINALIZE_UNLIMITED_ROWS
+
+    def test_terminalize_max_rows_coercion(self) -> None:
+        assert ch._terminalize_max_rows(None) == ch._TERMINALIZE_UNLIMITED_ROWS
+        assert ch._terminalize_max_rows(0) == ch._TERMINALIZE_UNLIMITED_ROWS
+        assert ch._terminalize_max_rows(-5) == ch._TERMINALIZE_UNLIMITED_ROWS
+        assert ch._terminalize_max_rows("25") == 25
+        assert ch._terminalize_max_rows(object()) == ch._TERMINALIZE_UNLIMITED_ROWS
+        assert ch._terminalize_max_rows(25) == 25
+
+    @pytest.mark.asyncio
+    async def test_claim_cap_and_hitl_updates_carry_limit_param(self) -> None:
+        session = _MockSession([])
+        await ch._terminalize_claim_cap_exhausted(session, ORG, claim_cap=20, stale_seconds=600, max_rows=9)
+        await ch._terminalize_expired_hitl_gates(session, ORG, grace_seconds=3600, max_rows=11)
+        claim_stmt, claim_params = session.executed[-2]
+        hitl_stmt, hitl_params = session.executed[-1]
+        assert "LIMIT :max_rows" in str(claim_stmt)
+        assert claim_params["max_rows"] == 9
+        assert "LIMIT :max_rows" in str(hitl_stmt)
+        assert hitl_params["max_rows"] == 11
+
+    @pytest.mark.asyncio
+    async def test_terminalize_capped_counter_fires_at_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A wedge terminalizer returning exactly terminalize_max rows counts
+        the terminalize_capped overflow signal — the backlog did not fully
+        drain this tick."""
+        summary, _, _, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_ids={"executor_superseded": [uuid.uuid4() for _ in range(2)]},
+            settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 2},
+        )
+        assert summary["mid_graph_wedge_terminalized"] == 2
+        assert summary["terminalize_capped"] == 1
+
+    @pytest.mark.asyncio
+    async def test_terminalize_capped_counter_silent_under_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A wedge terminalizer returning fewer rows than the cap does NOT
+        count an overflow."""
+        summary, _, _, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_ids={"executor_superseded": [uuid.uuid4()]},
+            settings_overrides={"dispatcher_reconcile_terminalize_max_per_tick": 25},
+        )
+        assert summary["mid_graph_wedge_terminalized"] == 1
+        assert summary["terminalize_capped"] == 0

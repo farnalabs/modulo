@@ -512,6 +512,283 @@ jobs:
             fi
           done
 
+      - name: Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)
+        id: pre-rehearse
+        shell: bash
+        # FAR-717 migration rehearsal: dry-run the ENTIRE migration chain
+        # against the REAL staging database BEFORE the real pre-migrate runs.
+        # This launches the same /release.sh on a one-off machine from the
+        # same image with ALEMBIC_REHEARSAL=1: env.py runs the whole upgrade
+        # chain inside ONE transaction and ALWAYS rolls back, proving the
+        # chain against real data with zero persistence (the alembic_version
+        # bump rolls back with everything). The 2026-09-08 deploy outage
+        # (migration 0191 failed against populated databases while fresh-DB
+        # CI passed vacuously) was only diagnosable by exactly this
+        # technique; this step builds it into every deploy.
+        #
+        # Expected exit code is 0 (a passing rehearsal rolls back and exits
+        # clean). A non-zero exit - a migration that would fail against real
+        # data, or env.py's autocommit escape-hatch refusal - aborts the
+        # deploy BEFORE the real migration runs. The machine's logs are
+        # captured on failure (echoed here + uploaded as an artifact by the
+        # "Upload migration machine logs" step) - the outage post-mortem's
+        # diagnosis-time saver: today only the exit code survives.
+        #
+        # Same launch parameters/env as the real pre-migrate machine below,
+        # plus ALEMBIC_REHEARSAL=1 via --env. Uses its own /tmp/prerehearse-*
+        # state files so it cannot collide with the real run's, and the
+        # destroy step immediately after removes the machine in every
+        # outcome so the real run's discovery below can never match it.
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          bash .github/scripts/install-flyctl.sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+
+          # Snapshot machine IDs BEFORE creating the one-off machine so ID
+          # discovery (and the destroy step's fallback) can single it out.
+          fly machine list --app staging-modulo --json > /tmp/prerehearse-before.json 2>/dev/null || true
+          python3 -c '
+          import json
+          try:
+              with open("/tmp/prerehearse-before.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          with open("/tmp/prerehearse-preexisting.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+
+          # /release.sh is the in-image path of deploy/fly/release.sh. The
+          # rehearsal is the SAME script with ALEMBIC_REHEARSAL=1 injected as
+          # machine env (env.py reads os.environ). A failing rehearsal exits
+          # non-zero and aborts the deploy before the real migration runs
+          # (see the exit-code gate below); every attempt rolls back, so the
+          # real pre-migrate run still gates the deploy on migration success.
+          echo "Launching REHEARSAL migration machine from ${PREMIGRATE_IMAGE_REF} ..."
+          LAUNCH_ATTEMPTS=6
+          LAUNCH_INTERVAL_SEC=10
+          launch_attempt=0
+          RUN_OUTPUT=""
+          AMBIGUOUS_LAUNCH=0
+          LAUNCH_RC=1
+          while [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; do
+            launch_attempt=$(( launch_attempt + 1 ))
+            RUN_OUTPUT="$(fly machine run "${PREMIGRATE_IMAGE_REF}" --app staging-modulo --restart=no \
+              --entrypoint /bin/bash \
+              --vm-size shared-cpu-1x --memory 1024 \
+              --env ALEMBIC_REHEARSAL=1 \
+              --detach \
+              "/release.sh" 2>/tmp/prerehearse-launch-err.txt)"
+            LAUNCH_RC=$?
+            cat /tmp/prerehearse-launch-err.txt >&2 || true
+            if [ "$LAUNCH_RC" -eq 0 ]; then
+              break
+            fi
+            if grep -qi 'failed to reach desired start state' \
+              /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              AMBIGUOUS_LAUNCH=1
+              echo "Launch call errored ambiguously (flyctl wait race, FAR-486): machine may still be starting - deferring to discovery + state poll"
+              break
+            fi
+            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+              /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              break
+            fi
+            if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
+              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              sleep "$LAUNCH_INTERVAL_SEC"
+            fi
+          done
+          if [ "$LAUNCH_RC" -ne 0 ] && [ "${AMBIGUOUS_LAUNCH:-0}" != "1" ]; then
+            echo "::error::REHEARSAL migration machine failed to launch - failing the run so the deploy is aborted (the rehearsal must prove the chain before the real migration)."
+            exit 1
+          fi
+
+          MID="$(printf '%s' "$RUN_OUTPUT" | python3 deploy/fly/extract_machine_id.py)"
+          if [ -z "$MID" ]; then
+            DISCOVERY_ATTEMPTS=12
+            DISCOVERY_INTERVAL_SEC=5
+            discovery_attempt=0
+            while [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; do
+              discovery_attempt=$(( discovery_attempt + 1 ))
+              MID="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+           import json, os, sys
+           image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+           try:
+               machines = json.load(sys.stdin)
+           except Exception:
+               machines = []
+           pre = set()
+           try:
+               with open("/tmp/prerehearse-preexisting.txt") as f:
+                   pre = {line.strip() for line in f if line.strip()}
+           except Exception:
+               pass
+           for m in machines:
+               mid = m.get("id")
+               cfg = m.get("config") or {}
+               mimage = cfg.get("image") or m.get("image") or ""
+               if mid and image and mimage.startswith(image) and mid not in pre:
+                   print(mid)
+                   break
+           ')"
+              if [ -n "$MID" ]; then
+                break
+              fi
+              if [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; then
+                echo "Rehearsal machine not identified yet (attempt ${discovery_attempt}/${DISCOVERY_ATTEMPTS}); retrying in ${DISCOVERY_INTERVAL_SEC}s ..."
+                sleep "$DISCOVERY_INTERVAL_SEC"
+              fi
+            done
+          fi
+          if [ -z "$MID" ]; then
+            if [ "${AMBIGUOUS_LAUNCH:-0}" = "1" ]; then
+              echo "::error::Launch errored ambiguously and no REHEARSAL machine was found by discovery - treating as a genuine launch failure; aborting the deploy."
+            else
+              echo "::error::Could not identify the REHEARSAL migration machine after launch - failing the run so the deploy is aborted (the rehearsal must prove the chain before the real migration)."
+            fi
+            exit 1
+          fi
+          echo "$MID" > /tmp/prerehearse-machine-id.txt
+          export MID
+          echo "Rehearsal machine: ${MID}"
+
+          # Bounded poll until the rehearsal machine stops (release.sh has
+          # exited). Timeout is fatal: the deploy is aborted rather than
+          # migrating onto an unrehearsed chain.
+          TIMEOUT_MIN=40
+          INTERVAL_SEC=20
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            STATE="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          state = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  state = (m.get("state") or "").lower()
+                  break
+          print(state)
+          ' 2>/dev/null || echo "")"
+            if [ "$STATE" = "stopped" ]; then
+              # Verify HOW the machine stopped: a non-zero exit code means the
+              # rehearsal FAILED (a migration would fail against the real
+              # database, or the escape hatch refused) - abort BEFORE the real
+              # migration. The Fly API omits exit_code on a clean exit (code
+              # 0), so a missing exit_code is treated as success, exactly like
+              # the real pre-migrate machine's gate below: the real run still
+              # gates the deploy on migration success.
+              EXIT_CODE="$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          code = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  for ev in (m.get("events") or []):
+                      if (ev.get("type") or "") == "exit":
+                          ee = (ev.get("request") or {}).get("exit_event") or {}
+                          if ee.get("exit_code") is not None:
+                              code = str(ee.get("exit_code"))
+                          break
+                  break
+          print(code)
+          ' 2>/dev/null || echo "")"
+              if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
+                echo "::error::REHEARSAL migration machine ${MID} exited with code ${EXIT_CODE} - the rehearsal FAILED (a migration would fail against the real database); aborting the deploy before the real migration."
+                echo "Capturing rehearsal machine logs for diagnosis (FAR-717) ..."
+                fly logs --app staging-modulo --machine "$MID" --no-tail > /tmp/prerehearse-failure.log 2>&1 || true
+                echo "----- rehearsal machine log (tail) -----"
+                tail -200 /tmp/prerehearse-failure.log || true
+                echo "----- end rehearsal machine log -----"
+                exit 1
+              fi
+              echo "WARNING: no exit code recorded in rehearsal machine ${MID}'s exit event (the Fly API omits exit code 0) - treating the stop as success; the real pre-migrate run below still gates the deploy."
+              echo "Migration rehearsal PASSED (machine ${MID} stopped, chain rolled back, attempt ${attempt}/${ATTEMPTS})."
+              exit 0
+            fi
+            if [ "$STATE" = "destroyed" ]; then
+              echo "::error::Rehearsal machine ${MID} vanished before the rehearsal completed (state: destroyed) - failing the run so the deploy is aborted."
+              exit 1
+            fi
+            echo "rehearsal machine state: ${STATE:-unknown} (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::Migration rehearsal did not complete within ${TIMEOUT_MIN} minutes (machine ${MID} still running) - failing the run so the deploy is aborted; fix the root cause."
+          echo "Capturing rehearsal machine logs for diagnosis (FAR-717) ..."
+          fly logs --app staging-modulo --machine "$MID" --no-tail > /tmp/prerehearse-failure.log 2>&1 || true
+          echo "----- rehearsal machine log (tail) -----"
+          tail -100 /tmp/prerehearse-failure.log || true
+          echo "----- end rehearsal machine log -----"
+          exit 1
+
+      - name: Destroy pre-rehearsal machine
+        if: always()
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+          # Same contract as the "Destroy pre-migrate machine" step below:
+          # remove the one-off machine in EVERY outcome so it cannot
+          # accumulate against the Fly machine limit - or masquerade as the
+          # real pre-migrate machine in that step's discovery fallback.
+          bash .github/scripts/install-flyctl.sh 2>/dev/null || true
+          MID=""
+          if [ -f /tmp/prerehearse-machine-id.txt ]; then
+            MID="$(cat /tmp/prerehearse-machine-id.txt 2>/dev/null || true)"
+          fi
+          if [ -z "$MID" ]; then
+            # Fallback: find a machine running the pre-migrate image that was
+            # not present before the rehearsal step created anything.
+            fly machine list --app staging-modulo --json > /tmp/prerehearse-destroy.json 2>/dev/null || true
+            MID="$(python3 -c '
+          import json, os
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              with open("/tmp/prerehearse-destroy.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/prerehearse-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and mimage == image and mid not in pre:
+                  print(mid)
+                  break
+          ' 2>/dev/null || true)"
+          fi
+          if [ -n "$MID" ]; then
+            fly machine destroy "$MID" --app staging-modulo --force || true
+            echo "Pre-rehearsal machine ${MID} destroyed (or already gone)."
+          else
+            echo "No pre-rehearsal machine found to destroy (it may never have been created)."
+          fi
+          exit 0
+
       - name: Pre-deploy migrations (one-off machine)
         id: pre-migrate
         shell: bash
@@ -677,6 +954,15 @@ jobs:
                    pre = {line.strip() for line in f if line.strip()}
            except Exception:
                pass
+           # FAR-717: never match the rehearsal machine - its destroy step
+           # normally removed it already, but excluding its id keeps a leaked
+           # rehearsal machine (same image, launched before the real one)
+           # from masquerading as the real pre-migrate machine here.
+           try:
+               with open("/tmp/prerehearse-machine-id.txt") as f:
+                   pre |= {line.strip() for line in f if line.strip()}
+           except Exception:
+               pass
            for m in machines:
                mid = m.get("id")
                cfg = m.get("config") or {}
@@ -737,8 +1023,8 @@ jobs:
               # Verify HOW the machine stopped: a non-zero exit code means
               # release.sh failed and migrations did NOT complete - abort
               # before the swap. The Fly API omits exit_code on a clean exit
-              # (code 0) and requested stops record none, so a missing
-              # exit_code is warned about and treated as success (the
+              # (code 0, omitempty) and requested stops record none either, so
+              # a missing exit_code is warned about and treated as success (the
               # release command in `fly deploy` remains the authoritative
               # migration gate). Events are newest-first; the first "exit"
               # event is the latest.
@@ -763,6 +1049,11 @@ jobs:
           ' 2>/dev/null || echo "")"
               if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
                 echo "::error::Pre-deploy migration machine ${MID} exited with code ${EXIT_CODE} - migrations failed; aborting the deploy before the swap."
+                echo "Capturing pre-migrate machine logs for diagnosis (FAR-717) ..."
+                fly logs --app staging-modulo --machine "$MID" --no-tail > /tmp/premigrate-failure.log 2>&1 || true
+                echo "----- pre-migrate machine log (tail) -----"
+                tail -200 /tmp/premigrate-failure.log || true
+                echo "----- end pre-migrate machine log -----"
                 exit 1
               fi
               echo "WARNING: no exit code recorded in machine ${MID}'s exit event (the Fly API omits exit code 0 and requested stops record none) - treating the stop as success; the release command in 'fly deploy' remains the authoritative migration gate."
@@ -777,6 +1068,11 @@ jobs:
             sleep "$INTERVAL_SEC"
           done
           echo "::error::Pre-deploy migrations did not complete within ${TIMEOUT_MIN} minutes (machine ${MID} still running) - failing the run so the deploy is aborted; fix the root cause."
+          echo "Capturing pre-migrate machine logs for diagnosis (FAR-717) ..."
+          fly logs --app staging-modulo --machine "$MID" --no-tail > /tmp/premigrate-failure.log 2>&1 || true
+          echo "----- pre-migrate machine log (tail) -----"
+          tail -100 /tmp/premigrate-failure.log || true
+          echo "----- end pre-migrate machine log -----"
           exit 1
 
       - name: Deploy to staging-modulo
@@ -868,6 +1164,23 @@ jobs:
             echo "No pre-migrate machine found to destroy (it may never have been created)."
           fi
           exit 0
+
+      - name: Upload migration machine logs (staging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        # FAR-717: today only the exit code of the one-off migration machines
+        # survives a failure, which is exactly why the 2026-09-08 outage took
+        # so long to diagnose. Upload the captured machine logs (rehearsal
+        # and/or real pre-migrate) as an artifact with a short retention. The
+        # failing steps echo a tail into the workflow log; this preserves the
+        # full capture.
+        with:
+          name: pre-migrate-machine-logs-staging
+          path: |
+            /tmp/prerehearse-failure.log
+            /tmp/premigrate-failure.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Verify deployment
         uses: ./.github/actions/verify-deployment
@@ -1316,6 +1629,283 @@ jobs:
             fi
           done
 
+      - name: Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)
+        id: pre-rehearse
+        shell: bash
+        # FAR-717 migration rehearsal: dry-run the ENTIRE migration chain
+        # against the REAL production database BEFORE the real pre-migrate
+        # runs. This launches the same /release.sh on a one-off machine from
+        # the same image with ALEMBIC_REHEARSAL=1: env.py runs the whole
+        # upgrade chain inside ONE transaction and ALWAYS rolls back,
+        # proving the chain against real data with zero persistence (the
+        # alembic_version bump rolls back with everything). The 2026-09-08
+        # deploy outage (migration 0191 failed against populated databases
+        # while fresh-DB CI passed vacuously) was only diagnosable by exactly
+        # this technique; this step builds it into every deploy.
+        #
+        # Expected exit code is 0 (a passing rehearsal rolls back and exits
+        # clean). A non-zero exit - a migration that would fail against real
+        # data, or env.py's autocommit escape-hatch refusal - aborts the
+        # deploy BEFORE the real migration runs. The machine's logs are
+        # captured on failure (echoed here + uploaded as an artifact by the
+        # "Upload migration machine logs" step) - the outage post-mortem's
+        # diagnosis-time saver: today only the exit code survives.
+        #
+        # Same launch parameters/env as the real pre-migrate machine below,
+        # plus ALEMBIC_REHEARSAL=1 via --env. Uses its own /tmp/prerehearse-*
+        # state files so it cannot collide with the real run's, and the
+        # destroy step immediately after removes the machine in every
+        # outcome so the real run's discovery below can never match it.
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          bash .github/scripts/install-flyctl.sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+
+          # Snapshot machine IDs BEFORE creating the one-off machine so ID
+          # discovery (and the destroy step's fallback) can single it out.
+          fly machine list --app app-modulo --json > /tmp/prerehearse-before.json 2>/dev/null || true
+          python3 -c '
+          import json
+          try:
+              with open("/tmp/prerehearse-before.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          with open("/tmp/prerehearse-preexisting.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+
+          # /release.sh is the in-image path of deploy/fly/release.sh. The
+          # rehearsal is the SAME script with ALEMBIC_REHEARSAL=1 injected as
+          # machine env (env.py reads os.environ). A failing rehearsal is
+          # retried by release.sh's 3-attempt loop exactly like a failing
+          # real migration (every attempt rolls back, so retries are safe)
+          # before the non-zero exit reaches the gate below.
+          echo "Launching REHEARSAL migration machine from ${PREMIGRATE_IMAGE_REF} ..."
+          LAUNCH_ATTEMPTS=6
+          LAUNCH_INTERVAL_SEC=10
+          launch_attempt=0
+          RUN_OUTPUT=""
+          AMBIGUOUS_LAUNCH=0
+          LAUNCH_RC=1
+          while [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; do
+            launch_attempt=$(( launch_attempt + 1 ))
+            RUN_OUTPUT="$(fly machine run "${PREMIGRATE_IMAGE_REF}" --app app-modulo --restart=no \
+              --entrypoint /bin/bash \
+              --vm-size shared-cpu-1x --memory 1024 \
+              --env ALEMBIC_REHEARSAL=1 \
+              --detach \
+              "/release.sh" 2>/tmp/prerehearse-launch-err.txt)"
+            LAUNCH_RC=$?
+            cat /tmp/prerehearse-launch-err.txt >&2 || true
+            if [ "$LAUNCH_RC" -eq 0 ]; then
+              break
+            fi
+            if grep -qi 'failed to reach desired start state' \
+              /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              AMBIGUOUS_LAUNCH=1
+              echo "Launch call errored ambiguously (flyctl wait race, FAR-486): machine may still be starting - deferring to discovery + state poll"
+              break
+            fi
+            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+              /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              break
+            fi
+            if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
+              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              sleep "$LAUNCH_INTERVAL_SEC"
+            fi
+          done
+          if [ "$LAUNCH_RC" -ne 0 ] && [ "${AMBIGUOUS_LAUNCH:-0}" != "1" ]; then
+            echo "::error::REHEARSAL migration machine failed to launch - failing the run so the deploy is aborted (the rehearsal must prove the chain before the real migration)."
+            exit 1
+          fi
+
+          MID="$(printf '%s' "$RUN_OUTPUT" | python3 deploy/fly/extract_machine_id.py)"
+          if [ -z "$MID" ]; then
+            DISCOVERY_ATTEMPTS=12
+            DISCOVERY_INTERVAL_SEC=5
+            discovery_attempt=0
+            while [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; do
+              discovery_attempt=$(( discovery_attempt + 1 ))
+              MID="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+           import json, os, sys
+           image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+           try:
+               machines = json.load(sys.stdin)
+           except Exception:
+               machines = []
+           pre = set()
+           try:
+               with open("/tmp/prerehearse-preexisting.txt") as f:
+                   pre = {line.strip() for line in f if line.strip()}
+           except Exception:
+               pass
+           for m in machines:
+               mid = m.get("id")
+               cfg = m.get("config") or {}
+               mimage = cfg.get("image") or m.get("image") or ""
+               if mid and image and mimage.startswith(image) and mid not in pre:
+                   print(mid)
+                   break
+           ')"
+              if [ -n "$MID" ]; then
+                break
+              fi
+              if [ "$discovery_attempt" -lt "$DISCOVERY_ATTEMPTS" ]; then
+                echo "Rehearsal machine not identified yet (attempt ${discovery_attempt}/${DISCOVERY_ATTEMPTS}); retrying in ${DISCOVERY_INTERVAL_SEC}s ..."
+                sleep "$DISCOVERY_INTERVAL_SEC"
+              fi
+            done
+          fi
+          if [ -z "$MID" ]; then
+            if [ "${AMBIGUOUS_LAUNCH:-0}" = "1" ]; then
+              echo "::error::Launch errored ambiguously and no REHEARSAL machine was found by discovery - treating as a genuine launch failure; aborting the deploy."
+            else
+              echo "::error::Could not identify the REHEARSAL migration machine after launch - failing the run so the deploy is aborted (the rehearsal must prove the chain before the real migration)."
+            fi
+            exit 1
+          fi
+          echo "$MID" > /tmp/prerehearse-machine-id.txt
+          export MID
+          echo "Rehearsal machine: ${MID}"
+
+          # Bounded poll until the rehearsal machine stops (release.sh has
+          # exited). Timeout is fatal: the deploy is aborted rather than
+          # migrating onto an unrehearsed chain.
+          TIMEOUT_MIN=40
+          INTERVAL_SEC=20
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            STATE="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          state = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  state = (m.get("state") or "").lower()
+                  break
+          print(state)
+          ' 2>/dev/null || echo "")"
+            if [ "$STATE" = "stopped" ]; then
+              # Verify HOW the machine stopped: a non-zero exit code means the
+              # rehearsal FAILED (a migration would fail against the real
+              # database, or the escape hatch refused) - abort BEFORE the real
+              # migration. The Fly API omits exit_code on a clean exit (code
+              # 0), so a missing exit_code is treated as success, exactly like
+              # the real pre-migrate machine's gate below: the real run still
+              # gates the deploy on migration success.
+              EXIT_CODE="$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c '
+          import json, os, sys
+          mid = os.environ.get("MID", "")
+          try:
+              machines = json.load(sys.stdin)
+          except Exception:
+              machines = []
+          code = ""
+          for m in machines:
+              if m.get("id") == mid:
+                  for ev in (m.get("events") or []):
+                      if (ev.get("type") or "") == "exit":
+                          ee = (ev.get("request") or {}).get("exit_event") or {}
+                          if ee.get("exit_code") is not None:
+                              code = str(ee.get("exit_code"))
+                          break
+                  break
+          print(code)
+          ' 2>/dev/null || echo "")"
+              if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
+                echo "::error::REHEARSAL migration machine ${MID} exited with code ${EXIT_CODE} - the rehearsal FAILED (a migration would fail against the real database); aborting the deploy before the real migration."
+                echo "Capturing rehearsal machine logs for diagnosis (FAR-717) ..."
+                fly logs --app app-modulo --machine "$MID" --no-tail > /tmp/prerehearse-failure.log 2>&1 || true
+                echo "----- rehearsal machine log (tail) -----"
+                tail -200 /tmp/prerehearse-failure.log || true
+                echo "----- end rehearsal machine log -----"
+                exit 1
+              fi
+              echo "WARNING: no exit code recorded in rehearsal machine ${MID}'s exit event (the Fly API omits exit code 0) - treating the stop as success; the real pre-migrate run below still gates the deploy."
+              echo "Migration rehearsal PASSED (machine ${MID} stopped, chain rolled back, attempt ${attempt}/${ATTEMPTS})."
+              exit 0
+            fi
+            if [ "$STATE" = "destroyed" ]; then
+              echo "::error::Rehearsal machine ${MID} vanished before the rehearsal completed (state: destroyed) - failing the run so the deploy is aborted."
+              exit 1
+            fi
+            echo "rehearsal machine state: ${STATE:-unknown} (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::Migration rehearsal did not complete within ${TIMEOUT_MIN} minutes (machine ${MID} still running) - failing the run so the deploy is aborted; fix the root cause."
+          echo "Capturing rehearsal machine logs for diagnosis (FAR-717) ..."
+          fly logs --app app-modulo --machine "$MID" --no-tail > /tmp/prerehearse-failure.log 2>&1 || true
+          echo "----- rehearsal machine log (tail) -----"
+          tail -100 /tmp/prerehearse-failure.log || true
+          echo "----- end rehearsal machine log -----"
+          exit 1
+
+      - name: Destroy pre-rehearsal machine
+        if: always()
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIGRATE_IMAGE_REF: ${{ steps.build.outputs.IMAGE_REF }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          set +e
+          # Same contract as the "Destroy pre-migrate machine" step below:
+          # remove the one-off machine in EVERY outcome so it cannot
+          # accumulate against the Fly machine limit - or masquerade as the
+          # real pre-migrate machine in that step's discovery fallback.
+          bash .github/scripts/install-flyctl.sh 2>/dev/null || true
+          MID=""
+          if [ -f /tmp/prerehearse-machine-id.txt ]; then
+            MID="$(cat /tmp/prerehearse-machine-id.txt 2>/dev/null || true)"
+          fi
+          if [ -z "$MID" ]; then
+            # Fallback: find a machine running the pre-migrate image that was
+            # not present before the rehearsal step created anything.
+            fly machine list --app app-modulo --json > /tmp/prerehearse-destroy.json 2>/dev/null || true
+            MID="$(python3 -c '
+          import json, os
+          image = os.environ.get("PREMIGRATE_IMAGE_REF", "")
+          try:
+              with open("/tmp/prerehearse-destroy.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          pre = set()
+          try:
+              with open("/tmp/prerehearse-preexisting.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pass
+          for m in machines:
+              mid = m.get("id")
+              cfg = m.get("config") or {}
+              mimage = cfg.get("image") or m.get("image") or ""
+              if mid and mimage == image and mid not in pre:
+                  print(mid)
+                  break
+          ' 2>/dev/null || true)"
+          fi
+          if [ -n "$MID" ]; then
+            fly machine destroy "$MID" --app app-modulo --force || true
+            echo "Pre-rehearsal machine ${MID} destroyed (or already gone)."
+          else
+            echo "No pre-rehearsal machine found to destroy (it may never have been created)."
+          fi
+          exit 0
+
       - name: Pre-deploy migrations (one-off machine)
         id: pre-migrate
         shell: bash
@@ -1483,6 +2073,15 @@ jobs:
                    pre = {line.strip() for line in f if line.strip()}
            except Exception:
                pass
+           # FAR-717: never match the rehearsal machine - its destroy step
+           # normally removed it already, but excluding its id keeps a leaked
+           # rehearsal machine (same image, launched before the real one)
+           # from masquerading as the real pre-migrate machine here.
+           try:
+               with open("/tmp/prerehearse-machine-id.txt") as f:
+                   pre |= {line.strip() for line in f if line.strip()}
+           except Exception:
+               pass
            for m in machines:
                mid = m.get("id")
                cfg = m.get("config") or {}
@@ -1543,8 +2142,8 @@ jobs:
               # Verify HOW the machine stopped: a non-zero exit code means
               # release.sh failed and migrations did NOT complete - abort
               # before the swap. The Fly API omits exit_code on a clean exit
-              # (code 0) and requested stops record none, so a missing
-              # exit_code is warned about and treated as success (the
+              # (code 0, omitempty) and requested stops record none either, so
+              # a missing exit_code is warned about and treated as success (the
               # release command in `fly deploy` remains the authoritative
               # migration gate). Events are newest-first; the first "exit"
               # event is the latest.
@@ -1569,6 +2168,11 @@ jobs:
           ' 2>/dev/null || echo "")"
               if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
                 echo "::error::Pre-deploy migration machine ${MID} exited with code ${EXIT_CODE} - migrations failed; aborting the deploy before the swap."
+                echo "Capturing pre-migrate machine logs for diagnosis (FAR-717) ..."
+                fly logs --app app-modulo --machine "$MID" --no-tail > /tmp/premigrate-failure.log 2>&1 || true
+                echo "----- pre-migrate machine log (tail) -----"
+                tail -200 /tmp/premigrate-failure.log || true
+                echo "----- end pre-migrate machine log -----"
                 exit 1
               fi
               echo "WARNING: no exit code recorded in machine ${MID}'s exit event (the Fly API omits exit code 0 and requested stops record none) - treating the stop as success; the release command in 'fly deploy' remains the authoritative migration gate."
@@ -1583,6 +2187,11 @@ jobs:
             sleep "$INTERVAL_SEC"
           done
           echo "::error::Pre-deploy migrations did not complete within ${TIMEOUT_MIN} minutes (machine ${MID} still running) - failing the run so the deploy is aborted; fix the root cause."
+          echo "Capturing pre-migrate machine logs for diagnosis (FAR-717) ..."
+          fly logs --app app-modulo --machine "$MID" --no-tail > /tmp/premigrate-failure.log 2>&1 || true
+          echo "----- pre-migrate machine log (tail) -----"
+          tail -100 /tmp/premigrate-failure.log || true
+          echo "----- end pre-migrate machine log -----"
           exit 1
 
       - name: Deploy to app-modulo
@@ -1675,6 +2284,23 @@ jobs:
             echo "No pre-migrate machine found to destroy (it may never have been created)."
           fi
           exit 0
+
+      - name: Upload migration machine logs (prod)
+        if: always()
+        uses: actions/upload-artifact@v4
+        # FAR-717: today only the exit code of the one-off migration machines
+        # survives a failure, which is exactly why the 2026-09-08 outage took
+        # so long to diagnose. Upload the captured machine logs (rehearsal
+        # and/or real pre-migrate) as an artifact with a short retention. The
+        # failing steps echo a tail into the workflow log; this preserves the
+        # full capture.
+        with:
+          name: pre-migrate-machine-logs-prod
+          path: |
+            /tmp/prerehearse-failure.log
+            /tmp/premigrate-failure.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Post-deploy verify + auto-rollback (never leave prod down)
         id: verify

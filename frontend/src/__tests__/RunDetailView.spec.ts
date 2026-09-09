@@ -1131,6 +1131,65 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('renders the linked PR badge for a derived bare "pr" work item kind (FAR-726)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            ...baseDetail(),
+            work_item_refs: [{ kind: 'pr', ref: '206', source: 'derived' }],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: null,
+            input_payload: {
+              repository: { full_name: 'acme/widget' },
+              pull_request: { number: 206 },
+            },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    const prLinks = section.findAll('[data-testid^="run-detail-pr-link-"]')
+    expect(prLinks.length).toBe(1)
+    expect(prLinks[0].attributes('data-testid')).toBe('run-detail-pr-link-0')
+    expect(prLinks[0].attributes('href')).toBe('https://github.com/acme/widget/pull/206')
+    expect(prLinks[0].text()).toBe('PR #206')
+    expect(section.find('code').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders a single unlinked badge for a bare "pr" kind without payload context (FAR-726)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      work_item_refs: [{ kind: 'pr', ref: '206', source: 'derived' }],
+    })
+
+    const section = wrapper.find('[data-testid="run-detail-work-items"]')
+    expect(section.exists()).toBe(true)
+    expect(section.find('[data-testid="run-detail-pr-link-0"]').exists()).toBe(false)
+    expect(section.findAll('.badge').length).toBe(1)
+    expect(section.find('.badge').text()).toBe('PR #206')
+    expect(section.find('code').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('copies the run input payload with the copy button', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
@@ -1405,10 +1464,24 @@ describe('RunDetailView', () => {
 
     const el = wrapper.find('[data-testid="run-detail-heartbeat"]')
     // The label/value whitespace must be an explicit, same-line space: newline
-    // separation is stripped by Vue's whitespace condensing (FAR-624).
+    // separation is stripped by Vue's whitespace condensing (FAR-624). The
+    // regex form fails on the glue regression ("Last heartbeat2h 10m ago").
+    expect(el.text()).toMatch(/Last heartbeat\s/)
     expect(el.text()).toContain('Last heartbeat')
     expect(el.text()).toContain('Last heartbeat 2h 10m ago')
     expect(el.text()).toContain('(stale)')
+    wrapper.unmount()
+  })
+
+  it('keeps the label gap when the heartbeat value is the terminal placeholder (FAR-726)', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      status: 'complete',
+      heartbeat_at: new Date(Date.now() - 30_000).toISOString(), // nosemgrep: new-date-without-guard
+    })
+
+    const el = wrapper.find('[data-testid="run-detail-heartbeat"]')
+    expect(el.text()).toMatch(/Last heartbeat\s+—/)
     wrapper.unmount()
   })
 

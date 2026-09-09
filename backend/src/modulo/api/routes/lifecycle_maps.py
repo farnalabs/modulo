@@ -1209,18 +1209,36 @@ def _team_scope_filter(lifecycle_map: Any) -> uuid.UUID | None:
     return None
 
 
+_JOURNEY_STATUS_FILTER_VALUES = ("complete", "failed")
+
+
 @router.get("/{lifecycle_map_id}/journeys")
 @handle_db_errors(_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS)
 async def list_journeys_endpoint(
     lifecycle_map_id: uuid.UUID,
     kind: str | None = Query(default=None),
     ref: str | None = Query(default=None),
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+        description="Filter on the journey's latest status.",
+        pattern="^(complete|failed)$",
+    ),
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Only journeys whose updated_at (last move) is at or after this ISO-8601 instant.",
+    ),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("run.list"),
 ) -> JourneyListResponse:
-    """Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref."""
+    """Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref, status, and last-move time."""
+    if status_filter is not None and status_filter not in _JOURNEY_STATUS_FILTER_VALUES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid status filter; expected one of: complete, failed.",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1235,6 +1253,8 @@ async def list_journeys_endpoint(
                 kind=kind,
                 ref=ref,
                 owner_team_id=owner_team_id,
+                status=status_filter,
+                updated_since=updated_since,
                 cursor=cursor,
                 limit=limit,
             )

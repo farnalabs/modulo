@@ -114,11 +114,11 @@ async def test_probe_index_exists_and_refusal_index_dropped(db_engine: AsyncEngi
                 for row in sync_connection.execute(text("SELECT indexname FROM pg_indexes WHERE tablename = 'runs'"))
             }
         )
-    # ix_runs_probe (organisation_id, started_at) — migration 0066, retained.
+    # ix_runs_probe (organisation_id, started_at) is still required by the
+    # cost-controller probe gate.
     assert "ix_runs_probe" in indexes
-    # ix_runs_refusal (organisation_id, created_at) was INTENTIONALLY dropped by
-    # migration 0197_runs_index_and_constraint_fixes: it is a strict prefix of
+    # ix_runs_refusal was intentionally DROPPED by migration
+    # 0197_runs_index_and_constraint_fixes: it is a strict prefix of
     # ix_runs_org_created_pipeline (organisation_id, created_at) INCLUDE
-    # (pipeline_id), so the same leading-key lookups are already covered (and the
-    # redundant index would only tax the hottest write path).
+    # (pipeline_id), so keeping it only doubled write amplification on runs.
     assert "ix_runs_refusal" not in indexes
