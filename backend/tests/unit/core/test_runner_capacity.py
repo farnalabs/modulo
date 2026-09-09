@@ -1342,7 +1342,8 @@ async def test_acquire_sweep_lock_connect_failure_fails_open(
 
     caplog.set_level(logging.WARNING, logger="modulo.core.runner_capacity")
     acquired, lock_conn = await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
-    assert acquired is False and lock_conn is None
+    assert acquired is False
+    assert lock_conn is None
     assert any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records)
 
 
@@ -1370,7 +1371,8 @@ async def test_acquire_sweep_lock_execute_failure_fails_open_and_closes(
 
     caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
     acquired, lock_conn = await rc._acquire_sweep_dedup_lock(_Factory(), 1, 2)
-    assert acquired is False and lock_conn is None
+    assert acquired is False
+    assert lock_conn is None
     assert any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records)
     # The acquire-side cleanup must still log the close failure rather than raise.
     assert any("runner.capacity.marker_sweep_lock_conn_close_failed" in r.message for r in caplog.records)
