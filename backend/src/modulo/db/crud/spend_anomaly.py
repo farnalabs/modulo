@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,7 +56,10 @@ async def record_or_get_anomaly(
             percent_above=percent_above,
             dismissed=False,
         )
-        .on_conflict_do_nothing(index_elements=["organisation_id", "anomaly_date"])
+        .on_conflict_do_nothing(
+            index_elements=["organisation_id", "anomaly_date"],
+            index_where=text("pipeline_id IS NULL"),
+        )
     )
     await session.execute(insert_stmt)
     anomaly = (
