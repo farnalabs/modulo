@@ -306,10 +306,12 @@ class TestMigrationBackfillGrace:
         assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
-        # 0195_hitl_claim_gate_config_json (FAR-634, from main) chains off
-        # 0202 and this PR's 0203_runner_probe_cache chains off 0195, so the
-        # single linear head of the chain is 0203_runner_probe_cache.
-        assert heads == ["0203_runner_probe_cache"], f"expected a single head, got {heads}"
+        # 0195_hitl_claim_gate_config_json chains off 0202 (FAR-634, from
+        # main); FAR-681 slice 2 added 0203_triggers_add_name on top of 0195,
+        # and this PR's 0204_runner_probe_cache chains off 0203_triggers_add_name
+        # (renumbered from its original 0203 prefix to avoid colliding with
+        # main's 0203), so it is the single linear head of the chain.
+        assert heads == ["0204_runner_probe_cache"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

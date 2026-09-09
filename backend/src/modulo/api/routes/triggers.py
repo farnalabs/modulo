@@ -24,7 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.api.dependencies import (
+    deny_break_glass_mint,
+    deny_break_glass_mint_any_credential,
+    get_db_session,
+    require_permission,
+    require_permission_any_credential,
+)
 from modulo.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
     mask_config_json,
@@ -154,6 +160,9 @@ def _trigger_to_dict(trigger: Trigger, *, in_flight: int, streak_status: dict[st
     return {
         "id": str(trigger.id),
         "pipeline_id": str(trigger.pipeline_id),
+        # FAR-681 slice 2: declarative-apply identity handle (nullable for
+        # pre-0200 rows; NULL rows are invisible to name-based apply).
+        "name": trigger.name,
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
@@ -355,7 +364,9 @@ async def list_triggers(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_LIST),
+    # any_credential: declarative apply (FAR-681) lists triggers with mk_ org
+    # API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_TRIGGER_LIST),
 ) -> dict[str, Any]:
     """List all triggers, optionally filtered by pipeline or type."""
     items: list[dict[str, Any]] = []
@@ -871,6 +882,10 @@ async def test_polling_condition(
 
 class TriggerCreate(BaseModel):
     trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling|agent_signal|ongoing|slack_app_mention)$")
+    # FAR-681 slice 2: declarative-apply identity within (pipeline, name).
+    # Optional so every existing creator (UI/MCP) stays source-compatible;
+    # name-based apply requires it.
+    name: str | None = Field(None, min_length=1, max_length=255)
     active: bool = True
     max_concurrent_runs: int = Field(default=1, ge=1)
     daily_spend_limit: Decimal | None = Field(None, ge=0, description="Daily spend ceiling in USD; None = unlimited")
@@ -882,14 +897,18 @@ class TriggerCreate(BaseModel):
 @router.post(
     "/pipelines/{pipeline_id}/triggers",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    # any_credential deny: declarative apply (FAR-681) creates triggers with
+    # mk_ org API keys; break-glass accounts can never mint (config secrets).
+    dependencies=[Depends(deny_break_glass_mint_any_credential)],
 )
 @handle_db_errors("triggers.create_trigger")
 async def create_trigger(
     pipeline_id: uuid.UUID,
     req: TriggerCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("trigger.create"),
+    # any_credential: declarative apply (FAR-681) creates triggers with mk_
+    # org API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential("trigger.create"),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Create a new trigger for a pipeline."""
@@ -897,6 +916,26 @@ async def create_trigger(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-681: (pipeline, name) is the declarative-apply identity, so a
+            # live duplicate name is a 409 CONFLICT (the 0201 partial unique
+            # index enforces the same rule at the DB level; this check gives a
+            # clear error before the insert instead of a raw IntegrityError).
+            if req.name is not None:
+                duplicate = await session.execute(
+                    select(Trigger.id).where(
+                        Trigger.pipeline_id == pipeline_id,
+                        Trigger.name == req.name,
+                        Trigger.deleted_at.is_(None),
+                    )
+                )
+                if duplicate.first() is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            f"duplicate trigger name {req.name!r} for this pipeline - a live trigger "
+                            "with this (pipeline, name) identity already exists"
+                        ),
+                    )
             next_fire_at = _resolve_cron_next_fire(req.trigger_type, req.cron_expression, req.cron_timezone)
             if req.trigger_type == "ongoing":
                 # FAR-158 ongoing guard: validated BEFORE creating (the shared
@@ -917,6 +956,7 @@ async def create_trigger(
             trigger = Trigger(
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
+                name=req.name,
                 trigger_type=req.trigger_type,
                 active=req.active,
                 max_concurrent_runs=req.max_concurrent_runs,
@@ -1021,13 +1061,21 @@ async def _apply_trigger_update(
     return ongoing_scan_interval_changed, prev_active
 
 
-@router.put("/triggers/{trigger_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(deny_break_glass_mint)])
+@router.put(
+    "/triggers/{trigger_id}",
+    status_code=status.HTTP_200_OK,
+    # any_credential deny: declarative apply (FAR-681) updates triggers with
+    # mk_ org API keys; break-glass accounts can never modify config secrets.
+    dependencies=[Depends(deny_break_glass_mint_any_credential)],
+)
 @handle_db_errors("triggers.update_trigger")
 async def update_trigger(
     trigger_id: uuid.UUID,
     req: TriggerUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # any_credential: declarative apply (FAR-681) updates triggers with mk_
+    # org API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_TRIGGER_UPDATE),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""

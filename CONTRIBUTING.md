@@ -224,7 +224,7 @@ CLI tools are registered as console scripts in `pyproject.toml`:
 
 | Command | Entry point | Purpose |
 |---|---|---|
-| `modulo` | `modulo.cli.backup:cli` | Backup and restore database |
+| `modulo` | `modulo.cli.main:cli` | Native launcher (start/stop/status/env) + backup/restore/apply |
 | `modulo-migrate` | `modulo.cli.migrate:cli` | Export/import/verify org data |
 | `modulo-break-glass` | `modulo.cli.break_glass:cli` | Emergency break-glass operations |
 
