@@ -20,6 +20,7 @@ from modulo.db.bundled_runner_template import (
     TEMPLATE_PROFILE_NAME,
     build_bundled_runner_profile_values,
     is_placeholder_bundled_runner_image_ref,
+    template_drift_fields,
 )
 
 __all__ = [
@@ -42,27 +43,15 @@ def template_drift_status(profile_row: Any) -> dict[str, Any]:
     Only the template-owned fields are compared. No state to clear, no
     silent auto-refresh: the Runners page (D5) surfaces per-row "shipped
     template updated - apply" when ``drifted`` is True.
+
+    Delegates to the DB-layer pure function (``template_drift_fields``) so
+    the drift logic has ONE implementation shared with the crud apply
+    helper — the core module owns the LIVE profile-row access.
     """
-    provider_type = getattr(profile_row, "provider_type", None)
-    if provider_type != BUNDLED_RUNNER_PROVIDER_TYPE:
-        # Only template-shaped runner_docker rows participate in drift.
-        return {"is_seeded": False, "drifted": False, "drifted_fields": []}
-    drifted_fields: list[str] = []
-    if (getattr(profile_row, "image_ref", None) or "") != BUNDLED_RUNNER_IMAGE_REF:
-        drifted_fields.append("image_ref")
-    network_policy = getattr(profile_row, "network_policy", None)
-    if network_policy != TEMPLATE_OWNED_FIELDS["network_policy"]:
-        drifted_fields.append("network_policy")
-    persistence = getattr(profile_row, "persistence_policy", None)
-    if persistence != "ephemeral":
-        drifted_fields.append("persistence_policy")
-    cfg = getattr(profile_row, "config_json", None) or {}
-    shipped = TEMPLATE_OWNED_FIELDS["config_json"]
-    for key, value in shipped.items():
-        if cfg.get(key) != value:
-            drifted_fields.append(f"config_json.{key}")
-    return {
-        "is_seeded": True,
-        "drifted": bool(drifted_fields),
-        "drifted_fields": drifted_fields,
-    }
+    return template_drift_fields(
+        provider_type=getattr(profile_row, "provider_type", None),
+        image_ref=getattr(profile_row, "image_ref", None),
+        network_policy=getattr(profile_row, "network_policy", None),
+        persistence_policy=getattr(profile_row, "persistence_policy", None),
+        config_json=getattr(profile_row, "config_json", None),
+    )
