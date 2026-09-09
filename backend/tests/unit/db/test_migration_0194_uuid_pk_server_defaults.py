@@ -20,7 +20,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0194_uuid_pk_server_defaults"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
-_EXPECTED_COUNT = 82
+_EXPECTED_COUNT = 83
 
 
 def _load_migration() -> ModuleType:
