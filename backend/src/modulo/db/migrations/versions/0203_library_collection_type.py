@@ -1,7 +1,7 @@
 """Add library_collection primitive type and collection authoring fields (FAR-760).
 
 Revision ID: 0203_library_collection_type
-Revises: 0202_runs_error_code_claimed_by_indexes
+Revises: 0195_hitl_claim_gate_config_json
 Create Date: 2026-09-09
 """
 
@@ -9,7 +9,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0203_library_collection_type"
-down_revision = "0202_runs_error_code_claimed_by_indexes"
+down_revision = "0195_hitl_claim_gate_config_json"
 branch_labels = None
 depends_on = None
 
