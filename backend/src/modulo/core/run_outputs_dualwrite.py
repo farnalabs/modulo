@@ -729,6 +729,60 @@ _DEGRADED_FALLBACK_MIN_INTERVAL_SECONDS = 10.0
 _DEGRADED_LAST_FALLBACK_EMISSION = float("-inf")
 
 
+async def _emit_dual_write_degraded_event(run_id: uuid.UUID | str, org_id: uuid.UUID | None, message: str) -> None:
+    """Emit one ``dual_write_degraded`` warning event, when the org is resolvable.
+
+    The org-less degraded path has no org to attribute the event to, so it
+    stays silent (the log + counter still carry the signal).
+    """
+    org_uuid = uuid.UUID(str(org_id)) if org_id else None
+    if org_uuid is not None:
+        await _emit_error_event(
+            org_uuid,
+            level="warning",
+            message=message,
+            context_json={"run_id": str(run_id)},
+        )
+
+
+async def _note_dual_write_edge_fired(
+    run_id: uuid.UUID | str, org_id: uuid.UUID | None, org_key: str, now: float
+) -> None:
+    """First occurrence in the flag-off window (edge fired): latch + emit + count."""
+    _DEGRADED_NOTED_WINDOW[org_key] = now
+    await _emit_dual_write_degraded_event(
+        run_id,
+        org_id,
+        "run_node_outputs dual-write disabled (kill-switch off) — legacy-only writes; sweep will heal",
+    )
+    await bump_dual_write_counter("outputs_dual_write_degraded")
+
+
+async def _note_dual_write_redis_down(run_id: uuid.UUID | str, org_id: uuid.UUID | None, now: float) -> None:
+    """Redis down (edge is None): the token-bucket fallback emission.
+
+    At most one event per *_DEGRADED_FALLBACK_MIN_INTERVAL_SECONDS* per
+    process (a Redis outage must not silence the channel, nor open a failed
+    client per write). The counter needs Redis; skip it (as before). The
+    window is NOT latched: the next write retries the edge gate so a
+    recovered Redis re-arms the real edge immediately.
+    """
+    global _DEGRADED_LAST_FALLBACK_EMISSION
+    _log.warning(
+        "run_outputs.dual_write_disabled run=%s org=%s edge_fired=None (redis down, token-bucketed)",
+        run_id,
+        org_id,
+    )
+    if now - _DEGRADED_LAST_FALLBACK_EMISSION >= _DEGRADED_FALLBACK_MIN_INTERVAL_SECONDS:
+        _DEGRADED_LAST_FALLBACK_EMISSION = now
+        await _emit_dual_write_degraded_event(
+            run_id,
+            org_id,
+            "run_node_outputs dual-write disabled (kill-switch off, redis unavailable) "
+            "— legacy-only writes; sweep will heal",
+        )
+
+
 async def note_dual_write_disabled(run_id: uuid.UUID | str, org_id: uuid.UUID | None) -> None:
     """Edge-triggered degraded signal for kill-switch-OFF legacy-only writes.
 
@@ -744,7 +798,6 @@ async def note_dual_write_disabled(run_id: uuid.UUID | str, org_id: uuid.UUID | 
     the outage still surfaces, the per-write storm does not). Best-effort and
     never raises.
     """
-    global _DEGRADED_LAST_FALLBACK_EMISSION
     try:
         org_key = str(org_id) if org_id is not None else ""
         now = time.monotonic()
@@ -758,48 +811,14 @@ async def note_dual_write_disabled(run_id: uuid.UUID | str, org_id: uuid.UUID | 
         edge = await _redis_set_nx(edge_key, _DUAL_WRITE_DEGRADED_EDGE_TTL_SECONDS)
         if edge is True:
             # First occurrence in the window: emit the degraded event.
-            _DEGRADED_NOTED_WINDOW[org_key] = now
-            org_uuid = uuid.UUID(str(org_id)) if org_id else None
-            if org_uuid is not None:
-                message = "run_node_outputs dual-write disabled (kill-switch off) — legacy-only writes; sweep will heal"
-                await _emit_error_event(
-                    org_uuid,
-                    level="warning",
-                    message=message,
-                    context_json={"run_id": str(run_id)},
-                )
-            await bump_dual_write_counter("outputs_dual_write_degraded")
+            await _note_dual_write_edge_fired(run_id, org_id, org_key, now)
         elif edge is False:
             # Seen recently (another write in this window noted it): count it,
             # latch the window locally, no event, no further clients.
             _DEGRADED_NOTED_WINDOW[org_key] = now
             await bump_dual_write_counter("outputs_dual_write_degraded")
         else:
-            # Redis down (edge is None): the token-bucket fallback — at most
-            # one event per interval per process (a Redis outage must not
-            # silence the channel, nor open a failed client per write). The
-            # counter needs Redis; skip it (as before). The window is NOT
-            # latched: the next write retries the edge gate so a recovered
-            # Redis re-arms the real edge immediately.
-            _log.warning(
-                "run_outputs.dual_write_disabled run=%s org=%s edge_fired=None (redis down, token-bucketed)",
-                run_id,
-                org_id,
-            )
-            if now - _DEGRADED_LAST_FALLBACK_EMISSION >= _DEGRADED_FALLBACK_MIN_INTERVAL_SECONDS:
-                _DEGRADED_LAST_FALLBACK_EMISSION = now
-                org_uuid = uuid.UUID(str(org_id)) if org_id else None
-                if org_uuid is not None:
-                    message = (
-                        "run_node_outputs dual-write disabled (kill-switch off, redis unavailable) "
-                        "— legacy-only writes; sweep will heal"
-                    )
-                    await _emit_error_event(
-                        org_uuid,
-                        level="warning",
-                        message=message,
-                        context_json={"run_id": str(run_id)},
-                    )
+            await _note_dual_write_redis_down(run_id, org_id, now)
     except asyncio.CancelledError:
         raise
     except Exception:

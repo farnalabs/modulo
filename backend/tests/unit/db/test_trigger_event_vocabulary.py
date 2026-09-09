@@ -65,9 +65,9 @@ _MIGRATION_PATH = (
 # 0191_bundled_runner_seed_backfill re-parented onto 0190_hitl_claim_context_json,
 # FAR-583's 0192_run_node_outputs re-parented onto 0191 with its
 # 0193_run_node_outputs_sweep_index (qa iteration 2, the sweep's partial index)
-# chained onto 0192, and this PR's 0194_uuid_pk_server_defaults (FAR-718) chained
-# onto 0193 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0194_uuid_pk_server_defaults"
+# chained onto 0192, 0194_uuid_pk_server_defaults (FAR-718, from main) chained onto
+# 0193 as the chain head, and improve-database's 0197/0198/0199 chain off it.
+_CHAIN_HEAD_MIGRATION_NAME = "0200_runs_runner_marker_sweep_index"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

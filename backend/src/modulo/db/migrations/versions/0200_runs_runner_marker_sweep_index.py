@@ -34,8 +34,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0195_runs_runner_marker_sweep_index"
-down_revision: str | None = "0194_uuid_pk_server_defaults"
+revision: str = "0200_runs_runner_marker_sweep_index"
+down_revision: str | None = "0199_runs_json_to_jsonb"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

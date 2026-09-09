@@ -129,8 +129,19 @@ class TestSelfReportedCost:
         assert _extract_reported_cost({"model_cost_usd": float("inf")}) is None
 
     def test_extract_rejects_non_positive(self) -> None:
+        # FAR-653: a zero WITHOUT the zero-token proof is unproven — no report;
+        # negatives stay rejected outright.
         assert _extract_reported_cost({"model_cost_usd": 0}) is None
         assert _extract_reported_cost({"model_cost_usd": -5}) is None
+
+    def test_extract_accepts_genuine_zero_with_proven_token_usage(self) -> None:
+        raw, clamped, was_clamped, oob = _extract_reported_cost(
+            {"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": 0, "total": 0}}
+        )
+        assert raw == 0.0
+        assert clamped == 0.0
+        assert was_clamped is False
+        assert oob is False
 
     def test_extract_reads_raw_then_legacy(self) -> None:
         raw, clamped, was_clamped, oob = _extract_reported_cost(

@@ -806,19 +806,31 @@ async def _run_recoverable(session: AsyncSession, run_id: Any, recovery_or: Any,
 
 
 async def _assert_capacity_within_cap(session: AsyncSession, org_id: uuid.UUID) -> bool:
-    """Sweep rule (h): the breach VERDICT for the live count vs cap (qa F4).
+    """Sweep rule (h): assert the live count ≤ cap; log a violation on breach.
 
-    Returns True only on a genuine breach (a cap exists AND the active count
-    exceeds it). A cap-less org (the overwhelmingly common case) is never a
-    violation — the previous caller-side ``active > 0`` read counted runner
-    ACTIVITY, not breaches, so every sweep tick on an uncapped org minted a
-    phantom violation. The caller logs ``runner.capacity.violation`` and
-    increments the violations counter ONLY on True. This is the D8 ROLLBACK
-    signal — a sustained breach means the atomic gate is not holding and the
-    rollout flag must go off.
+    Returns ``True`` when the live count exceeds the cap (a real breach) and
+    ``False`` otherwise. This is the D8 ROLLBACK signal — a sustained breach
+    means the atomic gate is not holding and the rollout flag must go off. A
+    healthy org sitting below cap (including one with live dispatches) MUST NOT
+    be reported as a breach, otherwise the dispatcher-reconcile ``violations``
+    summary and the liveness key become indistinguishable from noise and a true
+    breach is masked (qa F4). The caller increments the violations counter
+    ONLY on ``True`` — AFTER the org transaction commits, so a rolled-back
+    org pass never mints a phantom counter increment.
     """
     decision = await resolve_runner_capacity_decision(session, org_id)
-    return decision.cap is not None and decision.active > decision.cap
+    breached = decision.cap is not None and decision.active > decision.cap
+    if breached:
+        _log.error(
+            "runner.capacity.violation",
+            extra={
+                "org_id": str(org_id),
+                "active": decision.active,
+                "cap": decision.cap,
+                "host_resource_only": decision.host_resource_only,
+            },
+        )
+    return breached
 
 
 @dataclass(frozen=True)
@@ -1031,10 +1043,6 @@ async def reconcile_runner_dispatch_markers(
                 )
             if org_breach:
                 violations += 1
-                _log.error(
-                    "runner.capacity.violation",
-                    extra={"org_id": str(org_id), "note": "the live count exceeded the org cap"},
-                )
         _log.info(
             "runner.capacity.marker_swept scanned=%d cleared=%d transitioned=%d",
             scanned,

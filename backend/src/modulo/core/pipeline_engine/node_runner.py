@@ -79,7 +79,11 @@ from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_USD_MIN,
 )
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
-from modulo.core.cost_controller.breakdown.params import REPORTED_TOKEN_CHAIN, coerce_reported_token
+from modulo.core.cost_controller.breakdown.params import (
+    REPORTED_TOKEN_CHAIN,
+    coerce_reported_token,
+    is_proven_zero_token_usage,
+)
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType
 from modulo.core.guardrails.loop_intercept import LoopInterceptConfig
 from modulo.core.node_output_split import (
@@ -308,7 +312,7 @@ _MAX_ERROR_MSG = 500
 # SandboxNodeFailedError message must survive the executor's terminal-fail
 # surface AFTER retries exhausted — `_sanitize_detail("Sandbox node failed
 # (transient) after retries exhausted: " + msg, limit=5000)` — and the
-# `runs.error_detail` String(5000) column, so every section stays small and
+# `runs.error_detail` Text column (widened from String(5000) by migration 0199), so every section stays small and
 # the COMBINED message (sections + headers + truncation markers) stays well
 # under 5000 chars. Sections are ordered by diagnostic value: the E2B log
 # tail (the only place the kill reason lives) FIRST, then the captured agent
@@ -317,7 +321,7 @@ _MAX_ERROR_MSG = 500
 # Section caps are sized so the whole message stays under the sanitizer's
 # hard cap (5000 chars) AND the executor's terminal-fail write surface
 # (`_sanitize_detail(..., limit=5000)`) and the `runs.error_detail`
-# String(5000) column, so the diagnostic is never truncated away.
+# Text column (widened from String(5000) by migration 0199), so the diagnostic is never truncated away.
 _NO_OUTPUT_LOG_TAIL = 1024
 _NO_OUTPUT_STDERR_TAIL = 1536
 _NO_OUTPUT_STDOUT_TAIL = 1024
@@ -544,10 +548,20 @@ def _extract_reported_cost(
 ) -> tuple[float, float, bool, bool] | None:
     """Tri-state + BAND extraction — the SINGLE extraction authority.
 
-    Returns ``(raw, clamped, was_clamped, out_of_band_high)`` ONLY for a
-    POSITIVE finite numeric ``model_cost_usd`` (> 0). ``None`` for absent key,
-    non-dict, non-numeric, NaN/Inf, negative, zero, or bool (bool rejected
+    Returns ``(raw, clamped, was_clamped, out_of_band_high)`` for a POSITIVE
+    finite numeric ``model_cost_usd`` (> 0), OR — FAR-653 — for an EXACT ZERO
+    that the producer PROVES is a genuine zero. ``None`` for absent key,
+    non-dict, non-numeric, NaN/Inf, negative, or bool (bool rejected
     explicitly). ``None`` => the key is NOT written.
+
+    GENUINE-ZERO RULE (FAR-653): an explicit ``model_cost_usd: 0`` is a REAL
+    report ONLY when the producer proves no token spend — the output's
+    ``token_usage`` dict must carry every mandatory key (``input`` / ``output``
+    / ``total``) present and zero, with every optional cache key, WHEN PRESENT,
+    also zero (``is_proven_zero_token_usage``). An unproven zero (zero cost
+    without the zero-token proof) is NOT a report — the keys stay absent and
+    the ``missing_self_report`` warning applies. A sub-floor NON-ZERO value
+    stays rejected.
 
     The raw input is read from ``model_cost_raw_usd`` WHEN PRESENT (the
     producer's pre-clamp value — devtools writes it), falling back to
@@ -583,7 +597,18 @@ def _extract_reported_cost(
         val_f = float(val)
     except (TypeError, ValueError, OverflowError):
         return None
-    if not (math.isfinite(val_f) and val_f > 0):
+    if not math.isfinite(val_f):
+        return None
+    if val_f == 0:
+        # FAR-653 GENUINE-ZERO: an explicit 0 is a REAL report ONLY when the
+        # producer proves no token spend (every mandatory ``token_usage`` key
+        # present and zero; optional cache keys, when present, also zero). An
+        # unproven zero is NOT a report — the keys stay absent and the
+        # missing-self-report warning applies.
+        if not is_proven_zero_token_usage(output_json.get("token_usage")):
+            return None
+        return 0.0, 0.0, False, False
+    if val_f <= 0:
         return None
     floor = float(max_reportable_usd_min) if max_reportable_usd_min is not None else float(MAX_REPORTABLE_USD_MIN)
     if val_f < floor:
@@ -660,13 +685,15 @@ def _build_model_cost_fields(output_json: Any) -> dict[str, Any]:
     """Build the node-output model-cost fields (audit + display + flags).
 
     Returns an EMPTY dict when the node carries no report (the keys are ABSENT
-    — ``0.0`` is NEVER written as a report). When a report exists the fields
-    are: ``model_cost_usd`` (clamped), ``model_cost_raw_usd`` (pre-clamp, for
-    audit), ``model_cost_display_usd`` (clamped-at-1e6 — the UI/money formatter
-    renders THIS field, so the raw value never reaches the money path),
-    ``model_cost_clamped`` and ``model_cost_out_of_band_high`` (BOTH written
-    UNCONDITIONALLY — true/false explicitly, derived from the TRUE raw so a
-    legacy or hostile marker already on the node output can never survive).
+    — an UNPROVEN ``0.0`` is never written as a report). When a report exists
+    the fields are: ``model_cost_usd`` (clamped), ``model_cost_raw_usd``
+    (pre-clamp, for audit), ``model_cost_display_usd`` (clamped-at-1e6 — the
+    UI/money formatter renders THIS field, so the raw value never reaches the
+    money path), ``model_cost_clamped`` and ``model_cost_out_of_band_high``
+    (BOTH written UNCONDITIONALLY — true/false explicitly, derived from the
+    TRUE raw so a legacy or hostile marker already on the node output can
+    never survive). FAR-653: a PROVEN genuine zero IS a report — the fields
+    are written with ``0.0`` / ``False`` values.
     """
     extracted = _extract_reported_cost(output_json)
     if extracted is None:

@@ -1,11 +1,11 @@
-"""Structural unit tests for migration 0195_runs_runner_marker_sweep_index (FAR-594 D8 qa F8).
+"""Structural unit tests for migration 0200_runs_runner_marker_sweep_index (FAR-594 D8 qa F8).
 
 These run WITHOUT a database. They pin the migration's contract: the partial
 index shape (``runs (organisation_id) WHERE sandbox_dispatch_state IS NOT
-NULL`` — the exact predicate the marker sweep's candidate scan filters on),
+NULL`` â€” the exact predicate the marker sweep's candidate scan filters on),
 the idempotent IF NOT EXISTS form, the revision chain position (down_revision
 = 0194, the current head at authoring time), and the deploy-safety markers
-(plain CREATE INDEX, Postgres-guarded upgrade/downgrade — the 0193 precedent).
+(plain CREATE INDEX, Postgres-guarded upgrade/downgrade â€” the 0193 precedent).
 The live-Postgres behaviour (index creation + the sweep's batched cursor scan
 using it) is covered by the testcontainers integration suite.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 from types import ModuleType
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0195_runs_runner_marker_sweep_index"
+_MIGRATION_NAME = "0200_runs_runner_marker_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 
@@ -41,16 +41,16 @@ def _source_code() -> str:
 
 
 def test_revision_chain_position() -> None:
-    """The migration extends the CURRENT head (0194) — no branch, no collision."""
+    """The migration extends the CURRENT head (0194) â€” no branch, no collision."""
     module = _load_migration()
-    assert module.revision == "0195_runs_runner_marker_sweep_index"
-    assert module.down_revision == "0194_uuid_pk_server_defaults"
+    assert module.revision == "0200_runs_runner_marker_sweep_index"
+    assert module.down_revision == "0199_runs_json_to_jsonb"
     assert module.branch_labels is None
 
 
 def test_partial_index_shape_matches_the_sweep_predicate() -> None:
     """The index is the sweep's candidate-scan predicate: org-scoped, partial
-    on ``sandbox_dispatch_state IS NOT NULL`` — the marker sweep filters
+    on ``sandbox_dispatch_state IS NOT NULL`` â€” the marker sweep filters
     exactly these rows (batched cursor scan on ``id``)."""
     module = _load_migration()
     assert module._TABLE == "runs"
@@ -65,7 +65,7 @@ def test_partial_index_shape_matches_the_sweep_predicate() -> None:
 
 def test_sweep_candidate_scan_matches_the_indexed_predicate() -> None:
     """The sweep's batched candidate SQL filters the SAME predicate the index
-    covers (org + marker presence) and pages with a cursor + LIMIT — the
+    covers (org + marker presence) and pages with a cursor + LIMIT â€” the
     index serves the probe, the batch bounds the materialisation."""
     from modulo.core.runner_capacity import _SWEEP_CANDIDATE_SQL, SWEEP_CANDIDATE_BATCH
 

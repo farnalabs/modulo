@@ -77,6 +77,35 @@ def _state_of(candidate: Any) -> str | None:
     return str(state) if state else None
 
 
+def _scan_node_candidates(node: BaseException) -> tuple[str | None, str | None]:
+    """Scan one chain node's candidate exceptions for a SQLSTATE.
+
+    Per node the candidates are: the node ITSELF (a raw driver error carries
+    ``sqlstate``/``pgcode`` directly), the SQLAlchemy ``.orig`` driver error,
+    its ``__cause__``, and the node's own ``__cause__``. Returns
+    ``(state, fallback)``: ``state`` is the first NON-savepoint SQLSTATE found
+    (the walk returns it immediately); ``fallback`` is the node's first
+    savepoint-wrapper state (25P02), kept only as a last-resort fallback when
+    the whole chain carries nothing else.
+    """
+    orig = getattr(node, "orig", None)
+    fallback: str | None = None
+    for candidate in (
+        node,
+        orig,
+        getattr(orig, "__cause__", None),
+        getattr(node, "__cause__", None),
+    ):
+        state = _state_of(candidate)
+        if state is None:
+            continue
+        if state not in SAVEPOINT_ROLLBACK_FAILURE_SQLSTATES:
+            return state, fallback
+        if fallback is None:
+            fallback = state
+    return None, fallback
+
+
 def sqlstate_of(exc: BaseException) -> str | None:
     """Extract the SQLSTATE from a SQLAlchemy DBAPI error (dialect-tolerant).
 
@@ -106,20 +135,11 @@ def sqlstate_of(exc: BaseException) -> str | None:
             continue
         seen.add(id(node))
         visited += 1
-        orig = getattr(node, "orig", None)
-        for candidate in (
-            node,
-            orig,
-            getattr(orig, "__cause__", None),
-            getattr(node, "__cause__", None),
-        ):
-            state = _state_of(candidate)
-            if state is None:
-                continue
-            if state not in SAVEPOINT_ROLLBACK_FAILURE_SQLSTATES:
-                return state
-            if fallback is None:
-                fallback = state
+        state, node_fallback = _scan_node_candidates(node)
+        if state is not None:
+            return state
+        if node_fallback is not None and fallback is None:
+            fallback = node_fallback
         context_or_cause = (getattr(node, "__context__", None), getattr(node, "__cause__", None))
         queue.extend(child for child in context_or_cause if child is not None)
     return fallback

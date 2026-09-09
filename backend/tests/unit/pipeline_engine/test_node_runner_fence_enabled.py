@@ -169,7 +169,10 @@ def _run_state(*, claim_lease: str) -> dict:
 def _assert_marker_acquire_executed(executed: list[str]) -> None:
     # The acquire is the D8 gate's own-row FENCED read (D5) — it runs on EVERY
     # DB path, including the denied cases where the marker UPDATE (only fired
-    # on a matching row) is never reached.
+    # on a matching row) is never reached. The D8 capacity gate
+    # (_sandbox_acquire_dispatch_marker -> acquire_runner_dispatch_slot)
+    # embeds the same fenced SELECT (spaces around '=' — both spellings of
+    # claim_token=:tok match this assertion).
     assert any("claim_count FROM runs" in s and "claim_token" in s and "FOR UPDATE" in s for s in executed)
 
 

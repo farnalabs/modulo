@@ -217,6 +217,62 @@ async def get_available_providers(
         ) from None
 
 
+async def _apply_remy_config_patch(
+    session: AsyncSession,
+    req: RemyConfigUpdate,
+    principal: TenantPrincipal,
+) -> dict[str, Any]:
+    """Load-or-create the org's ``remy_config`` entry and apply non-None fields.
+
+    Runs inside the caller's transaction. Only fields explicitly present in
+    the request are written; the merged dict is returned (and stored on the
+    entry) so the response can render the merged state.
+    """
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key == f"remy_config:{principal.organisation_id}")
+    )
+    entry = result.scalar_one_or_none()
+    if entry is None:
+        entry = SystemConfig(key=f"remy_config:{principal.organisation_id}", value={})
+        session.add(entry)
+
+    current: dict[str, Any] = entry.value if isinstance(entry.value, dict) else {}
+    if req.system_prompt is not None:
+        current["system_prompt"] = req.system_prompt
+    if req.additional_guidance is not None:
+        current["additional_guidance"] = req.additional_guidance
+    if req.access_list is not None:
+        current["access_list"] = req.access_list.model_dump()
+    if req.default_provider is not None:
+        current["default_provider"] = req.default_provider
+    if req.default_model is not None:
+        current["default_model"] = req.default_model
+    if req.default_context_window is not None:
+        current["default_context_window"] = req.default_context_window
+    if req.allowed_providers is not None:
+        current["allowed_providers"] = req.allowed_providers
+    if req.allowed_models is not None:
+        current["allowed_models"] = req.allowed_models
+    entry.updated_by = principal.account_id
+    entry.value = current
+    await session.flush()
+    return current
+
+
+def _remy_config_response(current: dict[str, Any]) -> RemyConfigResponse:
+    """The merged Remy config rendered as a response, with documented defaults."""
+    return RemyConfigResponse(
+        system_prompt=current.get("system_prompt"),
+        additional_guidance=current.get("additional_guidance"),
+        access_list=AccessList(**current.get("access_list", {})),
+        default_provider=current.get("default_provider", "anthropic"),
+        default_model=current.get("default_model", _MSG_CLAUDE_SONNET_4_20250514),
+        default_context_window=current.get("default_context_window", 200000),
+        allowed_providers=current.get("allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]),
+        allowed_models=current.get("allowed_models", []),
+    )
+
+
 @router.put("/config")
 @handle_db_errors("admin.remy.update_remy_config")
 async def update_remy_config(
@@ -235,45 +291,9 @@ async def update_remy_config(
             )
     try:
         async with session.begin():
-            result = await session.execute(
-                select(SystemConfig).where(SystemConfig.key == f"remy_config:{principal.organisation_id}")
-            )
-            entry = result.scalar_one_or_none()
-            if entry is None:
-                entry = SystemConfig(key=f"remy_config:{principal.organisation_id}", value={})
-                session.add(entry)
+            current = await _apply_remy_config_patch(session, req, principal)
 
-            current: dict[str, Any] = entry.value if isinstance(entry.value, dict) else {}
-            if req.system_prompt is not None:
-                current["system_prompt"] = req.system_prompt
-            if req.additional_guidance is not None:
-                current["additional_guidance"] = req.additional_guidance
-            if req.access_list is not None:
-                current["access_list"] = req.access_list.model_dump()
-            if req.default_provider is not None:
-                current["default_provider"] = req.default_provider
-            if req.default_model is not None:
-                current["default_model"] = req.default_model
-            if req.default_context_window is not None:
-                current["default_context_window"] = req.default_context_window
-            if req.allowed_providers is not None:
-                current["allowed_providers"] = req.allowed_providers
-            if req.allowed_models is not None:
-                current["allowed_models"] = req.allowed_models
-            entry.updated_by = principal.account_id
-            entry.value = current
-            await session.flush()
-
-        return RemyConfigResponse(
-            system_prompt=current.get("system_prompt"),
-            additional_guidance=current.get("additional_guidance"),
-            access_list=AccessList(**current.get("access_list", {})),
-            default_provider=current.get("default_provider", "anthropic"),
-            default_model=current.get("default_model", _MSG_CLAUDE_SONNET_4_20250514),
-            default_context_window=current.get("default_context_window", 200000),
-            allowed_providers=current.get("allowed_providers", ["anthropic", "openai", "gemini", "deepseek", "groq"]),
-            allowed_models=current.get("allowed_models", []),
-        )
+        return _remy_config_response(current)
     except ProgrammingError:
         logger.exception("admin_remy.update_remy_config")
         raise HTTPException(

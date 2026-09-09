@@ -15,6 +15,7 @@ system admins may operate across all orgs, optionally narrowed by an
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -35,6 +36,7 @@ from modulo.api.dependencies import (
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.run_retention import (
+    ESTIMATE_DEADLINE_SECONDS,
     iter_run_export,
     list_retention_candidates,
     purge_terminal_runs,
@@ -63,6 +65,13 @@ class CandidatesResponse(BaseModel):
     total_estimated_bytes: int
     terminal_total: int = 0
     terminal_estimated_bytes: int = 0
+    # qa (FAR-660): the whole-set byte estimate is best-effort and deadline-
+    # bounded per scan. True when any scan was skipped past the request
+    # deadline, failed, or timed out — every such component contributes 0, so
+    # the byte totals are then a PARTIAL approximation (a lower bound), never
+    # an authoritative accounting. Consumers MUST annotate this flag: a
+    # degraded "0 bytes reclaimable" must not be read as "nothing to purge".
+    estimate_degraded: bool = False
 
 
 class RetentionFilter(BaseModel):
@@ -133,9 +142,28 @@ async def candidates(
     (unbounded), so the client must derive its confirm count and reclaimable
     figure from these server-side terminal totals, never from the page-capped
     candidate list it happens to hold.
+
+    qa (FAR-660) contract notes:
+
+    * ``estimate_degraded`` is True when any whole-set estimate scan was
+      skipped past the request deadline, failed, or hit its per-scan
+      statement timeout — the byte totals are then a partial approximation
+      (a lower bound), and the UI must annotate them instead of presenting
+      "0 bytes reclaimable" as authoritative.
+    * the per-run page estimates and the whole-set totals measure the same
+      columns through different renderings (Python ``json.dumps`` vs Postgres
+      jsonb text) — they coincide only for simple ASCII payloads, so the page
+      sum may legitimately differ from ``total_estimated_bytes`` for
+      non-ASCII / exponent-format payloads. The totals are the authoritative
+      whole-set figure.
     """
 
     org_id = _resolve_org_id(principal, organisation_id)
+    # FAR-660: request-scoped estimate budget. The size estimate runs as
+    # bounded SQL aggregates; a pathological filter degrades to a partial
+    # approximation at this deadline instead of the minutes-long Python walk
+    # that 503'd the endpoint on the multi-GB production DB.
+    deadline = time.monotonic() + ESTIMATE_DEADLINE_SECONDS
     try:
         async with session.begin():
             await _run_scoped(session, org_id)
@@ -148,6 +176,7 @@ async def candidates(
                 status=status,
                 limit=limit,
                 offset=offset,
+                deadline=deadline,
             )
     except ProgrammingError:
         _log.exception("run_retention.candidates.programming_error")
