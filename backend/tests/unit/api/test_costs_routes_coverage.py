@@ -615,7 +615,7 @@ def _make_stored_anomaly(date_value: object = None) -> MagicMock:
     return a
 
 
-def test_merge_anomalies_keeps_stored_dismissals_and_appends_stored_only() -> None:
+def test_merge_anomalies_keeps_stored_dismissals_and_filters_stored_only() -> None:
     from modulo.api.routes.costs import _merge_anomalies
 
     detected = [
@@ -630,10 +630,16 @@ def test_merge_anomalies_keeps_stored_dismissals_and_appends_stored_only() -> No
         }
     ]
     other_date = datetime(2025, 2, 1, tzinfo=UTC).date()
-    merged = _merge_anomalies(detected, [_make_stored_anomaly(), _make_stored_anomaly(other_date)])
+    other_row = _make_stored_anomaly(other_date)
+    other_row.dismissed = False
+    lapsed_dismissed_date = datetime(2025, 3, 1, tzinfo=UTC).date()
+    merged = _merge_anomalies(
+        detected,
+        [_make_stored_anomaly(), other_row, _make_stored_anomaly(lapsed_dismissed_date)],
+    )
 
     assert merged[0]["dismissed"] is True
-    assert merged[1]["anomaly_date"] == str(other_date)
+    assert [m["anomaly_date"] for m in merged] == ["2025-01-02", str(other_date)]
 
 
 def test_get_anomalies_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> None:
@@ -668,6 +674,7 @@ def test_get_anomalies_happy_path_merges_detected_and_stored(client: tuple[TestC
         _make_stored_anomaly(spike_date),
         _make_stored_anomaly(today - timedelta(days=20)),
     ]
+    stored[1].dismissed = False
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}list_anomalies", new=AsyncMock(return_value=stored)))
         stack.enter_context(_rls_cm())
@@ -678,6 +685,55 @@ def test_get_anomalies_happy_path_merges_detected_and_stored(client: tuple[TestC
     assert len(body) == 2
     assert body[0]["dismissed"] is True
     assert body[1]["anomaly_date"] == str(today - timedelta(days=20))
+
+
+def test_fresh_detection_is_persisted_and_dismissible(client: tuple[TestClient, AsyncMock]) -> None:
+    """First sight of a detection must be stored so it gets a real id.
+
+    Without persistence a fresh detection carries an empty ``id`` and could
+    never be targeted by POST /anomalies/dismiss/{id}; after this pass every
+    detected day is recorded via ``record_or_get_anomaly`` and returned with
+    its stored id.
+    """
+    http, session = client
+    today = datetime.now(UTC).date()
+    spike_date = today - timedelta(days=1)
+    counts = MagicMock()
+    counts.all = MagicMock(
+        return_value=[
+            MagicMock(run_date=today - timedelta(days=8), daily_spend=1.0),
+            MagicMock(run_date=today - timedelta(days=7), daily_spend=1.0),
+            MagicMock(run_date=today - timedelta(days=6), daily_spend=1.0),
+            MagicMock(run_date=today - timedelta(days=5), daily_spend=1.0),
+            MagicMock(run_date=today - timedelta(days=4), daily_spend=1.0),
+            MagicMock(run_date=today - timedelta(days=3), daily_spend=1.0),
+            MagicMock(run_date=today - timedelta(days=2), daily_spend=1.0),
+            MagicMock(run_date=spike_date, daily_spend=5.0),
+        ]
+    )
+    session.execute = AsyncMock(return_value=counts)
+
+    persisted = MagicMock()
+    persisted.id = uuid.uuid4()
+    persisted.anomaly_date = spike_date
+    persisted.pipeline_id = None
+    persisted.amount = 5.0
+    persisted.baseline = 1.0
+    persisted.percent_above = 400.0
+    persisted.dismissed = False
+
+    with ExitStack() as stack:
+        stack.enter_context(patch(f"{_PREFIX}list_anomalies", new=AsyncMock(return_value=[])))
+        stack.enter_context(patch(f"{_PREFIX}record_or_get_anomaly", new=AsyncMock(return_value=persisted)))
+        stack.enter_context(_rls_cm())
+        resp = http.get("/api/v1/admin/costs/anomalies")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["id"] == str(persisted.id)
+    assert body[0]["anomaly_date"] == str(spike_date)
+    assert body[0]["dismissed"] is False
 
 
 def test_dismiss_anomaly_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> None:
