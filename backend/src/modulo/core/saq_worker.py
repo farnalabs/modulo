@@ -473,6 +473,18 @@ async def execute_run(
         )
         return {"status": "setup_failed"}
     if run is None:
+        # The claim succeeded (status=running + heartbeat), but the row is now
+        # invisible to load_and_setup — terminalize so the claimed row is not
+        # left running with a frozen heartbeat until dispatcher_reconcile
+        # collects it (~35-min zombie backstop).
+        _log.warning("SAQ execute_run: run %s not found after claim — terminalizing", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="run row not found during load_and_setup after a successful claim",
+        )
         return {"status": "missing"}
 
     outcome = await run_executor_with_watchdog(
