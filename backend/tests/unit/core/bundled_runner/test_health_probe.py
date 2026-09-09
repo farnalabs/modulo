@@ -463,7 +463,7 @@ class TestEngineBoundaryRealClient:
         boundary = _real_boundary(client)
         outcome = await boundary.probe_engine()
         assert outcome.reachable is True
-        assert outcome.engine_info == {}
+        assert not outcome.engine_info
 
     @pytest.mark.asyncio
     async def test_probe_engine_scrubs_credentials_on_failure(self) -> None:

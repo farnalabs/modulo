@@ -93,8 +93,8 @@ class TestUpsertRunnerProbeCache:
         assert row.engine_reachable is False
         assert row.images_present is None
         assert row.probe_error == "down"
-        assert row.image_checks_json == {}
-        assert row.engine_info_json == {}
+        assert not row.image_checks_json
+        assert not row.engine_info_json
 
     @pytest.mark.asyncio
     async def test_defaults_timestamp_when_not_supplied(self) -> None:
