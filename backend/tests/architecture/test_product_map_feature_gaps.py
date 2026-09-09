@@ -416,6 +416,96 @@ def test_no_unregistered_bdd_feature_files():
     )
 
 
+#: Heading that opens a behaviour-tracker's currently-acknowledged gap list.
+_KNOWN_GAPS_HEADING = "## Known Gaps"
+_KNOWN_GAPS_CLAIM_START = re.compile(r"^- ", re.MULTILINE)
+
+#: Claim phrases in a Known Gaps bullet that assert a ``.feature`` file does not
+#: execute. When such a bullet names a feature file that a step module actually
+#: registers via ``scenarios(...)``, the entry has drifted stale — the exact
+#: failure the 2026-09-08 feat-runs "dead BDD files" gap suffered: it was
+#: recorded the day before ``steps/test_pipelines.py`` wired both files up.
+#: Scanning is scoped to the Known Gaps section (not behaviour/QA prose, where a
+#: file is named as positive coverage or as a historical record) and evaluated
+#: per bullet, so a negation in one gap bullet cannot implicate a positively-cited
+#: file in the next.
+_DEAD_BDD_CLAIM = re.compile(
+    r"(?:never\s+executes?|"
+    r"no\s+step\s+module\s+registers|"
+    r"does\s+not\s+register|"
+    r"not\s+registered\s+via|"
+    r"dead\s+BDD\s+files?|"
+    r"unregistered\s+BDD)",
+    re.IGNORECASE,
+)
+
+
+def _known_gap_bullets(entry: Path) -> list[str]:
+    """Split an entry's ``## Known Gaps`` section into its bullets.
+
+    Returns the text of each bullet (continuation lines included) or ``[]`` when
+    the entry has no Known Gaps section.
+    """
+    text = entry.read_text(encoding="utf-8")
+    if _KNOWN_GAPS_HEADING not in text:
+        return []
+    section = text.split(_KNOWN_GAPS_HEADING, 1)[1]
+    section = re.split(r"^## ", section, maxsplit=1, flags=re.MULTILINE)[0]
+    starts = [match.start() for match in _KNOWN_GAPS_CLAIM_START.finditer(section)]
+    if not starts:
+        return []
+    bullets = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(section)
+        bullets.append(section[start:end])
+    return bullets
+
+
+def test_no_stale_dead_bdd_claims():
+    """No Known Gaps bullet claims a registered BDD feature file never executes.
+
+    ``test_no_unregistered_bdd_feature_files`` tracks orphaned ``.feature`` files
+    that genuinely never run. The opposite drift is a behaviour-tracker entry whose
+    Known Gaps prose asserts a feature file is dead ("never executes", "no step
+    module registers it", "dead BDD") after a step module has wired that same file
+    up via ``scenarios(...)`` — a stale claim that survives
+    ``test_bdd_citations_are_registered_coverage`` because the file was never a
+    ``bdd:`` citation. The 2026-09-08 feat-runs gap
+    ("``run_lifecycle.feature`` / ``run_sequential.feature`` are dead BDD files")
+    is that failure: both files shipped registered in ``steps/test_pipelines.py``
+    the next day while the tracker kept claiming they never executed. Fail closed
+    on any such mismatch so a walk that wires a file up also updates the tracker
+    that documented the gap.
+    """
+    registered = _registered_bdd_features()
+    assert registered, "no BDD feature files are registered by any step module"
+    registered_rel = {path.relative_to(REPO_ROOT).as_posix() for path in registered}
+
+    stale: dict[str, list[str]] = {}
+    for entry in _product_map_entry_paths():
+        for bullet in _known_gap_bullets(entry):
+            if not _DEAD_BDD_CLAIM.search(bullet):
+                continue
+            for name_match in re.finditer(r"([A-Za-z0-9_./-]+\.feature)", bullet):
+                name = name_match.group(1)
+                registered_hit = next(
+                    (rel for rel in registered_rel if rel.endswith((f"/{name}", name))),
+                    None,
+                )
+                if registered_hit is None:
+                    continue
+                stale.setdefault(entry.relative_to(REPO_ROOT).as_posix(), []).append(
+                    f"{name!r} (registered: {registered_hit})"
+                )
+    assert not stale, (
+        "behaviour-tracker prose claims these .feature files never execute / are "
+        "not registered, but a step module registers them via scenarios(...) — "
+        "stale 'dead BDD' claims: update the entry to cite them as executing "
+        "coverage and drop the gap:\n"
+        + "\n".join(f"  {entry} -> {', '.join(files)}" for entry, files in sorted(stale.items()))
+    )
+
+
 def test_feature_references_resolve():
     """Every ``feat-*`` literal in shipped code/tests resolves against the product map.
 
