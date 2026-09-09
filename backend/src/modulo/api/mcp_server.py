@@ -6987,58 +6987,6 @@ def _log_tool_failure(tool: str) -> None:
     _log.exception("%s failed", tool)
 
 
-def _validate_parameter_values(values: dict[str, Any], param_map: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
-    errors: list[dict[str, str]] = []
-    for p_name, p_def in param_map.items():
-        value = values.get(p_name)
-        p_required = p_def.get("required", False)
-        if p_required and value is None:
-            errors.append({"field": p_name, "message": "This field is required."})
-            continue
-        if value is None:
-            continue
-        errors.extend(_validate_parameter_value(p_name, p_def, value))
-    return errors
-
-
-def _validate_parameter_value(p_name: str, p_def: dict[str, Any], value: Any) -> list[dict[str, str]]:
-    p_type = p_def.get("type", "string")
-    if p_type == "string":
-        if isinstance(value, str):
-            return []
-        return [{"field": p_name, "message": "Expected a string value."}]
-    if p_type == "boolean":
-        if isinstance(value, bool):
-            return []
-        return [{"field": p_name, "message": "Expected a boolean value."}]
-    if p_type == "number":
-        return _validate_number(p_name, p_def, value)
-    if p_type == "select":
-        options = p_def.get("options", [])
-        if options and str(value) not in options:
-            return [
-                {
-                    "field": p_name,
-                    "message": f"Value must be one of: {', '.join(str(o) for o in options)}.",
-                }
-            ]
-        return []
-    return []
-
-
-def _validate_number(p_name: str, p_def: dict[str, Any], value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, (int, float)):
-        return [{"field": p_name, "message": "Expected a numeric value."}]
-    errors: list[dict[str, str]] = []
-    p_min = p_def.get("minimum")
-    p_max = p_def.get("maximum")
-    if p_min is not None and value < p_min:
-        errors.append({"field": p_name, "message": f"Value must be >= {p_min}."})
-    if p_max is not None and value > p_max:
-        errors.append({"field": p_name, "message": f"Value must be <= {p_max}."})
-    return errors
-
-
 @mcp.tool(
     description="Create a new parameter schema. Returns the created schema details.",
 )
@@ -7382,6 +7330,7 @@ async def validate_parameter_schema(
         except ValueError:
             return {"error": "invalid_id", "detail": f"Invalid UUID format: {schema_id}"}
 
+        from modulo.api.routes.parameter_schemas import validate_parameter_values
         from modulo.db.crud.parameter_schema import get_schema as db_get_ps
 
         org_id = _ctx_org_id_val()
@@ -7391,12 +7340,10 @@ async def validate_parameter_schema(
             if schema is None or schema.organisation_id != org_id:
                 return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
-            params = schema.parameters if isinstance(schema.parameters, list) else []
-            param_map = {p.get("name", ""): p for p in params if isinstance(p, dict)}
+            errors_items = validate_parameter_values(schema.parameters, values)
+            errors = [{"field": e.field, "message": e.message} for e in errors_items]
 
-            errors = _validate_parameter_values(values, param_map)
-
-        return {"data": {"valid": len(errors) == 0, "errors": errors}}
+        return {"data": {"valid": len(errors_items) == 0, "errors": errors}}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:

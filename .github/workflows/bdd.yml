@@ -108,13 +108,19 @@ jobs:
           # down the whole BDD suite. Chromium does not need google-chrome-stable,
           # so drop that source and retry to ride out any transient mirror errors.
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome-stable.list 2>/dev/null || true
+          install_ok=0
           for i in 1 2 3; do
             if uv run --no-build --no-sync playwright install --with-deps chromium; then
+              install_ok=1
               break
             fi
             echo "Playwright browser install attempt $i failed, retrying..."
             sleep 5
           done
+          if [ "$install_ok" -ne 1 ]; then
+            echo "Playwright browser install failed after 3 attempts"
+            exit 1
+          fi
 
       - name: Pre-create alembic_version table
         shell: bash

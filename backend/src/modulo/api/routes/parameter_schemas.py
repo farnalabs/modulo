@@ -211,6 +211,62 @@ class ValidateResponse(BaseModel):
     errors: list[ValidationErrorItem] = Field(default_factory=list)
 
 
+def validate_parameter_values(
+    parameters: Any,
+    values: dict[str, Any],
+) -> list[ValidationErrorItem]:
+    """Pure validation of parameter values against a schema definition.
+
+    Shared by the REST ``/validate`` endpoint and the MCP ``validate_parameter_schema``
+    tool so the validation rules (types, required, numeric bounds, select options) stay
+    in exactly one place and cannot drift between the two entry points.
+
+    ``parameters`` is the schema ``parameters`` field (expected to be a list of dicts);
+    any non-list is treated as empty. Only declared parameters are validated, so values
+    for unknown keys are silently ignored.
+    """
+    errors: list[ValidationErrorItem] = []
+    params = parameters if isinstance(parameters, list) else []
+    param_map = {p.get("name", ""): p for p in params if isinstance(p, dict)}
+
+    for p_name, p_def in param_map.items():
+        p_type = p_def.get("type", "string")
+        p_required = p_def.get("required", False)
+        value = values.get(p_name)
+
+        if p_required and value is None:
+            errors.append(ValidationErrorItem(field=p_name, message="This field is required."))
+            continue
+        if value is None:
+            continue
+
+        if p_type == "string" and not isinstance(value, str):
+            errors.append(ValidationErrorItem(field=p_name, message="Expected a string value."))
+        elif p_type == "number":
+            if not isinstance(value, (int, float)):
+                errors.append(ValidationErrorItem(field=p_name, message="Expected a numeric value."))
+            else:
+                p_min = p_def.get("minimum")
+                p_max = p_def.get("maximum")
+                if p_min is not None and value < p_min:
+                    errors.append(ValidationErrorItem(field=p_name, message=f"Value must be >= {p_min}."))
+                if p_max is not None and value > p_max:
+                    errors.append(ValidationErrorItem(field=p_name, message=f"Value must be <= {p_max}."))
+        elif p_type == "boolean" and not isinstance(value, bool):
+            errors.append(ValidationErrorItem(field=p_name, message="Expected a boolean value."))
+        elif p_type == "select":
+            options = p_def.get("options", [])
+            if options and str(value) not in options:
+                errors.append(
+                    ValidationErrorItem(
+                        field=p_name,
+                        message=f"Value must be one of: {', '.join(str(o) for o in options)}.",
+                    )
+                )
+
+    return errors
+
+
 # ---------------------------------------------------------------------------
 # Schema endpoints
 # ---------------------------------------------------------------------------
@@ -611,44 +667,7 @@ async def validate_parameter_values_endpoint(
             if schema is None or schema.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PARAMETER_SCHEMA_NOT_FOUND)
 
-            params = schema.parameters if isinstance(schema.parameters, list) else []
-            errors: list[ValidationErrorItem] = []
-            param_map = {p.get("name", ""): p for p in params if isinstance(p, dict)}
-
-            for p_name, p_def in param_map.items():
-                p_type = p_def.get("type", "string")
-                p_required = p_def.get("required", False)
-                value = req.values.get(p_name)
-
-                if p_required and value is None:
-                    errors.append(ValidationErrorItem(field=p_name, message="This field is required."))
-                    continue
-                if value is None:
-                    continue
-
-                if p_type == "string" and not isinstance(value, str):
-                    errors.append(ValidationErrorItem(field=p_name, message="Expected a string value."))
-                elif p_type == "number":
-                    if not isinstance(value, (int, float)):
-                        errors.append(ValidationErrorItem(field=p_name, message="Expected a numeric value."))
-                    else:
-                        p_min = p_def.get("minimum")
-                        p_max = p_def.get("maximum")
-                        if p_min is not None and value < p_min:
-                            errors.append(ValidationErrorItem(field=p_name, message=f"Value must be >= {p_min}."))
-                        if p_max is not None and value > p_max:
-                            errors.append(ValidationErrorItem(field=p_name, message=f"Value must be <= {p_max}."))
-                elif p_type == "boolean" and not isinstance(value, bool):
-                    errors.append(ValidationErrorItem(field=p_name, message="Expected a boolean value."))
-                elif p_type == "select":
-                    options = p_def.get("options", [])
-                    if options and str(value) not in options:
-                        errors.append(
-                            ValidationErrorItem(
-                                field=p_name,
-                                message=f"Value must be one of: {', '.join(str(o) for o in options)}.",
-                            )
-                        )
+            errors = validate_parameter_values(schema.parameters, req.values)
     except ProgrammingError:
         logger.exception(_CODE_PARAMETER_SCHEMAS_VALIDATE)
         raise HTTPException(

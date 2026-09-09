@@ -447,6 +447,26 @@ class TestUpdateParameterSet(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_cross_org_schema_reads_as_not_found(
+        self,
+        mock_get_schema: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        foreign_schema = _make_mock_schema()
+        foreign_schema.organisation_id = uuid.uuid4()  # not ORG_ID
+        mock_get_schema.return_value = foreign_schema
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await update_parameter_set(
+            schema_id=str(foreign_schema.id),
+            set_id=str(uuid.uuid4()),
+            version=1,
+        )
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
     @patch("modulo.db.crud.parameter_set.get_set")
     @patch("modulo.db.crud.parameter_set.update_set")
     async def test_returns_updated_set(
