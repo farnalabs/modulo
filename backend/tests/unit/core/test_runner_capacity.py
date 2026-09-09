@@ -1187,10 +1187,11 @@ async def test_sweep_fails_open_when_dedup_lock_unavailable(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A dedup lock that can never be acquired (``pg_try_advisory_lock`` returns
-    False every poll) must FAIL OPEN: the sweep returns the zero result and logs
-    ``marker_sweep_skipped_locked`` rather than hanging on a blocking lock or
-    skipping the clear silently. The per-row CAS guards + SAQ unique=True remain
-    the overlap guards."""
+    False every poll) must FAIL OPEN: the sweep PROCEEDS to clear stale markers
+    rather than skipping the whole tick. A skipped sweep would let stale markers
+    accumulate as phantom capacity and take the D8 rollback signal dark (qa F5
+    liveness contract); the per-row CAS guards + SAQ unique=True remain the real
+    overlap guards, so a missed lock must never abort the sweep."""
     _patch_gate(monkeypatch, flag_on=False)
 
     class _S(_FakeGateSettings):
@@ -1217,12 +1218,14 @@ async def test_sweep_fails_open_when_dedup_lock_unavailable(
     monkeypatch.setattr(rc, "_SWEEP_LOCK_POLL_ATTEMPTS", 3)
     monkeypatch.setattr(rc, "_SWEEP_LOCK_POLL_INTERVAL", 0.0)
 
-    caplog.set_level(logging.INFO, logger="modulo.core.runner_capacity")
+    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
     result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
 
-    assert result == {"scanned": 0, "cleared": 0, "transitioned": 0, "violations": 0, "orgs_failed": 0}
-    assert not factory.cleared, "a locked-out sweep must not clear any marker"
-    assert any("runner.capacity.marker_sweep_skipped_locked" in r.message for r in caplog.records)
+    assert result["cleared"] == 1, "fail-open must proceed and clear the stale marker"
+    assert stale_awaiting.id in factory.cleared, "a fail-open sweep must clear the stale marker"
+    assert any("runner.capacity.marker_sweep_proceeding_without_lock" in r.message for r in caplog.records), (
+        "the fail-open path must log marker_sweep_proceeding_without_lock"
+    )
 
 
 async def test_sweep_serialises_contending_sweeps_via_polling(
