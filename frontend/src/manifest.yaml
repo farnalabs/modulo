@@ -2894,9 +2894,6 @@ elements:
       - testid: hitl-gate-card
         type: element
         dynamic_testid: false
-      - testid: hitl-gate-card
-        type: element
-        dynamic_testid: false
       - testid: hitl-gate-copy-id
         type: button
         dynamic_testid: false
