@@ -6979,6 +6979,65 @@ async def list_parameter_schemas(
 # Parameter Schema CRUD MCP tools
 # ---------------------------------------------------------------------------
 
+_MSG_PARAM_SCHEMA_NOT_FOUND = "Parameter schema not found"
+_MSG_PARAM_SET_NOT_FOUND = "Parameter set not found"
+
+
+def _log_tool_failure(tool: str) -> None:
+    _log.exception("%s failed", tool)
+
+
+def _validate_parameter_values(values: dict[str, Any], param_map: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    for p_name, p_def in param_map.items():
+        value = values.get(p_name)
+        p_required = p_def.get("required", False)
+        if p_required and value is None:
+            errors.append({"field": p_name, "message": "This field is required."})
+            continue
+        if value is None:
+            continue
+        errors.extend(_validate_parameter_value(p_name, p_def, value))
+    return errors
+
+
+def _validate_parameter_value(p_name: str, p_def: dict[str, Any], value: Any) -> list[dict[str, str]]:
+    p_type = p_def.get("type", "string")
+    if p_type == "string":
+        if isinstance(value, str):
+            return []
+        return [{"field": p_name, "message": "Expected a string value."}]
+    if p_type == "boolean":
+        if isinstance(value, bool):
+            return []
+        return [{"field": p_name, "message": "Expected a boolean value."}]
+    if p_type == "number":
+        return _validate_number(p_name, p_def, value)
+    if p_type == "select":
+        options = p_def.get("options", [])
+        if options and str(value) not in options:
+            return [
+                {
+                    "field": p_name,
+                    "message": f"Value must be one of: {', '.join(str(o) for o in options)}.",
+                }
+            ]
+        return []
+    return []
+
+
+def _validate_number(p_name: str, p_def: dict[str, Any], value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, (int, float)):
+        return [{"field": p_name, "message": "Expected a numeric value."}]
+    errors: list[dict[str, str]] = []
+    p_min = p_def.get("minimum")
+    p_max = p_def.get("maximum")
+    if p_min is not None and value < p_min:
+        errors.append({"field": p_name, "message": f"Value must be >= {p_min}."})
+    if p_max is not None and value > p_max:
+        errors.append({"field": p_name, "message": f"Value must be <= {p_max}."})
+    return errors
+
 
 @mcp.tool(
     description="Create a new parameter schema. Returns the created schema details.",
@@ -7022,16 +7081,16 @@ async def create_parameter_schema(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
-        _log.exception("create_parameter_schema failed")
+        _log_tool_failure("create_parameter_schema")
         return {"error": "conflict", "detail": "A parameter schema with this name already exists."}
     except ProgrammingError:
-        _log.exception("create_parameter_schema failed")
+        _log_tool_failure("create_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("create_parameter_schema failed")
+        _log_tool_failure("create_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("create_parameter_schema failed")
+        _log_tool_failure("create_parameter_schema")
         return _tool_error("Failed to create parameter schema")
 
 
@@ -7060,7 +7119,7 @@ async def get_parameter_schema(
             schema = await db_get_ps(s, sid)
 
         if schema is None or schema.organisation_id != org_id:
-            return {"error": "not_found", "detail": "Parameter schema not found"}
+            return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
         return {
             "data": {
@@ -7112,7 +7171,7 @@ async def update_parameter_schema(
         async with _session(org_id) as s:
             existing = await db_get_ps(s, sid)
             if existing is None or existing.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             schema = await db_update_ps(
                 s,
@@ -7140,16 +7199,16 @@ async def update_parameter_schema(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
-        _log.exception("update_parameter_schema failed")
+        _log_tool_failure("update_parameter_schema")
         return {"error": "conflict", "detail": "A parameter schema with this name already exists."}
     except ProgrammingError:
-        _log.exception("update_parameter_schema failed")
+        _log_tool_failure("update_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("update_parameter_schema failed")
+        _log_tool_failure("update_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("update_parameter_schema failed")
+        _log_tool_failure("update_parameter_schema")
         return _tool_error("Failed to update parameter schema")
 
 
@@ -7178,12 +7237,12 @@ async def delete_parameter_schema(
         async with _session(org_id) as s:
             existing = await db_get_ps(s, sid)
             if existing is None or existing.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             schema = await db_delete_ps(s, sid)
 
         if schema is None:
-            return {"error": "not_found", "detail": "Parameter schema not found"}
+            return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
         return {
             "data": {
@@ -7195,13 +7254,13 @@ async def delete_parameter_schema(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
-        _log.exception("delete_parameter_schema failed")
+        _log_tool_failure("delete_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("delete_parameter_schema failed")
+        _log_tool_failure("delete_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("delete_parameter_schema failed")
+        _log_tool_failure("delete_parameter_schema")
         return _tool_error("Failed to delete parameter schema")
 
 
@@ -7250,13 +7309,13 @@ async def restore_parameter_schema(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
-        _log.exception("restore_parameter_schema failed")
+        _log_tool_failure("restore_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("restore_parameter_schema failed")
+        _log_tool_failure("restore_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("restore_parameter_schema failed")
+        _log_tool_failure("restore_parameter_schema")
         return _tool_error("Failed to restore parameter schema")
 
 
@@ -7285,7 +7344,7 @@ async def get_parameter_schema_references(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             refs = await db_get_refs(s, sid)
 
@@ -7330,46 +7389,12 @@ async def validate_parameter_schema(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             params = schema.parameters if isinstance(schema.parameters, list) else []
-            errors: list[dict[str, str]] = []
             param_map = {p.get("name", ""): p for p in params if isinstance(p, dict)}
 
-            for p_name, p_def in param_map.items():
-                p_type = p_def.get("type", "string")
-                p_required = p_def.get("required", False)
-                value = values.get(p_name)
-
-                if p_required and value is None:
-                    errors.append({"field": p_name, "message": "This field is required."})
-                    continue
-                if value is None:
-                    continue
-
-                if p_type == "string" and not isinstance(value, str):
-                    errors.append({"field": p_name, "message": "Expected a string value."})
-                elif p_type == "number":
-                    if not isinstance(value, (int, float)):
-                        errors.append({"field": p_name, "message": "Expected a numeric value."})
-                    else:
-                        p_min = p_def.get("minimum")
-                        p_max = p_def.get("maximum")
-                        if p_min is not None and value < p_min:
-                            errors.append({"field": p_name, "message": f"Value must be >= {p_min}."})
-                        if p_max is not None and value > p_max:
-                            errors.append({"field": p_name, "message": f"Value must be <= {p_max}."})
-                elif p_type == "boolean" and not isinstance(value, bool):
-                    errors.append({"field": p_name, "message": "Expected a boolean value."})
-                elif p_type == "select":
-                    options = p_def.get("options", [])
-                    if options and str(value) not in options:
-                        errors.append(
-                            {
-                                "field": p_name,
-                                "message": f"Value must be one of: {', '.join(str(o) for o in options)}.",
-                            }
-                        )
+            errors = _validate_parameter_values(values, param_map)
 
         return {"data": {"valid": len(errors) == 0, "errors": errors}}
     except MCPAuthorizationError as exc:
@@ -7412,7 +7437,7 @@ async def list_parameter_sets(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             sets = await db_list_sets(s, parameter_schema_id=sid, org_id=org_id)
 
@@ -7471,7 +7496,7 @@ async def create_parameter_set(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             ps = await db_create_set(
                 s,
@@ -7499,16 +7524,16 @@ async def create_parameter_set(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
-        _log.exception("create_parameter_set failed")
+        _log_tool_failure("create_parameter_set")
         return {"error": "conflict", "detail": "A parameter set with this name already exists for this schema."}
     except ProgrammingError:
-        _log.exception("create_parameter_set failed")
+        _log_tool_failure("create_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("create_parameter_set failed")
+        _log_tool_failure("create_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("create_parameter_set failed")
+        _log_tool_failure("create_parameter_set")
         return _tool_error("Failed to create parameter set")
 
 
@@ -7539,7 +7564,7 @@ async def get_parameter_set(
             ps = await db_get_set(s, setid)
 
         if ps is None or ps.parameter_schema_id != sid or ps.organisation_id != org_id:
-            return {"error": "not_found", "detail": "Parameter set not found"}
+            return {"error": "not_found", "detail": _MSG_PARAM_SET_NOT_FOUND}
 
         return {
             "data": {
@@ -7596,11 +7621,11 @@ async def update_parameter_set(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             existing = await db_get_set(s, setid)
             if existing is None or existing.parameter_schema_id != sid or existing.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter set not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SET_NOT_FOUND}
 
             ps = await db_update_set(
                 s,
@@ -7630,16 +7655,16 @@ async def update_parameter_set(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
-        _log.exception("update_parameter_set failed")
+        _log_tool_failure("update_parameter_set")
         return {"error": "conflict", "detail": "A parameter set with this name already exists."}
     except ProgrammingError:
-        _log.exception("update_parameter_set failed")
+        _log_tool_failure("update_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("update_parameter_set failed")
+        _log_tool_failure("update_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("update_parameter_set failed")
+        _log_tool_failure("update_parameter_set")
         return _tool_error("Failed to update parameter set")
 
 
@@ -7671,16 +7696,16 @@ async def delete_parameter_set(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
 
             existing = await db_get_set(s, setid)
             if existing is None or existing.parameter_schema_id != sid or existing.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter set not found"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SET_NOT_FOUND}
 
             ps = await db_delete_set(s, setid)
 
         if ps is None:
-            return {"error": "not_found", "detail": "Parameter set not found"}
+            return {"error": "not_found", "detail": _MSG_PARAM_SET_NOT_FOUND}
 
         return {
             "data": {
@@ -7692,13 +7717,13 @@ async def delete_parameter_set(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
-        _log.exception("delete_parameter_set failed")
+        _log_tool_failure("delete_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("delete_parameter_set failed")
+        _log_tool_failure("delete_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("delete_parameter_set failed")
+        _log_tool_failure("delete_parameter_set")
         return _tool_error("Failed to delete parameter set")
 
 
@@ -7757,13 +7782,13 @@ async def restore_parameter_set(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
-        _log.exception("restore_parameter_set failed")
+        _log_tool_failure("restore_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError:
-        _log.exception("restore_parameter_set failed")
+        _log_tool_failure("restore_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
-        _log.exception("restore_parameter_set failed")
+        _log_tool_failure("restore_parameter_set")
         return _tool_error("Failed to restore parameter set")
 
 

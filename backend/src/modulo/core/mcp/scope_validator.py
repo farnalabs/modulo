@@ -75,6 +75,7 @@ class MCPConfigurationError(Exception):
 # Secret-management permission shared by the create/delete/list secret tools.
 _SCOPE_SECRET_MANAGE = "secret.manage"  # nosec B105 — permission scope name, not a credential
 _SCOPE_CONNECTOR_LIST = "connector.list"  # nosec B105 — permission scope name, not a credential
+_SCOPE_PARAMETER_SCHEMA_LIST = "parameter_schema.list"  # nosec B105 — permission scope name, not a credential
 
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "run.trigger",
@@ -139,17 +140,17 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "list_model_backends": "model_backend.list",
     "get_model_backend": "model_backend.list",
     "list_environment_profiles": "environment_profile.list",
-    "list_parameter_schemas": "parameter_schema.list",
+    "list_parameter_schemas": _SCOPE_PARAMETER_SCHEMA_LIST,
     "create_parameter_schema": "parameter_schema.create",
-    "get_parameter_schema": "parameter_schema.list",
+    "get_parameter_schema": _SCOPE_PARAMETER_SCHEMA_LIST,
     "update_parameter_schema": "parameter_schema.update",
     "delete_parameter_schema": "parameter_schema.delete",
     "restore_parameter_schema": "parameter_schema.update",
-    "get_parameter_schema_references": "parameter_schema.list",
+    "get_parameter_schema_references": _SCOPE_PARAMETER_SCHEMA_LIST,
     "validate_parameter_schema": "parameter_schema.validate",
-    "list_parameter_sets": "parameter_schema.list",
+    "list_parameter_sets": _SCOPE_PARAMETER_SCHEMA_LIST,
     "create_parameter_set": "parameter_schema.set.create",
-    "get_parameter_set": "parameter_schema.list",
+    "get_parameter_set": _SCOPE_PARAMETER_SCHEMA_LIST,
     "update_parameter_set": "parameter_schema.set.update",
     "delete_parameter_set": "parameter_schema.set.delete",
     "restore_parameter_set": "parameter_schema.set.update",
