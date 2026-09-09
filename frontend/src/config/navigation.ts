@@ -10,6 +10,7 @@ export interface NavItem {
   requiredRoles?: string[] | null
   requiredTier?: string | null
   requiredPermissions?: string[] | null
+  requiredFeatureFlag?: string | null
 }
 
 export interface NavGroup {
@@ -97,6 +98,7 @@ interface ManifestRoute {
   required_tier?: string | null
   required_roles?: string[] | null
   required_permissions?: string[] | null
+  feature_flag?: string | null
 }
 
 interface ManifestSidebarGroup {
@@ -157,6 +159,7 @@ function buildSidebarGroups(): NavGroup[] {
       requiredRoles: route.required_roles || null,
       requiredTier: route.required_tier || null,
       requiredPermissions: route.required_permissions || null,
+      requiredFeatureFlag: route.feature_flag || null,
     })
   }
 
@@ -209,6 +212,9 @@ export interface NavVisibilityContext {
   // from localStorage inside the per-item function) — private_preview surfaces
   // are hidden for demo sessions even when dev mode is enabled.
   isDemoSession: boolean
+  // FAR-656: resolves manifest-declared route flags (planStore.featureEnabled)
+  // so flag-gated sidebar items stay consistent with the router guard.
+  isFeatureEnabled: (flag: string) => boolean
 }
 
 export function isNavItemVisible(item: NavItem, ctx: NavVisibilityContext): boolean {
@@ -219,7 +225,18 @@ export function isNavItemVisible(item: NavItem, ctx: NavVisibilityContext): bool
   // preview tools). The demo state is sourced from the context, not from
   // localStorage, so every consumer gates identically without per-item reads.
   if (item.visibility === 'private_preview' && ctx.isDemoSession) return false
-  if (!item.requiredRoles && !item.requiredTier && !item.requiredPermissions) return true
+  if (
+    !item.requiredRoles
+    && !item.requiredTier
+    && !item.requiredPermissions
+    && !item.requiredFeatureFlag
+  )
+    return true
+  // FAR-656: flag-gated items stay hidden until the plan fetch resolves, and
+  // are filtered out entirely while their flag is disabled — the router guard
+  // enforces the same flag on the route itself.
+  if (item.requiredFeatureFlag && !ctx.tierInfoLoaded) return false
+  if (item.requiredFeatureFlag && !ctx.isFeatureEnabled(item.requiredFeatureFlag)) return false
   if (item.requiredTier && !ctx.tierInfoLoaded) return false
   return canSeeItem(
     item,

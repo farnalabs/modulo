@@ -150,7 +150,7 @@ class TestAfterProcess:
         record_facts.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_failed_execute_truncates_long_error_detail(self) -> None:
+    async def test_failed_execute_preserves_long_error_detail(self) -> None:
         ctx = {
             "job": _job(
                 "modulo.core.saq_worker.execute_run",
@@ -174,7 +174,10 @@ class TestAfterProcess:
 
         _stmt, params = mark_session.execute.await_args.args
         assert params["detail"] is not None
-        assert len(params["detail"]) == 5000
+        # error_detail was widened String(5000) -> Text by migration 0199, so the
+        # write site no longer truncates (FAR-583 path uses limit=None); the full
+        # 6000-char sanitized payload is preserved rather than capped at 5000.
+        assert len(params["detail"]) == 6000
 
     @pytest.mark.asyncio
     async def test_failed_execute_none_error_writes_null_detail(self) -> None:

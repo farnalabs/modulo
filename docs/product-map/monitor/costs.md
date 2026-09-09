@@ -11,7 +11,7 @@ code:
   - backend/src/modulo/db/crud/scheduled_report.py
   - backend/src/modulo/db/crud/spend_anomaly.py
   - backend/src/modulo/db/models/spend_anomaly.py
-  - backend/src/modulo/db/migrations/versions/0195_spend_anomaly_unique_org_date.py
+  - backend/src/modulo/db/migrations/versions/0200_spend_anomaly_unique_org_date.py
 unit-tests:
   - backend/tests/unit/api/test_costs.py
   - backend/tests/unit/api/test_cost_controls_bdd.py

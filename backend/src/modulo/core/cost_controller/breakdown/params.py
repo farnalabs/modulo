@@ -7,9 +7,11 @@ rejected at save time AND eval time.
 
 The telemetry builder (``build_telemetry``) is the SINGLE classification
 authority: a node is self-reporting iff (1) positive ``model_cost_usd`` >=
-floor, (2) ``sandbox_by_map`` (from the run-frozen node-type map via the
-enriched union), and (3) an enabled consuming ``self_reported`` component's
-``report_key`` matches. Token sums come in TWO flavours: ``tokens_input`` /
+floor, (1b) FAR-653: an EXACT ZERO ``model_cost_usd`` that PROVES no token
+spend (every mandatory agent-reported token key present and zero — the shared
+``is_proven_zero_*`` predicates), (2) ``sandbox_by_map`` (from the run-frozen
+node-type map via the enriched union), and (3) an enabled consuming
+``self_reported`` component's ``report_key`` matches. Token sums come in TWO flavours: ``tokens_input`` /
 ``tokens_output`` / ``tokens_estimated`` are SERVER-MEASURED ONLY, while the
 ``tokens_*_reported`` family sums the agent-supplied ``token_usage`` folded
 into the union's ``reported_*`` keys (FAR-491, sandbox nodes included). The
@@ -44,6 +46,9 @@ __all__ = [
     "coerce_reported_token",
     "compute_run_warnings",
     "compute_run_warnings_count",
+    "is_proven_zero_model_token_fields",
+    "is_proven_zero_reported_tokens",
+    "is_proven_zero_token_usage",
 ]
 
 # The ONLY registered rate-fallback name. CRUD rejects any other name with a
@@ -213,6 +218,87 @@ def coerce_reported_token(value: Any) -> int | None:
     return coerced
 
 
+#: FAR-653 proven-zero proof: the producer contract pins ``input`` / ``output``
+#: / ``total`` as the MANDATORY ``token_usage`` keys (the cache keys are
+#: optional, tri-state). A genuine-zero cost report is PROVEN only when every
+#: mandatory key is present and zero and every optional key, WHEN PRESENT, is
+#: also zero — an absent optional key proves nothing either way, a present
+#: non-zero (or unparseable) one means there WAS token activity.
+_PROVEN_ZERO_MANDATORY_PRODUCER_KEYS = frozenset({"input", "output", "total"})
+
+#: Per-stage key tuples of the shared chain — the same chain drives the
+#: producer ``token_usage`` stage (node_runner extraction), the node-output
+#: ``model_tokens_*`` stage (finalize fold), and the union ``reported_*``
+#: stage (classification), so the proven-zero rule cannot drift between them.
+_REPORTED_TOKEN_PRODUCER_KEYS: tuple[str, ...] = tuple(binding.producer_key for binding in REPORTED_TOKEN_CHAIN)
+_REPORTED_TOKEN_NODE_FIELDS: tuple[str, ...] = tuple(binding.node_field for binding in REPORTED_TOKEN_CHAIN)
+_REPORTED_TOKEN_UNION_KEYS: tuple[str, ...] = tuple(binding.union_key for binding in REPORTED_TOKEN_CHAIN)
+
+_PROVEN_ZERO_MANDATORY_NODE_FIELDS = frozenset(
+    binding.node_field
+    for binding in REPORTED_TOKEN_CHAIN
+    if binding.producer_key in _PROVEN_ZERO_MANDATORY_PRODUCER_KEYS
+)
+_PROVEN_ZERO_MANDATORY_UNION_KEYS = frozenset(
+    binding.union_key
+    for binding in REPORTED_TOKEN_CHAIN
+    if binding.producer_key in _PROVEN_ZERO_MANDATORY_PRODUCER_KEYS
+)
+
+
+def _proven_zero_via_keys(values: Any, keys: tuple[str, ...], mandatory: frozenset[str]) -> bool:
+    """The ONE proven-zero core (FAR-653), parameterised by chain stage.
+
+    ``values`` is the stage's mapping (producer ``token_usage`` / node-output
+    dict / union entry). Every MANDATORY key must be present and coerce (via
+    the shared ``coerce_reported_token`` tri-state) to 0; every OPTIONAL key,
+    WHEN PRESENT, must also coerce to 0 (absent optional keys are fine — a
+    present non-zero or unparseable one means there WAS token activity, so the
+    zero is unproven). Non-dict input is never a proof.
+    """
+    if not isinstance(values, dict):
+        return False
+    for key in keys:
+        coerced = coerce_reported_token(values.get(key))
+        if key in mandatory:
+            if coerced != 0:  # absent, unparseable, or non-zero — all unproven
+                return False
+        elif key in values and coerced != 0:
+            return False
+    return True
+
+
+def is_proven_zero_token_usage(usage: Any) -> bool:
+    """FAR-653: TRUE iff a producer ``token_usage`` dict PROVES no token spend.
+
+    Producer-stage predicate (node_runner extraction): every mandatory
+    ``token_usage`` key (``input`` / ``output`` / ``total``) present and zero;
+    optional cache keys, when present, also zero. This is the TRUST BOUNDARY
+    for accepting an explicit ``model_cost_usd: 0`` as a real report.
+    """
+    return _proven_zero_via_keys(usage, _REPORTED_TOKEN_PRODUCER_KEYS, _PROVEN_ZERO_MANDATORY_PRODUCER_KEYS)
+
+
+def is_proven_zero_model_token_fields(output_obj: Any) -> bool:
+    """FAR-653 node-output stage: the ``model_tokens_*`` fields prove zero.
+
+    Used by the finalize fold (``_fold_from_output_obj``) to re-verify the
+    proven-zero shape on the stored node-output dict — the node-output mirror
+    of ``is_proven_zero_token_usage`` (the same proof, one stage later).
+    """
+    return _proven_zero_via_keys(output_obj, _REPORTED_TOKEN_NODE_FIELDS, _PROVEN_ZERO_MANDATORY_NODE_FIELDS)
+
+
+def is_proven_zero_reported_tokens(entry: dict[str, Any]) -> bool:
+    """FAR-653 union stage: the ``reported_*`` keys prove zero.
+
+    Used by ``_classify_self_report`` to re-verify the proven-zero shape on
+    the enriched-union entry (defense-in-depth: the fold only writes a zero
+    when proven, and this re-checks the stored union it classifies).
+    """
+    return _proven_zero_via_keys(entry, _REPORTED_TOKEN_UNION_KEYS, _PROVEN_ZERO_MANDATORY_UNION_KEYS)
+
+
 @dataclass(frozen=True)
 class CostComponentConfig:
     """Live cost-component row in the shape the engine consumes (no DB coupling)."""
@@ -302,11 +388,22 @@ def _classify_self_report(
     reportable floor, an unparseable/non-finite ``model_cost_usd``, or no
     consuming component matches). ``model_cost_usd`` is the fallback alias for
     any report_key.
+
+    FAR-653: an EXACT ZERO ``model_cost_usd`` is a REAL report ONLY when the
+    union entry proves no token spend (``is_proven_zero_reported_tokens`` —
+    every mandatory ``reported_*`` token key present and zero); an unproven
+    zero is not a report and routes to estimate, keeping the
+    ``missing_self_report`` warning. Sub-floor NON-ZERO values stay rejected.
     """
     if not sandbox_by_map:
         return None
     reported_usd = _coerce_decimal(entry.get("model_cost_usd"))
-    if reported_usd is None or reported_usd < floor:
+    if reported_usd is None:
+        return None
+    if reported_usd == 0:
+        if not is_proven_zero_reported_tokens(entry):
+            return None
+    elif reported_usd < floor:
         return None
     node_report_key = entry.get("report_key")
     for rk, comp in consuming.items():

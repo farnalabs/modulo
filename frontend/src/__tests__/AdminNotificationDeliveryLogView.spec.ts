@@ -23,7 +23,7 @@ describe('AdminNotificationDeliveryLogView', () => {
     const wrapper = mount(AdminNotificationDeliveryLogView)
     await nextTick()
     expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Notification Delivery Log')
+    expect(wrapper.text()).toContain('Webhook Notifications')
   })
 
   it('renders empty state when no deliveries', async () => {

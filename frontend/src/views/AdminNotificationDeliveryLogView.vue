@@ -1,5 +1,5 @@
 <template>
-  <FeatureGate feature-name="notification_log" required-tier="community" show-disabled>
+  <FeatureGate feature-name="webhook_notification_log" required-tier="community" show-disabled>
     <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries')" data-test-id="admin-notification-log-title" />
 

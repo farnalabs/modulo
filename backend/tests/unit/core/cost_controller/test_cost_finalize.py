@@ -185,6 +185,78 @@ def test_enrich_union_output_present_but_lacking_pops_sibling_flags() -> None:
         assert key not in union["node-a"]
 
 
+_PROVEN_ZERO_NODE_OUTPUT = {
+    "model_cost_usd": 0.0,
+    "model_cost_raw_usd": 0.0,
+    "model_cost_clamped": False,
+    "model_cost_out_of_band_high": False,
+    "model_tokens_input": 0,
+    "model_tokens_output": 0,
+    "model_tokens_total": 0,
+}
+
+
+def test_enrich_union_folds_proven_zero_report() -> None:
+    """FAR-653: a node output carrying an exact-zero cost WITH the all-zero
+    ``model_tokens_*`` proof folds as a REAL report — the union keeps 0.0."""
+    usage = {"node-a": {"model_cost_usd": 5.0}}
+    outputs = {"node-a": {"output": dict(_PROVEN_ZERO_NODE_OUTPUT)}}
+    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False)
+    entry = union["node-a"]
+    assert entry["model_cost_usd"] == 0.0
+    assert entry["model_cost_raw_usd"] == 0.0
+    assert entry["model_cost_clamped"] is False
+    assert entry["model_cost_out_of_band_high"] is False
+    assert entry["reported_input_tokens"] == 0
+    assert entry["reported_output_tokens"] == 0
+    assert entry["reported_total_tokens"] == 0
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        {"model_cost_usd": 0.0, "model_cost_raw_usd": 0.0},  # no token fields — unproven
+        {  # a non-zero reported token count — unproven
+            "model_cost_usd": 0.0,
+            "model_cost_raw_usd": 0.0,
+            "model_tokens_input": 0,
+            "model_tokens_output": 5,
+            "model_tokens_total": 5,
+        },
+        {  # mandatory node field absent — unproven
+            "model_cost_usd": 0.0,
+            "model_cost_raw_usd": 0.0,
+            "model_tokens_input": 0,
+            "model_tokens_output": 0,
+        },
+    ],
+)
+def test_enrich_union_pops_unproven_zero_fold(output: dict) -> None:
+    """FAR-653: an unproven zero is NOT a report — the fold pops the fields."""
+    usage = {"node-a": {"model_cost_usd": 5.0, "model_cost_raw_usd": 5.0}}
+    outputs = {"node-a": {"output": output}}
+    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False)
+    for key in ("model_cost_usd", "model_cost_raw_usd", "model_cost_clamped", "model_cost_out_of_band_high"):
+        assert key not in union["node-a"]
+
+
+def test_enrich_union_keeps_stored_genuine_zero_without_outputs() -> None:
+    """FAR-653 branch (3): a stored exact zero is server-written (only the
+    validated proven-zero fold writes one) — a re-enrich of an outputs-pruned
+    run keeps the genuine-zero report instead of resurrecting the warning."""
+    usage = {
+        "node-a": {
+            "model_cost_usd": 0.0,
+            "model_cost_clamped": False,
+            "model_cost_out_of_band_high": False,
+        }
+    }
+    union = _enrich_union(usage, {}, {"node-a": "sandbox_agent"}, is_terminal=False)
+    assert union["node-a"]["model_cost_usd"] == 0.0
+    assert union["node-a"]["model_cost_clamped"] is False
+    assert union["node-a"]["model_cost_out_of_band_high"] is False
+
+
 @pytest.mark.parametrize(
     ("is_terminal", "map_type", "pin_failed", "should_increment"),
     [
