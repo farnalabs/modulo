@@ -374,7 +374,9 @@ async def test_sweep_then_dual_write_replace(
     assert final_nodes == ["a"]
     assert rows[0][2] == {"v": 10}
     legacy = await _fetch_legacy_row(db_engine, run_id)
-    assert legacy["outputs_json"] == {"a": {"v": 10}}
+    # FAR-583 B1: the REPLACE write is the only write — the legacy column
+    # keeps its SEEDED value (the pre-sweep state) until B2b drops it.
+    assert legacy["outputs_json"] == {"a": {"v": 1}, "b": {"v": 2}}
 
 
 @pytest.mark.asyncio

@@ -756,36 +756,44 @@ class TestMarkRunFailedGuard:
 
 class TestDualWriteHelperSkipsWithoutRlsOrg:
     @pytest.mark.asyncio
-    async def test_no_rls_org_skips_the_new_table_leg(self, sqlite_sessionmaker: Any) -> None:
-        """A session with no bound RLS org skips the new-table leg silently.
+    async def test_no_rls_org_raises_fail_closed(self, sqlite_sessionmaker: Any) -> None:
+        """B1 contract cut: a session with NO bound RLS org raises
+        :class:`OutputsRlsMismatch` fail-closed.
 
-        The repo's write gate requires a bound org; the only org-less sessions
-        are unit tests / maintenance sessions where the legacy write governs.
-        The absence of a raised error IS the assertion (a real replace attempt
-        would either raise the org gate or hit the table).
+        With the legacy ``runs`` blob columns no longer written, a silently
+        skipped store write would be DATA LOSS — the org-less skip (qa rider
+        g) is gone; the caller must wrap the write in an org-bound
+        transaction.
         """
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud.run import write_run_outputs_from_run
+        from modulo.db.rls import OutputsRlsMismatch
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
         await _seed_run(maker, run_id)
         async with maker() as session, session.begin():
-            await dual_write_run_node_outputs(
-                session,
-                run_id=run_id,
-                organisation_id=_ORG,
-                outputs={"n1": {"a": 1}},
-                telemetry=None,
-            )
+            with pytest.raises(OutputsRlsMismatch, match="requires a bound RLS organisation context"):
+                await write_run_outputs_from_run(
+                    session,
+                    run_id=run_id,
+                    organisation_id=_ORG,
+                    outputs={"n1": {"a": 1}},
+                    telemetry=None,
+                )
         row = await _read_run(maker, run_id)
         assert row["status"] == "running"
 
 
 class TestDualWriteHelperKillSwitchOff:
     @pytest.mark.asyncio
-    async def test_kill_switch_off_skips_with_degraded_note(self, sqlite_sessionmaker: Any) -> None:
+    async def test_kill_switch_off_does_not_gate_the_store_write(self, sqlite_sessionmaker: Any) -> None:
+        """B1 contract cut: the blobs chokepoint consults NO kill-switch —
+        with the legacy columns no longer written there is no legacy-only
+        mode to fall back to, so even a flag forced OFF cannot disable the
+        store write (the switch dies with the legacy writes at B2a)."""
         from modulo.core.run_outputs_dualwrite import note_dual_write_disabled
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud import run as run_crud
+        from modulo.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -795,18 +803,22 @@ class TestDualWriteHelperKillSwitchOff:
         try:
             async with maker() as session, session.begin():
                 await set_rls_org_for_test(session, _ORG)
-                with patch(
-                    "modulo.core.run_outputs_dualwrite.note_dual_write_disabled",
-                    wraps=note_dual_write_disabled,
-                ) as note:
-                    await dual_write_run_node_outputs(
+                with (
+                    patch(
+                        "modulo.core.run_outputs_dualwrite.note_dual_write_disabled",
+                        wraps=note_dual_write_disabled,
+                    ) as note,
+                    patch.object(run_crud, "replace_run_node_outputs", wraps=run_crud.replace_run_node_outputs) as rep,
+                ):
+                    await write_run_outputs_from_run(
                         session,
                         run_id=run_id,
                         organisation_id=_ORG,
                         outputs={"n1": {"a": 1}},
                         telemetry=None,
                     )
-            assert note.await_count == 1
+            rep.assert_awaited_once(), "the store write must run even with the switch forced OFF"
+            note.assert_not_awaited(), "the degraded note is a legacy-mode signal — it never fires post-B1"
         finally:
             store.clear_override(DUAL_WRITE_ENABLED_KEY)
 
@@ -828,7 +840,7 @@ class TestDualWriteHelperSentinelAbort:
         The repo's sentinel gate raises inside the savepoint; the helper
         converts it to the fail-closed DualWriteError (non-retryable).
         """
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -836,7 +848,7 @@ class TestDualWriteHelperSentinelAbort:
         async with maker() as session, session.begin():
             await set_rls_org_for_test(session, _ORG)
             with pytest.raises(DualWriteError) as caught:
-                await dual_write_run_node_outputs(
+                await write_run_outputs_from_run(
                     session,
                     run_id=run_id,
                     organisation_id=_ORG,
@@ -858,7 +870,7 @@ class TestDualWriteHelperRetryable:
         from sqlalchemy.exc import OperationalError
 
         from modulo.db.crud import run as run_crud
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -884,7 +896,7 @@ class TestDualWriteHelperRetryable:
                     new_callable=AsyncMock,
                 ),
             ):
-                await dual_write_run_node_outputs(
+                await write_run_outputs_from_run(
                     session,
                     run_id=run_id,
                     organisation_id=_ORG,
@@ -901,7 +913,7 @@ class TestDualWriteHelperRetryable:
         from sqlalchemy.exc import OperationalError
 
         from modulo.db.crud import run as run_crud
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -925,7 +937,7 @@ class TestDualWriteHelperRetryable:
                 ) as bump,
                 pytest.raises(DualWriteError) as caught,
             ):
-                await dual_write_run_node_outputs(
+                await write_run_outputs_from_run(
                     session,
                     run_id=run_id,
                     organisation_id=_ORG,
@@ -942,7 +954,7 @@ class TestDualWriteHelperRetryable:
         from sqlalchemy.exc import OperationalError
 
         from modulo.db.crud import run as run_crud
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -963,7 +975,7 @@ class TestDualWriteHelperRetryable:
                 ),
                 pytest.raises(DualWriteError) as caught,
             ):
-                await dual_write_run_node_outputs(
+                await write_run_outputs_from_run(
                     session,
                     run_id=run_id,
                     organisation_id=_ORG,
@@ -979,7 +991,7 @@ class TestDualWriteHelperRetryable:
         from sqlalchemy.exc import OperationalError
 
         from modulo.db.crud import run as run_crud
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -1000,7 +1012,7 @@ class TestDualWriteHelperRetryable:
                 patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock),
                 pytest.raises(DualWriteError) as caught,
             ):
-                await dual_write_run_node_outputs(
+                await write_run_outputs_from_run(
                     session,
                     run_id=run_id,
                     organisation_id=_ORG,
@@ -1392,25 +1404,30 @@ class TestFailureEventDetailHygiene:
 
 
 class TestOrgLessSkipCounter:
-    """qa rider (g): the org-less dual-write skip bumps its dedicated counter."""
+    """qa rider (g), retired by the B1 contract cut: the org-less dual-write
+    skip counter is GONE — the org-less write raises fail-closed instead of
+    skipping, so there is no skip to count. The pin verifies the raise (the
+    counter can never fire again)."""
 
     @pytest.mark.asyncio
-    async def test_no_rls_org_skip_bumps_counter(self, sqlite_sessionmaker: Any) -> None:
-        from modulo.db.crud.run import dual_write_run_node_outputs
+    async def test_no_rls_org_raises_instead_of_skipping(self, sqlite_sessionmaker: Any) -> None:
+        from modulo.db.crud.run import write_run_outputs_from_run
+        from modulo.db.rls import OutputsRlsMismatch
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
         await _seed_run(maker, run_id)
         with patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock) as bump:
             async with maker() as session, session.begin():
-                await dual_write_run_node_outputs(
-                    session,
-                    run_id=run_id,
-                    organisation_id=_ORG,
-                    outputs={"n1": {"a": 1}},
-                    telemetry=None,
-                )
-        bump.assert_awaited_once_with("outputs_dual_write_skipped_no_org")
+                with pytest.raises(OutputsRlsMismatch):
+                    await write_run_outputs_from_run(
+                        session,
+                        run_id=run_id,
+                        organisation_id=_ORG,
+                        outputs={"n1": {"a": 1}},
+                        telemetry=None,
+                    )
+        bump.assert_not_awaited()
 
 
 class TestSentinelFilteredCounterWiring:
@@ -1419,7 +1436,7 @@ class TestSentinelFilteredCounterWiring:
         """The replace helper's ``outputs_dual_write_sentinel_filtered`` count
         is wired into the dedicated counters (qa M10) — inherited sentinel
         keys are filtered (kept on the legacy column) and counted."""
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud.run import write_run_outputs_from_run
 
         maker = sqlite_sessionmaker
         run_id = uuid.uuid4()
@@ -1427,7 +1444,7 @@ class TestSentinelFilteredCounterWiring:
         with patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock) as bump:
             async with maker() as session, session.begin():
                 await set_rls_org_for_test(session, _ORG)
-                await dual_write_run_node_outputs(
+                await write_run_outputs_from_run(
                     session,
                     run_id=run_id,
                     organisation_id=_ORG,
@@ -1500,17 +1517,25 @@ class TestSqlstateExtraction:
         assert sqlstate_of(a) is None
 
     def test_vocabularies_are_shared_not_forked(self) -> None:
-        """The crud + node-runner vocabularies ARE the shared module's (the
-        hoist removed both forked copies)."""
-        from modulo.core.pipeline_engine.node_runner import _MARKER_TXN_ABORTING_SQLSTATES
-        from modulo.db.crud.run import _DUAL_WRITE_RETRYABLE_SQLSTATES
-        from modulo.db.sqlstates import DUAL_WRITE_RETRYABLE_SQLSTATES, MARKER_TXN_ABORTING_SQLSTATES
+        """The crud + node-runner vocabularies ARE the shared module's.
 
-        assert _MARKER_TXN_ABORTING_SQLSTATES is MARKER_TXN_ABORTING_SQLSTATES
+        B1 removed node_runner's module-local ``_MARKER_TXN_ABORTING_SQLSTATES``
+        alias: the read sites consume the imported shared constant directly
+        (the B1 SQLSTATE consolidation), and crud.run keeps only its
+        delegation alias."""
+        import inspect
+
+        from modulo.core.pipeline_engine import node_runner
+        from modulo.db.crud.run import _DUAL_WRITE_RETRYABLE_SQLSTATES
+        from modulo.db.sqlstates import DUAL_WRITE_RETRYABLE_SQLSTATES
+
+        source = inspect.getsource(node_runner)
+        assert "MARKER_TXN_ABORTING_SQLSTATES" in source
+        assert "_MARKER_TXN_ABORTING_SQLSTATES" not in source, "the module-local alias must stay removed (B1)"
         assert _DUAL_WRITE_RETRYABLE_SQLSTATES is DUAL_WRITE_RETRYABLE_SQLSTATES
 
     def test_marker_abort_vocabulary_matches_the_shared_copy(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _MARKER_TXN_ABORTING_SQLSTATES
+        from modulo.db.sqlstates import MARKER_TXN_ABORTING_SQLSTATES
 
         assert {
             "40P01",
@@ -1522,4 +1547,4 @@ class TestSqlstateExtraction:
             "08004",
             "08006",
             "08007",
-        } == _MARKER_TXN_ABORTING_SQLSTATES
+        } == MARKER_TXN_ABORTING_SQLSTATES

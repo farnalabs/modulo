@@ -6,10 +6,16 @@ JSON columns are still typed plain ``json`` (not promoted to ``jsonb``) while
 casts the bound JSON param to ``json`` (not ``jsonb``), so it must keep working
 against plain ``json`` columns — type-agnostic across both column types.
 
-The test force-downgrades the four run JSON columns to ``json``, exercises the
-fenced ``update_run_status`` write, and asserts the values round-trip — then
-restores the columns to ``jsonb`` in a ``finally`` so the shared test DB is left
-untouched for other integration tests.
+The test force-downgrades the runs JSON columns to ``json``, exercises the
+fenced ``update_run_status`` write, and asserts the fenced columns round-trip
+— then restores the columns to ``jsonb`` in a ``finally`` so the shared test
+DB is left untouched for other integration tests.
+
+FAR-583 B1 note: the blobs (``outputs_json`` / ``node_telemetry_json``) are
+no longer fenced-SQL writes — the per-node store write carries them, and the
+legacy runs blob columns stay NULL. The fenced columns this regression pins
+are ``node_token_usage`` / ``cost_breakdown``; the blobs land on
+``run_node_outputs`` (asserted here over the same plain-json exercise).
 """
 
 from __future__ import annotations
@@ -125,7 +131,11 @@ async def test_fenced_update_run_status_succeeds_on_plain_json_columns(
         assert result is not None, "the fenced write must land against plain-json columns"
         assert result.status == "complete"
 
-        # Read the persisted row back and assert the four values round-tripped.
+        # Read the persisted row back and assert the fenced-write columns
+        # round-tripped. FAR-583 B1: the blobs are NOT fenced-SQL writes any
+        # more — the store write carries them onto run_node_outputs, and the
+        # legacy runs blob columns stay NULL (the store is the only store
+        # until B2b drops the columns).
         # NOTE: run the read on a dedicated db_engine connection with an explicit
         # begin/commit — a plain db_session.execute() autobegins a transaction
         # that stays open (until the fixture teardown rollback, AFTER the
@@ -141,11 +151,30 @@ async def test_fenced_update_run_status_succeeds_on_plain_json_columns(
                     {"rid": str(run_id)},
                 )
             ).first()
-        assert row is not None
-        assert _as_json(row[0]) == outputs_json
-        assert _as_json(row[1]) == node_telemetry_json
-        assert _as_json(row[2]) == node_token_usage
-        assert _as_json(row[3]) == cost_breakdown
+            assert row is not None
+            assert row[0] is None, "the legacy blobs column is never written post-B1"
+            assert row[1] is None, "the legacy blobs column is never written post-B1"
+            assert _as_json(row[2]) == node_token_usage
+            assert _as_json(row[3]) == cost_breakdown
+            store_rows = (
+                await conn.execute(
+                    text(
+                        "SELECT node_id, attempt_key, outputs_json, node_telemetry_json "
+                        "FROM run_node_outputs WHERE run_id = :rid"
+                    ),
+                    {"rid": str(run_id)},
+                )
+            ).all()
+        # Each side lands on its own __final__ rows (a node carrying only the
+        # other side reads SQL NULL here) — filter per side.
+        final_outputs = {
+            r[0]: r[2] for r in store_rows if r[1] == "__final__" and r[0] != "__run_meta__" and r[2] is not None
+        }
+        final_telemetry = {
+            r[0]: r[3] for r in store_rows if r[1] == "__final__" and r[0] != "__run_meta__" and r[3] is not None
+        }
+        assert final_outputs == outputs_json, "the blobs land on the per-node store (B1 primary write)"
+        assert final_telemetry == node_telemetry_json
     finally:
         # Restore the shared test DB to jsonb so other integration tests are
         # unaffected.

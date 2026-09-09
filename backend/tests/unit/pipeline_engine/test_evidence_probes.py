@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.pipeline_engine import evidence
 from modulo.core.pipeline_engine.evidence import (
@@ -432,6 +432,11 @@ async def sqlite_factory():
                 tables=[RunEvidence.__table__, Run.__table__, RunNodeOutput.__table__],
             )
         )
+        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
+        # IN THE DATABASE until B2b — the repo's raw Core legacy-table readers
+        # select them; reproduce the migrated shape.
+        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
     yield factory
     await engine.dispose()
@@ -526,8 +531,7 @@ class TestRunEvidenceProbe:
         run_id = uuid.uuid4()
         org_id = uuid.uuid4()
         async with sqlite_factory() as session, session.begin():
-            session.add(_complete_run(run_id, org_id, outputs_json={}, telemetry={}))
-            await session.flush()
+            await _seed_complete_run(session, run_id, org_id, outputs_json={}, telemetry={})
             await write_evidence_row(
                 session, run_id=run_id, node_id=str(_NODE_A), evidence_state="verified_empty", evidence_detail=None
             )
@@ -842,9 +846,31 @@ def _complete_run(run_id: uuid.UUID, org_id: uuid.UUID, outputs_json: dict[str, 
         input_hash="a" * 64,
         langgraph_thread_id=f"thread-{run_id}",
         completed_at=datetime.datetime.now(datetime.UTC),
-        outputs_json=outputs_json,
-        node_telemetry_json=telemetry,
     )
+
+
+async def _seed_complete_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    outputs_json: dict[str, Any],
+    telemetry: dict[str, Any],
+) -> Run:
+    """Add a terminal run AND its legacy blob columns (FAR-583 B1: the ORM
+    mapping is cut — the blobs land via the repo's raw Core legacy table)."""
+    from sqlalchemy import update as sa_update
+
+    from modulo.db.crud.run_node_outputs import RUNS_LEGACY_TABLE
+
+    run = _complete_run(run_id, org_id, outputs_json, telemetry)
+    session.add(run)
+    await session.flush()
+    await session.execute(
+        sa_update(RUNS_LEGACY_TABLE)
+        .where(RUNS_LEGACY_TABLE.c.id == run.id)
+        .values(outputs_json=outputs_json, node_telemetry_json=telemetry)
+    )
+    return run
 
 
 class TestReconcileNoopEvidence:
@@ -852,22 +878,20 @@ class TestReconcileNoopEvidence:
         run_id = uuid.uuid4()
         org_id = uuid.uuid4()
         async with sqlite_factory() as session, session.begin():
-            session.add(
-                _complete_run(
-                    run_id,
-                    org_id,
-                    outputs_json={
-                        str(_NODE_A): {
-                            "artifacts": [
-                                {"output": {"output_json": {}, "agent_status": "completed", "agent_outcome": "success"}}
-                            ],
-                            "output": {"agent_status": "completed", "agent_outcome": "success"},
-                        }
-                    },
-                    telemetry={str(_NODE_A): {"agent_status": "completed", "agent_outcome": "success"}},
-                )
+            await _seed_complete_run(
+                session,
+                run_id,
+                org_id,
+                outputs_json={
+                    str(_NODE_A): {
+                        "artifacts": [
+                            {"output": {"output_json": {}, "agent_status": "completed", "agent_outcome": "success"}}
+                        ],
+                        "output": {"agent_status": "completed", "agent_outcome": "success"},
+                    }
+                },
+                telemetry={str(_NODE_A): {"agent_status": "completed", "agent_outcome": "success"}},
             )
-            await session.flush()
 
         provider = FakeEvidenceProvider(EvidenceResult.verified_empty, EvidenceResult.verified_empty)
         summary = await reconcile_noop_evidence(sqlite_factory, provider=provider, max_runs=10)
@@ -884,15 +908,13 @@ class TestReconcileNoopEvidence:
     async def test_skips_runs_that_already_have_evidence(self, sqlite_factory) -> None:
         run_id = uuid.uuid4()
         async with sqlite_factory() as session, session.begin():
-            session.add(
-                _complete_run(
-                    run_id,
-                    uuid.uuid4(),
-                    outputs_json={str(_NODE_A): {"output": {"agent_status": "completed", "agent_outcome": "success"}}},
-                    telemetry={str(_NODE_A): {"agent_status": "completed", "agent_outcome": "success"}},
-                )
+            await _seed_complete_run(
+                session,
+                run_id,
+                uuid.uuid4(),
+                outputs_json={str(_NODE_A): {"output": {"agent_status": "completed", "agent_outcome": "success"}}},
+                telemetry={str(_NODE_A): {"agent_status": "completed", "agent_outcome": "success"}},
             )
-            await session.flush()
             await write_evidence_row(
                 session,
                 run_id=run_id,
@@ -911,15 +933,13 @@ class TestReconcileNoopEvidence:
     async def test_ignores_non_declared_success_nodes(self, sqlite_factory) -> None:
         run_id = uuid.uuid4()
         async with sqlite_factory() as session, session.begin():
-            session.add(
-                _complete_run(
-                    run_id,
-                    uuid.uuid4(),
-                    outputs_json={str(_NODE_A): {"output": {"agent_status": "completed"}}},
-                    telemetry={str(_NODE_A): {"agent_status": "completed"}},
-                )
+            await _seed_complete_run(
+                session,
+                run_id,
+                uuid.uuid4(),
+                outputs_json={str(_NODE_A): {"output": {"agent_status": "completed"}}},
+                telemetry={str(_NODE_A): {"agent_status": "completed"}},
             )
-            await session.flush()
 
         provider = FakeEvidenceProvider(EvidenceResult.verified_empty, EvidenceResult.verified_empty)
         summary = await reconcile_noop_evidence(sqlite_factory, provider=provider, max_runs=10)
@@ -930,15 +950,13 @@ class TestReconcileNoopEvidence:
     async def test_probe_failure_counts_as_error_and_continues(self, sqlite_factory) -> None:
         run_id = uuid.uuid4()
         async with sqlite_factory() as session, session.begin():
-            session.add(
-                _complete_run(
-                    run_id,
-                    uuid.uuid4(),
-                    outputs_json={str(_NODE_A): {"output": {"agent_status": "completed", "agent_outcome": "success"}}},
-                    telemetry={str(_NODE_A): {"agent_status": "completed", "agent_outcome": "success"}},
-                )
+            await _seed_complete_run(
+                session,
+                run_id,
+                uuid.uuid4(),
+                outputs_json={str(_NODE_A): {"output": {"agent_status": "completed", "agent_outcome": "success"}}},
+                telemetry={str(_NODE_A): {"agent_status": "completed", "agent_outcome": "success"}},
             )
-            await session.flush()
 
         class _RaisingProvider:
             async def git_diff_empty(self, run_id, node_id):
@@ -968,15 +986,13 @@ class TestReconcileNoopEvidence:
     async def test_budget_break_stops_sweep(self, sqlite_factory) -> None:
         run_id = uuid.uuid4()
         async with sqlite_factory() as session, session.begin():
-            session.add(
-                _complete_run(
-                    run_id,
-                    uuid.uuid4(),
-                    outputs_json={str(_NODE_A): {"output": {"agent_status": "completed", "agent_outcome": "success"}}},
-                    telemetry={str(_NODE_A): {"agent_status": "completed", "agent_outcome": "success"}},
-                )
+            await _seed_complete_run(
+                session,
+                run_id,
+                uuid.uuid4(),
+                outputs_json={str(_NODE_A): {"output": {"agent_status": "completed", "agent_outcome": "success"}}},
+                telemetry={str(_NODE_A): {"agent_status": "completed", "agent_outcome": "success"}},
             )
-            await session.flush()
 
         provider = FakeEvidenceProvider(EvidenceResult.verified_empty, EvidenceResult.verified_empty)
         # A negative budget puts the deadline in the past — the sweep scans the

@@ -21,10 +21,10 @@ module. It provides:
 * EMPTY/MISMATCH read-fallback helpers: a raw parameterised SELECT of the
   legacy ``runs`` columns, served per the DIRECTION-AWARE subset rule
   (see :func:`read_run_blobs_with_fallback`); removed at B2b together with
-  the columns. B1 NOTE (design-doc addendum): these fallback readers read the
-  legacy columns via ORM attributes — B1 MUST convert them to raw
-  parameterised SQL BEFORE dropping the model columns, so the fallback
-  survives until B2b;
+  the columns. B1 (design-doc addendum) cut the legacy columns' ORM mapping
+  first — every legacy-column access here (and the fenced markers reader's
+  joined legacy leg, the sweep's selection, and the marker dual-write's
+  legacy leg) runs through the raw Core table :data:`RUNS_LEGACY_TABLE`;
 * the batched backfill helper (the catch-up sweep body) whose selection is
   driven by the NOT-EXISTS trigger legs + jsonb-native object predicates on
   Postgres, the per-tick cap, and ``ORDER BY completed_at ASC`` — NO
@@ -98,7 +98,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.models.run_node_outputs import (
     FINAL_ATTEMPT_KEY,
     META_NODE_ID,
@@ -116,6 +116,8 @@ __all__ = [
     "RunBlobs",
     "backfill_run_node_outputs_batch",
     "parse_marker_node_id",
+    "read_legacy_raw_output_markers",
+    "read_legacy_run_blobs",
     "read_node_output_blob_bytes",
     "read_run_blobs_with_fallback",
     "read_run_markers_fenced",
@@ -124,6 +126,7 @@ __all__ = [
     "read_run_outputs_with_fallback",
     "read_run_telemetry_with_fallback",
     "replace_run_node_outputs",
+    "write_legacy_raw_output_markers",
     "write_run_markers",
 ]
 
@@ -357,6 +360,38 @@ QUARANTINE_TABLE = Table(
     Column("legacy_node_telemetry_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
     Column("legacy_raw_output_markers", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
     Column("quarantined_at", DateTime(timezone=True), nullable=False),
+)
+
+
+# The legacy ``runs`` blob columns as a CORE-ONLY Table (B1 — FAR-583): the
+# ORM mapping of ``outputs_json`` / ``node_telemetry_json`` /
+# ``raw_output_markers`` was CUT from :class:`modulo.db.models.run.Run` in B1,
+# but the columns EXIST IN THE DATABASE until migration 0194 (B2b), so the
+# EMPTY/MISMATCH fallback readers, the fenced markers read, the catch-up
+# sweep's selection, and the marker dual-write's legacy read-merge-write leg
+# select/patch them through this table. Statement-shaped parameterised SQL
+# with the same ``Uuid``/``JSON``-variant types the ORM mapping carried —
+# SQLAlchemy's type-aware binding keeps every dialect's UUID/JSON
+# bind-and-result round-trip identical to the ORM's (SQLite stores ``Uuid`` in
+# the non-text form a plain string bind parameter could not match). Postgres'
+# runs RLS policy is a statement-level property (the ``app.organisation_id``
+# session setting), so raw-core SELECTs against ``runs`` are RLS-filtered
+# exactly like ORM ones; read paths additionally bound the session's org
+# explicitly (the compensation for the ORM-only generic-backend tenant filter
+# this Core statement bypasses — see :func:`_read_legacy_run_blobs`).
+# Dies with the columns at B2b together with every reader of these columns.
+_RUNS_LEGACY_METADATA = MetaData()
+RUNS_LEGACY_TABLE = Table(
+    "runs",
+    _RUNS_LEGACY_METADATA,
+    Column("id", Uuid(), primary_key=True),
+    Column("organisation_id", Uuid(), nullable=False),
+    Column("status", String(30), nullable=False),
+    Column("claim_token", String(128), nullable=False),
+    Column("completed_at", DateTime(timezone=True), nullable=True),
+    Column("outputs_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
+    Column("node_telemetry_json", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
+    Column("raw_output_markers", JSON().with_variant(JSONB(), "postgresql"), nullable=True),
 )
 
 
@@ -903,29 +938,87 @@ def _ensure_dict(value: Any) -> dict[str, Any] | None:
     return None
 
 
-async def _read_legacy_run_blobs(session: AsyncSession, run_id: uuid.UUID) -> RunBlobs:
+async def _read_legacy_run_blobs(
+    session: AsyncSession, run_id: uuid.UUID, organisation_id: uuid.UUID | None
+) -> RunBlobs:
     """Single parameterised SELECT of the legacy ``runs`` blob columns.
 
     The one sanctioned legacy read in this module (the EMPTY/MISMATCH
-    fallback; B2b removes it with the columns). Deliberately a COLUMN-level
-    select (three columns, bound ``run_id`` — never f-stringed): it stays a
-    single statement on every dialect and picks up the runs RLS policy on
-    Postgres and the ORM tenant filter on generic backends (a raw text()
-    SELECT would bypass the latter AND could not bind the UUID portably —
-    SQLite stores ``Uuid`` in a non-text form the DBAPI cannot match against
-    a plain string parameter).
+    fallback; B2b removes it with the columns). B1 note fulfilled: the read is
+    COLUMN-LEVEL SQL against :data:`RUNS_LEGACY_TABLE` (bound ``run_id``/
+    ``organisation_id`` — never f-stringed, never an ORM attribute reference
+    since the ORM mapping was cut). It stays a single statement on every
+    dialect and picks up the runs RLS policy on Postgres (a session-level
+    property); *organisation_id*, when the session has an org context, is
+    included in the WHERE as the compensation for the ORM-only generic-backend
+    tenant filter this Core statement bypasses (a mismatched legacy read
+    degrades to an absent side, which the caller resolves toward the NEW
+    table — never toward another tenant's data).
     """
-    row = (
-        await session.execute(
-            select(Run.outputs_json, Run.node_telemetry_json, Run.raw_output_markers).where(Run.id == run_id)
-        )
-    ).first()
+    stmt = select(
+        RUNS_LEGACY_TABLE.c.outputs_json,
+        RUNS_LEGACY_TABLE.c.node_telemetry_json,
+        RUNS_LEGACY_TABLE.c.raw_output_markers,
+    ).where(RUNS_LEGACY_TABLE.c.id == run_id)
+    if organisation_id is not None:
+        stmt = stmt.where(RUNS_LEGACY_TABLE.c.organisation_id == organisation_id)
+    row = (await session.execute(stmt)).first()
     if row is None:
         return RunBlobs(outputs=None, telemetry=None, markers=None)
     return RunBlobs(
         outputs=_ensure_dict(row.outputs_json),
         telemetry=_ensure_dict(row.node_telemetry_json),
         markers=_ensure_dict(row.raw_output_markers),
+    )
+
+
+async def read_legacy_run_blobs(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID | None = None,
+) -> RunBlobs:
+    """Public read of the legacy ``runs`` blob columns (raw parameterised SQL).
+
+    The chokepoints' PRE-WRITE capture source (crud.run's ORM + fenced
+    branches capture the legacy dicts for the M19 inherited-sentinel filter —
+    the caller's write NEVER shadows a pre-existing sentinel key). B2b removes
+    this together with the columns.
+    """
+    return await _read_legacy_run_blobs(session, run_id, organisation_id)
+
+
+async def read_legacy_raw_output_markers(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID | None = None,
+) -> dict[str, Any] | None:
+    """The legacy ``runs.raw_output_markers`` dict, raw parameterised SQL.
+
+    Serves the marker dual-write's legacy read-merge-write leg (node_runner's
+    ``_write_raw_output_marker``) after the ORM mapping was cut at B1; the
+    *organisation_id* predicate applies when given (the caller's RLS org).
+    """
+    stmt = select(RUNS_LEGACY_TABLE.c.raw_output_markers).where(RUNS_LEGACY_TABLE.c.id == run_id)
+    if organisation_id is not None:
+        stmt = stmt.where(RUNS_LEGACY_TABLE.c.organisation_id == organisation_id)
+    return _ensure_dict((await session.execute(stmt)).scalar_one_or_none())
+
+
+async def write_legacy_raw_output_markers(session: AsyncSession, *, run_id: uuid.UUID, markers: dict[str, Any]) -> None:
+    """Parameterised UPDATE of the legacy ``runs.raw_output_markers`` column.
+
+    The marker dual-write's legacy leg after the ORM mapping was cut at B1
+    (the column exists in the database until B2b; the caller holds the run row
+    FOR UPDATE, so this serialises exactly like the former ORM assignment).
+    A ``*markers* of ``{}`` writes SQL NULL (the legacy no-markers state) —
+    the JSON null VALUE is not used for the markers column.
+    """
+    await session.execute(
+        update(RUNS_LEGACY_TABLE)
+        .where(RUNS_LEGACY_TABLE.c.id == run_id)
+        .values(raw_output_markers=markers or _sql_null())
     )
 
 
@@ -1048,16 +1141,15 @@ async def read_run_blobs_with_fallback(
     the reassembled value already matches the legacy column, including the
     ``{}``-vs-``None`` distinction.) The legacy read is one extra
     parameterised SELECT per call; B2b removes it together with the columns.
-
-    B1 NOTE: this reader (and the fenced markers reader) reads the legacy
-    columns via ORM attributes — B1 MUST convert these to raw parameterised
-    SQL BEFORE dropping the model columns (design-doc addendum).
     """
     rows = await _fetch_output_rows(session, run_id)
     session_org = await read_rls_org(session)
-    _assert_read_org(session_org, rows[0].organisation_id if rows else organisation_id, run_id)
     blobs, info = _assemble(rows)
-    legacy = await _read_legacy_run_blobs(session, run_id)
+    legacy = await _read_legacy_run_blobs(session, run_id, session_org)
+    if rows:
+        _assert_read_org(session_org, rows[0].organisation_id, run_id)
+    else:
+        _assert_read_org(session_org, organisation_id, run_id)
 
     # No new-table representation for a side -> serve the legacy column
     # verbatim (pre-sweep stragglers / kill-switch-off mode); a represented
@@ -1171,9 +1263,10 @@ async def read_run_markers_fenced(
 
     The DIRECTION-AWARE legacy fallback (qa M2/M3) is part of the contract:
     the legacy ``runs.raw_output_markers`` column is selected FROM THE SAME
-    FENCED JOINED ROW — the fence predicates apply to the runs row, and the
-    fallback read therefore re-checks the fence by construction (a fence-miss
-    can never serve legacy markers either). Reassembly uses the same
+    FENCED JOINED ROW — the fence predicates apply to the runs row (bound
+    through the raw Core legacy table since B1's ORM cut), and the fallback
+    read therefore re-checks the fence by construction (a fence-miss can never
+    serve legacy markers either). Reassembly uses the same
     subset-direction rule as :func:`read_run_blobs_with_fallback`.
 
     *legacy_tiebreak_on_equal_mismatch* (qa iteration 2, Major 1): when True
@@ -1188,20 +1281,24 @@ async def read_run_markers_fenced(
     (e.g. the connector gate's plain run-row FOR UPDATE) passes None.
     """
     fence: list[Any] = [
-        Run.id == run_id,
-        Run.organisation_id == organisation_id,
+        RUNS_LEGACY_TABLE.c.id == run_id,
+        RUNS_LEGACY_TABLE.c.organisation_id == organisation_id,
     ]
     if fence_status:
-        fence.append(Run.status == _FENCED_RUNNING_STATUS)
+        fence.append(RUNS_LEGACY_TABLE.c.status == _FENCED_RUNNING_STATUS)
     if claim_token is not None:
-        fence.append(Run.claim_token == claim_token)
+        fence.append(RUNS_LEGACY_TABLE.c.claim_token == claim_token)
 
     stmt = (
-        select(Run.raw_output_markers, RunNodeOutput.attempt_key, RunNodeOutput.raw_output_markers)
+        select(
+            RUNS_LEGACY_TABLE.c.raw_output_markers,
+            RunNodeOutput.attempt_key,
+            RunNodeOutput.raw_output_markers,
+        )
         .join(
             RunNodeOutput,
             and_(
-                RunNodeOutput.run_id == Run.id,
+                RunNodeOutput.run_id == RUNS_LEGACY_TABLE.c.id,
                 RunNodeOutput.attempt_key != FINAL_ATTEMPT_KEY,
                 RunNodeOutput.raw_output_markers.is_not(None),
             ),
@@ -1211,7 +1308,7 @@ async def read_run_markers_fenced(
     )
     if for_update:
         # FOR UPDATE OF runs — Postgres-only; SQLite ignores FOR UPDATE.
-        stmt = stmt.with_for_update(of=Run)
+        stmt = stmt.with_for_update(of=RUNS_LEGACY_TABLE)
 
     session_org = await read_rls_org(session)
     _assert_read_org(session_org, organisation_id, run_id)
@@ -1378,24 +1475,31 @@ async def backfill_run_node_outputs_batch(
 
     # The __final__ row kind carries the outputs/telemetry/metadata
     # representation; the marker rows carry non-__final__ attempt keys. The
-    # inner ``Run.id`` reference auto-correlates to the outer runs FROM.
+    # inner runs-side reference auto-correlates to the outer runs FROM
+    # (retrieved through the Core legacy table since B1's ORM cut).
     final_row_exists = exists().where(
-        RunNodeOutput.run_id == Run.id,
+        RunNodeOutput.run_id == RUNS_LEGACY_TABLE.c.id,
         RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
     )
     marker_row_exists = exists().where(
-        RunNodeOutput.run_id == Run.id,
+        RunNodeOutput.run_id == RUNS_LEGACY_TABLE.c.id,
         RunNodeOutput.attempt_key != FINAL_ATTEMPT_KEY,
     )
-    quarantined_exists = exists().where(QUARANTINE_TABLE.c.run_id == Run.id)
+    quarantined_exists = exists().where(QUARANTINE_TABLE.c.run_id == RUNS_LEGACY_TABLE.c.id)
 
     run_stmt = (
-        select(Run.id, Run.outputs_json, Run.node_telemetry_json, Run.raw_output_markers, Run.completed_at)
-        .where(
-            Run.organisation_id == organisation_id,
-            Run.status.in_(sorted(TERMINAL_STATUSES)),
+        select(
+            RUNS_LEGACY_TABLE.c.id,
+            RUNS_LEGACY_TABLE.c.outputs_json,
+            RUNS_LEGACY_TABLE.c.node_telemetry_json,
+            RUNS_LEGACY_TABLE.c.raw_output_markers,
+            RUNS_LEGACY_TABLE.c.completed_at,
         )
-        .order_by(Run.completed_at.asc())
+        .where(
+            RUNS_LEGACY_TABLE.c.organisation_id == organisation_id,
+            RUNS_LEGACY_TABLE.c.status.in_(sorted(TERMINAL_STATUSES)),
+        )
+        .order_by(RUNS_LEGACY_TABLE.c.completed_at.asc())
         .limit(cap)
     )
     # Trigger predicate: only runs the sweep can actually heal enter the
@@ -1406,18 +1510,18 @@ async def backfill_run_node_outputs_batch(
     # heuristic (junk sides are quarantined by the body).
     if dialect == "postgresql":
         side_meaningful = or_(
-            _pg_side_object(Run.outputs_json),
-            _pg_side_object(Run.node_telemetry_json),
-            _pg_markers_object_nonempty(Run.raw_output_markers),
+            _pg_side_object(RUNS_LEGACY_TABLE.c.outputs_json),
+            _pg_side_object(RUNS_LEGACY_TABLE.c.node_telemetry_json),
+            _pg_markers_object_nonempty(RUNS_LEGACY_TABLE.c.raw_output_markers),
         )
-        markers_meaningful = _pg_markers_object_nonempty(Run.raw_output_markers)
+        markers_meaningful = _pg_markers_object_nonempty(RUNS_LEGACY_TABLE.c.raw_output_markers)
     else:
         side_meaningful = or_(
-            _side_present(Run.outputs_json),
-            _side_present(Run.node_telemetry_json),
-            _markers_present(Run.raw_output_markers),
+            _side_present(RUNS_LEGACY_TABLE.c.outputs_json),
+            _side_present(RUNS_LEGACY_TABLE.c.node_telemetry_json),
+            _markers_present(RUNS_LEGACY_TABLE.c.raw_output_markers),
         )
-        markers_meaningful = _markers_present(Run.raw_output_markers)
+        markers_meaningful = _markers_present(RUNS_LEGACY_TABLE.c.raw_output_markers)
     run_stmt = run_stmt.where(
         or_(
             and_(side_meaningful, ~final_row_exists),

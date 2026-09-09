@@ -21,13 +21,14 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run_node_outputs import (
     FINAL_ATTEMPT_KEY,
     META_NODE_ID,
     QUARANTINE_TABLE,
+    RUNS_LEGACY_TABLE,
     UNKNOWN_NODE_ID,
     OutputsSentinelViolation,
     RunBlobs,
@@ -70,6 +71,12 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
         # Core-only in the repo module) — created here so the sweep's
         # quarantine exclusion + INSERT run against the real schema.
         await conn.run_sync(lambda sync_conn: QUARANTINE_TABLE.create(sync_conn, checkfirst=True))
+        # FAR-583 B1: the legacy blob columns left the ORM mapping but are
+        # still IN THE DATABASE until B2b — the patching ALTERs reproduce the
+        # migrated schema (SQLite ADD COLUMN per legacy column) so the raw
+        # Core legacy-table readers/sweep/fenced legs run against real DDL.
+        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -104,13 +111,24 @@ async def _seed_run(
         status=status,
         completed_at=completed_at,
         claim_token=claim_token,
-        outputs_json=outputs,
-        node_telemetry_json=telemetry,
-        raw_output_markers=markers,
     )
     async with session.begin():
         session.add(run)
         await session.flush()
+        # FAR-583 B1: the legacy blob columns no longer map on the ORM — the
+        # seeding writes them through the repo module's raw Core legacy table
+        # (the same parameterised-SQL surface the production fallback readers
+        # and sweep selection use; the SQLite round-trip is exercised here).
+        if outputs is not None or telemetry is not None or markers is not None:
+            await session.execute(
+                update(RUNS_LEGACY_TABLE)
+                .where(RUNS_LEGACY_TABLE.c.id == run.id)
+                .values(
+                    outputs_json=outputs,
+                    node_telemetry_json=telemetry,
+                    raw_output_markers=markers,
+                )
+            )
     return run
 
 
@@ -123,9 +141,9 @@ async def _set_legacy_blobs(
     markers: Any = _UNSET,
 ) -> None:
     """Directly rewrite the run's legacy blob columns (simulating a
-    kill-switch-OFF legacy-only write or the frozen-at-B1 legacy state)."""
-    from sqlalchemy import update
-
+    kill-switch-OFF legacy-only write or the frozen-at-B1 legacy state).
+    FAR-583 B1: the columns are rewritten via the repo module's raw Core
+    legacy table (the ORM mapping is cut)."""
     values: dict[str, Any] = {}
     if outputs is not _UNSET:
         values["outputs_json"] = outputs
@@ -136,7 +154,7 @@ async def _set_legacy_blobs(
     if not values:
         return
     async with session.begin():
-        await session.execute(update(Run).where(Run.id == run.id).values(**values))
+        await session.execute(update(RUNS_LEGACY_TABLE).where(RUNS_LEGACY_TABLE.c.id == run.id).values(**values))
 
 
 async def _quarantine_row_count(session: AsyncSession, run_id: uuid.UUID) -> int:
@@ -745,22 +763,25 @@ class TestFencedMarkersReader:
 
         event.listen(engine.sync_engine, "before_cursor_execute", _count)
         try:
-            async with maker() as sess:
-                async with sess.begin():
-                    run = Run(
-                        organisation_id=_ORG_A,
-                        pipeline_id=uuid.uuid4(),
-                        snapshot_id=uuid.uuid4(),
-                        trigger_type="manual",
-                        run_number=next(_RUN_NUMBER),
-                        input_hash="a" * 64,
-                        langgraph_thread_id="thread-" + uuid.uuid4().hex,
-                        status="running",
-                        claim_token="tok-1",
-                        raw_output_markers={"legacy-k": {"raw": "x"}},
-                    )
-                    sess.add(run)
-                    await sess.flush()
+            async with maker() as sess, sess.begin():
+                run = Run(
+                    organisation_id=_ORG_A,
+                    pipeline_id=uuid.uuid4(),
+                    snapshot_id=uuid.uuid4(),
+                    trigger_type="manual",
+                    run_number=next(_RUN_NUMBER),
+                    input_hash="a" * 64,
+                    langgraph_thread_id="thread-" + uuid.uuid4().hex,
+                    status="running",
+                    claim_token="tok-1",
+                )
+                sess.add(run)
+                await sess.flush()
+                await sess.execute(
+                    update(RUNS_LEGACY_TABLE)
+                    .where(RUNS_LEGACY_TABLE.c.id == run.id)
+                    .values(raw_output_markers={"legacy-k": {"raw": "x"}})
+                )
                 run_id = run.id
             before = len(statements)
             async with maker() as sess, sess.begin():

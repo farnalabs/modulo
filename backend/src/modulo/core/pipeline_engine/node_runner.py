@@ -1290,10 +1290,10 @@ async def _persist_raw_output_marker(
 # transaction rolls back), so the "legacy survives, sweep heals" claim is
 # false — the failure logs ``legacy_marker_also_lost``.
 #
-# qa iteration 2 (Major 2): hoisted to the shared leaf
-# :mod:`modulo.db.sqlstates` (alongside ``crud.run``'s retryable set); the
-# name below keeps the module-local read sites unchanged.
-_MARKER_TXN_ABORTING_SQLSTATES = MARKER_TXN_ABORTING_SQLSTATES
+# B1 (FAR-583): the vocabulary lives ONLY in the shared leaf
+# :mod:`modulo.db.sqlstates` — every read site below consumes the imported
+# constant directly (the B1 note in that file said this is where all
+# SQLSTATE vocabularies consolidate).
 
 
 async def _write_raw_output_marker(
@@ -1317,7 +1317,11 @@ async def _write_raw_output_marker(
     """
     from sqlalchemy import select as _sql_select
 
-    from modulo.db.crud.run_node_outputs import write_run_markers
+    from modulo.db.crud.run_node_outputs import (
+        read_legacy_raw_output_markers,
+        write_legacy_raw_output_markers,
+        write_run_markers,
+    )
     from modulo.db.models.run import Run as _RunModel
 
     try:
@@ -1344,7 +1348,14 @@ async def _write_raw_output_marker(
                     },
                 )
                 return
-            markers = dict(run.raw_output_markers) if isinstance(run.raw_output_markers, dict) else {}
+            # FAR-583 B1: the legacy blob columns' ORM mapping is cut — the
+            # legacy read-merge-write runs through the repo's raw parameterised
+            # SQL helpers instead of the ``run.raw_output_markers`` attribute
+            # (the run row is still locked FOR UPDATE, so the read-merge-write
+            # serialises exactly like the former ORM leg).
+            markers = dict(
+                (await read_legacy_raw_output_markers(session, run_id=run.id, organisation_id=org_uuid)) or {}
+            )
             key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
             # FAR-438 read-before-write: stamp the derived per-node idempotency key
             # (from the run's PERSISTED run-level key) so a re-run that reuses the
@@ -1375,8 +1386,7 @@ async def _write_raw_output_marker(
                 preserve_delivery_done=preserve_delivery_done,
             )
             markers[key] = persisted_marker
-            run.raw_output_markers = markers
-            await session.flush()
+            await write_legacy_raw_output_markers(session, run_id=run.id, markers=markers)
             # FAR-583: post-merge marker row into run_node_outputs inside a
             # SAVEPOINT. The MERGED dict is stored (prior pr_url preserved,
             # delivery_done monotone) — one row per attempt key, delete-absent.
@@ -1434,7 +1444,7 @@ async def _write_raw_output_marker(
                     # __aexit__ of an already-aborted savepoint) does NOT mask
                     # the ORIGINAL transaction-aborting state (40P01 etc.).
                     sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                    if sqlstate in _MARKER_TXN_ABORTING_SQLSTATES:
+                    if sqlstate in MARKER_TXN_ABORTING_SQLSTATES:
                         # qa rider f: a transaction-aborting failure (deadlock,
                         # admin shutdown, connection loss) poisons the WHOLE
                         # transaction — the legacy marker write above is rolled

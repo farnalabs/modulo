@@ -42,6 +42,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.models.team import Team
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -68,6 +69,7 @@ _TABLES: list[Table] = cast(
         AuditEvent.__table__,
         AuditChainHead.__table__,
         EnvironmentProfile.__table__,
+        RunNodeOutput.__table__,
     ],
 )
 
@@ -77,6 +79,11 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     eng = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
+        # IN THE DATABASE until B2b — the finalize read-switch reads them via
+        # the repo's raw Core legacy table; reproduce the migrated shape.
+        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -179,10 +186,15 @@ async def test_clean_run_with_guardrails_identical_to_no_guardrails(session: Asy
     assert without_gr.input_payload == _CLEAN_PAYLOAD
 
     # Identical no-node-execution footprint (neither run was dispatched).
+    # FAR-583 B1: the per-node store is the single blob surface — neither run
+    # has any rows there (the legacy ``runs`` blob columns are unmapped and
+    # never written post-B1).
     for run in (with_gr, without_gr):
         assert run.started_at is None
-        assert run.outputs_json is None
-        assert run.node_telemetry_json is None
+        store_rows = (
+            (await session.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run.id))).scalars().all()
+        )
+        assert not store_rows
         assert run.claim_count == 0
         assert run.node_attempt_count == 0
 

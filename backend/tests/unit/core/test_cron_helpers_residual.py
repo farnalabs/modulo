@@ -1577,7 +1577,10 @@ async def test_process_one_ongoing_row_enqueue_variants():
 
 
 def test_is_nodeless_zombie_row_rejects_missing_started_at():
-    row = SimpleNamespace(status="running", node_token_usage=None, outputs_json=None, started_at=None)
+    # FAR-583 B1: the row carries the reconcile SELECT's computed
+    # ``outputs_absent`` flag (NOT EXISTS(run_node_outputs __final__ row)) —
+    # the cut ``outputs_json`` column is gone from the scan.
+    row = SimpleNamespace(status="running", node_token_usage=None, outputs_absent=True, started_at=None)
     assert ch._is_nodeless_zombie_row(row, 20) is False
 
 

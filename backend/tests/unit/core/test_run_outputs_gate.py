@@ -36,7 +36,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, select, text
+from sqlalchemy import event, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -77,6 +77,12 @@ async def sqlite_engine() -> AsyncGenerator[AsyncEngine, None]:
     await _now_sqlite(eng)
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_RUN_AND_ORG_TABLES))
+        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
+        # IN THE DATABASE until B2b — the marker path's raw-SQL legacy leg
+        # (read_legacy_raw_output_markers / write_legacy_raw_output_markers)
+        # selects them, so the test schema reproduces the migrated shape.
+        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -160,9 +166,14 @@ class TestMarkerSavepointKillSwitchGate:
 
         note.assert_awaited_once_with(str(run_id), _ORG)
         written.assert_not_awaited()
-        run = await _load_run(sqlite_sessionmaker, run_id)
-        assert run.raw_output_markers is not None, "the legacy marker write must survive the switch-off"
-        assert f"run:{run_id}:node:n1:fallback" in run.raw_output_markers
+        # FAR-583 B1: the legacy column's ORM mapping is cut — read it through
+        # the repo's raw parameterised-SQL helper.
+        from modulo.db.crud.run_node_outputs import read_legacy_raw_output_markers
+
+        async with sqlite_sessionmaker() as check, check.begin():
+            legacy = await read_legacy_raw_output_markers(check, run_id=run_id)
+        assert legacy is not None, "the legacy marker write must survive the switch-off"
+        assert f"run:{run_id}:node:n1:fallback" in legacy
 
     @pytest.mark.asyncio
     async def test_switch_on_writes_the_merged_marker_row(
@@ -319,8 +330,13 @@ class TestMarkerSavepointLegacyLostClassification:
             )
         note.assert_awaited_once()
         assert not any("legacy_marker_also_lost" in r.message for r in caplog.records)
-        run = await _load_run(sqlite_sessionmaker, run_id)
-        assert run.raw_output_markers is not None, "the legacy marker survives a savepoint-scoped failure"
+        # FAR-583 B1: the legacy column's ORM mapping is cut — read it through
+        # the repo's raw parameterised-SQL helper.
+        from modulo.db.crud.run_node_outputs import read_legacy_raw_output_markers
+
+        async with sqlite_sessionmaker() as check, check.begin():
+            legacy = await read_legacy_raw_output_markers(check, run_id=run_id)
+        assert legacy is not None, "the legacy marker survives a savepoint-scoped failure"
 
 
 # ---------------------------------------------------------------------------
@@ -513,10 +529,17 @@ class TestFenceStatusVisibilityDuringCancel:
     async def _seed_cancelled_run(self, maker: async_sessionmaker[AsyncSession]) -> uuid.UUID:
         run_id = uuid.uuid4()
         await _seed_run(maker, run_id, status="cancelled")
-        # The markers land via the ORM so the JSON column serializes the dict.
+        # The markers land via the repo's raw Core legacy table (FAR-583 B1 —
+        # the ORM mapping of the column is cut) so the raw-SQL fenced reader
+        # sees the JSON payload exactly as the migrated database stores it.
+        from modulo.db.crud.run_node_outputs import RUNS_LEGACY_TABLE
+
         async with maker() as session, session.begin():
-            run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
-            run.raw_output_markers = self._MARKERS
+            await session.execute(
+                update(RUNS_LEGACY_TABLE)
+                .where(RUNS_LEGACY_TABLE.c.id == run_id)
+                .values(raw_output_markers=self._MARKERS)
+            )
         return run_id
 
     @pytest.mark.asyncio
@@ -671,12 +694,16 @@ class TestGuardContract:
         assert "guard_dual_write" in doc, "the guard obligation must be documented at the chokepoint"
 
     def test_dual_write_helper_docstring_documents_the_contract(self) -> None:
-        from modulo.db.crud.run import dual_write_run_node_outputs
+        from modulo.db.crud.run import write_run_outputs_from_run
 
-        doc = inspect.getdoc(dual_write_run_node_outputs)
+        doc = inspect.getdoc(write_run_outputs_from_run)
         assert doc is not None
         assert "DualWriteError" in doc
-        assert "Kill-switch" in doc
+        # B1 contract cut: the helper is the PRIMARY store write — the
+        # kill-switch check is gone and the docstring documents that (there is
+        # no legacy-only mode to fall back to).
+        assert "PRIMARY" in doc
+        assert "kill-switch check is REMOVED" in doc
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +735,7 @@ class TestRecoveryClaimTokenFence:
                 origin=kwargs["origin"],
             )
 
-        with patch("modulo.db.crud.run.dual_write_run_node_outputs", _failing_dual_write):
+        with patch("modulo.db.crud.run.write_run_outputs_from_run", _failing_dual_write):
             async with sqlite_sessionmaker() as session, session.begin():
                 loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
                 with pytest.raises(DualWriteError) as caught:
@@ -761,7 +788,7 @@ class TestRecoveryInheritedSentinelKeys:
         async def _capturing_dual_write(session: Any, **kwargs: Any) -> None:
             captured.update(kwargs)
 
-        with patch("modulo.db.crud.run.dual_write_run_node_outputs", _capturing_dual_write):
+        with patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_dual_write):
             async with sqlite_sessionmaker() as session, session.begin():
                 loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
                 await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
@@ -787,12 +814,21 @@ class TestRecoveryInheritedSentinelKeys:
 
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
+        # Pre-0176 inherited junk lands in the legacy blobs through the raw
+        # Core legacy table (FAR-583 B1 — the ORM mapping is cut).
+        from modulo.db.crud.run_node_outputs import RUNS_LEGACY_TABLE, read_legacy_run_blobs
+
+        async with sqlite_sessionmaker() as seed_session, seed_session.begin():
+            await seed_session.execute(
+                update(RUNS_LEGACY_TABLE)
+                .where(RUNS_LEGACY_TABLE.c.id == run_id)
+                .values(
+                    outputs_json={"__sneaky__": {"v": 0}, "a": {"v": 1}},
+                    node_telemetry_json={"a": {"ms": 1}},
+                )
+            )
         async with sqlite_sessionmaker() as session, session.begin():
             loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
-            # Pre-0176 inherited junk in the legacy blobs:
-            loaded.outputs_json = {"__sneaky__": {"v": 0}, "a": {"v": 1}}
-            loaded.node_telemetry_json = {"a": {"ms": 1}}
-            await session.flush()
             await set_rls_org(session, _ORG)
             with (
                 patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", new=AsyncMock(return_value=True)),
@@ -812,6 +848,10 @@ class TestRecoveryInheritedSentinelKeys:
         assert "__sneaky__" not in final_nodes, "the sentinel is filtered from the new-table leg"
         assert "a" in final_nodes
         assert "n1" in final_nodes
-        # The legacy column (the caller's write) retains the inherited key.
-        run = await _load_run(sqlite_sessionmaker, run_id)
-        assert "__sneaky__" in run.outputs_json
+        # The legacy column is NEVER written post-B1 (the store write is the
+        # only store) — the inherited key survives there untouched until B2a's
+        # sweep heals it into the new table.
+        async with sqlite_sessionmaker() as check_legacy, check_legacy.begin():
+            legacy = await read_legacy_run_blobs(check_legacy, run_id=run_id)
+        assert legacy.outputs is not None
+        assert "__sneaky__" in legacy.outputs
