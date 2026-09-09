@@ -105,6 +105,39 @@ def _entry_amount(amount: Decimal) -> str:
     return format(min(amount, COST_COLUMN_CAP), "f")
 
 
+def _serialize_basis_display(raw_val: Any) -> Any:
+    """A per-node map → clamped display map; a scalar → clamped display."""
+    if isinstance(raw_val, dict):
+        display: dict[str, float] = {}
+        for nid, val in raw_val.items():
+            try:
+                d = Decimal(str(val))
+                display[nid] = _clamped_display(d)
+            except (TypeError, ValueError, ArithmeticError):
+                continue
+        return display
+    if raw_val is None:
+        return None
+    try:
+        d = Decimal(str(raw_val))
+        return _clamped_display(d)
+    except (TypeError, ValueError, ArithmeticError):
+        return float(0)
+
+
+def _truncate_basis(basis: dict[str, Any]) -> None:
+    """Truncate the serialized-largest members when the entry exceeds the bound."""
+    if len(str(basis).encode("utf-8")) <= MAX_BREAKDOWN_BASIS_SIZE:
+        return
+    for key in ("raw_reported", "per_node_raw"):
+        raw_val = basis.get(key)
+        if isinstance(raw_val, dict):
+            kept = list(raw_val.items())[-8:]
+            basis[key] = dict(kept)
+            basis["node_count"] = len(kept)
+            _log.warning("cost_breakdown.basis_truncated", extra={"key": key})
+
+
 def _basis_within_limit(basis: dict[str, Any]) -> dict[str, Any]:
     """Enforce MAX_BREAKDOWN_BASIS_SIZE per entry.
 
@@ -116,30 +149,9 @@ def _basis_within_limit(basis: dict[str, Any]) -> dict[str, Any]:
     """
     for key in ("raw_reported", "per_node_raw"):
         raw_val = basis.get(key)
-        if isinstance(raw_val, dict):
-            display = {}
-            for nid, val in raw_val.items():
-                try:
-                    d = Decimal(str(val))
-                    display[nid] = _clamped_display(d)
-                except (TypeError, ValueError, ArithmeticError):
-                    continue
-            basis[key] = display
-        elif raw_val is not None:
-            try:
-                d = Decimal(str(raw_val))
-                basis[key] = _clamped_display(d)
-            except (TypeError, ValueError, ArithmeticError):
-                basis[key] = float(0)
-    # Truncate the per-node map when the serialized entry exceeds the bound.
-    if len(str(basis).encode("utf-8")) > MAX_BREAKDOWN_BASIS_SIZE:
-        for key in ("raw_reported", "per_node_raw"):
-            raw_val = basis.get(key)
-            if isinstance(raw_val, dict):
-                kept = list(raw_val.items())[-8:]
-                basis[key] = dict(kept)
-                basis["node_count"] = len(kept)
-                _log.warning("cost_breakdown.basis_truncated", extra={"key": key})
+        if raw_val is not None:
+            basis[key] = _serialize_basis_display(raw_val)
+    _truncate_basis(basis)
     return basis
 
 

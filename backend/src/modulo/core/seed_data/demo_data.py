@@ -71,6 +71,141 @@ def _community_license_key(slug: str, private_key_hex: str, org_id: str) -> str:
     return encode_license_key(payload, private_key_hex)
 
 
+async def _seed_demo_org_entity(session: AsyncSession, slug: str) -> Organisation:
+    """Step 1 — organisation (idempotent by slug, with concurrency safety)."""
+    org_result = await session.execute(select(Organisation).where(Organisation.slug == slug))
+    org = org_result.scalar_one_or_none()
+    if org is None:
+        org = Organisation(name=slug, slug=slug, settings_json={})
+        try:
+            # Insert inside a savepoint so a concurrent boot that already
+            # committed this slug (unique violation) only rolls back the failed
+            # insert — NOT the whole transaction, which session.rollback() would
+            # do (discarding unrelated in-flight writes from concurrent work).
+            async with session.begin_nested():
+                session.add(org)
+                await session.flush()
+        except IntegrityError:
+            # Another boot won the race; use the row it committed. The failed
+            # pending insert is discarded automatically by the savepoint.
+            org_result = await session.execute(select(Organisation).where(Organisation.slug == slug))
+            org = org_result.scalar_one_or_none()
+            if org is None:
+                raise
+            _log.info("demo_org.recovered_after_conflict", extra={"slug": slug})
+        else:
+            _log.info("demo_org.created", extra={"slug": slug})
+    else:
+        _log.info("demo_org.exists", extra={"slug": slug})
+    return org
+
+
+async def _seed_demo_admin_account(
+    session: AsyncSession,
+    *,
+    admin_email: str,
+    admin_password: str,
+    org: Organisation,
+) -> Account:
+    """Step 2 — admin account (idempotent by email, with collision guard)."""
+    account_result = await session.execute(select(Account).where(Account.email == admin_email))
+    account = account_result.scalar_one_or_none()
+    if account is None:
+        from modulo.auth.passwords import hash_password
+
+        account = Account(
+            email=admin_email,
+            display_name=admin_email.split("@", 1)[0],
+            password_hash=hash_password(admin_password),
+            auth_provider="local",
+        )
+        session.add(account)
+        await session.flush()
+        _log.info("demo_account.created", extra={"email": admin_email})
+        return account
+    # Refuse to attach a pre-existing account unless it is already the
+    # admin member we created on a prior boot. A real account (e.g. a
+    # superuser) must never be silently bound to a demo org.
+    member_result = await session.execute(
+        select(OrgMembership).where(
+            OrgMembership.account_id == account.id,
+            OrgMembership.organisation_id == org.id,
+            OrgMembership.role == "admin",
+        )
+    )
+    if member_result.scalar_one_or_none() is None:
+        raise ValueError(
+            f"demo org email {admin_email!r} collides with an existing account "
+            f"— refusing to attach (use a dedicated demo email)"
+        )
+    _log.info("demo_account.exists", extra={"email": admin_email})
+    return account
+
+
+async def _seed_demo_membership(
+    session: AsyncSession,
+    *,
+    account: Account,
+    org: Organisation,
+    admin_email: str,
+    slug: str,
+) -> OrgMembership:
+    """Step 3 — membership (idempotent by account + org)."""
+    mem_result = await session.execute(
+        select(OrgMembership).where(
+            OrgMembership.account_id == account.id,
+            OrgMembership.organisation_id == org.id,
+        )
+    )
+    membership = mem_result.scalar_one_or_none()
+    if membership is None:
+        membership = OrgMembership(
+            account_id=account.id,
+            organisation_id=org.id,
+            role="admin",
+        )
+        session.add(membership)
+        _log.info("demo_membership.created", extra={"email": admin_email, "slug": slug})
+    else:
+        _log.info("demo_membership.exists", extra={"email": admin_email, "slug": slug})
+    return membership
+
+
+def _demo_org_license_key(
+    org: Organisation,
+    *,
+    tier: str,
+    slug: str,
+    private_key: str,
+) -> str:
+    """Compute the org's signed license key (community | team).
+
+    Idempotent: reuse an existing valid key whose tier matches, otherwise
+    (re)compute.
+    """
+    org_id = str(org.id)
+    existing_key: str | None = org.settings_json.get("license_key") if org.settings_json else None
+    if existing_key:
+        parsed = parse_and_verify(existing_key)
+        if parsed.valid and parsed.license_data is not None and parsed.license_data.tier == tier:
+            return existing_key  # still valid for this tier — keep it
+    if tier == "team":
+        return generate_team_license(org_name=slug, org_id=org_id, private_key_hex=private_key)
+    return _community_license_key(slug, private_key, org_id)
+
+
+def _demo_org_settings(org: Organisation, *, license_key: str, tier: str, full: bool) -> dict[str, Any]:
+    """Stamp the license + demo flags onto a copy of the org settings."""
+    base = dict(org.settings_json or {})
+    new_settings: dict[str, Any] = dict(base)
+    new_settings["license_key"] = license_key
+    demo = dict(base.get("demo") or {})
+    demo["tier"] = tier
+    demo["full"] = bool(full)
+    new_settings["demo"] = demo
+    return new_settings
+
+
 async def seed_demo_org(
     session: AsyncSession,
     *,
@@ -104,110 +239,15 @@ async def seed_demo_org(
             f"No license signing private key configured for demo org {slug!r} (set MODULO_LICENSE_PRIVATE_KEY)."
         )
 
-    # 1. Organisation (idempotent by slug, with concurrency safety)
-    org_result = await session.execute(select(Organisation).where(Organisation.slug == slug))
-    org = org_result.scalar_one_or_none()
-    if org is None:
-        org = Organisation(name=slug, slug=slug, settings_json={})
-        try:
-            # Insert inside a savepoint so a concurrent boot that already
-            # committed this slug (unique violation) only rolls back the failed
-            # insert — NOT the whole transaction, which session.rollback() would
-            # do (discarding unrelated in-flight writes from concurrent work).
-            async with session.begin_nested():
-                session.add(org)
-                await session.flush()
-        except IntegrityError:
-            # Another boot won the race; use the row it committed. The failed
-            # pending insert is discarded automatically by the savepoint.
-            org_result = await session.execute(select(Organisation).where(Organisation.slug == slug))
-            org = org_result.scalar_one_or_none()
-            if org is None:
-                raise
-            _log.info("demo_org.recovered_after_conflict", extra={"slug": slug})
-        else:
-            _log.info("demo_org.created", extra={"slug": slug})
-    else:
-        _log.info("demo_org.exists", extra={"slug": slug})
-
-    # 2. Admin account (idempotent by email, with collision guard)
-    account_result = await session.execute(select(Account).where(Account.email == admin_email))
-    account = account_result.scalar_one_or_none()
-    if account is None:
-        from modulo.auth.passwords import hash_password
-
-        account = Account(
-            email=admin_email,
-            display_name=admin_email.split("@", 1)[0],
-            password_hash=hash_password(admin_password),
-            auth_provider="local",
-        )
-        session.add(account)
-        await session.flush()
-        _log.info("demo_account.created", extra={"email": admin_email})
-    else:
-        # Refuse to attach a pre-existing account unless it is already the
-        # admin member we created on a prior boot. A real account (e.g. a
-        # superuser) must never be silently bound to a demo org.
-        member_result = await session.execute(
-            select(OrgMembership).where(
-                OrgMembership.account_id == account.id,
-                OrgMembership.organisation_id == org.id,
-                OrgMembership.role == "admin",
-            )
-        )
-        if member_result.scalar_one_or_none() is None:
-            raise ValueError(
-                f"demo org email {admin_email!r} collides with an existing account "
-                f"— refusing to attach (use a dedicated demo email)"
-            )
-        _log.info("demo_account.exists", extra={"email": admin_email})
-
-    # 3. Membership (idempotent by account + org)
-    mem_result = await session.execute(
-        select(OrgMembership).where(
-            OrgMembership.account_id == account.id,
-            OrgMembership.organisation_id == org.id,
-        )
-    )
-    membership = mem_result.scalar_one_or_none()
-    if membership is None:
-        membership = OrgMembership(
-            account_id=account.id,
-            organisation_id=org.id,
-            role="admin",
-        )
-        session.add(membership)
-        _log.info("demo_membership.created", extra={"email": admin_email, "slug": slug})
-    else:
-        _log.info("demo_membership.exists", extra={"email": admin_email, "slug": slug})
+    org = await _seed_demo_org_entity(session, slug)
+    account = await _seed_demo_admin_account(session, admin_email=admin_email, admin_password=admin_password, org=org)
+    await _seed_demo_membership(session, account=account, org=org, admin_email=admin_email, slug=slug)
 
     # 4. Per-org signed license (community | team), bound to the real org id.
-    #    Idempotent: reuse an existing valid key whose tier matches, otherwise
-    #    (re)compute. Only write back when something actually changed.
-    org_id = str(org.id)
-    existing_key = org.settings_json.get("license_key") if org.settings_json else None
-    new_key: str | None = None
-    if existing_key:
-        parsed = parse_and_verify(existing_key)
-        if parsed.valid and parsed.license_data is not None and parsed.license_data.tier == tier:
-            new_key = existing_key  # still valid for this tier — keep it
-
-    if new_key is None:
-        if tier == "team":
-            new_key = generate_team_license(org_name=slug, org_id=org_id, private_key_hex=private_key)
-        else:
-            new_key = _community_license_key(slug, private_key, org_id)
-
-    base = dict(org.settings_json or {})
-    new_settings: dict[str, Any] = dict(base)
-    new_settings["license_key"] = new_key
-    demo = dict(base.get("demo") or {})
-    demo["tier"] = tier
-    demo["full"] = bool(full)
-    new_settings["demo"] = demo
-
-    if new_settings != base:
+    #    Only write back when something actually changed.
+    new_key = _demo_org_license_key(org, tier=tier, slug=slug, private_key=private_key)
+    new_settings = _demo_org_settings(org, license_key=new_key, tier=tier, full=full)
+    if new_settings != (org.settings_json or {}):
         org.settings_json = new_settings
         await session.flush()
 
