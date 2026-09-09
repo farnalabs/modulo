@@ -23,7 +23,9 @@ bdd:
   - backend/tests/bdd/features/mcp/library_browse.feature
   - backend/tests/bdd/features/mcp/trigger.feature
   - backend/tests/bdd/features/mcp/mcp_oauth.feature
+  - backend/tests/bdd/features/mcp/onboarding.feature
   - backend/tests/bdd/steps/test_alpha_mcp.py
+  - backend/tests/bdd/steps/test_mcp_onboarding_steps.py
   - backend/tests/bdd/steps/test_mcp_oauth.py
 depends-on: [feat-auth, feat-model-backends]
 status: covered
@@ -94,16 +96,20 @@ URL, plus completion handoff setup. Built on the auth + model-backend core.
   in-flight browser consent sessions.
 - **SSE is the only transport exposed** — the streamable-HTTP transport is not
   published as a distinct surface here.
-- **No executing BDD surface for MCP onboarding** — `mcp/onboarding.feature`
-  ships under `tests/bdd/features/mcp/` but no step module registers it via
-  `scenarios(...)`, so it never executes and is no longer cited as coverage
-  here. The setup-handoff and key-management behaviours are unit-tested
-  (`test_api_key_mgmt_tools`, `test_mcp_structural_coverage`,
-  `SettingsMcpView.spec.ts`); wiring the feature file up needs its missing step
-  definitions written.
 
 ## QA History
 
+- 2026-09-09: **improve-architecture (product-map walk)** — closed the
+  "no executing BDD surface for MCP onboarding" gap. `mcp/onboarding.feature`
+  is now registered by `tests/bdd/steps/test_mcp_onboarding_steps.py` and
+  executes against the shipped contracts: the discoverable tool inventory
+  (FastMCP tool manager, the same registry `test_mcp_structural_coverage.py`
+  pins) and the fail-closed auth gate (`McpAuthMiddleware` rejects
+  unauthenticated / invalid-credential requests with 401, ADR 017). The draft
+  previously described a PUBLIC `tools/list` that does not match the shipped
+  server (its middleware rejects unauthenticated introspection fail-closed),
+  so it was rewritten to describe the real contract and dropped from the
+  tracked orphaned-BDD debt list.
 - 2026-08-30: **improve-architecture (product-map walk)** — new behaviour
   tracker for the registered `feat-mcp` manifest feature (route `/settings/mcp`,
   previously absent from the feature graph). Behaviours verified against
