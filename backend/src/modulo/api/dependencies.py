@@ -16,7 +16,7 @@ divergent second pool.
 import logging
 import threading
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextvars import Token
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -844,62 +844,80 @@ async def get_current_tenant_user_optional(
     )
 
 
-async def deny_break_glass_mint(
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> AuthenticatedPrincipal:
-    """Raise 403 when the current principal's account is a break-glass account.
+def deny_break_glass_mint_dependency(
+    principal_dependency: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Build the break-glass secret-mint deny dependency, parameterized.
 
     Break-glass accounts can NEVER mint secrets or credentials — live OR denied
-    (plan v17, API-key + long-lived deny). Enforced via a shared DI/dependency
-    marker on the enumerated secret-bearing create/update/delete routes with a
-    uniform 403. The login-route create_family mint for break-glass logins is
-    DELIBERATELY EXCLUDED — it IS the recovery path.
+    (plan v17, API-key + long-lived deny). This factory single-sources the deny
+    rule (the union of the shared ``is_break_glass_denied`` / ``is_break_glass_live``
+    decisions from ``db.crud.break_glass_deny``) so it is NEVER duplicated across
+    the secret-bearing routes — only the principal dependency differs.
 
-    The account is loaded by primary key (``session.get``) and the deny rule is
-    the union of the shared ``is_break_glass_denied`` / ``is_break_glass_live``
-    decisions from ``db.crud.break_glass_deny`` (single-sourced — never
-    duplicated here). The ``is True`` identity check guards against ORM test
-    doubles whose auto-created attributes are truthy mocks, not booleans. A DB
-    read failure folds to 503 (fail-closed: a blip must not fail-open a
-    break-glass mint).
+    Pass ``get_current_user`` for JWT-only routes (the stock ``deny_break_glass_mint``)
+    and ``get_current_tenant_user_or_api_key`` for routes that must also accept
+    org API-key (``mk_``) credentials — declarative apply, FAR-681. The resolved
+    principal must expose ``account_id`` and ``username``; the deny is applied to
+    the KEY'S OWNING account (an API key minted for a break-glass account must
+    not mint credentials either).
+
+    The account is loaded by primary key (``session.get``) and the ``is True``
+    identity check guards against ORM test doubles whose auto-created attributes
+    are truthy mocks, not booleans. A DB read failure folds to 503 (fail-closed:
+    a blip must not fail-open a break-glass mint).
     """
-    try:
-        from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
-        from modulo.db.models.account import Account
 
-        now = datetime.now(UTC)
-        async with session.begin():
-            account = await session.get(Account, current_user.account_id)
-    except SQLAlchemyError:
-        logger.exception("permission.break_glass_mint_read_failed")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
-        ) from None
-    if account is None:
-        return current_user
-    if account.is_break_glass is True:
-        is_break_glass_account = is_break_glass_denied(
-            is_break_glass=account.is_break_glass,
-            break_glass_expires_at=account.break_glass_expires_at,
-            break_glass_deactivated_at=account.break_glass_deactivated_at,
-            active=account.active,
-            now=now,
-        ) or is_break_glass_live(
-            is_break_glass=account.is_break_glass,
-            break_glass_expires_at=account.break_glass_expires_at,
-            break_glass_deactivated_at=account.break_glass_deactivated_at,
-            active=account.active,
-            now=now,
-        )
-        if is_break_glass_account:
-            logger.warning(
-                "permission.break_glass_mint_denied",
-                extra={"account_id": str(current_user.account_id), "username": current_user.username},
-            )
+    async def _check(
+        principal: Any = Depends(principal_dependency),
+        session: AsyncSession = Depends(get_db_session),
+    ) -> Any:
+        try:
+            from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
+            from modulo.db.models.account import Account
+
+            now = datetime.now(UTC)
+            async with session.begin():
+                account = await session.get(Account, principal.account_id)
+        except SQLAlchemyError:
+            logger.exception("permission.break_glass_mint_read_failed")
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Break-glass accounts cannot create or modify secrets/credentials",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+            ) from None
+        if account is None:
+            return principal
+        if account.is_break_glass is True:
+            is_break_glass_account = is_break_glass_denied(
+                is_break_glass=account.is_break_glass,
+                break_glass_expires_at=account.break_glass_expires_at,
+                break_glass_deactivated_at=account.break_glass_deactivated_at,
+                active=account.active,
+                now=now,
+            ) or is_break_glass_live(
+                is_break_glass=account.is_break_glass,
+                break_glass_expires_at=account.break_glass_expires_at,
+                break_glass_deactivated_at=account.break_glass_deactivated_at,
+                active=account.active,
+                now=now,
             )
-    return current_user
+            if is_break_glass_account:
+                logger.warning(
+                    "permission.break_glass_mint_denied",
+                    extra={"account_id": str(principal.account_id), "username": principal.username},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Break-glass accounts cannot create or modify secrets/credentials",
+                )
+        return principal
+
+    return _check
+
+
+#: Stock JWT-only deny marker, used on the enumerated secret-bearing routes.
+deny_break_glass_mint = deny_break_glass_mint_dependency(get_current_user)
+
+#: Any-credential variant (accepts org ``mk_`` API keys) for model-backends
+#: create/patch — declarative apply (FAR-681) mints backends with org keys.
+deny_break_glass_mint_any_credential = deny_break_glass_mint_dependency(get_current_tenant_user_or_api_key)

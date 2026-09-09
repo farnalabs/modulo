@@ -9,7 +9,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,7 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_NOT_FOUND, MSG_RESOURCE_ALREADY_EXISTS
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
+from modulo.api.dependencies import (
+    deny_break_glass_mint,
+    deny_break_glass_mint_any_credential,
+    get_db_session,
+    require_in_dev_operator,
+    require_permission,
+    require_permission_any_credential,
+)
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped
@@ -240,7 +247,10 @@ class ModelBackendCreate(TeamVisibilityMixin):
     provider: str = Field(..., min_length=1, max_length=128)
     model_id: str = Field(..., min_length=1, max_length=128)
     api_key: str = Field(..., min_length=1)
-    default_params: ClassVar[dict[str, Any]] = {}
+    # A REAL field (not ClassVar): pydantic v2 excludes ClassVar annotations
+    # from the model fields, so a ClassVar default_params silently dropped
+    # every POST body's default_params on the floor (FAR-681 apply round-trip).
+    default_params: dict[str, Any] = Field(default_factory=dict)
     visibility: str = Field(default="org")
     owner_team_id: uuid.UUID | None = None
     fallback_backend_ids: list[uuid.UUID] | None = None
@@ -338,7 +348,9 @@ async def list_model_backends_endpoint(
     page_size: int = Query(20, ge=1, le=100),
     include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_PERM_MODEL_BACKEND_LIST),
+    # any_credential: declarative apply (FAR-681) and CI/CD list this resource
+    # with mk_ org API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential(_PERM_MODEL_BACKEND_LIST),
 ) -> ModelBackendListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "model_backend.list.in_dev")
@@ -506,13 +518,14 @@ def _validate_provider(provider: str) -> None:
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[Depends(deny_break_glass_mint_any_credential)],
 )
 @handle_db_errors(_CODE_MODEL_BACKENDS_CREATE_MODEL)
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.create"),
+    # any_credential: declarative apply (FAR-681) creates backends with mk_ keys.
+    principal: TenantPrincipal = require_permission_any_credential("model_backend.create"),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     _validate_provider(req.provider)
@@ -887,13 +900,14 @@ async def _apply_backend_update(
         ) from None
 
 
-@router.patch("/{backend_id}", dependencies=[Depends(deny_break_glass_mint)])
+@router.patch("/{backend_id}", dependencies=[Depends(deny_break_glass_mint_any_credential)])
 @handle_db_errors(_CODE_MODEL_BACKENDS_UPDATE_MODEL)
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
     req: ModelBackendUpdate,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.update"),
+    # any_credential: declarative apply (FAR-681) updates backends with mk_ keys.
+    principal: TenantPrincipal = require_permission_any_credential("model_backend.update"),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     updates = _prepare_update_payload(req, settings)
@@ -905,7 +919,9 @@ async def update_model_backend_endpoint(
 async def recheck_model_backend_health_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("model_backend.update"),
+    # any_credential: declarative apply (FAR-681) re-checks health after each
+    # backend create/update with mk_ keys, so unhealthy credentials surface.
+    principal: TenantPrincipal = require_permission_any_credential("model_backend.update"),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendHealthCheckResponse:
     """Re-run the health check on demand and persist the result (PRD §8.1).

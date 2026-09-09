@@ -97,8 +97,13 @@ and does not cover:
   validate-then-connects (an accepted residual, see the note on
   :func:`validate_outbound_url`); the others are pending a per-call-site pin and
   are excluded from the semgrep gate so it does not go red while they remain
-  un-migrated. A NEW raw ``httpx`` construction anywhere else in the tree is
-  still caught by the rule.
+  un-migrated. ``cli/apply`` (FAR-681) joins the residual list for the same
+  reason the sync world needs a pinless path: the click executor is sync and no
+  sync pinned factory exists, and the target is the single operator-configured
+  ``MODULO_URL`` the operator's credentials already address, so it is excluded
+  as documented residual (no validate-then-connect attached - test harnesses
+  use unresolvable fixture URLs). A NEW raw
+  ``httpx`` construction anywhere else in the tree is still caught by the rule.
 """
 
 from __future__ import annotations

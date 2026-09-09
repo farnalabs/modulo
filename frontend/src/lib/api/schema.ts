@@ -12691,6 +12691,10 @@ export interface components {
             model_id: string;
             /** Api Key */
             api_key: string;
+            /** Default Params */
+            default_params?: {
+                [key: string]: unknown;
+            };
             /** Fallback Backend Ids */
             fallback_backend_ids?: string[] | null;
             /**

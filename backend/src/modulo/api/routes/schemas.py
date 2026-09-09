@@ -18,7 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_RESOURCE_ALREADY_EXISTS, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.api.dependencies import (
+    get_db_session,
+    require_feature,
+    require_permission,
+    require_permission_any_credential,
+)
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.connector_hub import ConnectorHub
@@ -173,7 +178,9 @@ async def list_schemas_endpoint(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     folder_id: Annotated[uuid.UUID | None, Query()] = None,
-    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
+    # any_credential: declarative apply (FAR-681) lists schemas with mk_ org
+    # API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_SCHEMA_LIST),
 ) -> SchemaListResponse:
     try:
         async with session.begin():
@@ -262,7 +269,8 @@ async def schema_counts_endpoint(
 async def create_schema_endpoint(
     req: SchemaCreate,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_CREATE),
+    # any_credential: declarative apply (FAR-681) creates schemas with mk_ keys.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_SCHEMA_CREATE),
 ) -> SchemaResponse:
     try:
         async with session.begin():
@@ -365,7 +373,8 @@ async def update_schema_endpoint(
     schema_id: uuid.UUID,
     req: SchemaUpdate,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_UPDATE),
+    # any_credential: declarative apply (FAR-681) updates schemas with mk_ keys.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_SCHEMA_UPDATE),
 ) -> SchemaResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -555,7 +564,8 @@ async def list_schema_versions_endpoint(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_LIST),
+    # any_credential: declarative apply (FAR-681) fetches versions with mk_ keys.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_SCHEMA_LIST),
 ) -> SchemaVersionListResponse:
     try:
         async with session.begin():
@@ -609,7 +619,8 @@ async def create_schema_version_endpoint(
     schema_id: uuid.UUID,
     req: SchemaVersionCreate,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    principal: TenantPrincipal = require_permission(_CODE_SCHEMA_CREATE),
+    # any_credential: declarative apply (FAR-681) creates versions with mk_ keys.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_SCHEMA_CREATE),
 ) -> SchemaVersionResponse:
     try:
         async with session.begin():
