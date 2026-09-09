@@ -19,6 +19,7 @@ from modulo.db.models.notification import Notification
 
 _ORG = uuid.uuid4()
 _TARGET_USER = uuid.uuid4()
+_ACTOR = uuid.uuid4()
 
 _PAYLOAD = {
     "pipeline_name": "my-pipeline",
@@ -87,6 +88,7 @@ _EXPECTED_MAPPING = {
     "hitl_overdue": ("warning", "admin", "hitl.overdue", "org_admin", True, 168),
     "hitl_gate_removed": ("warning", "admin", "hitl.gate_removed", "org_admin", True, 168),
     "hitl_gate_removal_denied": ("error", "admin", "hitl.gate_removal_denied", "org_admin", True, 168),
+    "hitl_approve_sweep_suspected": ("warning", "admin", "hitl.approve_sweep", "org_admin", True, 168),
     "eval_regression": ("warning", "org", "eval.regression", "any_scope", True, 336),
     "eval_blocked": ("error", "org", "eval.blocked", "any_scope", True, 168),
     "feedback_pending": ("info", "user", "feedback.pending", "user_only", False, 336),
@@ -215,6 +217,24 @@ async def test_hitl_gate_removal_denied_templates_resolved(mapper: NotificationE
     kwargs = mock_create.await_args.kwargs
     assert kwargs["title"] == "HITL gate removal denied"
     assert kwargs["body"] == "A non-privileged attempt to weaken a HITL gate was denied."
+    assert kwargs["action_url"] is None
+
+
+async def test_hitl_approve_sweep_templates_resolved(mapper: NotificationEventMapper) -> None:
+    """hitl_approve_sweep_suspected (FAR-611) formats the sweep counts with no action URL."""
+    payload = {
+        "actor": str(_ACTOR),
+        "approve_count": 6,
+        "distinct_pipeline_count": 3,
+        "window_seconds": 60,
+    }
+    _, mock_create = await _call(mapper, "hitl_approve_sweep_suspected", payload=payload)
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "HITL approve sweep suspected"
+    assert kwargs["body"] == (
+        f"6 HITL gates across 3 pipelines were approved by actor {_ACTOR} "
+        "within 60 seconds — possible bulk-approve sweep."
+    )
     assert kwargs["action_url"] is None
 
 

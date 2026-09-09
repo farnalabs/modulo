@@ -815,12 +815,12 @@ def test_single_migration_head() -> None:
     # 0199_runs_json_to_jsonb (improve-database) chains off 0198.
     chaining_off_0198 = [p for p in revisions if parents[p] == "0198_runs_add_missing_indexes"]
     assert [_basename(p) for p in chaining_off_0198] == ["0199_runs_json_to_jsonb.py"]
-    # This PR's 0200_spend_anomaly_unique_org_date chains off 0199.
-    chaining_off_0199 = [p for p in revisions if parents[p] == "0199_runs_json_to_jsonb"]
-    assert [_basename(p) for p in chaining_off_0199] == ["0200_spend_anomaly_unique_org_date.py"]
-    # Nothing chains off 0200 -> it is the single head.
-    chaining_off_0200 = [p for p in revisions if parents[p] == "0200_spend_anomaly_unique_org_date"]
-    assert chaining_off_0200 == []
+    # This PR's 0201_spend_anomaly_unique_org_date chains off 0200_runs_runner_marker_sweep_index.
+    chaining_off_0200_runner = [p for p in revisions if parents[p] == "0200_runs_runner_marker_sweep_index"]
+    assert [_basename(p) for p in chaining_off_0200_runner] == ["0201_spend_anomaly_unique_org_date.py"]
+    # Nothing chains off 0201 -> it is the single head.
+    chaining_off_0201 = [p for p in revisions if parents[p] == "0201_spend_anomaly_unique_org_date"]
+    assert chaining_off_0201 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

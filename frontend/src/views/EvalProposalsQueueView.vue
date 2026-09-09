@@ -206,8 +206,16 @@ async function publishProposal(p: EvalProposalItem) {
       }),
     )
     actionMessages.value[p.id] = { type: 'success', text: t('views.EvalProposalsQueueView.publish_success') }
-    const idx = proposals.value.findIndex(x => x.id === p.id)
-    if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'resolved'
+    // Query data is deep-readonly (FAR-630/FAR-645): an in-place item mutation
+    // would be silently dropped. Replace the whole response through the
+    // writable computed instead.
+    if (proposalsResp.value) {
+      proposalsResp.value = {
+        ...proposalsResp.value,
+        items: proposalsResp.value.items.map(x =>
+          x.id === p.id ? { ...x, feedback_status: 'resolved' } : x),
+      }
+    }
     setTimeout(() => { delete actionMessages.value[p.id] }, 3000)
   } catch (e: unknown) {
     actionMessages.value[p.id] = { type: 'error', text: `${t('views.EvalProposalsQueueView.publish_failed')} ${formatApiError(e)}` }
@@ -227,8 +235,14 @@ async function dismissProposal(id: string) {
       }),
     )
     actionMessages.value[id] = { type: 'success', text: t('views.EvalProposalsQueueView.dismissed') }
-    const idx = proposals.value.findIndex(p => p.id === id)
-    if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'dismissed'
+    // Deep-readonly query data: whole-response reassignment, never in-place.
+    if (proposalsResp.value) {
+      proposalsResp.value = {
+        ...proposalsResp.value,
+        items: proposalsResp.value.items.map(x =>
+          x.id === id ? { ...x, feedback_status: 'dismissed' } : x),
+      }
+    }
     setTimeout(() => { delete actionMessages.value[id] }, 3000)
   } catch (e: unknown) {
     actionMessages.value[id] = { type: 'error', text: `${t('views.EvalProposalsQueueView.dismiss_failed')} ${formatApiError(e)}` }

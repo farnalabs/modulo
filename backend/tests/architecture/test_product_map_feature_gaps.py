@@ -346,6 +346,78 @@ def test_bdd_citations_are_registered_coverage():
     )
 
 
+#: BDD ``.feature`` files under ``backend/tests/bdd/features/`` that no step
+#: module loads via ``scenarios(...)`` — each ships but never executes, so its
+#: scenarios contribute nothing to the test run. These are the acknowledged,
+#: consciously-deferred orphans from the 2026-09-07 product-map walk (stale
+#: placeholder drafts that predate any step definitions). They are tracked here
+#: so the set can only SHRINK: the way to remove an entry is to either wire the
+#: feature file up from a step module (rooting it in the real coverage) or
+#: delete the file. New orphans fail ``test_no_unregistered_bdd_feature_files``.
+_ORPHANED_BDD_FEATURES = frozenset(
+    {
+        "backend/tests/bdd/features/connectors/azure_key_vault.feature",
+        "backend/tests/bdd/features/connectors/azure_pipelines.feature",
+        "backend/tests/bdd/features/connectors/azure_repos.feature",
+        "backend/tests/bdd/features/connectors/buildkite.feature",
+        "backend/tests/bdd/features/connectors/circleci.feature",
+        "backend/tests/bdd/features/connectors/discord.feature",
+        "backend/tests/bdd/features/connectors/dropbox_paper.feature",
+        "backend/tests/bdd/features/connectors/grafana.feature",
+        "backend/tests/bdd/features/connectors/jenkins.feature",
+        "backend/tests/bdd/features/connectors/microsoft_teams.feature",
+        "backend/tests/bdd/features/connectors/opsgenie_connector.feature",
+        "backend/tests/bdd/features/connectors/pagerduty.feature",
+        "backend/tests/bdd/features/connectors/sentry.feature",
+        "backend/tests/bdd/features/connectors/sharepoint.feature",
+        "backend/tests/bdd/features/connectors/swappable_binding.feature",
+        "backend/tests/bdd/features/connectors/teamcity_connector.feature",
+        "backend/tests/bdd/features/library/contribute.feature",
+        "backend/tests/bdd/features/licensing/feature_flag_inspection.feature",
+        "backend/tests/bdd/features/mcp/onboarding.feature",
+        "backend/tests/bdd/features/pipelines/pipeline_config_validation.feature",
+        "backend/tests/bdd/features/pipelines/run_lifecycle.feature",
+        "backend/tests/bdd/features/pipelines/run_sequential.feature",
+        "backend/tests/bdd/features/pipelines/validation.feature",
+        "backend/tests/bdd/features/rate_limiting/rate_limiting.feature",
+    }
+)
+
+
+def test_no_unregistered_bdd_feature_files():
+    """Every ``.feature`` file under ``backend/tests/bdd/features/`` executes.
+
+    ``test_bdd_citations_are_registered_coverage`` only catches the drift where
+    a cited feature file stops being loaded. The *reverse* accumulation is a
+    shipped ``.feature`` file that no step module ever loads: its scenarios
+    silently decay while the file keeps the build green. Fail CLOSED on any
+    orphan outside the tracked set — the tracked set must shrink to zero over
+    time, never grow.
+    """
+    registered = _registered_bdd_features()
+    features_dir = _BDD_ROOT / "features"
+    assert features_dir.is_dir(), "backend/tests/bdd/features/ must exist"
+
+    orphans = {path.resolve() for path in features_dir.rglob("*.feature") if path.resolve() not in registered}
+    tracked = {(REPO_ROOT / rel).resolve() for rel in _ORPHANED_BDD_FEATURES}
+
+    new_orphans = orphans - tracked
+    assert not new_orphans, (
+        "unregistered BDD feature files — no step module loads them via "
+        "scenarios(...), so their scenarios never execute:\n"
+        + "\n".join(f"  {p.relative_to(_BDD_ROOT)}" for p in sorted(new_orphans))
+        + "\nWire each up from a step module (and drop it from "
+        + "_ORPHANED_BDD_FEATURES) or delete it."
+    )
+
+    redundant = tracked - orphans
+    assert not redundant, (
+        "tracked orphan entries that are no longer orphaned (already wired up or "
+        "deleted) — shrink _ORPHANED_BDD_FEATURES so the debt list stays honest:\n"
+        + "\n".join(f"  {p.relative_to(_BDD_ROOT)}" for p in sorted(redundant))
+    )
+
+
 def test_feature_references_resolve():
     """Every ``feat-*`` literal in shipped code/tests resolves against the product map.
 

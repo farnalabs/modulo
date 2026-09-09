@@ -1,7 +1,7 @@
 """One persisted spend-anomaly row per detected org-day (feat-costs).
 
-Revision ID: 0200_spend_anomaly_unique_org_date
-Revises: 0199_runs_json_to_jsonb
+Revision ID: 0201_spend_anomaly_unique_org_date
+Revises: 0200_runs_runner_marker_sweep_index
 Create Date: 2026-09-08
 
 The rolling spend-anomaly endpoint now persists freshly detected anomalies on
@@ -22,8 +22,8 @@ index is created without it (same convention as 0127_soft_delete_partial_unique)
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0200_spend_anomaly_unique_org_date"
-down_revision: str | None = "0199_runs_json_to_jsonb"
+revision: str = "0201_spend_anomaly_unique_org_date"
+down_revision: str | None = "0200_runs_runner_marker_sweep_index"
 branch_labels: str | None = None
 depends_on: str | None = None
 

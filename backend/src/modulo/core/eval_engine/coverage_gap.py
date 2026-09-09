@@ -315,6 +315,123 @@ def _verdict_for_eval(
     )
 
 
+def _validate_coverage_gap_params(
+    min_runs: int,
+    divergence_threshold: float,
+    differentiation_threshold: float,
+) -> None:
+    """Raise ``ValueError`` for out-of-range signal parameters."""
+    if min_runs < 1:
+        raise ValueError(f"min_runs must be >= 1, got {min_runs}")
+    if not 0.0 <= divergence_threshold <= 1.0:
+        raise ValueError(f"divergence_threshold must be in [0, 1], got {divergence_threshold}")
+    if differentiation_threshold < 0.0:
+        raise ValueError(f"differentiation_threshold must be >= 0, got {differentiation_threshold}")
+
+
+def _coverage_data_point_run_ids(runs: Sequence[object], eval_results: Sequence[object]) -> set[UUID]:
+    """Terminal runs carrying at least one eval result — the signal's data points."""
+    terminal_run_ids = {getattr(r, "id", None) for r in runs if getattr(r, "status", None) in TERMINAL_STATUSES}
+    results_by_run: dict[UUID, list[object]] = defaultdict(list)
+    for result in eval_results:
+        run_id = getattr(result, "run_id", None)
+        if run_id is None or run_id not in terminal_run_ids:
+            continue
+        results_by_run[run_id].append(result)
+    return {run_id for run_id, results in results_by_run.items() if results}
+
+
+def _variant_representatives(
+    runs: Sequence[object],
+    data_point_run_ids: set[UUID],
+) -> tuple[dict[str, object], dict[UUID, str]]:
+    """One representative terminal run per distinct variant (stable order).
+
+    Returns ``(runs_by_variant, variant_key_by_run)`` — the second map covers
+    EVERY data-point run (not just representatives) so the differentiation pass
+    can restrict itself to the SAME population.
+    """
+    runs_by_variant: dict[str, object] = {}
+    variant_key_by_run: dict[UUID, str] = {}
+    for run in runs:
+        run_id = getattr(run, "id", None)
+        if run_id not in data_point_run_ids:
+            continue
+        key = _variant_key(run)
+        if key is None:
+            continue  # a run without a variant identity cannot participate
+        variant_key_by_run[run_id] = key
+        if key not in runs_by_variant:
+            runs_by_variant[key] = run
+    return runs_by_variant, variant_key_by_run
+
+
+def _divergence_for_variants(
+    runs_by_variant: Mapping[str, object],
+    outputs_by_run: Mapping[UUID, Any],
+) -> float:
+    """Variant divergence over the representative runs' outputs (``None`` outputs dropped)."""
+    variant_outputs = [outputs_by_run.get(cast(UUID, getattr(run, "id", None))) for run in runs_by_variant.values()]
+    variant_outputs = [o for o in variant_outputs if o is not None]
+    return compute_variant_divergence(variant_outputs)
+
+
+def _eval_values_by_variant(
+    eval_results: Sequence[object],
+    data_point_run_ids: set[UUID],
+    variant_key_by_run: Mapping[UUID, str],
+    runs_by_variant: Mapping[str, object],
+) -> dict[UUID, dict[str, float]]:
+    """Per-eval ONE metric value per distinct variant, taken from the representative run.
+
+    Both sides of the has_gap AND must be computed on the SAME entities:
+    divergence uses ``runs_by_variant`` (one representative run per distinct
+    variant); differentiation must therefore also use one value per distinct
+    variant, taken ONLY from that variant's representative run. Counting every
+    run per variant would weight run-count rather than variants and bias
+    differentiation down (inflating false-gap risk).
+    """
+    results_by_eval_variant: dict[UUID, dict[str, float]] = defaultdict(dict)
+    for result in eval_results:
+        run_id = getattr(result, "run_id", None)
+        if run_id not in data_point_run_ids:
+            continue
+        key = variant_key_by_run.get(run_id)
+        if key is None:
+            continue
+        representative = runs_by_variant.get(key)
+        if representative is None or getattr(representative, "id", None) != run_id:
+            continue  # only the variant's representative run contributes
+        eval_id = getattr(result, "eval_id", None)
+        if eval_id is None:
+            continue
+        results_by_eval_variant[eval_id][key] = _eval_metric(result)
+    return results_by_eval_variant
+
+
+def _eval_verdicts(
+    results_by_eval_variant: Mapping[UUID, Mapping[str, float]],
+    eval_names: Mapping[UUID, str],
+    variant_divergence: float,
+    divergence_threshold: float,
+    differentiation_threshold: float,
+) -> list[EvalCoverageGap]:
+    """Per-eval coverage-gap verdicts, sorted deterministically by eval id."""
+    evals = [
+        _verdict_for_eval(
+            eval_id,
+            values_by_variant,
+            eval_names=eval_names,
+            variant_divergence=variant_divergence,
+            divergence_threshold=divergence_threshold,
+            differentiation_threshold=differentiation_threshold,
+        )
+        for eval_id, values_by_variant in results_by_eval_variant.items()
+    ]
+    evals.sort(key=lambda g: str(g.eval_id))
+    return evals
+
+
 def evaluate_coverage_gap(
     runs: Sequence[object],
     eval_results: Sequence[object],
@@ -338,24 +455,11 @@ def evaluate_coverage_gap(
     (non-guardrail) eval result count as data points, so the signal is
     deterministic across two calls.
     """
-    if min_runs < 1:
-        raise ValueError(f"min_runs must be >= 1, got {min_runs}")
-    if not 0.0 <= divergence_threshold <= 1.0:
-        raise ValueError(f"divergence_threshold must be in [0, 1], got {divergence_threshold}")
-    if differentiation_threshold < 0.0:
-        raise ValueError(f"differentiation_threshold must be >= 0, got {differentiation_threshold}")
+    _validate_coverage_gap_params(min_runs, divergence_threshold, differentiation_threshold)
 
     eval_names = eval_names or {}
 
-    # Data points: terminal runs that have at least one eval result.
-    terminal_run_ids = {getattr(r, "id", None) for r in runs if getattr(r, "status", None) in TERMINAL_STATUSES}
-    results_by_run: dict[UUID, list[object]] = defaultdict(list)
-    for result in eval_results:
-        run_id = getattr(result, "run_id", None)
-        if run_id is None or run_id not in terminal_run_ids:
-            continue
-        results_by_run[run_id].append(result)
-    data_point_run_ids = {run_id for run_id, results in results_by_run.items() if results}
+    data_point_run_ids = _coverage_data_point_run_ids(runs, eval_results)
     run_count = len(data_point_run_ids)
 
     if run_count < min_runs:
@@ -369,65 +473,24 @@ def evaluate_coverage_gap(
         )
 
     # --- Variant divergence ----------------------------------------------
-    # One representative terminal run per distinct variant (stable order).
-    # ``variant_key_by_run`` maps every data-point run to its variant key so the
-    # differentiation pass below can restrict itself to the SAME population.
-    runs_by_variant: dict[str, object] = {}
-    variant_key_by_run: dict[UUID, str] = {}
-    for run in runs:
-        run_id = getattr(run, "id", None)
-        if run_id not in data_point_run_ids:
-            continue
-        key = _variant_key(run)
-        if key is None:
-            continue  # a run without a variant identity cannot participate
-        variant_key_by_run[run_id] = key
-        if key not in runs_by_variant:
-            runs_by_variant[key] = run
-
-    # Only data-point runs (those with a non-None id, guaranteed by the
-    # data_point_run_ids membership check above) reach runs_by_variant.
-    variant_outputs = [outputs_by_run.get(cast(UUID, getattr(run, "id", None))) for run in runs_by_variant.values()]
-    variant_outputs = [o for o in variant_outputs if o is not None]
-    variant_divergence = compute_variant_divergence(variant_outputs)
+    runs_by_variant, variant_key_by_run = _variant_representatives(runs, data_point_run_ids)
+    variant_divergence = _divergence_for_variants(runs_by_variant, outputs_by_run)
 
     # --- Eval differentiation (per eval_id, ONE value per variant) -------
-    # Both sides of the has_gap AND must be computed on the SAME entities:
-    # divergence uses ``runs_by_variant`` (one representative run per distinct
-    # variant); differentiation must therefore also use one value per distinct
-    # variant, taken ONLY from that variant's representative run. Counting every
-    # run per variant would weight run-count rather than variants and bias
-    # differentiation down (inflating false-gap risk).
-    results_by_eval_variant: dict[UUID, dict[str, float]] = defaultdict(dict)
-    for result in eval_results:
-        run_id = getattr(result, "run_id", None)
-        if run_id not in data_point_run_ids:
-            continue
-        key = variant_key_by_run.get(run_id)
-        if key is None:
-            continue
-        representative = runs_by_variant.get(key)
-        if representative is None or getattr(representative, "id", None) != run_id:
-            continue  # only the variant's representative run contributes
-        eval_id = getattr(result, "eval_id", None)
-        if eval_id is None:
-            continue
-        results_by_eval_variant[eval_id][key] = _eval_metric(result)
+    results_by_eval_variant = _eval_values_by_variant(
+        eval_results,
+        data_point_run_ids,
+        variant_key_by_run,
+        runs_by_variant,
+    )
+    evals = _eval_verdicts(
+        results_by_eval_variant,
+        eval_names,
+        variant_divergence,
+        divergence_threshold,
+        differentiation_threshold,
+    )
 
-    evals: list[EvalCoverageGap] = []
-    for eval_id, values_by_variant in results_by_eval_variant.items():
-        evals.append(
-            _verdict_for_eval(
-                eval_id,
-                values_by_variant,
-                eval_names=eval_names,
-                variant_divergence=variant_divergence,
-                divergence_threshold=divergence_threshold,
-                differentiation_threshold=differentiation_threshold,
-            )
-        )
-
-    evals.sort(key=lambda g: str(g.eval_id))
     return CoverageGapSummary(
         status="complete",
         batch_id=batch_id,

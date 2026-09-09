@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -132,6 +132,11 @@ def _client_for_session(mock_session: AsyncMock) -> Generator[TestClient, None, 
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
     )
+    # apply-moved routes (FAR-681) resolve via get_current_tenant_user_or_api_key;
+    # both stacks share the same admin principal in these endpoint tests.
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -160,6 +165,9 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
         username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
     )
     mock_plan = MagicMock()

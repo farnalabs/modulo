@@ -11,7 +11,7 @@ code:
   - backend/src/modulo/db/crud/scheduled_report.py
   - backend/src/modulo/db/crud/spend_anomaly.py
   - backend/src/modulo/db/models/spend_anomaly.py
-  - backend/src/modulo/db/migrations/versions/0200_spend_anomaly_unique_org_date.py
+  - backend/src/modulo/db/migrations/versions/0201_spend_anomaly_unique_org_date.py
 unit-tests:
   - backend/tests/unit/api/test_costs.py
   - backend/tests/unit/api/test_cost_controls_bdd.py
@@ -106,6 +106,6 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 - 2026-09-08: **improve-architecture (product-map walk)** — closed the anomaly
   persistence gap: freshly detected anomalies are now written on first sight
   (`record_or_get_anomaly`) and uniqueness per detected org-day is enforced
-  (`uq_spend_anomalies_org_date`, migration 0200_spend_anomaly_unique_org_date), so every returned anomaly has a
+  (`uq_spend_anomalies_org_date`, migration 0201_spend_anomaly_unique_org_date), so every returned anomaly has a
   stable id that `POST /anomalies/dismiss/{id}` can target and dismissal state
   survives repeat detection. Endpoint + CRUD unit suites updated.

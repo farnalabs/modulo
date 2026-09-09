@@ -181,6 +181,37 @@ CAPACITY_REDISPATCH_SECONDS = 120
 # backstop.
 _NODELESS_ZOMBIE_ERROR_CODE = "executor_stalled"
 
+# FAR-714 root-cause note — how a run reaches this repair at all. The
+# in-process guards (execute_run zombie_watchdog fails a claimed-but-nodeless
+# run at SAQ_SETUP_GRACE_SECONDS, pipeline_execution.py) should prevent every
+# zombie, yet ~30 runs/week still terminal-fail HERE with the nodeless detail —
+# i.e. every claim up to the re-dispatch budget (default 2, so >=3 claims over
+# >=3 nodeless windows, ~2h) produced zero checkpoints. Ranked mechanisms:
+#   1. First node DISPATCHED but never COMPLETED a super-step: the predicate
+#      matches on ZERO CHECKPOINTS (written at super-step completion), so an
+#      in-flight first node — hung sandbox/model call — is indistinguishable
+#      from a never-dispatched run. first_progress fires on DISPATCH, the
+#      watchdog stands down, and the node-deadline watchdog only fires at the
+#      node's timeout_seconds (sandbox nodes may configure up to 3300s — past
+#      this branch's window). Bursts (Sep 2: 11, Aug 31: 6) align with
+#      provider-degradation windows, not capacity saturation. Re-dispatch then
+#      supersedes the in-flight executor (token rotation) and the cycle
+#      repeats until the budget burns — the terminal-fail observed here.
+#   2. Pre-node hang that outlives the watchdog's write: the watchdog's
+#      fail_run_terminal is claim-token-fenced and requires status='running';
+#      if the reconcile's stale branch re-dispatched first (token rotated) the
+#      write lands rowcount 0 and the run continues zombie-free only if the
+#      successor executes — a successor that ALSO hangs re-enters this branch.
+#   3. Wedged worker with a live heartbeat (the 2026-08-05 documented case):
+#      event-loop starvation that lets the cheap heartbeat task tick while the
+#      executor never progresses; the watchdog fires late/never and its DB
+#      write can fail while the DB is degraded, leaving the run for the
+#      reconcile.
+# Detection (FAR-714): every terminal-fail through _fail_nodeless_run bumps
+# ``claimed_but_never_dispatched`` and ingests a source='saq' error event, so
+# the class is alertable per tick instead of visible only after ~2h of wasted
+# budget.
+
 # ---------------------------------------------------------------------------
 # Durable dispatch recovery (PR dist/runtime-reconcile, B2/B3).
 # dispatch_run now leaves a failed-enqueue run ``pending`` with
@@ -263,6 +294,12 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "nodeless_failed": 0,
     "nodeless_redispatched": 0,
     "nodeless_capped": 0,
+    # FAR-714: runs the zombie repair TERMINAL-FAILED because SAQ claimed them
+    # but no node was ever dispatched — the exact population behind the
+    # ~30/week "Claimed by SAQ but dispatched no node" executor_stalled
+    # failures. Distinct from nodeless_failed so ops can alert on this class
+    # (an error event is ingested per repair; see _fail_nodeless_run).
+    "claimed_but_never_dispatched": 0,
     "claim_cap_terminalized": 0,
     "mid_graph_wedge_terminalized": 0,
     "age_terminalized": 0,
@@ -313,6 +350,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["nodeless_failed"] = stats.get("nodeless_failed", 0)
     _dispatcher_reconcile_stats["nodeless_redispatched"] = stats.get("nodeless_redispatched", 0)
     _dispatcher_reconcile_stats["nodeless_capped"] = stats.get("nodeless_capped", 0)
+    _dispatcher_reconcile_stats["claimed_but_never_dispatched"] = stats.get("claimed_but_never_dispatched", 0)
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
     _dispatcher_reconcile_stats["claim_cap_terminalized"] = stats.get("claim_cap_terminalized", 0)
     _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
@@ -3922,6 +3960,10 @@ def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> An
     transaction) and the heartbeat gate throttles the sandbox-cap churn loop
     to one claim→demote attempt per window. Literal markers, matching the
     stale-run sweep.
+
+    Public alias (FAR-594 D8 qa F3): :func:`reconcile_capacity_marker_exclusion`
+    — the marker sweep composes the SAME predicates; public names keep the
+    shared vocabulary importable without underscore coupling.
     """
     from sqlalchemy import and_, or_
 
@@ -4099,28 +4141,70 @@ def _is_nodeless_redispatch_throttled(row: Any, nodeless_window: int) -> bool:
     return bool((datetime.now(UTC) - dispatched_at).total_seconds() <= nodeless_window * 60)
 
 
-async def _fail_nodeless_run(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+async def _fail_nodeless_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    summary: dict[str, Any],
+) -> None:
     """Terminal-fail a claimed-but-nodeless zombie in the reconcile transaction.
 
     Only transitions a run still ``running`` (a run already terminal, or
     capacity-deferred to ``pending``, is left untouched). Runs inside the
     per-org RLS context of the caller.
+
+    FAR-714: this is the single chokepoint where the "Claimed by SAQ but
+    dispatched no node" failure class is committed, so the repair decision is
+    surfaced here — the tick summary's ``claimed_but_never_dispatched`` counter
+    is bumped, an alert-grade ERROR log is emitted (with the zombie's wasted
+    age), and a ``source='saq'`` error event is ingested so the class is
+    visible/groupable in the Error Dashboard instead of only discoverable by
+    grepping run error_details after the fact. Best-effort: the alert must
+    never break the repair.
     """
     from modulo.db.models.run import Run
 
     run = await session.get(Run, run_id)
     if run is None or run.status != "running":
         return
+    zombie_age_minutes: float | None = None
+    started_at = getattr(run, "started_at", None)
+    if started_at is not None:
+        zombie_age_minutes = max((datetime.now(UTC) - started_at).total_seconds() / 60, 0.0)
     run.status = "failed"
     run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
     run.error_detail = (
         "Claimed by SAQ but dispatched no node within the nodeless window (dispatcher_reconcile zombie repair)"
     )
     run.completed_at = datetime.now(UTC)
-    _log.warning(
-        "dispatcher_reconcile.nodeless_zombie_failed run=%s org=%s",
+    summary["claimed_but_never_dispatched"] += 1
+    # Alert-grade: these runs burned their full retry budget without ever
+    # executing a node — the environment (worker or sandbox) that claimed them
+    # is degraded. ERROR level + the wasted age makes the burst visible.
+    age_text = f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown"
+    _log.error(
+        "dispatcher_reconcile.claimed_but_never_dispatched run=%s org=%s claim_count=%s zombie_age_minutes=%s — "
+        "terminal-failed; SAQ claimed this run but no node was ever dispatched",
         run_id,
         org_id,
+        getattr(run, "claim_count", None),
+        age_text,
+    )
+    await _ingest_saq_error(
+        session,
+        org_id,
+        function="dispatcher_reconcile",
+        # STABLE message (no run id): one error group whose occurrence count IS
+        # the alert signal for the class; the run id rides in context_json.
+        message=(
+            "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
+            "(SAQ claimed the run but no node was ever dispatched)"
+        ),
+        context={
+            "run_id": str(run_id),
+            "claim_count": getattr(run, "claim_count", None),
+            "zombie_age_minutes": zombie_age_minutes,
+        },
     )
 
 
@@ -4227,6 +4311,48 @@ def _build_re_dispatch_predicate(
             Run.heartbeat_at < func_now_minus(stale_window),
         ),
     )
+
+
+def reconciler_recovery_predicate(
+    *,
+    reenqueue_window: int,
+    stale_window: int,
+    capacity_redispatch_seconds: int,
+    nodeless_window: int,
+    enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
+) -> Any:
+    """The reconciler's COMPOSED recovery predicate (single source, qa F3).
+
+    ``re_dispatch OR nodeless_zombie`` — the exact OR-composition the
+    60s ``dispatcher_reconcile`` scan selects with. The D8 marker sweep
+    composes the SAME object (imported from here — parity by construction),
+    so a run the reconciler would re-dispatch can never have its dispatch
+    marker swept: the composition lives in ONE place instead of being
+    re-assembled (and silently drifted) at both call sites. This also fixes
+    the sweep's recoverability evaluation: the previous sweep evaluated the
+    branches AND-composed, so a fresh-heartbeat nodeless zombie (matched ONLY
+    by the nodeless branch, excluded by the stale branch) was misjudged
+    unrecoverable and its marker cleared.
+    """
+    from sqlalchemy import or_
+
+    return or_(
+        _build_re_dispatch_predicate(
+            reenqueue_window=reenqueue_window,
+            stale_window=stale_window,
+            capacity_redispatch_seconds=capacity_redispatch_seconds,
+            enqueue_failed_redispatch_seconds=enqueue_failed_redispatch_seconds,
+        ),
+        _nodeless_zombie_predicate(nodeless_window),
+    )
+
+
+# Public aliases (qa F3): the leaf predicates are part of the shared
+# reconcile/sweep vocabulary now that the marker sweep composes them; the
+# private names stay for the existing in-module call sites and tests.
+build_re_dispatch_predicate = _build_re_dispatch_predicate
+nodeless_zombie_predicate = _nodeless_zombie_predicate
+reconcile_capacity_marker_exclusion = _reconcile_capacity_marker_exclusion
 
 
 def _reconcile_job_type(status: str) -> str:
@@ -4900,8 +5026,6 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     ``finalize_cost``, so without this the terminalised runs would be
     invisible to analytics.
     """
-    from sqlalchemy import or_
-
     settings = get_settings()
     queue_name = settings.saq_runs_queue
     reenqueue_window = int(settings.saq_reenqueue_window)
@@ -4937,25 +5061,15 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         q = RedisQueue(redis_client, name=queue_name)
         # Per-tick re-dispatch cap counter for the B3 enqueue-failed branch.
         enqueue_failed_redispatched = 0
-        re_dispatch_predicate = or_(
-            _build_re_dispatch_predicate(
-                reenqueue_window=reenqueue_window,
-                stale_window=stale_window,
-                capacity_redispatch_seconds=capacity_redispatch_seconds,
-                enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
-            ),
-            # Claimed-but-nodeless zombie branch: running + saq + FRESH
-            # heartbeat but ZERO node progress after the nodeless window.
-            # The fresh heartbeat excludes it from the stale branch above
-            # (that is the primary hang mechanism - a live heartbeat keeps
-            # the run 'running' forever), so it gets its own predicate.
-            # Repaired by re-dispatch — budget-bounded (claim-cycle budget,
-            # terminal-fail on exhaustion) and rate-throttled to one
-            # re-dispatch per nodeless window per run (see
-            # _reconcile_nodeless_repair). The throttle is enforced ROW-level
-            # in the repair branch (a row can match multiple branches), so
-            # this predicate deliberately admits throttled rows.
-            _nodeless_zombie_predicate(nodeless_window),
+        # qa F3: the composed recovery predicate is the SINGLE composition
+        # (re_dispatch OR nodeless zombie) — shared verbatim with the D8
+        # marker sweep's recoverability check.
+        re_dispatch_predicate = reconciler_recovery_predicate(
+            reenqueue_window=reenqueue_window,
+            stale_window=stale_window,
+            capacity_redispatch_seconds=capacity_redispatch_seconds,
+            nodeless_window=nodeless_window,
+            enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
         )
         for org_id in org_ids:
             enqueue_failed_redispatched = await _reconcile_org(
@@ -4983,6 +5097,16 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         # opens its own RLS-scoped session.
         for run_id, run_org_id in terminalized_run_ids:
             await _record_fact_for_terminalized_run(run_id, run_org_id)
+        # FAR-714: alert-grade tick summary — runs claimed by SAQ but never
+        # dispatched a node are the recurring ~30/week executor_stalled class;
+        # a burst here points at degraded workers/sandboxes, not capacity.
+        if summary["claimed_but_never_dispatched"]:
+            _log.error(
+                "dispatcher_reconcile.claimed_but_never_dispatched_summary: %d run(s) claimed by SAQ but never "
+                "dispatched a node were repaired this tick (nodeless_window=%dm) — investigate worker/sandbox health",
+                summary["claimed_but_never_dispatched"],
+                nodeless_window,
+            )
         await _run_reconcile_sweeps(redis_client, summary)
         # qa M10: overlay the dedicated dual-write counters into the summary
         # BEFORE the stats persist — /healthz reads the counters' current
@@ -5010,10 +5134,15 @@ def _dispatcher_summary() -> dict[str, Any]:
         "nodeless_failed": 0,
         "nodeless_redispatched": 0,
         "nodeless_capped": 0,
+        "claimed_but_never_dispatched": 0,
         "claim_cap_terminalized": 0,
         "mid_graph_wedge_terminalized": 0,
         "age_terminalized": 0,
         "hitl_gate_expired_terminalized": 0,
+        "runner_markers_scanned": 0,
+        "runner_markers_cleared": 0,
+        "runner_markers_transitioned": 0,
+        "runner_capacity_violations": 0,
         "dispatch_failed_terminalized": 0,
         "enqueue_failed_ttl_terminalized": 0,
         "enqueue_failed_redispatched": 0,
@@ -5219,6 +5348,7 @@ async def _reconcile_org(
                         Run.started_at,
                         Run.claim_count,
                         Run.dispatcher,
+                        Run.sandbox_dispatch_state,
                         text("runs.enqueue_failed_at AS enqueue_failed_at"),
                         Pipeline.retry_policy,
                     )
@@ -5333,6 +5463,56 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         summary["rollback_thresholds_checked"] = 0
         summary["rollback_thresholds_flagged"] = 0
         _log.warning("dispatcher_reconcile.rollback_thresholds_failed", exc_info=True)
+    try:
+        # D8 (FAR-594): the state-aware runner dispatch-marker reconciliation
+        # sweep — clears non-fence markers on terminal runs and stale (>25h)
+        # markers, transitions stale non-terminal RUNNING runs terminal,
+        # never touches script_executing fence components or reconciler-
+        # recoverable rows (parity by construction: the sweep evaluates THIS
+        # module's re-dispatch predicates), and asserts the live count ≤ cap
+        # (runner.capacity.violation — the D8 rollback signal). A PARTIAL
+        # failure (qa F5) raises RunnerMarkerSweepError: the partial counts
+        # still land in the summary; the failure is logged loudly (the 5-min
+        # cron wrapper additionally persists the liveness key + re-raises).
+        from modulo.core.runner_capacity import RunnerMarkerSweepError, reconcile_runner_dispatch_markers
+
+        try:
+            marker_result = await reconcile_runner_dispatch_markers(_open_factory())
+        except RunnerMarkerSweepError as exc:
+            summary["runner_markers_scanned"] = exc.scanned
+            summary["runner_markers_cleared"] = exc.cleared
+            summary["runner_markers_transitioned"] = exc.transitioned
+            summary["runner_markers_orgs_failed"] = exc.org_failures
+            summary["runner_capacity_violations"] = 0
+            _log.warning(
+                "dispatcher_reconcile.runner_marker_sweep_partial_failure",
+                extra={"scanned": exc.scanned, "cleared": exc.cleared, "orgs_failed": exc.org_failures},
+                exc_info=True,
+            )
+        else:
+            summary["runner_markers_scanned"] = marker_result.get("scanned", 0)
+            summary["runner_markers_cleared"] = marker_result.get("cleared", 0)
+            summary["runner_markers_transitioned"] = marker_result.get("transitioned", 0)
+            summary["runner_markers_orgs_failed"] = marker_result.get("orgs_failed", 0)
+            summary["runner_capacity_violations"] = marker_result.get("violations", 0)
+            if marker_result.get("cleared") or marker_result.get("violations"):
+                _log.info(
+                    "dispatcher_reconcile.runner_marker_sweep",
+                    extra={
+                        "scanned": marker_result.get("scanned", 0),
+                        "cleared": marker_result.get("cleared", 0),
+                        "transitioned": marker_result.get("transitioned", 0),
+                        "violations": marker_result.get("violations", 0),
+                    },
+                )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        summary["runner_markers_scanned"] = 0
+        summary["runner_markers_cleared"] = 0
+        summary["runner_markers_transitioned"] = 0
+        summary["runner_capacity_violations"] = 0
+        _log.warning("dispatcher_reconcile.runner_marker_sweep_failed", exc_info=True)
 
 
 async def _update_reconcile_telemetry(summary: dict[str, Any]) -> None:
@@ -5483,6 +5663,40 @@ async def _resolve_hitl_resume_or_skip(
     return False, await _committed_decision_resume_data(session, org_id, row.id)
 
 
+async def _clear_previous_attempt_marker(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+) -> None:
+    """Refresh a re-dispatched RUNNING run's previous-attempt marker (qa F2).
+
+    A re-dispatch of a stale RUNNING run inherits the PREVIOUS attempt's
+    ``sandbox_dispatch_state`` — a stale marker that would otherwise survive
+    into the new attempt's running state and be terminalised by the D8
+    marker sweep's stale-RUNNING transition (killing the fresh attempt).
+    Clearing it here means: between the re-dispatch and the new attempt's own
+    fenced marker write the run is simply markerless (the count under-counts
+    by one slot for that window — the same fail-open window as a markerless
+    dispatch), and the sweep sees no stale marker to act on.
+
+    CAS-fenced on the marker text the scan saw: if a concurrent fresh
+    attempt already re-stamped the marker between the scan and this UPDATE,
+    the UPDATE matches 0 rows and the fresh reservation is untouched.
+    """
+    seen = getattr(row, "sandbox_dispatch_state", None)
+    if seen is None:
+        return
+    await session.execute(
+        text(
+            "UPDATE runs SET sandbox_dispatch_state = NULL "
+            "WHERE id = :rid AND organisation_id = :oid "
+            "AND sandbox_dispatch_state IS NOT NULL "
+            "AND sandbox_dispatch_state = :marker_seen"
+        ),
+        {"rid": row.id, "oid": str(org_id), "marker_seen": seen},
+    )
+
+
 async def _re_dispatch_reconciled_run(
     session: AsyncSession,
     q: RedisQueue,
@@ -5499,8 +5713,13 @@ async def _re_dispatch_reconciled_run(
 
     Returns the updated enqueue-failed counter. Every exception path ingests an
     error event and only bumps ``redis_errors`` — a re-dispatch never raises.
-    Extracted unchanged from ``_reconcile_one_row`` (complexity bound).
+    Extracted unchanged from ``_reconcile_one_row`` (complexity bound). A
+    re-dispatched RUNNING run has its previous attempt's stale marker
+    refreshed first (qa F2 — a stale marker must never survive into the new
+    attempt's running state).
     """
+    if getattr(row, "status", None) == "running":
+        await _clear_previous_attempt_marker(session, org_id, row)
     try:
         outcome, new_job_id = await _re_enqueue_run(
             q.name,
@@ -5621,7 +5840,7 @@ async def _reconcile_nodeless_repair(
         # terminal-fail exactly as before — even when throttled, since waiting
         # cannot help a run that can no longer be re-dispatched.
         summary["nodeless_failed"] += 1
-        await _fail_nodeless_run(session, row.id, org_id)
+        await _fail_nodeless_run(session, row.id, org_id, summary)
         # FAR-162 (P6'): the nodeless terminalizer writes a raw
         # ORM UPDATE (never finalize_cost) — add the run so its
         # compensating daily fact is recorded once the per-org
@@ -5689,8 +5908,11 @@ async def _redispatch_nodeless(
     skipped — not an error, not a terminal failure — so a later tick retries.
     Returns ``None`` — the branch always fully handles the row, so the caller
     passes its enqueue-failed counter through unchanged. Extracted from
-    ``_reconcile_one_row`` (complexity bound).
+    ``_reconcile_one_row`` (complexity bound). A re-dispatched zombie's
+    previous attempt's stale marker is refreshed first (qa F2).
     """
+    if getattr(row, "status", None) == "running":
+        await _clear_previous_attempt_marker(session, org_id, row)
     try:
         outcome, _ = await _re_enqueue_run(
             q.name,
@@ -5713,7 +5935,7 @@ async def _redispatch_nodeless(
         )
         # Fallback: terminal-fail so the run is never left dangling
         # when re-dispatch is impossible.
-        await _fail_nodeless_run(session, row.id, org_id)
+        await _fail_nodeless_run(session, row.id, org_id, summary)
         summary["nodeless_failed"] += 1
         terminalized_run_ids.append((row.id, org_id))
         return

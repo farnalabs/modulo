@@ -89,8 +89,8 @@ async def test_read_org_sandbox_cap_graph_scan_failure() -> None:
         patch.object(ex, "_graph_contains_sandbox_agent", side_effect=RuntimeError("boom")),
         patch.object(ex, "_log") as log,
     ):
-        result = await _executor()._read_org_sandbox_cap(org_id, {"nodes": []}, None)
-    assert result is None
+        result = await _executor()._read_org_sandbox_cap_full(org_id, {"nodes": []}, None)
+    assert result == (None, False, "graph")
     log.warning.assert_called_once_with(
         "pipeline.sandbox_graph_scan_failed",
         extra={"org_id": str(org_id)},
@@ -105,8 +105,8 @@ async def test_read_org_sandbox_cap_read_failure() -> None:
         patch.object(ex, "get_sandbox_concurrency_limit", new=AsyncMock(side_effect=RuntimeError("boom"))),
         patch.object(ex, "_log") as log,
     ):
-        result = await _executor()._read_org_sandbox_cap(org_id, {"nodes": []}, None)
-    assert result is None
+        result = await _executor()._read_org_sandbox_cap_full(org_id, {"nodes": []}, None)
+    assert result == (None, False, "graph")
     log.warning.assert_called_once_with(
         "pipeline.sandbox_cap_read_failed",
         extra={"org_id": str(org_id)},

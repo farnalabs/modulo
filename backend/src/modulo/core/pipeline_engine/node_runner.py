@@ -58,6 +58,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
 
@@ -502,18 +503,6 @@ _MAX_DRAIN_WINDOW = _MAX_ARTIFACT_LOG
 # rides for audit, the SEPARATE clamped display field is what the UI/money
 # formatter renders.
 _NODE_OUTPUT_DISPLAY_CLAMP = 1e6
-
-
-def _dispatch_marker_json(attempt_key: str) -> str:
-    """Structured ``runs.sandbox_dispatch_state`` value (dist/cleanup-idempotency D5).
-
-    The marker is extended from a bare ``'dispatching'`` literal to
-    ``{"state": "dispatching", "attempt_key": "<run:run_id:node:node_id:claim_count>"}``
-    so the per-node, per-claim-attempt idempotency key rides on the SAME DB-atomic
-    dispatch marker that already fences superseded executors. ``runs.sandbox_id``
-    stays in its own column (heartbeat-lost kill path reads it by id).
-    """
-    return json.dumps({"state": "dispatching", "attempt_key": attempt_key})
 
 
 def _claim_token_attempt_suffix(claim_lease: str | None) -> str:
@@ -4666,29 +4655,110 @@ async def _sandbox_acquire_dispatch_marker(
     org_id: str,
     run_id: str,
     node_id: str,
+    provider: str | None = None,
 ) -> str | None:
-    """DB-atomic dispatch marker (dist/runtime-core A4): one transaction
-    reads ``runs.claim_count`` (fenced on the claim token + status), then
-    claims the dispatch slot IMMEDIATELY BEFORE ``AsyncSandbox.create``.
+    """D8 atomic dispatch gate + marker (FAR-594): check capacity and claim the
+    dispatch slot in ONE transaction, immediately before provisioning.
 
-    ``UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid
-    WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND
-    status='running'`` — the marker is a structured JSON carrying the
-    attempt key. The UPDATE is atomic, no read-then-create TOCTOU;
-    rowcount 0 means the claim is superseded or the run is not running,
-    the caller raises :class:`SupersededNodeError` and MUST NOT create a
-    sandbox. The SELECT and UPDATE share one transaction, and the UPDATE
-    re-checks the same fenced WHERE, so a concurrent claim rotation
-    between them makes the UPDATE match zero rows and the attempt key is
-    never persisted for a superseded claim.
+    Delegates to ``runner_capacity.acquire_runner_dispatch_slot`` — own-row
+    claim-token-fenced lock FIRST, per-org advisory lock (reserved namespace,
+    flag-on), lock-free count over the narrowed running-only population, then
+    the fenced marker UPDATE commits the reservation. Applied to EVERY
+    sandbox_agent dispatch regardless of sandbox_mode and provider tier; the
+    marker carries ``provider``/``written_at`` (tier-less callers attribute to
+    the Docker tier — the only provider that reaches this helper without an
+    explicit provider is the Bundled Runner path).
 
-    Returns the attempt key on success, ``None`` when denied. Fail-open
-    (returns a claim-token-derived attempt key WITHOUT writing) when no
-    session factory or no claim lease is available.
+    Returns the attempt key on success, ``None`` when fenced (claim superseded
+    or run not running — the caller MUST NOT create a sandbox). Raises
+    :class:`SandboxCapacityExceededError` (retryable, ``capacity.org``) when
+    the org is at capacity or the advisory lock degraded (55P03). Fail-open
+    on any other gate error: the legacy best-effort marker write below runs
+    in its OWN transaction so a fail-open dispatch stays counted wherever the
+    marker write can commit (and markerless fail-open when even that write
+    fails — qa F11).
     """
+    from modulo.core.runner_capacity import (
+        RUNNER_PROVIDER_DOCKER,
+        RunnerCapacityDeniedError,
+        acquire_runner_dispatch_slot,
+    )
+
     if session_factory is None or not claim_lease:
         # Fail-open: no DB fence — derive a per-claim attempt key from the
         # (rotating) claim token so node output still distinguishes attempts.
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+    org_id_raw = org_id
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
+    try:
+        slot = await acquire_runner_dispatch_slot(
+            session_factory,
+            org_id=org_uuid,
+            run_id=run_id,
+            claim_token=claim_lease,
+            node_id=node_id,
+            provider=provider or RUNNER_PROVIDER_DOCKER,
+        )
+    except RunnerCapacityDeniedError as exc:
+        raise SandboxCapacityExceededError(str(exc)) from exc
+    if slot.status == "acquired":
+        return slot.attempt_key
+    if slot.status == "fenced":
+        return None
+    # fail_open — the gate degraded on a DB error; still write the marker
+    # best-effort in its own transaction (a fail-open dispatch must never go
+    # markerless: uncounted, unfenced, invisible to the rollback detector).
+    return await _sandbox_acquire_dispatch_marker_best_effort(
+        session_factory=session_factory,
+        claim_lease=claim_lease,
+        org_id=org_id,
+        run_id=run_id,
+        node_id=node_id,
+        provider=provider or RUNNER_PROVIDER_DOCKER,
+    )
+
+
+async def _sandbox_acquire_dispatch_marker_best_effort(
+    *,
+    session_factory: Callable[..., Any] | None,
+    claim_lease: str | None,
+    org_id: str,
+    run_id: str,
+    node_id: str,
+    provider: str | None = None,
+) -> str | None:
+    """The legacy best-effort dispatch-marker write (pre-D8 shape, provider-aware).
+
+    One transaction reads ``runs.claim_count`` (fenced on the claim token +
+    status), then writes the dispatch marker. ``UPDATE runs SET
+    sandbox_dispatch_state=:marker WHERE id=:rid AND organisation_id=:oid AND
+    claim_token=:tok AND status='running'`` — rowcount 0 means the claim is
+    superseded or the run is not running (returns ``None``). Used ONLY as the
+    D8 gate's fail-open fallback and by the flag-off flows that bypass the
+    gate; the SELECT and UPDATE share one transaction and the UPDATE
+    re-checks the same fenced WHERE, so a concurrent claim rotation between
+    them makes the UPDATE match zero rows and the attempt key is never
+    persisted for a superseded claim.
+
+    Fail-open contract (qa F11): a DB error here must never fail the
+    dispatch — the marker write is best-effort BY DESIGN. Any exception
+    (never a cancellation) logs ``sandbox_agent.best_effort_marker_failed``
+    and returns the claim-token-derived attempt key so the dispatch proceeds
+    MARKERLESS fail-open. Rollback-detector implication (noted on the log
+    event): with no marker row, a script anomaly on this attempt cannot be
+    attributed by ``rollback_thresholds._count_claim_without_marker`` until
+    the sweep/heartbeat path heals the row — accepted, because failing the
+    dispatch over a marker write would turn a DB hiccup into a dispatch
+    outage.
+    """
+    from modulo.core.runner_capacity import RUNNER_PROVIDER_DOCKER, build_dispatch_marker
+
+    if session_factory is None or not claim_lease:
         return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
     org_id_raw = org_id
     try:
@@ -4701,38 +4771,56 @@ async def _sandbox_acquire_dispatch_marker(
 
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
-    async with session_factory() as session, session.begin():
-        await set_rls_org(session, org_uuid)
-        await set_rls_execution_context(session)
-        row = (
-            await session.execute(
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            row = (
+                await session.execute(
+                    _sql_text(
+                        "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
+                        "AND claim_token=:tok AND status='running'"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
+            result = await session.execute(
                 _sql_text(
-                    "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
-                    "AND claim_token=:tok AND status='running'"
+                    "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
+                    "RETURNING id"
                 ),
-                {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+                {
+                    "rid": run_id,
+                    "oid": str(org_uuid),
+                    "tok": claim_lease,
+                    "sid": None,
+                    "marker": build_dispatch_marker(key, provider or RUNNER_PROVIDER_DOCKER),
+                },
             )
-        ).fetchone()
-        if row is None:
-            return None
-        key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
-        result = await session.execute(
-            _sql_text(
-                "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
-                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
-                "RETURNING id"
-            ),
-            {
-                "rid": run_id,
-                "oid": str(org_uuid),
-                "tok": claim_lease,
-                "sid": None,
-                "marker": _dispatch_marker_json(key),
+            if result.fetchone() is None:
+                return None
+            return key
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.best_effort_marker_failed",
+            extra={
+                "run_id": run_id,
+                "org_id": str(org_uuid),
+                "node_id": node_id,
+                "note": (
+                    "dispatch proceeds markerless (fail-open); the rollback detector cannot "
+                    "attribute a script anomaly to this attempt until the row is healed"
+                ),
             },
+            exc_info=True,
         )
-        if result.fetchone() is None:
-            return None
-        return key
+        return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
 
 
 async def _sandbox_store_dispatch_marker_sandbox(
@@ -4743,8 +4831,13 @@ async def _sandbox_store_dispatch_marker_sandbox(
     org_id: str,
     run_id: str,
     attempt_key: str | None,
+    provider: str | None = None,
 ) -> None:
-    """Persist the real sandbox id onto the runs row after a successful create."""
+    """Persist the real sandbox id onto the runs row after a successful create.
+
+    ``provider`` re-stamps the D8 tier attribution on the rewritten marker
+    (omitted → Docker-tier attribution, the Bundled Runner path's shape).
+    """
     if session_factory is None or not claim_lease:
         return
     org_id_raw = org_id
@@ -4756,6 +4849,7 @@ async def _sandbox_store_dispatch_marker_sandbox(
         return
     from sqlalchemy import text as _sql_text
 
+    from modulo.core.runner_capacity import RUNNER_PROVIDER_DOCKER, build_dispatch_marker
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async with session_factory() as session, session.begin():
@@ -4771,7 +4865,7 @@ async def _sandbox_store_dispatch_marker_sandbox(
                 "oid": str(org_uuid),
                 "tok": claim_lease,
                 "sid": sandbox_id_value,
-                "marker": _dispatch_marker_json(attempt_key or ""),
+                "marker": build_dispatch_marker(attempt_key or "", provider or RUNNER_PROVIDER_DOCKER),
             },
         )
 
@@ -4783,6 +4877,7 @@ async def _sandbox_store_script_lease(
     org_id: str,
     run_id: str,
     attempt_key: str | None,
+    provider: str | None = None,
 ) -> None:
     """FAR-296 Phase 2 fencing lease: record the script-mode execution claim.
 
@@ -4793,7 +4888,9 @@ async def _sandbox_store_script_lease(
     claimed, completion marker pending)". Fenced on the claim token +
     status so a superseded original cannot stamp a lease on a successor's
     row. Fail-open (no session factory / claim lease / org) — the lease
-    is a safety backstop, never a correctness dependency.
+    is a safety backstop, never a correctness dependency. ``provider``
+    re-stamps the D8 tier attribution (omitted → Docker-tier, matching the
+    Bundled Runner path's call shape).
     """
     if session_factory is None or not claim_lease:
         return
@@ -4806,6 +4903,10 @@ async def _sandbox_store_script_lease(
         return
     from sqlalchemy import text as _sql_text
 
+    from modulo.core.runner_capacity import (
+        MARKER_STATE_SCRIPT_EXECUTING,
+        RUNNER_PROVIDER_DOCKER,
+    )
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     async with session_factory() as session, session.begin():
@@ -4820,7 +4921,14 @@ async def _sandbox_store_script_lease(
                 "rid": run_id,
                 "oid": str(org_uuid),
                 "tok": claim_lease,
-                "marker": json.dumps({"state": "script_executing", "attempt_key": attempt_key or ""}),
+                "marker": json.dumps(
+                    {
+                        "state": MARKER_STATE_SCRIPT_EXECUTING,
+                        "attempt_key": attempt_key or "",
+                        "provider": provider or RUNNER_PROVIDER_DOCKER,
+                        "written_at": datetime.now(UTC).isoformat(),
+                    }
+                ),
             },
         )
         if result.rowcount == 0:
@@ -5860,6 +5968,12 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     agent_id = _parse_uuid_opt(node_def.get("agent_id"))
     await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id, node_def=node_def)
 
+    # D8 (FAR-594): the provider tier attribution for the dispatch marker,
+    # resolved with the route. The Bundled Runner path attributes below via
+    # the gate default (runner_docker); the legacy path is E2B (route "e2b"
+    # or the historical "none" default).
+    _resolved_provider: str | None = None
+
     # D4 dispatch adapter (FAR-590): branch on the PIPELINE-LEVEL bound
     # profile's provider_type (the validated, same-org-enforced
     # PipelineSnapshot.environment_profile_id — consumed at dispatch).
@@ -5876,6 +5990,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             resolve_sandbox_dispatch_route,
             validate_e2b_dispatch_timeout,
         )
+        from modulo.core.runner_capacity import RUNNER_PROVIDER_E2B
 
         _ctx = get_conformance_ctx()
         _env_profile_id = _ctx[2] if _ctx else None
@@ -5884,6 +5999,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             from modulo.core.bundled_runner.runner_dispatch import run_bundled_runner_node
 
             return await run_bundled_runner_node(state, config, _route)
+        _resolved_provider = RUNNER_PROVIDER_E2B
         if _route.provider_type == "e2b":
             validate_e2b_dispatch_timeout(sandbox_timeout)
 
@@ -6066,24 +6182,20 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 return _idempotency_gate_skipped_envelope(node_id)
 
     async def _acquire_dispatch_marker() -> str | None:
-        """DB-atomic dispatch marker (dist/runtime-core A4): one transaction
-        reads ``runs.claim_count`` (fenced on the claim token + status), then
-        claims the dispatch slot IMMEDIATELY BEFORE ``AsyncSandbox.create``.
+        """D8 atomic dispatch gate + marker (FAR-594): capacity check and the
+        dispatch reservation commit in ONE transaction — own-row fenced lock,
+        per-org advisory lock (flag-on), lock-free count over the
+        running-only marker population, then the fenced marker UPDATE. The
+        marker carries the tier (``provider``/``written_at``). Applied to
+        EVERY sandbox_agent dispatch regardless of sandbox_mode (the
+        pre-D8 script-only racy pre-gate is REPLACED by this).
 
-        ``UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid
-        WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND
-        status='running'`` — the marker is a structured JSON carrying the
-        attempt key. The UPDATE is atomic, no read-then-create TOCTOU;
-        rowcount 0 means the claim is superseded or the run is not running,
-        the caller raises :class:`SupersededNodeError` and MUST NOT create a
-        sandbox. The SELECT and UPDATE share one transaction, and the UPDATE
-        re-checks the same fenced WHERE, so a concurrent claim rotation
-        between them makes the UPDATE match zero rows and the attempt key is
-        never persisted for a superseded claim.
-
-        Returns the attempt key on success, ``None`` when denied. Fail-open
-        (returns a claim-token-derived attempt key WITHOUT writing) when no
-        session factory or no claim lease is available.
+        Returns the attempt key on success, ``None`` when denied
+        (superseded / not running — no sandbox may be created). Raises
+        :class:`SandboxCapacityExceededError` (retryable, ``capacity.org``)
+        when at capacity or the lock degraded. Fail-open on any other DB
+        error: the marker is still written best-effort in its own
+        transaction, then the sandbox provisions.
         """
         return await _sandbox_acquire_dispatch_marker(
             session_factory=session_factory,
@@ -6091,6 +6203,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             org_id=org_id,
             run_id=run_id,
             node_id=node_id,
+            provider=_resolved_provider,
         )
 
     async def _store_dispatch_marker_sandbox(sandbox_id_value: str | None) -> None:
@@ -6102,6 +6215,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             org_id=org_id,
             run_id=run_id,
             attempt_key=attempt_key,
+            provider=_resolved_provider,
         )
 
     async def _store_script_lease() -> None:
@@ -6122,6 +6236,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             org_id=org_id,
             run_id=run_id,
             attempt_key=attempt_key,
+            provider=_resolved_provider,
         )
 
     async def _mint_run_api_key_for_sandbox() -> str | None:
@@ -6156,60 +6271,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         )
 
     try:
-        # FAR-296 Phase 4b: dispatch-time sandbox capacity gate. Fail-fast
-        # before wasting E2B provisioning time — if the org is at sandbox
-        # capacity, raise a retryable capacity.org error immediately instead
-        # of letting the sandbox provision and then get demoted at claim time.
-        if sandbox_mode == "script" and session_factory is not None:
-            _org_id_raw = state.get("_org_id")
-            try:
-                _org_uuid = uuid.UUID(str(_org_id_raw)) if _org_id_raw else None
-            except (TypeError, ValueError):
-                _org_uuid = None
-            if _org_uuid is not None:
-                try:
-                    from modulo.db.crud.run import (
-                        count_active_runner_dispatches_for_org,
-                        get_sandbox_concurrency_limit,
-                    )
-                    from modulo.db.rls import set_rls_execution_context, set_rls_org
-
-                    async with session_factory() as _cap_session, _cap_session.begin():
-                        await set_rls_org(_cap_session, _org_uuid)
-                        await set_rls_execution_context(_cap_session)
-                        # FAR-589 D3b: one reader for all five call sites. The
-                        # flag-off window enforces the contract's cap only — an
-                        # absent key (Docker-tier default, is_default=True) does
-                        # NOT gate until D8's rollout flag activates it.
-                        _cap = (await get_sandbox_concurrency_limit(_cap_session, _org_uuid)).enforced_cap
-                        if _cap is not None:
-                            _active = await count_active_runner_dispatches_for_org(
-                                _cap_session, _org_uuid, exclude_run_id=uuid.UUID(str(run_id))
-                            )
-                            if _active >= _cap:
-                                _log.info(
-                                    "sandbox_agent.dispatch_capacity_denied",
-                                    extra={
-                                        "run_id": run_id,
-                                        "org_id": str(_org_uuid),
-                                        "active": _active,
-                                        "cap": _cap,
-                                    },
-                                )
-                                raise SandboxCapacityExceededError(
-                                    f"Sandbox dispatch denied: org {_org_uuid} at capacity "
-                                    f"({_active}/{_cap} active sandbox leases)"
-                                )
-                except SandboxCapacityExceededError:
-                    raise
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.warning(
-                        "sandbox_agent.dispatch_capacity_check_failed",
-                        extra={"run_id": run_id, "org_id": str(_org_uuid)},
-                        exc_info=True,
-                    )
+        # D8 (FAR-594): the pre-D8 script-only racy check-then-act capacity
+        # pre-gate is REPLACED by the atomic gate inside
+        # ``_acquire_dispatch_marker`` below — one transaction reserves the
+        # slot for EVERY sandbox_agent dispatch (any sandbox_mode, any
+        # provider tier) before provisioning.
         # DB-atomic dispatch marker (dist/runtime-core A4) — replaces the
         # retired Redis SETNX E2B fence. Exactly ONE executor wins the
         # dispatch slot; a superseded claim / non-running run is refused

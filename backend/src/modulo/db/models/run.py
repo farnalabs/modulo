@@ -100,6 +100,20 @@ PIPELINE_CAPACITY_STATUSES: frozenset[str] = frozenset(
 # to this exact set.
 HITL_ACTIONABLE_RUN_STATUSES: frozenset[str] = frozenset({"awaiting_human", "claimed", HITL_PARKED_STATUS})
 
+# Run statuses under which a claim may atomically ACQUIRE a gate (FAR-645).
+# Single source of truth for ``HITLManager.claim()``: the claimable set is
+# ``awaiting_human`` (claimable now) and ``hitl_parked`` (stays claimable per
+# FAR-604 D2 — park != decide, a parked run's gate remains undecided work until
+# a decision un-parks it). Deliberately distinct from
+# ``HITL_ACTIONABLE_RUN_STATUSES`` (which also contains ``claimed`` for listing
+# semantics): a claimed gate is HELD by a reviewer — claim() extends this set
+# with ``claimed`` ONLY for the same-account re-claim arm (FAR-686 token
+# recovery), mirrored atomically in the UPDATE's ``runs`` EXISTS predicate.
+# claim() uses the base set in its fast-fail pre-check AND in the atomic
+# UPDATE's ``runs`` EXISTS predicate, so a run that goes terminal between the
+# pre-check and the write can never be claimed.
+HITL_CLAIMABLE_RUN_STATUSES: frozenset[str] = frozenset({AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS})
+
 # In-flight run statuses for the ``ongoing`` trigger type (FAR-158). An ongoing
 # trigger keeps its pipeline topped up to ``max_concurrent_runs`` runs whose
 # status is in this set. pending = "queued" (the user-facing semantics — a
@@ -268,6 +282,22 @@ class Run(OrgScoped):
     enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Sandbox dispatch lifecycle state (migration 0074) — the persistent handle
     # dispatch.py reads to resume/retry a sandbox_agent node after a crash.
+    # D8 (FAR-594) JSON vocabulary (written by ``runner_capacity`` /
+    # ``node_runner``; consumers read ONLY ``state``/``attempt_key``):
+    #   * dispatch marker  — {"state": "dispatching", "attempt_key": …,
+    #     "provider": "runner_docker"|"e2b"|"local", "written_at": ISO-8601}
+    #     — the D8 atomic dispatch gate commits it as the slot reservation
+    #     (provider/written_at may be absent on tier-less writers, which
+    #     attribute to the Docker tier — fail-safe);
+    #   * script lease     — {"state": "script_executing", "attempt_key": …,
+    #     "provider": …, "written_at": …} — the exactly-once fence; the
+    #     reconciliation sweep NEVER clears it;
+    #   * HITL tombstone   — {"state": "cleared_at_hitl", "written_at": …} —
+    #     written at the interrupt boundary (capacity-neutral: the D8 count is
+    #     running-only AND excludes this state; visible to the rollback
+    #     detector).
+    # Pre-D8 values (bare "dispatching" literals, JSON without
+    # provider/written_at) count as Docker-tier and age out via the sweep.
     sandbox_dispatch_state: Mapped[str | None] = mapped_column(Text)
     # E2B sandbox id surfaced for observability (migration 0074).
     sandbox_id: Mapped[str | None] = mapped_column(Text)

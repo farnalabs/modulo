@@ -472,6 +472,12 @@ describe('AdminUsersView', () => {
     await flushPromises()
     await nextTick()
     expect(mockPut).toHaveBeenCalledWith('/api/v1/admin/users/u-1', { org_role: 'operator' })
+    // FAR-645: the updated row must actually re-render — query data is
+    // deep-readonly (FAR-630), so the list update replaces the whole response
+    // through the writable computed instead of an in-place index write that
+    // vue-query silently drops.
+    const usersState = (wrapper.vm as unknown as { users: Array<{ id: string; org_role: string }> }).users
+    expect(usersState.find(u => u.id === 'u-1')?.org_role).toBe('operator')
   })
 
   it('deactivates and reactivates a user via the row actions', async () => {

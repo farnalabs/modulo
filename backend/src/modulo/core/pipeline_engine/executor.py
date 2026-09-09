@@ -1158,8 +1158,28 @@ async def org_sandbox_capacity_free(
     Used by HITL routes as a PRE-approval check: the gate decision must not be
     committed when the org is at sandbox capacity. Fail-open — any error reads
     as ``True`` (admit) with a warning, never raises.
+
+    D8 (FAR-594): lock-free by contract — the resume path's advisory-lock gate
+    (``_enforce_resume_sandbox_capacity``) is the enforcement point; taking
+    the advisory lock here would invert the uniform row→advisory ordering
+    (this pre-check holds no run row). Flag-on converges onto the shared
+    ``resolve_runner_capacity_decision`` reader (the narrowed running-only
+    marker population, tier-scoped Docker default, cap-None short-circuit);
+    flag-off keeps the pre-D8 graph-based count and ``enforced_cap``.
+
+    E2B carve-out omission (D8 qa F14, deliberate — mirrored by
+    ``_enforce_resume_sandbox_capacity``): this pre-check does not model the
+    dispatch gate's e2b skip. With the Docker-tier default active it counts
+    host-resource markers only, so an org whose ONLY saturation is e2b
+    markers reads as capacity-free here anyway; an org saturated on
+    host-resource markers conservatively blocks the approval even though the
+    dispatch gate would admit an e2b re-dispatch. An approval that waits for
+    host-resource capacity is never lost work.
     """
     try:
+        from modulo.settings import get_settings
+
+        flag_on = get_settings().runner_capacity_gate_enabled
         run = await get_run(session, run_id)
         if run is None or run.snapshot_id is None:
             return True
@@ -1169,6 +1189,11 @@ async def org_sandbox_capacity_free(
         graph_json = snap_result.scalar_one_or_none()
         if not _graph_contains_sandbox_agent(graph_json):
             return True
+        if flag_on:
+            from modulo.core.runner_capacity import resolve_runner_capacity_decision
+
+            decision = await resolve_runner_capacity_decision(session, org_id, exclude_run_id=run_id)
+            return decision.cap is None or decision.active < decision.cap
         cap = (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap
         if cap is None:
             return True
@@ -1691,7 +1716,9 @@ class PipelineExecutor:
         runs, or scanning the graph logs a warning and ADMITS the run (treats
         it as no-cap) rather than raising.
         """
-        org_sandbox_cap: int | None = await self._read_org_sandbox_cap(org_id, graph_json, snapshot_id)
+        org_sandbox_cap, org_sandbox_host_only, org_sandbox_population = await self._read_org_sandbox_cap_full(
+            org_id, graph_json, snapshot_id
+        )
         org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
         async with self._session_factory() as session, session.begin():
@@ -1717,7 +1744,13 @@ class PipelineExecutor:
 
             org_sandbox_count = 0
             if org_sandbox_cap is not None:
-                org_sandbox_count = await self._org_sandbox_active_count(session, org_id, run_id)
+                org_sandbox_count = await self._org_sandbox_active_count(
+                    session,
+                    org_id,
+                    run_id,
+                    population=org_sandbox_population,
+                    host_resource_only=org_sandbox_host_only,
+                )
             org_sandbox_cap_ok = org_sandbox_cap is None or org_sandbox_count < org_sandbox_cap
 
             org_run_count = 0
@@ -1754,6 +1787,13 @@ class PipelineExecutor:
             # executor's claim token and only from ``running`` (A1): a
             # superseded original (token rotated by a successor) cannot demote
             # the successor's running row back to pending.
+            #
+            # D8 (FAR-594): this claim-time demotion is explicitly ADVISORY —
+            # a best-effort, lock-free, population-only read (its own-row
+            # lock exists only at this fenced demote write) that must NEVER
+            # take the per-org advisory lock (a count-then-row shape would
+            # invert the uniform row→advisory ordering). The runner-marker
+            # reconciliation sweep is its named backstop.
             await update_run_status(
                 session,
                 run_id,
@@ -1903,9 +1943,28 @@ class PipelineExecutor:
             )
         return running_run
 
-    async def _org_sandbox_active_count(self, session: AsyncSession, org_id: uuid.UUID, run_id: uuid.UUID) -> int:
-        """Count the org's active sandbox runs (fail-open to 0 on read error)."""
+    async def _org_sandbox_active_count(
+        self,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        *,
+        population: str = "graph",
+        host_resource_only: bool = False,
+    ) -> int:
+        """Count the org's active sandbox runs (fail-open to 0 on read error).
+
+        D8 (FAR-594): ``population="marker"`` (the flag-on claim-time path)
+        counts the narrowed running-only marker population; the default
+        ``"graph"`` keeps the pre-D8 sandbox-graph count for flag-off.
+        """
         try:
+            if population == "marker":
+                from modulo.core.runner_capacity import count_active_runner_dispatches_for_decision
+
+                return await count_active_runner_dispatches_for_decision(
+                    session, org_id, exclude_run_id=run_id, host_resource_only=host_resource_only
+                )
             return await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
         except asyncio.CancelledError:
             raise
@@ -1931,17 +1990,26 @@ class PipelineExecutor:
             )
             return 0
 
-    async def _read_org_sandbox_cap(
+    async def _read_org_sandbox_cap_full(
         self,
         org_id: uuid.UUID,
         graph_json: dict[str, Any] | None,
         snapshot_id: uuid.UUID | None,
-    ) -> int | None:
-        """Read the org's sandbox cap (``None`` = no cap / no sandbox / fail-open).
+    ) -> tuple[int | None, bool, str]:
+        """The claim-time cap read + its count-population contract (D8).
 
-        Short-circuits BEFORE any DB read: a graph with no ``sandbox_agent``
-        node skips the settings read entirely. Each fail-open path logs a
-        warning and treats the run as uncapped.
+        Returns ``(cap, host_resource_only, population)``: flag-on resolves
+        the tier-scoped cap through the shared runner-capacity reader (the
+        absent-key Docker-tier default 4 counts host-resource providers only;
+        an explicit value gates ALL runner dispatches) and pairs it with the
+        matching ``"marker"`` population; flag-off keeps the pre-D8
+        ``enforced_cap`` + ``"graph"`` population exactly.
+
+        E2B carve-out omission (D8 qa F14, documented at both sites): this
+        claim-time read does not model the dispatch gate's e2b skip — the
+        demotion it drives is an ADVISORY backstop (the dispatch gate is the
+        enforcement point), so a conservative host-only count here is
+        acceptable over-demotion, never lost work.
         """
         try:
             if snapshot_id is not None:
@@ -1956,17 +2024,25 @@ class PipelineExecutor:
                 extra={"org_id": str(org_id)},
                 exc_info=True,
             )
-            return None
+            return None, False, "graph"
         if not has_sandbox:
-            return None
+            return None, False, "graph"
         try:
+            from modulo.settings import get_settings
+
+            flag_on = get_settings().runner_capacity_gate_enabled
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
+                if flag_on:
+                    from modulo.core.runner_capacity import read_runner_cap_contract
+
+                    cap, host_resource_only = await read_runner_cap_contract(session, org_id)
+                    return cap, host_resource_only, "marker"
                 # FAR-589 D3b: the one reader returns the full contract; this
                 # claim-time cap read enforces the flag-off window cap only
                 # (absent key = no gate until D8's rollout flag).
-                return (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap
+                return (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap, False, "graph"
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1975,12 +2051,12 @@ class PipelineExecutor:
                 extra={"org_id": str(org_id)},
                 exc_info=True,
             )
-            return None
+            return None, False, "graph"
 
     async def _read_org_run_concurrency_limit(self, org_id: uuid.UUID) -> int | None:
         """Read the org's run-concurrency cap (``None`` = no cap / fail-open).
 
-        Mirrors :meth:`_read_org_sandbox_cap` but for the org-wide
+        Mirrors :meth:`_read_org_sandbox_cap_full` but for the org-wide
         ``run_concurrency_limit`` (applies to EVERY run, not just sandbox
         graphs). Fail-open: any read error logs a warning and treats the org
         as uncapped.
@@ -2792,11 +2868,89 @@ class PipelineExecutor:
         the real gate — serialised per-org via advisory lock so two concurrent
         approvals cannot both pass. Raises ``SandboxCapacityExceededError`` when
         the org's sandbox cap is reached.
+
+        D8 (FAR-594) converges this path onto the runner-capacity scheme when
+        the rollout flag is on: the per-org advisory lock uses the RESERVED
+        ``runner-capacity`` namespace (never the shared
+        ``_uuid_to_lock_keys`` keyspace) and the count is the narrowed
+        running-only marker population with the tier-scoped Docker default.
+        ``SET LOCAL lock_timeout`` bounds the advisory wait to the same
+        Settings knob the dispatch gate uses: a crowded per-org lock degrades
+        to the RETRYABLE ``SandboxCapacityExceededError`` (SQLSTATE 55P03 —
+        ``sqlstate_of`` extraction from the DBAPI chain), never a hang on
+        ``deadlock_timeout``. The caller has ALREADY written the run row
+        (``update_run_status`` above) — the uniform row→advisory ordering that
+        makes the scheme cycle-free with the dispatch gate. Flag-off keeps the
+        pre-D8 behaviour exactly (legacy keyspace, graph-based count,
+        ``enforced_cap``, no lock_timeout).
+
+        E2B carve-out omission (D8 qa F14, deliberate): unlike the dispatch
+        gate, this gate does NOT skip an e2b dispatch when the Docker-tier
+        default bucket is saturated — a Docker-tier-saturated org also blocks
+        e2b resumes (conservative: resumes are far rarer than dispatches, and
+        an approval that waits for host-resource capacity is never lost work;
+        the HITL pre-check mirrors the same omission — both sites documented).
         """
+        from modulo.core.runner_capacity import (
+            runner_capacity_lock_keys,
+        )
+
         graph_json = (
             await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
         ).scalar_one_or_none()
         if not _graph_contains_sandbox_agent(graph_json):
+            return
+        from modulo.settings import get_settings
+
+        if get_settings().runner_capacity_gate_enabled:
+            from modulo.core.runner_capacity import count_active_runner_dispatches_for_decision
+            from modulo.db.sqlstates import sqlstate_of
+
+            cap, host_resource_only = await self._read_runner_cap_converged(session, org_id)
+            if cap is None:
+                return
+            try:
+                # SET LOCAL lock_timeout BEFORE the advisory lock (qa F7): a
+                # crowded per-org lock degrades to SQLSTATE 55P03 — mapped to
+                # the RETRYABLE SandboxCapacityExceededError below — instead
+                # of hanging on deadlock_timeout.
+                lock_timeout_ms = get_settings().runner_capacity_lock_timeout_ms
+                await session.execute(
+                    text("SELECT set_config('lock_timeout', :val, true)"),
+                    {"val": f"{lock_timeout_ms}ms"},
+                )
+                # pg_advisory_xact_lock(k1, k2) over the RESERVED namespace — all
+                # workers/machines for the same org hash to the SAME key;
+                # xact-scoped, released exactly at this transaction's commit /
+                # rollback — never leaked onto a pooled connection.
+                k1, k2 = runner_capacity_lock_keys(org_id)
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
+                    {"k1": k1, "k2": k2},
+                )
+                active = await count_active_runner_dispatches_for_decision(
+                    session, org_id, exclude_run_id=run_id, host_resource_only=host_resource_only
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # qa F7: the designed degradation — lock_not_available (what
+                # SET LOCAL lock_timeout actually raises) is a RETRYABLE
+                # capacity denial, matching the dispatch gate's 55P03 →
+                # RunnerCapacityDeniedError mapping (the resume caller maps
+                # SandboxCapacityExceededError to the same ``capacity.org``
+                # house failure). Any OTHER DB error is not a capacity signal
+                # — re-raise.
+                if sqlstate_of(exc) == "55P03":
+                    _log.warning(
+                        "pipeline.runner_resume_lock_degraded",
+                        extra={"org_id": str(org_id), "run_id": str(run_id), "lock_timeout_ms": lock_timeout_ms},
+                        exc_info=True,
+                    )
+                    raise SandboxCapacityExceededError(org_id) from exc
+                raise
+            if active >= cap:
+                raise SandboxCapacityExceededError(org_id)
             return
         cap = (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap
         if cap is None:
@@ -2816,6 +2970,27 @@ class PipelineExecutor:
         active = await count_active_sandbox_runs_for_org(session, org_id, exclude_run_id=run_id)
         if active >= cap:
             raise SandboxCapacityExceededError(org_id)
+
+    async def _read_runner_cap_converged(self, session: AsyncSession, org_id: uuid.UUID) -> tuple[int | None, bool]:
+        """The D8-converged cap read for the resume path (flag-on only).
+
+        Returns ``(cap, host_resource_only)`` from the shared runner-capacity
+        reader; identical per-org derivation to the dispatch gate (asserted by
+        the convergence tests). Fail-open to no-gate on any read error.
+        """
+        try:
+            from modulo.core.runner_capacity import read_runner_cap_contract
+
+            return await read_runner_cap_contract(session, org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.runner_cap_read_failed",
+                extra={"org_id": str(org_id)},
+                exc_info=True,
+            )
+            return None, False
 
     async def resume(
         self,
@@ -5143,6 +5318,25 @@ class PipelineExecutor:
         run_id = ctx.run_id
         pipeline_id = ctx.pipeline_id
         org_id = ctx.org_id
+
+        # D8 (FAR-594) HITL boundary: BEFORE the run enters ``awaiting_human``,
+        # any remaining dispatch marker becomes the capacity-neutral
+        # ``cleared_at_hitl`` tombstone — a parked run holds no slot (the
+        # marker count is running-only AND tombstone-excluded), and an
+        # abandoned awaiting_human run can never starve the org. Best-effort,
+        # claim-token-fenced, and guarded on marker presence (never
+        # resurrects a marker on a run that dispatched nothing); the resume
+        # re-acquires a slot when the HITL approval re-dispatches through the
+        # decided-gate auto-resume loop.
+        if org_id is not None and self._claim_token:
+            from modulo.core.runner_capacity import mark_runner_dispatch_cleared_at_hitl
+
+            await mark_runner_dispatch_cleared_at_hitl(
+                self._session_factory,
+                org_id=org_id,
+                run_id=str(run_id),
+                claim_token=self._claim_token,
+            )
 
         if pipeline_id is not None and org_id is not None:
             pipeline_name, coalesce_reused = await self._create_interrupt_gate(
