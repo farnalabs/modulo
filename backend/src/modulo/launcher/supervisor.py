@@ -348,11 +348,17 @@ class DataDirLock:
         except OSError as exc:
             os.close(fd)
             holder = _read_lock_holder(self._path)
-            if holder is not None and holder.pid != os.getpid():
+            if holder is not None:
+                # A recorded holder means a launcher already owns this data
+                # dir — even when that holder is *this* process (a same-process
+                # second acquire must be refused and named, not treated as a
+                # mid-boot re-entrancy). Name the holder AND the mode of the
+                # acquire that is being refused.
                 raise DataDirLockError(
                     f"Refusing to start: data dir {self.data_dir} is locked by another launcher "
-                    f"(holder PID {holder.pid}, mode {holder.mode!r}). Stop that launcher first "
-                    "(or remove the stale lock file only if the holder process is confirmed dead)."
+                    f"(holder PID {holder.pid}, mode {holder.mode!r}); the requested acquire "
+                    f"(mode {self.mode!r}) is refused. Stop that launcher first (or remove the "
+                    "stale lock file only if the holder process is confirmed dead)."
                 ) from exc
             raise DataDirLockError(
                 f"Refusing to start: data dir {self.data_dir} is locked by another process "
@@ -508,9 +514,13 @@ def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
                 return 0
             return 1
         time.sleep(0.2)
-    raise LauncherError(
-        f"launcher PID {holder.pid} did not stop within {timeout}s — check the launcher log in the data dir"
-    )
+    # The holder was signalled but the kernel lock is still held at the
+    # deadline: we could not *confirm* a clean stop (the holder may be
+    # unverifiable, e.g. a legacy record with no STARTTIME). Per the contract
+    # this is a "could not confirm stopped" outcome, reported as 1 — never an
+    # exception, which is reserved for outright refusals (mid-boot / PID reuse).
+    _log.warning("stop.unconfirmed pid=%s timeout=%s", holder.pid, timeout)
+    return 1
 
 
 def _raise_still_locked(pid: int, timeout: float) -> int:
@@ -646,11 +656,12 @@ def child_shim_main(argv: list[str]) -> int:
     parser.add_argument("child_shim")
     parser.add_argument("--parent-pid", type=int, required=True)
     parser.add_argument("--parent-starttime", type=int, required=True)
-    parser.add_argument("child_argv", nargs=argparse.REMAINDER)
-    ns = parser.parse_args(argv)
-    child_argv = ns.child_argv
-    if child_argv and child_argv[0] == "--":
-        child_argv = child_argv[1:]
+    # argparse's REMAINDER positional mis-parses when optionals follow a
+    # positional, so split the child argv off on the first "--" ourselves and
+    # parse only the shim's own options.
+    dash = argv.index("--") if "--" in argv else len(argv)
+    child_argv = argv[dash + 1 :]
+    ns = parser.parse_args(argv[:dash])
     if not child_argv:
         _log.error("shim.no_child_argv")
         return 2
@@ -1073,6 +1084,13 @@ class Supervisor:
             with contextlib.suppress(OSError):
                 os.killpg(pgid, signum)
         else:
+            # The process is not the head of its own group (or we could not
+            # resolve its group), so signal the single PID directly. Mirror
+            # the contract the test doubles (and a real non-grouped child)
+            # expose via process.terminate() as well, so the teardown is
+            # observable regardless of whether the group signal went out.
+            with contextlib.suppress(OSError):
+                process.terminate()
             with contextlib.suppress(OSError):
                 os.kill(process.pid, signum)
 

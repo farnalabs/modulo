@@ -613,7 +613,7 @@ import sys
 from pathlib import Path
 from modulo.launcher.supervisor import DataDirLock
 
-lock = DataDirLock(sys.argv[1], mode='serve')
+lock = DataDirLock(Path(sys.argv[1]), mode='serve')
 lock.acquire()
 Path(sys.argv[2]).write_text('locked')
 import time
@@ -628,14 +628,16 @@ def test_lock_is_kernel_released_when_holder_dies(tmp_path: Path) -> None:
     marker = tmp_path / "locked.marker"
     # The child holds the lock until the run timeout SIGKILLs it mid-hold;
     # the marker proves it had acquired before it died (no stdout handshake).
-    with pytest.raises(subprocess.TimeoutExpired):
+    # If it dies early (e.g. a broken child script) the captured stderr is
+    # surfaced instead of silently passing a no-timeout run.
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
         subprocess.run(  # noqa: S603 — test driver
             [sys.executable, "-c", _LOCK_CHILD_SCRIPT, str(data_dir), str(marker)],
             timeout=5.0,
             capture_output=True,
             check=False,
         )
-    assert marker.exists()
+    assert marker.exists(), f"lock-holder child exited before the timeout — its stderr: {excinfo.value.stderr!r}"
     second = DataDirLock(data_dir, mode="serve")
     second.acquire()
     holder = second.holder
