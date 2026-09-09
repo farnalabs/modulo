@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from modulo.api import dependencies
 from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
@@ -126,6 +127,8 @@ from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
 from modulo.core.logging_config import configure_logging
 from modulo.core.seed_data.catalog import FLAGS, TIERS
 from modulo.db.capacity import StorageExhaustedError
+from modulo.db.health_checks import db_is_at_migration_head
+from modulo.db.seed import rehash_existing_user, seed_modulo_user, seed_modulo_users
 from modulo.db.session import engine as db_engine
 from modulo.otel_bridge import setup_otel, shutdown_otel
 from modulo.settings import Settings, get_settings
@@ -295,41 +298,13 @@ async def _run_break_glass_watchdog(settings: Settings) -> None:
 
 
 async def _db_is_at_migration_head(settings: Settings) -> bool:
-    """Return True when the DB's ``alembic_version`` already equals the head.
+    """Thin wrapper over the promoted predicate (modulo.db.health_checks).
 
-    Boot fast-path: multiple machines boot simultaneously on a fresh deploy and
-    every process group runs migrations serialised by the advisory lock —
-    machines that did not win the lock waited up to ``_MIGRATION_LOCK_POLL_ATTEMPTS``
-    before FATALing, even when the schema was already up to date. When the DB is
-    already at head there is no work to do, so the advisory lock acquisition and
-    the alembic run are pure contention and are skipped entirely.
-
-    Fail-safe: any failure (missing table, multiple heads, connection error)
-    returns False so the caller proceeds through the normal retry/lock path.
+    Kept as the boot-path/test seam (existing tests monkeypatch this name and
+    the module-level ``get_or_create_engine`` seam); behaviour unchanged from
+    the promoted ``db_is_at_migration_head`` (FAR-671).
     """
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-
-    alembic_ini = _resolve_alembic_ini()
-    config = Config(str(alembic_ini))
-    config.set_main_option(
-        "script_location",
-        str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
-    )
-    try:
-        head = ScriptDirectory.from_config(config).get_current_head()
-    except Exception:
-        return False
-    if not head:
-        return False
-    engine = get_or_create_engine(settings)
-    try:
-        async with engine.connect() as conn:
-            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
-            versions = {row[0] for row in result.fetchall()}
-    except Exception:
-        return False
-    return versions == {head}
+    return await db_is_at_migration_head(get_or_create_engine(settings))
 
 
 async def _run_migrations(settings: Settings) -> None:
@@ -503,119 +478,25 @@ async def _boot_seed(name: str, coro: Awaitable[Any]) -> None:
 
 
 async def _seed_modulo_users(settings: Settings) -> None:
-    """Seed MODULO_USERS env var entries into the account + membership tables.
+    """Boot wrapper over the promoted seeder (modulo.db.seed.seed_modulo_users).
 
-    Accepts both bcrypt hashes (user1:$2b$12$hash) and plaintext passwords
-    (admin:admin). Plaintext passwords are auto-hashed with bcrypt at seed time.
-    Skips if MODULO_USERS is empty or no organisation exists.
+    Resolves the engine/factory through THIS layer's seams (the DB layer stays
+    free of api imports); behaviour unchanged (FAR-671). Attribute lookups on
+    the dependencies module keep the test seams patchable at call time. See
+    the promoted function for the MODULO_USERS contract.
     """
     if not settings.modulo_users:
         return
-
-    from sqlalchemy import select
-
-    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
-    from modulo.db.models.organisation import Organisation
-
-    engine = get_or_create_engine(settings)
-    factory = get_or_create_session_factory(engine)
-
-    async with factory() as session, session.begin():
-        org_result = await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
-        org = org_result.scalar_one_or_none()
-        if org is None:
-            logger.warning("startup.no_org_for_user_seed")
-            return
-
-        for entry in settings.modulo_users.split(","):
-            await _seed_modulo_user(session, org, entry)
+    engine = dependencies.get_or_create_engine(settings)
+    factory = dependencies.get_or_create_session_factory(engine)
+    await seed_modulo_users(factory, settings.modulo_users)
 
 
-async def _seed_modulo_user(session: Any, org: Any, entry: str) -> None:
-    """Seed a single MODULO_USERS entry (``email:password``) into the account + membership tables.
-
-    Accepts both bcrypt hashes (user1:$2b$12$hash) and plaintext passwords
-    (admin:admin). Plaintext passwords are auto-hashed with bcrypt at seed time.
-    """
-    from sqlalchemy import select
-
-    from modulo.auth.passwords import hash_password
-    from modulo.db.models.account import Account
-    from modulo.db.models.org_membership import OrgMembership
-
-    entry = entry.strip()
-    if not entry:
-        return
-    colon = entry.find(":")
-    if colon < 1:
-        return
-    email = entry[:colon]
-    pw_part = entry[colon + 1 :]
-
-    result = await session.execute(select(Account).where(Account.email == email))
-    existing_account = result.scalar_one_or_none()
-    pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
-
-    if existing_account is not None and (
-        not existing_account.password_hash or not existing_account.password_hash.startswith("$2")
-    ):
-        await _rehash_existing_user(session, org, existing_account, email, pw_hash)
-        return
-
-    if existing_account is not None:
-        logger.info("startup.user_exists", extra={"email": email})
-        return
-
-    account = Account(
-        email=email,
-        display_name=email.split("@")[0],
-        password_hash=pw_hash,
-        auth_provider="local",
-    )
-    session.add(account)
-    await session.flush()
-
-    membership = OrgMembership(
-        account_id=account.id,
-        organisation_id=org.id,
-        role="admin" if email in ("admin", "admin@modulo.run") else "runner",
-    )
-    session.add(membership)
-    logger.info("startup.user_seeded", extra={"email": email})
-
-
-async def _rehash_existing_user(session: Any, org: Any, existing_account: Any, email: str, pw_hash: str) -> None:
-    """Rehash an existing account's plaintext password and ensure its org membership."""
-    from sqlalchemy import select
-
-    from modulo.db.models.org_membership import OrgMembership
-
-    existing_account.password_hash = pw_hash
-    logger.info("startup.user_rehashed", extra={"email": email})
-
-    # Ensure OrgMembership exists and role is correct
-    mem_result = await session.execute(
-        select(OrgMembership).where(
-            OrgMembership.account_id == existing_account.id,
-            OrgMembership.organisation_id == org.id,
-        )
-    )
-    membership = mem_result.scalar_one_or_none()
-    admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
-    if membership is not None:
-        if admin_role and membership.role != "admin":
-            membership.role = "admin"
-            logger.info("startup.user_role_set_admin", extra={"email": email})
-        else:
-            logger.info("startup.user_exists", extra={"email": email})
-    else:
-        new_membership = OrgMembership(
-            account_id=existing_account.id,
-            organisation_id=org.id,
-            role=admin_role or "runner",
-        )
-        session.add(new_membership)
-        logger.info("startup.user_membership_created", extra={"email": email})
+# The single-user seeder and the rehash helper were promoted verbatim into
+# modulo.db.seed (FAR-671). Module-level aliases keep the historical private
+# names importable from this module (existing tests call them here).
+_seed_modulo_user = seed_modulo_user
+_rehash_existing_user = rehash_existing_user
 
 
 async def _seed_sso_providers(settings: Settings) -> None:

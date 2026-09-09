@@ -14,6 +14,7 @@ const mockManifest = vi.hoisted(() => ({
     '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'build', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'admin', sidebar_order: 1, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/evals/editor': { name: 'eval-editor', breadcrumb: 'Evals', sidebar_group: 'monitor', sidebar_order: 1, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
+    '/admin/notification-delivery': { name: 'admin-notification-delivery', breadcrumb: 'Webhook Notifications', sidebar_group: 'monitor', sidebar_order: 2, feature_flag: 'webhook_notification_log', type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/my-profile': { name: 'my-profile', breadcrumb: 'My Profile', sidebar_group: null, sidebar_order: null, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'build', sidebar_order: 4, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
   },
@@ -113,6 +114,33 @@ describe('SidebarNav', () => {
     await flushPromises()
     const hrefs = wrapper.findAll('a[data-testid="router-link-stub"]').map((l) => l.attributes('href'))
     expect(hrefs).not.toContain('/pipelines')
+  })
+
+  it('hides the flag-gated Webhook Notifications item while webhook_notification_log is disabled (FAR-656)', async () => {
+    const { wrapper } = mountSidebar({ isSystemAdmin: true, userRole: 'admin' })
+    await flushPromises()
+    const hrefs = wrapper.findAll('a[data-testid="router-link-stub"]').map((l) => l.attributes('href'))
+    expect(hrefs).not.toContain('/admin/notification-delivery')
+  })
+
+  it('shows the flag-gated Webhook Notifications item to team admins when the flag is enabled (FAR-656)', async () => {
+    const { wrapper, store } = mountSidebar({ isSystemAdmin: true, userRole: 'admin' })
+    store.currentTier = 'team'
+    store.features['webhook_notification_log'] = true
+    await flushPromises()
+    const links = wrapper.findAll('a[data-testid="router-link-stub"]')
+    const webhookLog = links.find((l) => l.attributes('href') === '/admin/notification-delivery')
+    expect(webhookLog).toBeDefined()
+    expect(webhookLog!.text()).toContain('Webhook Notifications')
+  })
+
+  it('hides the flag-gated Webhook Notifications item from viewers even when the flag is enabled (FAR-656)', async () => {
+    const { wrapper, store } = mountSidebar({ userRole: 'viewer' })
+    store.currentTier = 'community'
+    store.features['webhook_notification_log'] = true
+    await flushPromises()
+    const hrefs = wrapper.findAll('a[data-testid="router-link-stub"]').map((l) => l.attributes('href'))
+    expect(hrefs).not.toContain('/admin/notification-delivery')
   })
 
   it('hides private_preview items unless dev mode is enabled', async () => {

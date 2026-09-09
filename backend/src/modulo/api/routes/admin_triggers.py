@@ -1,6 +1,8 @@
 """Admin-only trigger event log endpoints."""
 
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -41,33 +43,15 @@ class TriggerEventListResponse(BaseModel):
     total: int
 
 
-@router.get("")
-@handle_db_errors("admin.triggers.list_trigger_events")
-async def list_trigger_events(
-    trigger_type: str | None = Query(None),
-    validation_result: str | None = Query(None),
-    cursor: str | None = Query(None, description="Cursor: createdAt_id"),
-    limit: int = Query(25, ge=1, le=100),
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("admin.trigger_events"),
-) -> TriggerEventListResponse:
+async def _run_trigger_event_query(query: Callable[[], Awaitable[Any]], fail_log: str) -> Any:
+    """Run a trigger-event DB query, mapping DB errors to the HTTP error contract.
+
+    The result is intentionally ``Any`` (explicit): the PEP 695 generic syntax
+    ruff prefers here is not parseable by the SonarQube 9.9 Python analyzer,
+    which would silently skip this file from all analysis.
+    """
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-
-            q = select(TriggerEvent).where(
-                TriggerEvent.organisation_id == principal.organisation_id,
-            )
-            if trigger_type:
-                q = q.where(TriggerEvent.trigger_type == trigger_type)
-            if validation_result:
-                q = q.where(TriggerEvent.validation_result == validation_result)
-
-            if cursor:
-                q = apply_trigger_event_cursor(q, cursor)
-
-            q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
-            rows = (await session.execute(q)).scalars().all()
+        return await query()
     except ProgrammingError:
         _log.exception(_CODE_ADMIN_TRIGGERS_LIST_TRIGGER)
         raise HTTPException(
@@ -83,12 +67,72 @@ async def list_trigger_events(
     except HTTPException:
         raise
     except Exception:
-        _log.exception("admin list_trigger_events failed")
+        _log.exception(fail_log)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
+
+async def _fetch_trigger_event_rows(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    trigger_type: str | None,
+    validation_result: str | None,
+    cursor: str | None,
+    limit: int,
+) -> list[TriggerEvent]:
+    """Query trigger events with optional type/result filters and a keyset cursor."""
+
+    async def query() -> list[TriggerEvent]:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            q = select(TriggerEvent).where(
+                TriggerEvent.organisation_id == principal.organisation_id,
+            )
+            if trigger_type:
+                q = q.where(TriggerEvent.trigger_type == trigger_type)
+            if validation_result:
+                q = q.where(TriggerEvent.validation_result == validation_result)
+            if cursor:
+                q = apply_trigger_event_cursor(q, cursor)
+            q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
+            return list((await session.execute(q)).scalars().all())
+
+    result: Any = await _run_trigger_event_query(query, "admin list_trigger_events failed")
+    rows: list[TriggerEvent] = cast("list[TriggerEvent]", result)
+    return rows
+
+
+async def _count_trigger_events_total(session: AsyncSession, principal: TenantPrincipal) -> int:
+    """Count every trigger event in the caller's org (independent of filters)."""
+
+    async def query() -> int:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            count_result = await session.execute(
+                select(func.count(TriggerEvent.id)).where(
+                    TriggerEvent.organisation_id == principal.organisation_id,
+                )
+            )
+            return count_result.scalar() or 0
+
+    result: Any = await _run_trigger_event_query(query, "admin list_trigger_events count query failed")
+    total: int = cast("int", result)
+    return total
+
+
+@router.get("")
+@handle_db_errors("admin.triggers.list_trigger_events")
+async def list_trigger_events(
+    trigger_type: str | None = Query(None),
+    validation_result: str | None = Query(None),
+    cursor: str | None = Query(None, description="Cursor: createdAt_id"),
+    limit: int = Query(25, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("admin.trigger_events"),
+) -> TriggerEventListResponse:
+    rows = await _fetch_trigger_event_rows(session, principal, trigger_type, validation_result, cursor, limit)
     has_more = len(rows) > limit
     if has_more:
         rows = rows[:limit]
@@ -116,35 +160,7 @@ async def list_trigger_events(
         first = rows[0]
         prev_cursor = f"{first.created_at.isoformat()}_{first.id}"
 
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            count_result = await session.execute(
-                select(func.count(TriggerEvent.id)).where(
-                    TriggerEvent.organisation_id == principal.organisation_id,
-                )
-            )
-            total = count_result.scalar() or 0
-    except ProgrammingError:
-        _log.exception(_CODE_ADMIN_TRIGGERS_LIST_TRIGGER)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
-        ) from None
-    except SQLAlchemyError:
-        _log.exception(_CODE_ADMIN_TRIGGERS_LIST_TRIGGER)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database operation failed. Please try again later.",
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("admin list_trigger_events count query failed")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_INTERNAL_SERVER_ERROR,
-        ) from None
+    total = await _count_trigger_events_total(session, principal)
 
     return TriggerEventListResponse(
         items=items,

@@ -327,4 +327,10 @@ FLAGS: list[dict[str, str | None]] = [
         "tier_id": "community",
         "depends_on": None,
     },
+    {
+        "name": "webhook_notification_log",
+        "description": "Webhook notification delivery log (admin delivery-log UI)",
+        "tier_id": "community",
+        "depends_on": None,
+    },
 ]
