@@ -51,7 +51,14 @@ from modulo.db.crud.run import update_run_status
 from modulo.db.crud.run_node_outputs import parse_marker_node_id
 from modulo.db.rls import set_rls_org
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    # Runs dispatcher_reconcile -> reconcile_runner_dispatch_markers, which takes
+    # the same session advisory lock as the runner-capacity sweep. Group with the
+    # other sweep-triggering suites so they don't contend under -n 2 (a parallel
+    # capacity sweep would skip on the held lock => marker_sweep_skipped_locked).
+    pytest.mark.xdist_group(name="org_sandbox_capacity"),
+]
 
 
 # ---------------------------------------------------------------------------

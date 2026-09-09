@@ -23,6 +23,13 @@ from modulo.core import cron_helpers as ch
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.asyncio(loop_scope="session"),
+    # Runs reconcile_runner_dispatch_markers (via dispatcher_reconcile) which
+    # takes the SAME session advisory lock as the runner-capacity sweep. Group
+    # with the other sweep-triggering suites so they never run in parallel
+    # xdist workers (-n 2) — otherwise the capacity sweep sees the lock held by
+    # this suite and skips (marker_sweep_skipped_locked), failing the sweep
+    # assertions that require the sweep to actually act.
+    pytest.mark.xdist_group(name="org_sandbox_capacity"),
 ]
 
 

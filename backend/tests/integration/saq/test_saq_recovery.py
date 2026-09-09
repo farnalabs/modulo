@@ -31,7 +31,14 @@ from sqlalchemy.dialects import postgresql
 import modulo.core.pipeline_execution as pe
 from modulo.core import cron_helpers as ch
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    # Runs dispatcher_reconcile -> reconcile_runner_dispatch_markers, which takes
+    # the same session advisory lock as the runner-capacity sweep. Group with the
+    # other sweep-triggering suites so they don't contend under -n 2 (a parallel
+    # capacity sweep would skip on the held lock => marker_sweep_skipped_locked).
+    pytest.mark.xdist_group(name="org_sandbox_capacity"),
+]
 _ORG = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
 
