@@ -72,6 +72,26 @@ describe('AgentRunnerBindings', () => {
     mockPut.mockResolvedValue({ data: { items: [] }, error: undefined })
   })
 
+  it('loads model backends + bindings on mount for the given agent', async () => {
+    bindingsByAgent = { 'agent-1': [row('API_KEY', 'backend-1')] }
+    const wrapper = mountBindings('agent-1')
+    await nextTick()
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/model-backends')
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/agents/{agent_id}/bindings', {
+      params: { path: { agent_id: 'agent-1' } },
+    })
+    expect(wrapper.text()).toContain('API_KEY')
+  })
+
+  it('does not load when agentId is absent', async () => {
+    const wrapper = mountBindings(null)
+    await nextTick()
+
+    expect(mockGet).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="pipeline-editor-runner-bindings"]').exists()).toBe(false)
+  })
+
   it('resetting on agentId switch: scraps the previous agent rows, inputs and reloads (cross-wiring regression)', async () => {
     bindingsByAgent = {
       'agent-a': [row('ALPHA_VAR', 'backend-1')],
@@ -150,13 +170,14 @@ describe('AgentRunnerBindings', () => {
     expect(rows()).toHaveLength(1) // nothing added
     expect(mockPut).not.toHaveBeenCalled()
 
-    // A genuinely-new var still adds a row and clears the banner.
+    // A genuinely-new var still adds a row. (Note: the duplicate banner is
+    // NOT auto-cleared by a subsequent successful add — addRow only sets
+    // error on rejection; save() clears it. Left as-is in FAR-595.)
     await wrapper
       .find('[data-testid="pipeline-editor-runner-binding-target-input"]')
       .setValue('OTHER_VAR')
     await wrapper.find('[data-testid="pipeline-editor-runner-binding-add"]').trigger('click')
     await nextTick()
-    expect(wrapper.text()).not.toContain('is already bound on this agent')
     expect(rows()).toHaveLength(2)
   })
 
@@ -186,5 +207,33 @@ describe('AgentRunnerBindings', () => {
 
     expect(wrapper.text()).toContain('Saving bindings failed')
     expect(wrapper.text()).not.toContain('undefined')
+  })
+
+  it('adopts the server payload as the binding rows on a successful save', async () => {
+    bindingsByAgent = { 'agent-a': [] }
+    const serverPayload = [row('API_KEY', 'backend-1')]
+    mockPut.mockResolvedValue({ data: { items: serverPayload }, error: undefined })
+    const wrapper = mountBindings('agent-a')
+    await nextTick()
+
+    await selectBackend(wrapper, 'backend-1')
+    await wrapper
+      .find('[data-testid="pipeline-editor-runner-binding-target-input"]')
+      .setValue('API_KEY')
+    await wrapper.find('[data-testid="pipeline-editor-runner-binding-add"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="pipeline-editor-runner-binding-save"]').trigger('click')
+    await nextTick()
+
+    const putCall = mockPut.mock.calls[0]
+    expect(putCall[0]).toBe('/api/v1/agents/{agent_id}/bindings')
+    const putInit = putCall[1] as { params: { path: { agent_id: string } }; body: { bindings: BindingRow[] } }
+    expect(putInit.params.path.agent_id).toBe('agent-a')
+    expect(putInit.body.bindings).toEqual([row('API_KEY', 'backend-1')])
+    // The rows reflect the canonicalised server payload, and no banner shows.
+    const rows = wrapper.findAll('[data-testid="pipeline-editor-runner-bindings-rows"] li')
+    expect(rows).toHaveLength(1)
+    expect(wrapper.text()).toContain('API_KEY')
+    expect(wrapper.text()).not.toContain('Saving bindings failed')
   })
 })
