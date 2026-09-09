@@ -525,7 +525,7 @@ async def _check_saq_workers() -> CheckResult:
 
 
 async def _check_dispatcher_reconcile() -> CheckResult:
-    """dispatcher_reconcile liveness — two-tier gate (FAR-199).
+    """dispatcher_reconcile liveness — two-tier gate (FAR-199 / FAR-746).
 
     The dispatcher_reconcile system cron runs in the SYSTEM WORKER process
     (PR dist/separate-workers: workers on ``worker`` machines, uvicorn on
@@ -538,15 +538,22 @@ async def _check_dispatcher_reconcile() -> CheckResult:
     stale key, so expiry is signal-equivalent). Fail-open on Redis read errors
     (never degrade a healthy machine on a transient read).
 
-    Tiering (FAR-199): the dispatcher gates readiness ONLY at its unavailable
-    tier. A last_run_at older than the 60s cadence reports "stale" (degraded)
-    to alert operators while the app remains healthy — a single missed tick
-    must not block bluegreen. A last_run_at older than
+    Tiering (FAR-199, updated FAR-746): the dispatcher gates readiness ONLY
+    at its unavailable tier. A last_run_at older than the 60s cadence reports
+    "stale" (degraded) to alert operators while the app remains healthy — a
+    single missed tick must not block bluegreen. A last_run_at older than
     ``_RECONCILE_UNAVAILABLE_SECONDS`` (5 min — 5x the cadence, far beyond a
     transient tick gap) means the system worker's reconcile is silently dead:
     a wedged worker fleet can no longer terminalize stalled / never-dispatched
     runs, so the machine must NOT pass readiness and bluegreen must not cut
     over. The readiness aggregation 503s on this check's "unavailable" status.
+
+    FAR-746 failure heartbeat: when the stats blob is FRESH (within the
+    staleness window) but ``status`` is ``"timeout"`` or ``"failed"``, the
+    check returns "degraded" (non-gating) — a partially-working background
+    sweep must degrade the health REPORT, not take down prod routing (that
+    was the outage mechanism). Only "never ran" / truly stale (>300s) stays
+    "unavailable" (gating).
     """
     settings = get_settings()
     r: aioredis.Redis | None = None
@@ -589,6 +596,22 @@ async def _check_dispatcher_reconcile() -> CheckResult:
                 f"last_run_at={stats['last_run_at']}); {_format_reconcile_detail(stats)}"
             ),
         )
+    # FAR-746 failure heartbeat: when the stats are FRESH but the sweep
+    # reported a failure (inner deadline or unexpected exception), return
+    # "degraded" (non-gating) — a partially-working background sweep must
+    # degrade the health report, not take down prod routing.  Only the
+    # "never ran" / truly stale (>300s) tiers gate readiness.
+    tick_status = stats.get("status", "ok")
+    if tick_status in ("timeout", "failed"):
+        return CheckResult(
+            status="degraded",
+            detail=(
+                f"dispatcher_reconcile fresh but status={tick_status} "
+                f"(last_run_at={stats['last_run_at']}, "
+                f"last_error={stats.get('last_error', 'n/a')}); "
+                f"{_format_reconcile_detail(stats)}"
+            ),
+        )
     return CheckResult(
         status="ok",
         detail=f"last_run_at={stats['last_run_at']}, {_format_reconcile_detail(stats)}",
@@ -615,7 +638,9 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"enqueue_failed_ttl_terminalized={stats.get('enqueue_failed_ttl_terminalized', 0)}, "
         f"enqueue_failed_redispatched={stats.get('enqueue_failed_redispatched', 0)}, "
         f"enqueue_failed_capped={stats.get('enqueue_failed_capped', 0)}, "
-        f"capacity_deferred={stats.get('capacity_deferred', 0)}"
+        f"capacity_deferred={stats.get('capacity_deferred', 0)}, "
+        f"terminalize_capped={stats.get('terminalize_capped', 0)}, "
+        f"facts_deferred={stats.get('facts_deferred', 0)}"
     )
 
 

@@ -407,6 +407,43 @@ class Settings(BaseSettings):
     # refreshed by every dispatch). A zombie that can never be re-claimed is
     # ultimately bounded by the mid-graph-wedge age backstop.
     saq_nodeless_redispatch_budget: int = Field(default=2, alias="SAQ_NODELESS_REDISPATCH_BUDGET", ge=1, le=10)
+    # FAR-746 (2026-09-09 prod outage): the dispatcher_reconcile sweep manages
+    # its OWN time budget INSIDE the SAQ job. The SAQ cron registration caps
+    # the job at 120s (saq_worker._system_cron_jobs); a sweep that overruns
+    # that outer timeout is cancelled by SAQ's wait_for(shield(...)) — the
+    # shield means the inner sweep is NOT reliably cleaned (idle-in-transaction
+    # DB sessions leaked, holding row locks), and the tick dies BEFORE it can
+    # persist its stats blob, so /healthz/ready's staleness gate 503s and the
+    # Fly proxy stops routing (a full prod outage from a partially-working
+    # background sweep). The inner deadline fires FIRST (default 95s,
+    # comfortably below the 120s outer timeout): it stops new per-org work at
+    # a per-org transaction boundary, persists a failure heartbeat
+    # (status='timeout'), and returns gracefully. Bounds: ge=10 keeps a
+    # useful budget; le=119 keeps it strictly below the SAQ 120s job timeout
+    # so the outer cancellation path can never fire in normal operation.
+    dispatcher_reconcile_budget_seconds: int = Field(
+        default=95, alias="DISPATCHER_RECONCILE_BUDGET_SECONDS", ge=10, le=119
+    )
+    # FAR-746 batch cap: per-tick row cap on EACH per-org SQL terminalizer
+    # (mid-graph wedge, claim-cap, HITL-gate expiry) — a big zombie backlog
+    # must drain gradually across 60s ticks instead of one unbounded UPDATE
+    # storm competing with the tick budget. Each terminalizer is a single
+    # statement, so 25 rows/tick/terminalizer (75/tick total) drains ~4.3k
+    # zombie rows/hour while keeping every tick far under the inner deadline.
+    # The reconcile predicates re-select remaining rows next tick, so
+    # overflow drains automatically on subsequent ticks.
+    dispatcher_reconcile_terminalize_max_per_tick: int = Field(
+        default=25, alias="DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK", ge=1, le=1000
+    )
+    # FAR-746 batch cap: per-tick cap on the compensating run_daily_facts
+    # writes for terminalised runs — each write opens its OWN RLS-scoped
+    # session + re-select, the most expensive per-row step in the tick (one
+    # DB round-trip chain each at the observed ~250-440ms latency). Overflow
+    # is counted (facts_deferred in the stats blob) and logged; the
+    # terminalizer caps bound the backlog growth, so deferrals stay rare.
+    dispatcher_reconcile_facts_max_per_tick: int = Field(
+        default=25, alias="DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK", ge=1, le=1000
+    )
     # FAR-705: per-run capacity-retry budget for the stale-run sweep's
     # capacity_timeout TTL terminalisation. capacity.* is a RETRYABLE registry
     # class (all four capacity codes carry retryable=True), so a capacity-

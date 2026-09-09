@@ -242,6 +242,17 @@ ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK = 50
 # terminal-fail (terminal-fail reduces load; it never enqueues).
 NODELESS_REDISPATCH_MAX_PER_TICK = 50
 
+# FAR-746 resilience bounds for the dispatcher_reconcile tick.
+#
+# Redis read/write socket timeout for the tick's dedicated client: the
+# connect timeout alone left a HUNG Upstash connection invisible (the
+# 2026-09-09 outage tick stalled silently on a wedged socket). A read/write
+# timeout surfaces the stall as a counted redis error instead.
+_DISPATCHER_RECONCILE_REDIS_SOCKET_TIMEOUT_SECONDS = 10
+# Terminalizer LIMIT sentinel when no cap is configured (the standalone path):
+# LIMIT accepts it without ever truncating a realistic backlog.
+_TERMINALIZE_UNLIMITED_ROWS = 2**31 - 1
+
 # TTL backstop: an enqueue-failed run whose marker is older than this is
 # terminal-failed with ``dispatch_failed`` — but ONLY when Redis is verifiably
 # reachable (lightweight ping). Redis down -> keep pending.
@@ -328,6 +339,15 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # populated by the catch-up sweep leg wired into _reconcile_org (pass 2b).
     "outputs_sweep_healed": 0,
     "outputs_sweep_org_failed": 0,
+    # FAR-746 failure heartbeat (additive — readers use .get() so a pre-FAR-746
+    # blob without these keys never crashes): the tick's own outcome status
+    # ("ok" on success, "timeout" when the inner deadline fired, "failed" on
+    # an unexpected exception), the truncated error detail, the batch-cap
+    # observability counters, and the terminalizer row-cap hit marker.
+    "status": "ok",
+    "last_error": None,
+    "terminalize_capped": 0,
+    "facts_deferred": 0,
 }
 
 # The dual_write_* counter vocabulary is IMPORTED (qa iteration 2, rider 11):
@@ -382,6 +402,14 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
         _dispatcher_reconcile_stats[_dual_write_counter] = stats.get(_dual_write_counter, 0)
     _dispatcher_reconcile_stats["outputs_sweep_healed"] = stats.get("outputs_sweep_healed", 0)
     _dispatcher_reconcile_stats["outputs_sweep_org_failed"] = stats.get("outputs_sweep_org_failed", 0)
+    # FAR-746 failure heartbeat: every failure path persists these so
+    # /healthz/ready sees a FRESH last_run_at + the failure status (degraded,
+    # non-gating) instead of a stale blob -> unavailable -> 503 -> the Fly
+    # proxy stops routing. Success paths leave the "ok" default in place.
+    _dispatcher_reconcile_stats["status"] = stats.get("status", "ok")
+    _dispatcher_reconcile_stats["last_error"] = stats.get("last_error")
+    _dispatcher_reconcile_stats["terminalize_capped"] = stats.get("terminalize_capped", 0)
+    _dispatcher_reconcile_stats["facts_deferred"] = stats.get("facts_deferred", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -4662,11 +4690,57 @@ def _saq_run_claim_cap() -> int:
     return int(get_settings().saq_run_claim_cap)
 
 
+def _terminalize_max_rows(max_rows: int | None) -> int:
+    """Coerce the FAR-746 terminalizer row cap; ``None``/non-int means uncapped.
+
+    Real Settings always carries an int (pydantic Field, ge=1); the fallback
+    exists for stand-in settings objects (legacy test doubles, partial mocks)
+    so the cap can never crash the tick it exists to protect.
+    """
+    if max_rows is None:
+        return _TERMINALIZE_UNLIMITED_ROWS
+    try:
+        coerced = int(max_rows)
+    except (TypeError, ValueError):
+        return _TERMINALIZE_UNLIMITED_ROWS
+    return coerced if coerced > 0 else _TERMINALIZE_UNLIMITED_ROWS
+
+
+# FAR-746 coded defaults for the settings knobs read by dispatcher_reconcile.
+# They apply when the settings object does not carry a REAL int (stand-in test
+# doubles, partial mocks) so the tick keeps its protective budget/caps instead
+# of inheriting a mock's meaningless value (MagicMock.__int__ silently
+# returns 1).
+_RECONCILE_BUDGET_DEFAULT_SECONDS = 95
+_RECONCILE_TERMINALIZE_DEFAULT_MAX = 25
+_RECONCILE_FACTS_DEFAULT_MAX = 25
+
+
+def _int_setting(value: Any, default: int) -> int:
+    """Coerce a settings knob to int with the coded fallback (FAR-746).
+
+    Real Settings guarantees ints (pydantic Fields), so a literal int is used
+    as-is. Anything else — a missing attribute (``None`` via getattr) or a
+    stand-in settings object (legacy test doubles, partial mocks, whose
+    MagicMock attributes coerce to meaningless values) — falls back to the
+    coded default instead of crashing or silently perturbing the tick.
+    """
+    if type(value) is int:
+        return value
+    return default
+
+
+def _summarize_reconcile_error(exc: BaseException) -> str:
+    """FAR-746 failure-heartbeat detail: exception class + short message, truncated."""
+    return f"{type(exc).__name__}: {exc}"[:200]
+
+
 async def _terminalize_mid_graph_wedges(
     session: AsyncSession,
     org_id: uuid.UUID,
     *,
     max_age_minutes: int,
+    max_rows: int | None = None,
 ) -> list[uuid.UUID]:
     """Terminal-fail SAQ runs wedged mid-graph for longer than *max_age_minutes*.
 
@@ -4677,13 +4751,22 @@ async def _terminalize_mid_graph_wedges(
     branch never matches it. The age gate bounds the damage: ``executor_superseded``.
     Runs ``UPDATE ... RETURNING id`` so each failure is logged and the returned
     run ids drive the post-commit compensating analytics fact (P6', FAR-162).
+
+    FAR-746 batch cap: *max_rows* bounds the UPDATE to that many rows per tick
+    (``WHERE ctid IN (SELECT ctid ... LIMIT n)``) so a huge wedge backlog
+    drains gradually across 60s ticks instead of one unbounded UPDATE storm
+    competing with the tick budget; the predicate re-selects the remaining
+    rows next tick. ``None`` (or a non-int stand-in) means uncapped.
     """
     result = await session.execute(
         text(
             "UPDATE runs SET status='failed', error_code=:code, "
             "error_detail=:detail, completed_at=now() "
-            "WHERE organisation_id=:oid AND status='running' AND dispatcher='saq' "
-            "AND started_at < now() - (:max_age_minutes * interval '1 minute') "
+            "WHERE ctid IN ("
+            "  SELECT ctid FROM runs "
+            "  WHERE organisation_id=:oid AND status='running' AND dispatcher='saq' "
+            "  AND started_at < now() - (:max_age_minutes * interval '1 minute') "
+            "  LIMIT :max_rows) "
             "RETURNING id"
         ),
         {
@@ -4691,6 +4774,7 @@ async def _terminalize_mid_graph_wedges(
             "code": _EXECUTOR_SUPERSEDED_ERROR_CODE,
             "detail": _EXECUTOR_SUPERSEDED_ERROR_DETAIL,
             "max_age_minutes": max_age_minutes,
+            "max_rows": _terminalize_max_rows(max_rows),
         },
     )
     rows = result.all()
@@ -4709,6 +4793,7 @@ async def _terminalize_claim_cap_exhausted(
     *,
     claim_cap: int,
     stale_seconds: int,
+    max_rows: int | None = None,
 ) -> list[uuid.UUID]:
     """Terminal-fail SAQ runs at the claim cap whose heartbeat is STALE.
 
@@ -4722,16 +4807,28 @@ async def _terminalize_claim_cap_exhausted(
     fresh-heartbeat capped run is left alone. Returns the terminalized run ids
     (``UPDATE ... RETURNING id``) to drive the post-commit compensating
     analytics fact (P6', FAR-162).
+
+    FAR-746 batch cap: *max_rows* bounds the UPDATE per tick (see
+    :func:`_terminalize_mid_graph_wedges`); overflow drains next tick.
     """
     result = await session.execute(
         text(
             "UPDATE runs SET status='failed', error_code='claim_cap_exhausted', "
             "error_detail=:detail, completed_at=now() "
-            "WHERE organisation_id=:oid AND status='running' AND claim_count >= :cap "
-            "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:stale * interval '1 second')) "
+            "WHERE ctid IN ("
+            "  SELECT ctid FROM runs "
+            "  WHERE organisation_id=:oid AND status='running' AND claim_count >= :cap "
+            "  AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:stale * interval '1 second')) "
+            "  LIMIT :max_rows) "
             "RETURNING id"
         ),
-        {"oid": str(org_id), "cap": claim_cap, "stale": stale_seconds, "detail": _CLAIM_CAP_EXHAUSTED_ERROR_DETAIL},
+        {
+            "oid": str(org_id),
+            "cap": claim_cap,
+            "stale": stale_seconds,
+            "detail": _CLAIM_CAP_EXHAUSTED_ERROR_DETAIL,
+            "max_rows": _terminalize_max_rows(max_rows),
+        },
     )
     rows = result.all()
     for (run_id,) in rows:
@@ -4748,6 +4845,7 @@ async def _terminalize_expired_hitl_gates(
     org_id: uuid.UUID,
     *,
     grace_seconds: int,
+    max_rows: int | None = None,
 ) -> list[uuid.UUID]:
     """Terminalize ``awaiting_human`` runs whose HITL gate expired unanswered (FAR-648).
 
@@ -4776,27 +4874,34 @@ async def _terminalize_expired_hitl_gates(
     a cancellation-requested run is owned by the cancel path.
     ``expires_at``/``account_id``/``decision`` already exist on
     ``hitl_claims`` — DB-only, no migration.
+
+    FAR-746 batch cap: *max_rows* bounds the UPDATE per tick (see
+    :func:`_terminalize_mid_graph_wedges`); the predicate re-selects the
+    remaining expired gates next tick.
     """
     result = await session.execute(
         text(
             "UPDATE runs SET status='cancelled', error_code=:code, "
             "error_detail=:detail, completed_at=now() "
-            "WHERE organisation_id=:oid AND status=:awaiting_status "
-            "AND cancellation_requested=false "
-            "AND EXISTS ("
-            "  SELECT 1 FROM hitl_claims hc "
-            "  WHERE hc.organisation_id = runs.organisation_id "
-            "  AND hc.run_id = runs.id "
-            "  AND hc.decision IS NULL "
-            "  AND hc.account_id IS NULL "
-            "  AND hc.expires_at < now() - (:grace_seconds * interval '1 second')) "
-            "AND NOT EXISTS ("
-            "  SELECT 1 FROM hitl_claims hc2 "
-            "  WHERE hc2.organisation_id = runs.organisation_id "
-            "  AND hc2.run_id = runs.id "
-            "  AND hc2.decision IS NULL "
-            "  AND (hc2.account_id IS NOT NULL "
-            "       OR hc2.expires_at >= now() - (:grace_seconds * interval '1 second'))) "
+            "WHERE ctid IN ("
+            "  SELECT ctid FROM runs "
+            "  WHERE organisation_id=:oid AND status=:awaiting_status "
+            "  AND cancellation_requested=false "
+            "  AND EXISTS ("
+            "    SELECT 1 FROM hitl_claims hc "
+            "    WHERE hc.organisation_id = runs.organisation_id "
+            "    AND hc.run_id = runs.id "
+            "    AND hc.decision IS NULL "
+            "    AND hc.account_id IS NULL "
+            "    AND hc.expires_at < now() - (:grace_seconds * interval '1 second')) "
+            "  AND NOT EXISTS ("
+            "    SELECT 1 FROM hitl_claims hc2 "
+            "    WHERE hc2.organisation_id = runs.organisation_id "
+            "    AND hc2.run_id = runs.id "
+            "    AND hc2.decision IS NULL "
+            "    AND (hc2.account_id IS NOT NULL "
+            "         OR hc2.expires_at >= now() - (:grace_seconds * interval '1 second'))) "
+            "  LIMIT :max_rows) "
             "RETURNING id"
         ),
         {
@@ -4805,6 +4910,7 @@ async def _terminalize_expired_hitl_gates(
             "detail": _HITL_GATE_EXPIRED_ERROR_DETAIL,
             "grace_seconds": grace_seconds,
             "awaiting_status": AWAITING_HUMAN_STATUS,
+            "max_rows": _terminalize_max_rows(max_rows),
         },
     )
     rows = result.all()
@@ -5025,6 +5131,33 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     per-org transactions commit — the terminalizers never run
     ``finalize_cost``, so without this the terminalised runs would be
     invisible to analytics.
+
+    FAR-746 resilience (2026-09-09 prod outage — this tick must never take
+    prod routing down again):
+
+      * INNER DEADLINE: the sweep manages its OWN time budget inside the SAQ
+        job — the body runs under ``asyncio.timeout`` at
+        ``dispatcher_reconcile_budget_seconds`` (default 95s, comfortably
+        below the SAQ job's 120s outer timeout). On deadline expiry the
+        current per-org transaction is cancelled at its safe boundary (the
+        ``async with session.begin()`` context managers roll back + close —
+        no idle-in-transaction leak), the tick persists a FAILURE HEARTBEAT
+        (status='timeout' + last_error + fresh last_run_at) and RETURNS
+        GRACEFULLY; overflow drains on subsequent 60s ticks. The SAQ outer
+        timeout must never fire in normal operation (its shielded wait_for
+        leaks sessions and kills the tick before stats persist — the outage
+        mechanism).
+      * FAILURE HEARTBEAT: on EVERY failure path (inner deadline, unexpected
+        exception) the stats blob is persisted with ``status`` ('ok' on
+        success / 'timeout' / 'failed') and a truncated ``last_error``, so
+        /healthz/ready sees a fresh, truthful signal — a fresh-but-failed
+        tick reports "degraded" (non-gating) instead of ageing into the
+        readiness-gating "unavailable" tier that 503s the Fly proxy.
+      * BATCH CAPS: each per-org SQL terminalizer is capped at
+        ``dispatcher_reconcile_terminalize_max_per_tick`` rows per tick and
+        the compensating daily-fact writes at
+        ``dispatcher_reconcile_facts_max_per_tick`` per tick — a big zombie
+        backlog drains gradually instead of blowing the tick budget.
     """
     settings = get_settings()
     queue_name = settings.saq_runs_queue
@@ -5035,6 +5168,16 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
     claim_cap = _saq_run_claim_cap()
     hitl_gate_cancel_grace = int(settings.hitl_gate_cancel_grace_seconds)
+    budget_seconds = _int_setting(
+        getattr(settings, "dispatcher_reconcile_budget_seconds", None), _RECONCILE_BUDGET_DEFAULT_SECONDS
+    )
+    terminalize_max = _int_setting(
+        getattr(settings, "dispatcher_reconcile_terminalize_max_per_tick", None),
+        _RECONCILE_TERMINALIZE_DEFAULT_MAX,
+    )
+    facts_max = _int_setting(
+        getattr(settings, "dispatcher_reconcile_facts_max_per_tick", None), _RECONCILE_FACTS_DEFAULT_MAX
+    )
     factory = _open_system_factory()
     summary = _dispatcher_summary()
     # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
@@ -5046,82 +5189,172 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     redis_client = AsyncRedis.from_url(
         settings.redis_url,
         socket_connect_timeout=10,
+        socket_timeout=_DISPATCHER_RECONCILE_REDIS_SOCKET_TIMEOUT_SECONDS,
         socket_keepalive=True,
         max_connections=settings.saq_redis_pool_size,
     )
     try:
-        org_ids = await _collect_org_ids(factory)
-        if not org_ids:
-            # Still record the run so /healthz/ready sees a fresh last_run_at
-            # even in an empty-org environment (the cron keeps ticking every 60s).
-            await _overlay_dual_write_counters(redis_client, summary)
+        # FAR-746: inner deadline — the sweep manages its own time budget
+        # INSIDE the SAQ job.  The SAQ outer timeout (120s) uses
+        # asyncio.wait_for(asyncio.shield(...)) which does NOT reliably
+        # cancel the inner task (shields leak idle-in-transaction DB
+        # sessions holding row locks), and the tick dies BEFORE it can
+        # persist its stats blob — the outage mechanism.  The inner
+        # deadline fires first, stops new per-org work at a safe boundary
+        # (the ``async with session.begin()`` context managers roll back
+        # + close), persists a FAILURE HEARTBEAT, and returns gracefully.
+        tick_started = time.monotonic()
+        try:
+            async with asyncio.timeout(budget_seconds):
+                return await _dispatcher_reconcile_body(
+                    settings=settings,
+                    factory=factory,
+                    queue_name=queue_name,
+                    reenqueue_window=reenqueue_window,
+                    stale_window=stale_window,
+                    nodeless_window=nodeless_window,
+                    capacity_redispatch_seconds=capacity_redispatch_seconds,
+                    max_age_minutes=max_age_minutes,
+                    claim_cap=claim_cap,
+                    hitl_gate_cancel_grace=hitl_gate_cancel_grace,
+                    terminalize_max=terminalize_max,
+                    facts_max=facts_max,
+                    redis_client=redis_client,
+                    summary=summary,
+                    terminalized_run_ids=terminalized_run_ids,
+                )
+        except TimeoutError as exc:
+            # Inner deadline fired — the current per-org transaction
+            # rolled back + closed (session context managers), and no
+            # new per-org work was started.  Persist a failure heartbeat
+            # so /healthz/ready sees a FRESH last_run_at + status='timeout'
+            # (degraded, non-gating) instead of ageing into 'unavailable'.
+            summary["status"] = "timeout"
+            summary["last_error"] = _summarize_reconcile_error(exc)
+            _log.warning(
+                "dispatcher_reconcile: inner deadline fired after %.1fs (budget=%ds); stats persisted as timeout",
+                time.monotonic() - tick_started,
+                budget_seconds,
+            )
             set_dispatcher_reconcile_stats(summary)
             await write_dispatcher_reconcile_stats(redis_client, summary)
             return summary
-        q = RedisQueue(redis_client, name=queue_name)
-        # Per-tick re-dispatch cap counter for the B3 enqueue-failed branch.
-        enqueue_failed_redispatched = 0
-        # qa F3: the composed recovery predicate is the SINGLE composition
-        # (re_dispatch OR nodeless zombie) — shared verbatim with the D8
-        # marker sweep's recoverability check.
-        re_dispatch_predicate = reconciler_recovery_predicate(
-            reenqueue_window=reenqueue_window,
-            stale_window=stale_window,
-            capacity_redispatch_seconds=capacity_redispatch_seconds,
-            nodeless_window=nodeless_window,
-            enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
-        )
-        for org_id in org_ids:
-            enqueue_failed_redispatched = await _reconcile_org(
-                factory,
-                q,
-                redis_client,
-                org_id,
-                re_dispatch_predicate,
-                nodeless_window,
-                max_age_minutes,
-                claim_cap,
-                stale_window,
-                capacity_redispatch_seconds,
-                enqueue_failed_redispatched,
-                summary,
-                terminalized_run_ids,
-                hitl_gate_cancel_grace,
-            )
-        # FAR-162 (P6') — record a daily fact for every run terminalised this
-        # tick (executor_superseded / claim_cap_exhausted / dispatch_failed /
-        # hitl_gate_expired): the terminalizers write raw UPDATEs and never
-        # run finalize_cost, so without this the terminalised runs would be
-        # invisible to the analytics failure/stall dimensions. All per-org
-        # terminalizer transactions have committed by now; each facts write
-        # opens its own RLS-scoped session.
-        for run_id, run_org_id in terminalized_run_ids:
-            await _record_fact_for_terminalized_run(run_id, run_org_id)
-        # FAR-714: alert-grade tick summary — runs claimed by SAQ but never
-        # dispatched a node are the recurring ~30/week executor_stalled class;
-        # a burst here points at degraded workers/sandboxes, not capacity.
-        if summary["claimed_but_never_dispatched"]:
-            _log.error(
-                "dispatcher_reconcile.claimed_but_never_dispatched_summary: %d run(s) claimed by SAQ but never "
-                "dispatched a node were repaired this tick (nodeless_window=%dm) — investigate worker/sandbox health",
-                summary["claimed_but_never_dispatched"],
-                nodeless_window,
-            )
-        await _run_reconcile_sweeps(redis_client, summary)
-        # qa M10: overlay the dedicated dual-write counters into the summary
-        # BEFORE the stats persist — /healthz reads the counters' current
-        # values from the summary, and the tick never owns or resets them.
-        await _overlay_dual_write_counters(redis_client, summary)
-        # Record the outcome for /healthz/ready BEFORE the client is closed:
-        # the shared Redis key is what the WEB process reads (the in-process
-        # dict lives only in this worker process).
-        await _update_reconcile_telemetry(summary)
-        set_dispatcher_reconcile_stats(summary)
-        await write_dispatcher_reconcile_stats(redis_client, summary)
-        return summary
+        except Exception as exc:
+            # Unexpected exception — persist a failure heartbeat so the
+            # health signal stays fresh and truthful (degraded, non-gating).
+            summary["status"] = "failed"
+            summary["last_error"] = _summarize_reconcile_error(exc)
+            _log.exception("dispatcher_reconcile: unexpected failure")
+            set_dispatcher_reconcile_stats(summary)
+            await write_dispatcher_reconcile_stats(redis_client, summary)
+            raise
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
+
+
+async def _dispatcher_reconcile_body(
+    *,
+    settings: Any,
+    factory: async_sessionmaker[AsyncSession],
+    queue_name: str,
+    reenqueue_window: int,
+    stale_window: int,
+    nodeless_window: int,
+    capacity_redispatch_seconds: int,
+    max_age_minutes: int,
+    claim_cap: int,
+    hitl_gate_cancel_grace: int,
+    terminalize_max: int,
+    facts_max: int,
+    redis_client: AsyncRedis,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+) -> dict[str, Any]:
+    """Inner body of dispatcher_reconcile — runs under the inner deadline.
+
+    Extracted so the outer function can wrap it in ``asyncio.timeout`` and
+    catch TimeoutError at a safe boundary without touching the session
+    lifecycle.
+    """
+    org_ids = await _collect_org_ids(factory)
+    if not org_ids:
+        # Still record the run so /healthz/ready sees a fresh last_run_at
+        # even in an empty-org environment (the cron keeps ticking every 60s).
+        await _overlay_dual_write_counters(redis_client, summary)
+        set_dispatcher_reconcile_stats(summary)
+        await write_dispatcher_reconcile_stats(redis_client, summary)
+        return summary
+    q = RedisQueue(redis_client, name=queue_name)
+    # Per-tick re-dispatch cap counter for the B3 enqueue-failed branch.
+    enqueue_failed_redispatched = 0
+    # qa F3: the composed recovery predicate is the SINGLE composition
+    # (re_dispatch OR nodeless zombie) — shared verbatim with the D8
+    # marker sweep's recoverability check.
+    re_dispatch_predicate = reconciler_recovery_predicate(
+        reenqueue_window=reenqueue_window,
+        stale_window=stale_window,
+        capacity_redispatch_seconds=capacity_redispatch_seconds,
+        nodeless_window=nodeless_window,
+        enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
+    )
+    for org_id in org_ids:
+        enqueue_failed_redispatched = await _reconcile_org(
+            factory,
+            q,
+            redis_client,
+            org_id,
+            re_dispatch_predicate,
+            nodeless_window,
+            max_age_minutes,
+            claim_cap,
+            stale_window,
+            capacity_redispatch_seconds,
+            enqueue_failed_redispatched,
+            summary,
+            terminalized_run_ids,
+            hitl_gate_cancel_grace,
+            terminalize_max=terminalize_max,
+        )
+    # FAR-162 (P6') — record a daily fact for every run terminalised this
+    # tick (executor_superseded / claim_cap_exhausted / dispatch_failed /
+    # hitl_gate_expired): the terminalizers write raw UPDATEs and never
+    # run finalize_cost, so without this the terminalised runs would be
+    # invisible to the analytics failure/stall dimensions. All per-org
+    # terminalizer transactions have committed by now; each facts write
+    # opens its own RLS-scoped session.  FAR-746 batch cap: bound the
+    # facts writes so a huge terminalizer backlog cannot blow the tick
+    # budget (each write opens its own session + re-select at ~250-440ms
+    # DB latency).  Overflow is counted (facts_deferred) and drained on
+    # subsequent ticks.
+    facts_written = 0
+    for facts_written, (run_id, run_org_id) in enumerate(terminalized_run_ids):
+        if facts_written >= facts_max:
+            summary["facts_deferred"] += len(terminalized_run_ids) - facts_written
+            break
+        await _record_fact_for_terminalized_run(run_id, run_org_id)
+    # FAR-714: alert-grade tick summary — runs claimed by SAQ but never
+    # dispatched a node are the recurring ~30/week executor_stalled class;
+    # a burst here points at degraded workers/sandboxes, not capacity.
+    if summary["claimed_but_never_dispatched"]:
+        _log.error(
+            "dispatcher_reconcile.claimed_but_never_dispatched_summary: %d run(s) claimed by SAQ but never "
+            "dispatched a node were repaired this tick (nodeless_window=%dm) — investigate worker/sandbox health",
+            summary["claimed_but_never_dispatched"],
+            nodeless_window,
+        )
+    await _run_reconcile_sweeps(redis_client, summary)
+    # qa M10: overlay the dedicated dual-write counters into the summary
+    # BEFORE the stats persist — /healthz reads the counters' current
+    # values from the summary, and the tick never owns or resets them.
+    await _overlay_dual_write_counters(redis_client, summary)
+    # Record the outcome for /healthz/ready BEFORE the client is closed:
+    # the shared Redis key is what the WEB process reads (the in-process
+    # dict lives only in this worker process).
+    await _update_reconcile_telemetry(summary)
+    set_dispatcher_reconcile_stats(summary)
+    await write_dispatcher_reconcile_stats(redis_client, summary)
+    return summary
 
 
 def _dispatcher_summary() -> dict[str, Any]:
@@ -5169,6 +5402,12 @@ def _dispatcher_summary() -> dict[str, Any]:
         # and the setter above).
         "outputs_sweep_healed": 0,
         "outputs_sweep_org_failed": 0,
+        # FAR-746 failure heartbeat fields (additive — readers use .get() so
+        # a pre-FAR-746 blob without these keys never crashes).
+        "status": "ok",
+        "last_error": None,
+        "terminalize_capped": 0,
+        "facts_deferred": 0,
     }
     summary.update(dict.fromkeys(DUAL_WRITE_COUNTERS, 0))
     return summary
@@ -5300,6 +5539,8 @@ async def _reconcile_org(
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     hitl_gate_cancel_grace_seconds: int,
+    *,
+    terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop)."""
     from modulo.db.models.pipeline import Pipeline
@@ -5311,19 +5552,30 @@ async def _reconcile_org(
             # B4: age-bound mid-graph wedge terminalizer (DB-only, org-scoped).
             # Runs stuck 'running' past the max plausible duration are wedged —
             # fail them BEFORE the row select so they are excluded from
-            # re-dispatch.
-            wedged = await _terminalize_mid_graph_wedges(session, org_id, max_age_minutes=max_age_minutes)
+            # re-dispatch.  FAR-746 batch cap: max_rows bounds the UPDATE so
+            # a huge wedge backlog drains gradually across 60s ticks.
+            wedged = await _terminalize_mid_graph_wedges(
+                session, org_id, max_age_minutes=max_age_minutes, max_rows=terminalize_max
+            )
             summary["mid_graph_wedge_terminalized"] += len(wedged)
             summary["age_terminalized"] = summary["mid_graph_wedge_terminalized"]
+            if len(wedged) >= terminalize_max:
+                summary["terminalize_capped"] += 1
             terminalized_run_ids.extend((run_id, org_id) for run_id in wedged)
             # B5: claim-cap terminalizer — INDEPENDENT of the reconcile
             # predicates, stale-heartbeat gated (a LIVE run on its final claim
             # is never killed; a capped run whose heartbeat froze is still
             # caught).
             capped = await _terminalize_claim_cap_exhausted(
-                session, org_id, claim_cap=claim_cap, stale_seconds=stale_window
+                session,
+                org_id,
+                claim_cap=claim_cap,
+                stale_seconds=stale_window,
+                max_rows=terminalize_max,
             )
             summary["claim_cap_terminalized"] += len(capped)
+            if len(capped) >= terminalize_max:
+                summary["terminalize_capped"] += 1
             terminalized_run_ids.extend((run_id, org_id) for run_id in capped)
             # FAR-648: expired-HITL-gate terminalizer — an awaiting_human run
             # whose every undecided gate is unclaimed and past
@@ -5331,9 +5583,14 @@ async def _reconcile_org(
             # it cancelled BEFORE the row select so it is excluded from the
             # re-dispatch scan.
             expired_gates = await _terminalize_expired_hitl_gates(
-                session, org_id, grace_seconds=hitl_gate_cancel_grace_seconds
+                session,
+                org_id,
+                grace_seconds=hitl_gate_cancel_grace_seconds,
+                max_rows=terminalize_max,
             )
             summary["hitl_gate_expired_terminalized"] += len(expired_gates)
+            if len(expired_gates) >= terminalize_max:
+                summary["terminalize_capped"] += 1
             terminalized_run_ids.extend((run_id, org_id) for run_id in expired_gates)
             rows = (
                 await session.execute(
