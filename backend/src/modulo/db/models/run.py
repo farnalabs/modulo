@@ -171,9 +171,11 @@ class Run(OrgScoped):
         # Probe sample query (organisation_id, started_at) — migration 0066.
         Index("ix_runs_probe", "organisation_id", "started_at"),
         # Per-trigger daily-spend-limit enforcement readers (cron_helpers /
-        # polling) + billing overview — org_id + created_at. Migration 0066.
-        # The cost-controller refusal SUM reads the ledger, NOT runs (0066).
-        Index("ix_runs_refusal", "organisation_id", "created_at"),
+        # polling) + billing overview — (organisation_id, created_at). This is
+        # served by ix_runs_org_created_pipeline (organisation_id, created_at)
+        # INCLUDE (pipeline_id) declared below; the dedicated ix_runs_refusal
+        # index was intentionally dropped by migration 0197_runs_index_and_constraint_fixes
+        # because it was a strict prefix and only doubled write amplification.
         # Per-pipeline trigger rate-limit backstop (migration 0117 / #1105) —
         # one active run per (pipeline, rate_limit_key). create_run admits
         # atomically and translates the IntegrityError to a rate-limit error.

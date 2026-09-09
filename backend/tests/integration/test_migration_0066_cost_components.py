@@ -106,7 +106,7 @@ async def test_cost_components_rls_enabled(db_engine: AsyncEngine) -> None:
     assert relrowsecurity is True
 
 
-async def test_probe_and_refusal_indexes_exist(db_engine: AsyncEngine) -> None:
+async def test_probe_index_exists_refusal_dropped(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
         indexes = await connection.run_sync(
             lambda sync_connection: {
@@ -115,4 +115,7 @@ async def test_probe_and_refusal_indexes_exist(db_engine: AsyncEngine) -> None:
             }
         )
     assert "ix_runs_probe" in indexes
-    assert "ix_runs_refusal" in indexes
+    # ix_runs_refusal was intentionally dropped by migration 0197_runs_index_and_constraint_fixes:
+    # it was a strict prefix of ix_runs_org_created_pipeline (organisation_id, created_at)
+    # INCLUDE (pipeline_id) and served no distinct lookups, only doubling write amplification.
+    assert "ix_runs_refusal" not in indexes
