@@ -3670,7 +3670,7 @@ features:
             - "[x] The run detail page surfaces run-level warnings in a single top strip (id=warnings) that scrolls into view when navigated from the list badge (?warn=1) or a #warnings deep link"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
-        status: partial
+        status: covered
         behaviours:
             # FAR-591 D5: Runners page + health-probe cache
             - "[x] A per-machine health-probe system cron (runner_health_probe, every 60s, retries=2, unique=True) probes the deployment's Docker engine THROUGH the socket-proxy and upserts one runner_probe_cache row per (organisation, machine): engine reachability, pinned-image presence, and the engine's /info CPU/memory for the concurrency preflight — the Runners page and node editor read ONLY this cache, never a synchronous engine probe on the request path"
