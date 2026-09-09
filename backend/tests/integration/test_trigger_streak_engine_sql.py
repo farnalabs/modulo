@@ -742,12 +742,16 @@ async def test_streak_sql_uses_the_reshaped_index(
     # Mirror the engine's recency query: ``_STREAK_NEWEST_REASON_SQL`` walks
     # newest-first (``ORDER BY completed_at DESC, id DESC``), which is exactly
     # the keyset ``ix_runs_streak_engine`` (trigger_id, completed_at DESC) is
-    # shaped for. With ``enable_seqscan = off`` the planner must use an index;
-    # the ORDER BY makes ``ix_runs_streak_engine`` the only one that serves the
-    # sort without a Sort node, so the assertion is deterministic on a tiny
-    # table (a competing ``ix_runs_trigger_id_created_at`` would need an
-    # explicit sort and lose). RESET runs in ``finally`` so a failed EXPLAIN
-    # never leaves the connection with seqscan disabled.
+    # shaped for. With ``enable_seqscan = off`` the planner must use an index.
+    # The query is now served by one of two purpose-built ``runs`` indexes:
+    #   * ix_runs_streak_engine (trigger_id, completed_at DESC) — the dedicated
+    #     streak keyset, which serves the ORDER BY without a Sort node, or
+    #   * ix_runs_org_completed_at_terminal_sweep — the partial (terminal-only)
+    #     sweep index added in migration 0193, which the planner may prefer on a
+    #     tiny seeded table because it is smaller and already covers the
+    #     ``status IN (terminal)`` predicate. Either way the streak query must
+    #     NOT fall back to a Seq Scan of ``runs``. RESET runs in ``finally`` so a
+    #     failed EXPLAIN never leaves the connection with seqscan disabled.
     explain_sql = (
         "EXPLAIN SELECT id FROM runs WHERE trigger_id = :tid "
         "AND status IN (__STATUSES__) AND completed_at IS NOT NULL "
@@ -765,4 +769,7 @@ async def test_streak_sql_uses_the_reshaped_index(
         finally:
             await conn.execute(text("RESET enable_seqscan"))
     joined = "\n".join(rows)
-    assert "ix_runs_streak_engine" in joined, f"expected the streak index in the plan:\n{joined}"
+    assert "Seq Scan" not in joined, f"streak query must be index-backed, not a Seq Scan:\n{joined}"
+    assert "ix_runs_streak_engine" in joined or "ix_runs_org_completed_at_terminal_sweep" in joined, (
+        f"streak query must use a purpose-built runs index:\n{joined}"
+    )
