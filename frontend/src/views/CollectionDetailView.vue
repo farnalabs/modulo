@@ -95,6 +95,10 @@ async function load() {
       error.value = formatApiError(err)
       return
     }
+    if (!data) {
+      error.value = $t('views.LibraryView.collection_failed_to_load')
+      return
+    }
     collection.value = data as unknown as CollectionDetail
   } catch (e) {
     error.value = formatApiError(e)

@@ -108,6 +108,7 @@ export default {
       "collection_visibility_team": "Team",
       "collection_cancel": "Cancel",
       "collection_create_submit": "Create",
+      "collection_failed_to_load": "Failed to load this collection",
       "previous_page": "Previous",
       "next_page": "Next",
       "page_of": "Page {page} of {total}",

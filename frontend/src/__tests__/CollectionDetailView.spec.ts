@@ -3,6 +3,16 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick as vueNextTick } from 'vue'
 
+// Restore the REAL vue-router: the shared vitest setup (src/__tests__/setup.ts)
+// mocks 'vue-router' with a stub router whose currentRoute is pinned to a
+// no-match route. This spec asserts on the loaded collection and error state,
+// which depend on the real useRoute()/navigation (same override pattern as
+// routerFeatureFlagGuard.spec.ts / demo-handoff.spec.ts).
+vi.mock('vue-router', async () => {
+  const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
+  return actual
+})
+
 async function nextTick() {
   await vueNextTick()
   await flushPromises()

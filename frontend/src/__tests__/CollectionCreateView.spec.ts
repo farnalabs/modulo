@@ -3,6 +3,16 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick as vueNextTick } from 'vue'
 
+// Restore the REAL vue-router: the shared vitest setup (src/__tests__/setup.ts)
+// mocks 'vue-router' with a stub router whose push/currentRoute never navigate,
+// so router.push({ name: 'library-collection-detail' }) would never commit. This
+// spec asserts on the committed route, so it needs the real implementation
+// (same override pattern as routerFeatureFlagGuard.spec.ts / demo-handoff.spec.ts).
+vi.mock('vue-router', async () => {
+  const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
+  return actual
+})
+
 async function nextTick() {
   await vueNextTick()
   await flushPromises()
@@ -25,6 +35,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/library', name: 'library', component: { template: '<div/>' } },
+    { path: '/library/collections/new', name: 'library-collection-create', component: { template: '<div/>' } },
     { path: '/library/collections/:id', name: 'library-collection-detail', component: { template: '<div/>' } },
   ],
 })
