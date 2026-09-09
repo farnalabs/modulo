@@ -141,6 +141,19 @@ def _make_collection_primitive(
     return p
 
 
+def _make_collection_pin_primitive(
+    slug: str,
+    version: str,
+    *,
+    primitive_type: str = "schema",
+) -> MagicMock:
+    p = MagicMock()
+    p.slug = slug
+    p.version = version
+    p.primitive_type = primitive_type
+    return p
+
+
 # ---------------------------------------------------------------------------
 # PRIMITIVE_TYPES constant
 # ---------------------------------------------------------------------------
@@ -297,7 +310,11 @@ class TestUpdateCollectionEndpoint:
 class TestPublishCollectionEndpoint:
     def test_publish_with_valid_pins(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive(manifest_pins=[{"slug": "my-schema", "version": "1.0"}])
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        pinned = _make_collection_pin_primitive("my-schema", "1.0", primitive_type="schema")
+        with (
+            patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch("modulo.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
+        ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
             )
@@ -320,7 +337,11 @@ class TestPublishCollectionEndpoint:
                 {"slug": "my-schema", "version": "1.0"},
             ]
         )
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        pinned = _make_collection_pin_primitive("my-schema", "1.0", primitive_type="schema")
+        with (
+            patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch("modulo.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
+        ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
             )

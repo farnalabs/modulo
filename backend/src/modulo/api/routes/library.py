@@ -409,14 +409,35 @@ class CollectionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-def _validate_manifest_pins(
+async def _lookup_pin_primitive(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    slug: str,
+    version: str,
+) -> LibraryPrimitive | None:
+    """Resolve a manifest pin's slug@version to its backing primitive."""
+    stmt = select(LibraryPrimitive).where(
+        LibraryPrimitive.organisation_id == org_id,
+        LibraryPrimitive.slug == slug,
+        LibraryPrimitive.version == version,
+    )
+    try:
+        result = await session.execute(stmt)
+    except (ProgrammingError, SQLAlchemyError):
+        return None
+    return result.scalar_one_or_none()
+
+
+async def _validate_manifest_pins(
     pins: list[dict[str, Any]],
     session: AsyncSession,
     org_id: uuid.UUID,
 ) -> list[str]:
     """Validate collection manifest pins per ADR 032.
 
-    Returns a list of error messages (empty = valid).
+    Returns a list of error messages (empty = valid). Each pin must resolve to an
+    existing primitive of an allowed type (see COLLECTION_PIN_TYPES); disallowed
+    types (composite/integration/lifecycle_map) are rejected.
     """
     errors: list[str] = []
     if not pins:
@@ -436,7 +457,18 @@ def _validate_manifest_pins(
         key = (slug, version)
         if key in seen:
             errors.append(f"duplicate pin: {slug}@{version}")
+            continue
         seen.add(key)
+
+        prim = await _lookup_pin_primitive(session, org_id, slug, version)
+        if prim is None:
+            errors.append(f"pin references unknown primitive: {slug}@{version}")
+            continue
+        if prim.primitive_type not in _COLLECTION_PIN_TYPES_ALLOWED:
+            errors.append(
+                f"Pin type '{prim.primitive_type}' is not allowed in collections. "
+                f"Allowed types: {', '.join(sorted(_COLLECTION_PIN_TYPES_ALLOWED))}",
+            )
 
     return errors
 
@@ -1988,21 +2020,12 @@ async def publish_collection_endpoint(
                 )
 
             pins = prim.manifest_pins or []
-            errors = _validate_manifest_pins(pins, session, org_id)
+            errors = await _validate_manifest_pins(pins, session, org_id)
             if errors:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=f"Validation failed: {'; '.join(errors)}",
                 )
-
-            for pin in pins:
-                pin_type = pin.get("primitive_type")
-                if pin_type and pin_type not in _COLLECTION_PIN_TYPES_ALLOWED:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=f"Pin type '{pin_type}' is not allowed in collections. "
-                        f"Allowed types: {', '.join(sorted(_COLLECTION_PIN_TYPES_ALLOWED))}",
-                    )
 
             prim.status = "published"
             await session.flush()

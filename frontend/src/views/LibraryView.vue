@@ -220,7 +220,7 @@
         </div>
       </div>
 
-      <div v-if="total > pageSize" class="flex justify-center items-center gap-2 mt-8">
+      <div v-if="displayTotal > pageSize" class="flex justify-center items-center gap-2 mt-8">
         <button type="button"
           :disabled="page <= 1"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
@@ -230,10 +230,10 @@
           {{ $t('views.LibraryView.previous_page') }}
         </button>
         <span class="px-4 py-2 text-sm text-muted-foreground">
-          {{ $t('views.LibraryView.page_of', { page: page, total: Math.ceil(total / pageSize) }) }}
+          {{ $t('views.LibraryView.page_of', { page: page, total: Math.ceil(displayTotal / pageSize) }) }}
         </span>
         <button type="button"
-          :disabled="page >= Math.ceil(total / pageSize)"
+          :disabled="page >= Math.ceil(displayTotal / pageSize)"
           class="px-4 py-2 text-sm border border-input bg-background rounded-lg disabled:opacity-30 hover:bg-accent transition-colors"
           @click="nextPage"
           data-testid="library-next-page"
@@ -372,6 +372,7 @@ const previewPrimitives = computed(() => applyTypeFilter(primitives.value.filter
 const communityPrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => p.source === 'community')))
 
 const collectionPrimitives = ref<LibraryPrimitive[]>([])
+const collectionsTotal = ref(0)
 
 const { loading: collectionsLoading, error: collectionsError, data: collectionsLoadResp, load: loadCollections } = useDataFetch<ListResponse>(
   async () => {
@@ -394,9 +395,11 @@ const { loading: collectionsLoading, error: collectionsError, data: collectionsL
 watch(collectionsLoadResp, (d) => {
   if (d) {
     collectionPrimitives.value = d.items
-    total.value = d.total
+    collectionsTotal.value = d.total
   }
 }, { immediate: true })
+
+const displayTotal = computed(() => (section.value === 'collections' ? collectionsTotal.value : total.value))
 
 function onFilterChange() {
   page.value = 1
