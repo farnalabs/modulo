@@ -105,6 +105,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
 from modulo.core.pipeline_engine.hitl_context import HitlGateContext, build_hitl_gate_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
+from modulo.core.pipeline_engine.model_backend_errors import classify_provider_error
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
     MODULO_SYNTHETIC_FAILURE_MARKER,
@@ -4669,6 +4670,16 @@ class PipelineExecutor:
                 error_detail = _sanitize_detail(
                     "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
                 )
+                # FAR-734: scan the retained stdout (embedded in the
+                # exception message) for terminal provider-error
+                # signatures.  When a signature matches, upgrade the
+                # generic ``node_cancelled`` code to the specific
+                # ``model.*`` code so the Error Dashboard and daily facts
+                # bucket it as a first-class failure dimension.  Fail
+                # open: when no signature matches the generic code stays.
+                _provider_code = classify_provider_error(str(exc))
+                if _provider_code is not None:
+                    error_code = _provider_code
         return error_code, error_detail
 
     async def _read_retry_attempt_state(
