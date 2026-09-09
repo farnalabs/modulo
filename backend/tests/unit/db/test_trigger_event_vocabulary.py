@@ -66,8 +66,9 @@ _MIGRATION_PATH = (
 # FAR-583's 0192_run_node_outputs re-parented onto 0191 with its
 # 0193_run_node_outputs_sweep_index (qa iteration 2, the sweep's partial index)
 # chained onto 0192, 0194_uuid_pk_server_defaults (FAR-718, from main) chained onto
-# 0193 as the chain head, and improve-database's 0197/0198/0199 chain off it.
-_CHAIN_HEAD_MIGRATION_NAME = "0200_runs_runner_marker_sweep_index"
+# 0193, improve-database's 0197/0198/0199 chain off it, and this PR's
+# 0201_spend_anomaly_unique_org_date chained onto 0200_runs_runner_marker_sweep_index as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0201_spend_anomaly_unique_org_date"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

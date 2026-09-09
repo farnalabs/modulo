@@ -10,15 +10,19 @@ code:
   - backend/src/modulo/core/spend_ceiling.py
   - backend/src/modulo/db/crud/scheduled_report.py
   - backend/src/modulo/db/crud/spend_anomaly.py
+  - backend/src/modulo/db/models/spend_anomaly.py
+  - backend/src/modulo/db/migrations/versions/0201_spend_anomaly_unique_org_date.py
 unit-tests:
   - backend/tests/unit/api/test_costs.py
   - backend/tests/unit/api/test_cost_controls_bdd.py
   - backend/tests/unit/api/test_admin_spend_limits_gating.py
+  - backend/tests/unit/api/test_costs_routes_coverage.py
   - backend/tests/unit/core/test_cost_settings.py
   - backend/tests/unit/core/test_spend_ceiling.py
   - backend/tests/unit/core/cost_controller/test_cost_components_crud.py
   - backend/tests/unit/core/cost_controller/test_cost_finalize.py
   - backend/tests/unit/core/cost_controller/test_cost_finalize_ceiling.py
+  - backend/tests/unit/db/crud/test_spend_anomaly.py
 bdd:
   - backend/tests/bdd/features/costs/cost_controls.feature
 depends-on:
@@ -71,9 +75,13 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       daily/weekly/monthly, team/org, csv/json, one-time/recurring reports with
       `recipients` (email) required (min 1)
 - [x] Rolling spend-anomaly detection: days whose org spend exceeds 2x the trailing
-      7-day average are detected from `OrgDailyRunCount`, merged with persisted
-      anomalies so dismissals survive, and dismissible via
-      `POST /anomalies/dismiss/{id}`
+      7-day average are detected from `OrgDailyRunCount`, each fresh detection is
+      persisted on first sight (`record_or_get_anomaly`, unique per detected
+      org-day via `uq_spend_anomalies_org_date`) so it carries a real id and is
+      dismissible via `POST /anomalies/dismiss/{id}`, repeat detections inherit
+      the saved dismissal state, and previously stored still-flagged rows are
+      merged into the response (`test_costs_routes_coverage.py`,
+      `test_spend_anomaly.py`)
 - [x] Cost-component admin CRUD (attribution of spend to named components) in
       `api/routes/cost_components.py` + `cost_controller/test_cost_components_crud.py`
 - [x] The verification canary (`cost_controller/probe.py`, spec §4.7) and system
@@ -87,9 +95,6 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 - **No BDD for the ceiling / scheduled-report / anomaly / cost-component surfaces** —
   `cost_controls.feature` covers only token budget, org/team spend limits and the
   circuit breaker; the rest are unit-only.
-- **Anomaly detection has no persistence on first detection path in the endpoint** —
-  freshly detected anomalies carry an empty `id` and are merged with stored rows, so
-  a dismissal can only target previously persisted anomalies.
 
 ## QA History
 
@@ -98,3 +103,9 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   `docs/product-map/` entry. Behaviours verified against `api/routes/costs.py`,
   `api/routes/cost_components.py`, `core/cost_controller/*` and the costs unit/BDD
   suites. Status: covered.
+- 2026-09-08: **improve-architecture (product-map walk)** — closed the anomaly
+  persistence gap: freshly detected anomalies are now written on first sight
+  (`record_or_get_anomaly`) and uniqueness per detected org-day is enforced
+  (`uq_spend_anomalies_org_date`, migration 0201_spend_anomaly_unique_org_date), so every returned anomaly has a
+  stable id that `POST /anomalies/dismiss/{id}` can target and dismissal state
+  survives repeat detection. Endpoint + CRUD unit suites updated.

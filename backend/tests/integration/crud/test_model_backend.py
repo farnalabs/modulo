@@ -25,6 +25,7 @@ from modulo.db.models.model_backend import ModelBackend
 
 pytestmark = pytest.mark.integration
 
+
 _VALID_32 = "a" * 32
 _VALID_FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
