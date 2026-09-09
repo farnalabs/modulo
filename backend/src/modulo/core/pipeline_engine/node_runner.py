@@ -92,8 +92,10 @@ from modulo.core.node_output_split import (
     resolve_node_contract_output,
 )
 from modulo.core.pipeline_engine.decorator import cancellable_node
+from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
+from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
 from modulo.core.pipeline_engine.idempotency import (
     node_idempotency_key,
     read_before_write_ambiguous,
@@ -3480,22 +3482,80 @@ async def _hitl_gate_resume_result(
     return (True, _hitl_gate_approve_reject_result(gate_id, decision, is_rejected))
 
 
-def _hitl_gate_condition_skip(gate_id: str, condition_expr: str | None, state: dict[str, Any]) -> dict[str, Any] | None:
-    """Evaluate the conditional-gate JMESPath expression; skip artifact when falsy."""
-    if condition_expr:
-        try:
-            compiled = compile_jmespath(condition_expr)
-        except ValueError:
-            _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
-            raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
-        result = compiled.search(state)
-        if not bool(result):
-            # Condition falsy — skip the gate entirely. Preserve the raw result
-            # in the artifact (mirrors the pre-refactor behaviour).
-            return _build_hitl_gate_artifact(
-                gate_id, "condition_skipped", condition=condition_expr, condition_result=result
-            )
-    return None
+#: Deterministic cap for each serialised ``condition_result`` member carried
+#: in the interrupt payload (FAR-688). The matched value is derived from run
+#: STATE (node outputs — redacted, then bounded); the expression is
+#: user-authored but can exceed the REST save contract's 500-char cap on an
+#: MCP-authored graph (which bypasses the Pydantic contract), so BOTH members
+#: are bounded before they can reach persistence (the checkpointer persists
+#: interrupt payloads) or the briefing. A sliced member carries the shared
+#: truncation marker (WITHIN the cap).
+_CONDITION_RESULT_FIELD_MAX_CHARS = 2000
+
+
+def _serialize_condition_value(value: Any) -> str:
+    """Serialise a matched condition value deterministically, redacted + bounded.
+
+    FAR-688: the value the JMESPath condition matched is derived from run
+    state (node outputs — agent/connector content), so it runs through the
+    shared redaction primitive BEFORE truncation (FAR-163: a secret
+    straddling the cut point must still be removed) and is then bounded,
+    marked when sliced. Serialisation reuses the briefing's deterministic
+    serializer (:func:`modulo.core.pipeline_engine.hitl_context.serialize_value`)
+    instead of re-implementing it; the slice carries the marker WITHIN the cap.
+    """
+    return slice_with_marker(sanitize_error_text(serialize_value(value)), _CONDITION_RESULT_FIELD_MAX_CHARS)
+
+
+def _bound_condition_expression(expression: str) -> str:
+    """The payload's ``condition_result.expression``, bounded with the marker.
+
+    User-authored (save-time) text, so redaction does not apply — but the cap
+    does: an MCP-authored graph bypasses the REST 500-char condition cap and
+    the expression rides into checkpointer-persisted payloads. The marker is
+    carved out of the slice (WITHIN the cap).
+    """
+    return slice_with_marker(expression, _CONDITION_RESULT_FIELD_MAX_CHARS)
+
+
+def _hitl_gate_condition_evaluate(
+    gate_id: str, condition_expr: str | None, state: dict[str, Any]
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    """Evaluate the conditional-gate JMESPath expression (FAR-688).
+
+    Returns ``(skip_artifact, condition_result)``:
+
+    * No condition → ``(None, None)`` — the gate fires unconditionally.
+    * Falsy result → ``(condition_skipped artifact, None)`` — the gate is
+      skipped entirely (no interrupt); the raw result stays in the artifact
+      (mirrors the pre-refactor behaviour).
+    * Truthy result → ``(None, payload)`` — the gate proceeds and the payload
+      rides in the interrupt payload (``{"expression", "value"}``): the
+      MATCHED value + the expression that produced it, so the fire-time
+      briefing records what actually made the condition true instead of
+      re-guessing it from the expression string (FAR-613's regex heuristic
+      extracts zero node ids for conditions authored against merged-state
+      keys like ``output.score > 0.5``).
+    """
+    if not condition_expr:
+        return None, None
+    try:
+        compiled = compile_jmespath(condition_expr)
+    except ValueError:
+        _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
+        raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
+    result = compiled.search(state)
+    if not bool(result):
+        # Condition falsy — skip the gate entirely. Preserve the raw result
+        # in the artifact (mirrors the pre-refactor behaviour).
+        return (
+            _build_hitl_gate_artifact(gate_id, "condition_skipped", condition=condition_expr, condition_result=result),
+            None,
+        )
+    return None, {
+        "expression": _bound_condition_expression(condition_expr),
+        "value": _serialize_condition_value(result),
+    }
 
 
 def _resolve_llm_judge_callable(eval_def: Any) -> Any:
@@ -3698,7 +3758,12 @@ def make_hitl_gate_fn(
             return resume_result  # type: ignore[return-value]
 
         # --- Conditional gate (Section 8.17) — evaluate condition against state. ---
-        condition_skip = _hitl_gate_condition_skip(gate_id, condition_expr, state)
+        # FAR-688: on the fire (truthy) path the MATCHED value rides in the
+        # interrupt payload as ``condition_result`` so the executor's briefing
+        # capture records what made the condition true. The FAR-604 coalescing
+        # hash is over ``Run.input_hash``, never this payload — adding a
+        # member cannot change coalescing outcomes.
+        condition_skip, condition_result = _hitl_gate_condition_evaluate(gate_id, condition_expr, state)
         if condition_skip is not None:
             return condition_skip
 
@@ -3757,6 +3822,9 @@ def make_hitl_gate_fn(
                 "human_only": human_only,
                 "overdue_threshold_minutes": hitl_gate_config.get("overdue_threshold_minutes"),
                 "required_team_id": required_team_id,
+                # FAR-688: the matched condition value ({"expression", "value"},
+                # redacted + bounded) or None when the gate has no condition.
+                "condition_result": condition_result,
             }
         )
         return await _hitl_gate({**state, "_hitl_decision": decision})

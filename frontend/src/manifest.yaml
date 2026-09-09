@@ -2313,6 +2313,12 @@ elements:
       - testid: pipeline-editor-save-edge
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-legacy-hitl-banner
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-legacy-hitl-banner-dismiss
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-agent-select
         type: select
         dynamic_testid: false
@@ -2886,12 +2892,6 @@ elements:
       - testid: hitl-review-toggle-expand
         type: button
         dynamic_testid: false
-      - testid: hitl-review-pipeline-name
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-node-name
-        type: element
-        dynamic_testid: false
       - testid: hitl-gate-card
         type: element
         dynamic_testid: false
@@ -2933,6 +2933,12 @@ elements:
         dynamic_testid: false
       - testid: hitl-review-next-page
         type: button
+        dynamic_testid: false
+      - testid: hitl-review-pipeline-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-node-name
+        type: element
         dynamic_testid: false
     /settings/license:
       - testid: license-key-input

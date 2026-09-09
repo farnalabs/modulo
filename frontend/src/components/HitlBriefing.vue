@@ -28,12 +28,31 @@ function asString(value: unknown): string | null {
 
 const trigger = computed(() => {
   const value = ctx.value?.trigger
-  if (value === 'node') return t('views.HitlBriefing.trigger_node')
-  if (value === 'condition') return t('views.HitlBriefing.trigger_condition')
+  if (value === 'node') return t('components.HitlBriefing.trigger_node')
+  if (value === 'condition') return t('components.HitlBriefing.trigger_condition')
+  if (value === 'unknown') return t('components.HitlBriefing.trigger_unknown')
   return null
 })
 
 const condition = computed(() => asString(ctx.value?.condition))
+
+/**
+ * FAR-688: the matched condition value as PRIMARY briefing evidence —
+ * what the condition expression actually evaluated to at fire time.
+ */
+interface ConditionResult {
+  expression: string
+  value: string
+}
+
+const conditionResult = computed<ConditionResult | null>(() => {
+  const raw = ctx.value?.condition_result
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const entry = raw as Record<string, unknown>
+  const expression = asString(entry.expression)
+  const value = asString(entry.value)
+  return expression && value ? { expression, value } : null
+})
 
 const sourceNode = computed(() => {
   const id = asString(ctx.value?.source_node_id)
@@ -62,23 +81,34 @@ const artifacts = computed<ArtifactEntry[]>(() => {
     .filter((entry) => entry.node_id !== '' || entry.summary !== '')
 })
 
-const hasDetails = computed(() => Boolean(trigger.value || condition.value || sourceNode.value || reason.value || pipelineName.value || artifacts.value.length > 0))
+const hasDetails = computed(
+  () =>
+    Boolean(
+      trigger.value ||
+        condition.value ||
+        conditionResult.value ||
+        sourceNode.value ||
+        reason.value ||
+        pipelineName.value ||
+        artifacts.value.length > 0,
+    ),
+)
 </script>
 
 <template>
   <section
     data-testid="hitl-briefing"
     class="rounded-lg border bg-muted/30 p-3"
-    :aria-label="$t('views.HitlBriefing.title')"
+    :aria-label="$t('components.HitlBriefing.title')"
   >
     <h4 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-      {{ $t('views.HitlBriefing.title') }}
+      {{ $t('components.HitlBriefing.title') }}
     </h4>
     <p v-if="description" data-testid="hitl-briefing-description" class="text-sm text-foreground">
       {{ description }}
     </p>
     <p v-else data-testid="hitl-briefing-description-fallback" class="text-sm italic text-muted-foreground">
-      {{ $t('views.HitlBriefing.no_description') }}
+      {{ $t('components.HitlBriefing.no_description') }}
     </p>
     <template v-if="hasDetails">
       <button
@@ -88,34 +118,52 @@ const hasDetails = computed(() => Boolean(trigger.value || condition.value || so
         :aria-expanded="showDetails ? 'true' : 'false'"
         @click="showDetails = !showDetails"
       >
-        {{ showDetails ? $t('views.HitlBriefing.hide_details') : $t('views.HitlBriefing.show_details') }}
+        {{ showDetails ? $t('components.HitlBriefing.hide_details') : $t('components.HitlBriefing.show_details') }}
       </button>
       <dl v-if="showDetails" data-testid="hitl-briefing-details" class="mt-2 space-y-2 text-sm">
         <div v-if="trigger" class="flex justify-between gap-3">
-          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('views.HitlBriefing.trigger') }}</dt>
+          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('components.HitlBriefing.trigger') }}</dt>
           <dd class="text-right">{{ trigger }}</dd>
         </div>
         <div v-if="pipelineName" class="flex justify-between gap-3">
-          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('views.HitlBriefing.pipeline') }}</dt>
+          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('components.HitlBriefing.pipeline') }}</dt>
           <dd class="text-right">{{ pipelineName }}</dd>
         </div>
         <div v-if="sourceNode" class="flex justify-between gap-3">
-          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('views.HitlBriefing.source_node') }}</dt>
+          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('components.HitlBriefing.source_node') }}</dt>
           <dd class="text-right font-mono text-xs">{{ sourceNode }}</dd>
         </div>
         <div v-if="condition" class="flex justify-between gap-3">
-          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('views.HitlBriefing.condition') }}</dt>
+          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('components.HitlBriefing.condition') }}</dt>
           <dd class="break-all text-right font-mono text-xs">{{ condition }}</dd>
         </div>
+        <!-- FAR-688: PRIMARY evidence — the value the condition matched at fire
+             time, above the supplementary artifact excerpts. When the snapshot
+             condition row is absent (unresolvable config), the payload's own
+             expression is still shown — the builder guarantees it carries the
+             best-known expression. -->
+        <div v-if="conditionResult" class="rounded bg-background p-2" data-testid="hitl-briefing-condition-result">
+          <dt class="text-muted-foreground">{{ $t('components.HitlBriefing.condition_evaluated') }}</dt>
+          <dd
+            v-if="!condition"
+            data-testid="hitl-briefing-condition-result-expression"
+            class="break-all font-mono text-xs text-muted-foreground"
+          >
+            {{ conditionResult.expression }}
+          </dd>
+          <dd class="mt-1 break-all font-mono text-xs text-foreground">
+            {{ conditionResult.value }}
+          </dd>
+        </div>
         <div v-if="reason" class="flex justify-between gap-3">
-          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('views.HitlBriefing.reason') }}</dt>
+          <dt class="flex-shrink-0 text-muted-foreground">{{ $t('components.HitlBriefing.reason') }}</dt>
           <dd class="text-right">{{ reason }}</dd>
         </div>
         <div v-if="artifacts.length > 0" class="space-y-1">
-          <dt class="text-muted-foreground">{{ $t('views.HitlBriefing.artifacts') }}</dt>
+          <dt class="text-muted-foreground">{{ $t('components.HitlBriefing.artifacts') }}</dt>
           <dd
-            v-for="artifact in artifacts"
-            :key="artifact.node_id"
+            v-for="(artifact, index) in artifacts"
+            :key="`${artifact.node_id}-${index}`"
             class="rounded bg-background p-2"
           >
             <span class="font-mono text-xs text-muted-foreground">{{ artifact.node_id }}</span>
@@ -123,7 +171,7 @@ const hasDetails = computed(() => Boolean(trigger.value || condition.value || so
           </dd>
         </div>
         <div v-else-if="ctx" class="text-xs italic text-muted-foreground">
-          {{ $t('views.HitlBriefing.artifacts_empty') }}
+          {{ $t('components.HitlBriefing.artifacts_empty') }}
         </div>
       </dl>
     </template>

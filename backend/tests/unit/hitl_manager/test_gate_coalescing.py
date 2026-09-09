@@ -176,6 +176,43 @@ class TestEvaluateGateCoalescing:
         audit.assert_awaited_once()
 
     @patch("modulo.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
+    async def test_condition_result_member_never_affects_the_decision(self, audit: AsyncMock) -> None:
+        """FAR-688: the interrupt payload now carries a ``condition_result``
+        member. The coalescing decision keys on ``runs.input_hash`` + the
+        ``_coalesce_key`` extract — a payload carrying ``condition_result``
+        coalesces exactly as it would without it (same hash reuses, changed
+        hash supersedes)."""
+        stamped: dict[str, Any] = {
+            "input": "value",
+            "_coalesce_key": KEY,
+            "condition_result": {"expression": "output.review", "value": "true"},
+        }
+        session_reuse = _CoalesceSession(
+            run_row=_run_row(stamped, HASH_A),
+            candidates=[(_open_claim(), HASH_A, _payload())],
+        )
+        outcome_reuse = await evaluate_gate_coalescing(
+            session_reuse, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+        )
+        assert outcome_reuse == "reuse"
+        # Pure decision — no supersede writes issued either way.
+        assert len(session_reuse.statements) == 2
+
+        session_supersede = _CoalesceSession(
+            run_row=_run_row(stamped, HASH_B),
+            candidates=[(_open_claim(), HASH_A, _payload())],
+        )
+        outcome_supersede = await evaluate_gate_coalescing(
+            session_supersede, run_id=RUN_ID, gate_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID
+        )
+        assert outcome_supersede == "raise"
+        # The old gate was superseded (close-out + un-park) exactly as with a
+        # condition_result-free payload.
+        assert len(session_supersede.statements) == 4
+        # Each path audited once (reuse + supersede over the shared mock).
+        assert audit.await_count == 2
+
+    @patch("modulo.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
     async def test_changed_sha_supersedes_old_gate_and_raises_fresh(self, audit: AsyncMock) -> None:
         """Changed SHA → old gate auto-rejected + parked old run un-parked,
         new run raises fresh."""

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     deny_break_glass_mint,
@@ -23,10 +22,6 @@ from modulo.core.audit_logger import append_audit_event
 from modulo.core.fernet_rotation import rotate_all_encrypted_data
 from modulo.core.saq_worker import _make_system_session_factory
 from modulo.settings import Settings, get_settings
-
-_CODE_ADMIN_ROTATION_ROTATE_KEY = "admin_rotation.rotate_key"
-_CODE_ADMIN_ROTATION_ROTATION_STATUS = "admin_rotation.rotation_status"
-
 
 _MIN_KEY_LEN = 32
 
@@ -93,86 +88,63 @@ async def rotate_key(
     Re-encrypts all Fernet-encrypted data across all stores with the new key.
     The old key stays valid for reads until rotation completes (no-downtime).
     """
-    try:
-        _validate_fernet_key(req.new_fernet_key, "new_fernet_key")
+    _validate_fernet_key(req.new_fernet_key, "new_fernet_key")
 
-        old_key = req.old_fernet_key or settings.fernet_key
+    old_key = req.old_fernet_key or settings.fernet_key
 
-        # Rotation runs cross-org on the modulo_system (BYPASSRLS) role. If that
-        # role is not provisioned (MODULO_SYSTEM_DATABASE_URL empty) the system
-        # session factory silently falls back to the NOBYPASSRLS app role, which
-        # makes the rotation a zero-row no-op. Refuse loudly rather than
-        # re-introduce the exact silent failure this fix addresses.
-        if not settings.modulo_system_database_url:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=(
-                    "Fernet key rotation is unavailable: the modulo_system role is "
-                    "not provisioned (MODULO_SYSTEM_DATABASE_URL is unset)."
-                ),
-            )
-
-        global _rotation_in_progress
-        if _rotation_in_progress:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A key rotation is already in progress",
-            )
-
-        # Log the rotation start to audit log FIRST
-        try:
-            await append_audit_event(
-                session,
-                org_id=current_user.organisation_id,
-                event_type="fernet_key_rotation_started",
-                actor_user_id=current_user.account_id,
-                resource_type="encryption",
-                resource_id=current_user.organisation_id,
-                payload_json={
-                    "initiated_by": str(current_user.account_id),
-                    "old_key_provided": bool(req.old_fernet_key),
-                },
-            )
-        except HTTPException:
-            raise
-        except Exception:
-            _log.exception("Failed to record fernet_key_rotation_started audit event")
-            raise HTTPException(status_code=500, detail="Internal server error.") from None
-
-        _rotation_in_progress = True
-
-        import asyncio
-
-        # Launch background rotation task.
-        task = asyncio.create_task(
-            _run_rotation_background(
-                new_key=req.new_fernet_key,
-                old_key=old_key,
-                org_id=current_user.organisation_id,
-                actor_user_id=current_user.account_id,
-            )
+    # Rotation runs cross-org on the modulo_system (BYPASSRLS) role. If that
+    # role is not provisioned (MODULO_SYSTEM_DATABASE_URL empty) the system
+    # session factory silently falls back to the NOBYPASSRLS app role, which
+    # makes the rotation a zero-row no-op. Refuse loudly rather than
+    # re-introduce the exact silent failure this fix addresses.
+    if not settings.modulo_system_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Fernet key rotation is unavailable: the modulo_system role is "
+                "not provisioned (MODULO_SYSTEM_DATABASE_URL is unset)."
+            ),
         )
-        task_id = str(id(task))
 
-        return RotateKeyResponse(
-            status="accepted",
-            task_id=task_id,
-            message="Key rotation started — all encrypted data will be re-encrypted with the new key",
-        )
-    except HTTPException:
-        raise
-    except IntegrityError as exc:
-        _log.exception(_CODE_ADMIN_ROTATION_ROTATE_KEY)
+    global _rotation_in_progress
+    if _rotation_in_progress:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from exc
-    except ProgrammingError as exc:
-        _log.exception(_CODE_ADMIN_ROTATION_ROTATE_KEY)
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
-    except Exception as e:
-        _log.exception(_CODE_ADMIN_ROTATION_ROTATE_KEY)
-        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
+            detail="A key rotation is already in progress",
+        )
+
+    # Log the rotation start to audit log FIRST
+    await append_audit_event(
+        session,
+        org_id=current_user.organisation_id,
+        event_type="fernet_key_rotation_started",
+        actor_user_id=current_user.account_id,
+        resource_type="encryption",
+        resource_id=current_user.organisation_id,
+        payload_json={
+            "initiated_by": str(current_user.account_id),
+            "old_key_provided": bool(req.old_fernet_key),
+        },
+    )
+
+    _rotation_in_progress = True
+
+    # Launch background rotation task.
+    task = asyncio.create_task(
+        _run_rotation_background(
+            new_key=req.new_fernet_key,
+            old_key=old_key,
+            org_id=current_user.organisation_id,
+            actor_user_id=current_user.account_id,
+        )
+    )
+    task_id = str(id(task))
+
+    return RotateKeyResponse(
+        status="accepted",
+        task_id=task_id,
+        message="Key rotation started — all encrypted data will be re-encrypted with the new key",
+    )
 
 
 @router.get(
@@ -188,25 +160,10 @@ async def rotation_status(
     _current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RotationStatusResponse:
     """Return the current rotation state."""
-    try:
-        return RotationStatusResponse(
-            rotation_in_progress=_rotation_in_progress,
-            last_rotation_result=_last_rotation_result,
-        )
-    except HTTPException:
-        raise
-    except IntegrityError as exc:
-        _log.exception(_CODE_ADMIN_ROTATION_ROTATION_STATUS)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A resource with this value already exists",
-        ) from exc
-    except ProgrammingError as exc:
-        _log.exception(_CODE_ADMIN_ROTATION_ROTATION_STATUS)
-        raise HTTPException(status_code=503, detail="Database not available. Run migrations.") from exc
-    except Exception as e:
-        _log.exception(_CODE_ADMIN_ROTATION_ROTATION_STATUS)
-        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
+    return RotationStatusResponse(
+        rotation_in_progress=_rotation_in_progress,
+        last_rotation_result=_last_rotation_result,
+    )
 
 
 # ── Background task ────────────────────────────────────────────────────────

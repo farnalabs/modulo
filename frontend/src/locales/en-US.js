@@ -1091,6 +1091,11 @@ export default {
       "hitl_description_placeholder": "Describe what the reviewer should check",
       "hitl_description_hint": "Required (min 20 chars). This is the reviewer's briefing — explain why a human must decide here.",
       "hitl_description_required": "HITL gate requires a description (min 20 chars) explaining why this gate exists.",
+      "legacy_hitl_description_title": "HITL gates are missing descriptions",
+      "legacy_hitl_description_hint": "These gates were saved before descriptions were required (min 20 chars). Open each gate and add one — it is the reviewer's briefing.",
+      "legacy_hitl_hint_node": "Node-level gates cannot be edited in this editor yet — set their description via the API or an MCP-authored graph edit.",
+      "legacy_hitl_item_edge": "Gate on edge {label}",
+      "legacy_hitl_item_node": "HITL node {label}",
       "aria_checkbox": "checkbox",
       "jmespath_condition": "JMESPath Condition",
       "jmespath_condition_placeholder": "e.g. score > `0.5`",
@@ -1414,21 +1419,6 @@ export default {
       "pass_threshold_aria": "Pass threshold",
       "threshold": "threshold: {value}",
       "node_prefix": "node: {id}"
-    },
-    "HitlBriefing": {
-      "title": "Why this gate needs a decision",
-      "no_description": "No description provided for this gate",
-      "trigger": "Trigger",
-      "trigger_condition": "Fired by a condition on the edge",
-      "trigger_node": "Raised by a HITL node",
-      "source_node": "Source step",
-      "condition": "Condition",
-      "reason": "Reason",
-      "pipeline": "Pipeline",
-      "artifacts": "Relevant output",
-      "artifacts_empty": "No matching node output was captured for this gate.",
-      "show_details": "Show details",
-      "hide_details": "Hide details"
     },
     "RunDetailView": {
       "copy_run_id": "Copy run ID",
@@ -3161,6 +3151,23 @@ export default {
       "bundled_docker": "Bundled Runner (Docker)",
       "external_e2b": "External Runner (E2B)",
       "local": "Local"
+    },
+    "HitlBriefing": {
+      "title": "Why this gate needs a decision",
+      "no_description": "No description provided for this gate",
+      "trigger": "Trigger",
+      "trigger_condition": "Fired by a condition on the edge",
+      "trigger_node": "Raised by a HITL node",
+      "trigger_unknown": "Trigger unknown (gate config could not be resolved)",
+      "source_node": "Source step",
+      "condition": "Condition",
+      "condition_evaluated": "Condition evaluated to",
+      "reason": "Reason",
+      "pipeline": "Pipeline",
+      "artifacts": "Relevant output",
+      "artifacts_empty": "No matching node output was captured for this gate.",
+      "show_details": "Show details",
+      "hide_details": "Hide details"
     },
     "Sparkline": {
       "no_data": "No data",
