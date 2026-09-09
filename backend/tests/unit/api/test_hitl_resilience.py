@@ -1167,11 +1167,7 @@ class TestHumanOnlyDenialAudit:
         """Failure isolation: the audit write raising leaves the byte-identical
         403 (the denial is already emitted — the write is best-effort)."""
         engine = MagicMock()
-        session = AsyncMock()
-        begin_cm = AsyncMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=None)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin = MagicMock(return_value=begin_cm)
+        session = _audit_session_double()
         factory = MagicMock(return_value=_audit_session_ctx(session))
         with (
             patch("modulo.api.routes.hitl.HITLManager"),
@@ -1196,11 +1192,7 @@ class TestHumanOnlyDenialAudit:
         """The emit helper appends ``hitl.human_only_denied`` in a fresh RLS
         org-scoped session with the full denial payload."""
         engine = MagicMock()
-        session = AsyncMock()
-        begin_cm = AsyncMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=None)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin = MagicMock(return_value=begin_cm)
+        session = _audit_session_double()
         factory = MagicMock(return_value=_audit_session_ctx(session))
         append = AsyncMock()
         emit_exc = HumanOnlyDenied(
@@ -1258,9 +1250,29 @@ class TestHumanOnlyDenialAudit:
         assert outcome is None
 
 
-def _audit_session_ctx(session: AsyncMock) -> Any:
+def _audit_session_ctx(session: AsyncMock | MagicMock) -> Any:
     @asynccontextmanager
-    async def _ctx() -> AsyncGenerator[AsyncMock, None]:
+    async def _ctx() -> AsyncGenerator[AsyncMock | MagicMock, None]:
         yield session
 
     return _ctx()
+
+
+def _audit_session_double() -> MagicMock:
+    """An audit-session double faithful to the real AsyncSession surface.
+
+    The emit's RLS preamble (``_ensure_active_transaction``) calls
+    ``in_transaction()`` and ``get_bind()`` SYNCHRONOUSLY — a bare AsyncMock
+    returns un-awaited coroutines for both and leaks a "coroutine never
+    awaited" warning per call (two per denial). ``execute`` stays async
+    because the set_config queries are genuinely awaited.
+    """
+    bind = MagicMock()
+    bind.dialect.name = "postgresql"
+    session = MagicMock()
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=bind)
+    session.execute = AsyncMock()
+    begin_cm = MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False))
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
