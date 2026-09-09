@@ -660,7 +660,16 @@ export default {
       "refs_page_info": "Page {page} of {total}",
       "previous": "Previous",
       "next": "Next",
-      "retry": "Retry"
+      "retry": "Retry",
+      "preset_picker_title": "Choose a Provider Preset",
+      "preset_picker_description": "Pick a provider to get started quickly. You only need to add your API key.",
+      "preset_manual_entry": "Manual / Advanced Entry",
+      "preset_back_to_presets": "Back to presets",
+      "preset_manual_entry_description": "Configure the provider, model, and settings manually.",
+      "preset_selected": "Preset selected",
+      "preset_clear": "Change provider",
+      "preset_get_api_key": "Get an API key",
+      "preset_selected_description": "Provider and model have been pre-filled. Just add your API key below."
     },
     "AdminAuditView": {
       "target_type": "Target Type",

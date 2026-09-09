@@ -15,6 +15,71 @@
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
+          <div v-if="presets.length > 0 && !selectedPresetId && !manualMode" class="mb-6">
+            <p class="mb-3 text-sm text-muted-foreground">{{ $t('views.AdminModelBackendsView.preset_picker_description') }}</p>
+            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <button
+                v-for="preset in presets"
+                :key="preset.id"
+                type="button"
+                class="flex flex-col items-start rounded-lg border border-input bg-card p-3 text-left transition-colors hover:border-primary/60 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :data-testid="`admin-model-backends-preset-${preset.id}`"
+                @click="applyPreset(preset)"
+              >
+                <span class="text-sm font-medium">{{ preset.display_name }}</span>
+                <span class="mt-1 text-xs text-muted-foreground">{{ preset.default_model_id }}</span>
+              </button>
+            </div>
+            <div class="mt-3 flex items-center gap-2">
+              <span class="text-xs text-muted-foreground">—</span>
+              <button
+                type="button"
+                class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                data-testid="admin-model-backends-manual-entry-toggle"
+                @click="manualMode = true"
+              >
+                {{ $t('views.AdminModelBackendsView.preset_manual_entry') }}
+              </button>
+            </div>
+          </div>
+          <div v-if="manualMode" class="mb-6">
+            <button
+              type="button"
+              class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              data-testid="admin-model-backends-back-to-presets"
+              @click="manualMode = false"
+            >
+              {{ $t('views.AdminModelBackendsView.preset_back_to_presets') }}
+            </button>
+          </div>
+          <div v-if="selectedPreset" class="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="text-sm font-medium text-primary">{{ selectedPreset.display_name }}</span>
+                <span class="ml-2 text-xs text-muted-foreground">{{ selectedPreset.default_model_id }}</span>
+              </div>
+              <button
+                type="button"
+                class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                data-testid="admin-model-backends-preset-clear"
+                @click="selectedPresetId = null"
+              >
+                {{ $t('views.AdminModelBackendsView.preset_clear') }}
+              </button>
+            </div>
+            <p class="mt-1 text-xs text-muted-foreground">{{ selectedPreset.description }}</p>
+            <a
+              :href="selectedPreset.api_key_docs_url"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              data-testid="admin-model-backends-preset-docs-link"
+            >
+              {{ $t('views.AdminModelBackendsView.preset_get_api_key') }}
+              <span aria-hidden="true">&rarr;</span>
+            </a>
+            <p class="mt-2 text-xs text-muted-foreground">{{ $t('views.AdminModelBackendsView.preset_selected_description') }}</p>
+          </div>
           <form @submit.prevent="createBackend">
             <div class="space-y-4">
               <div>
@@ -428,6 +493,15 @@ import { useI18n } from 'vue-i18n'
 type ModelBackendItem = components['schemas']['ModelBackendResponse']
 type PipelineRefItem = components['schemas']['PipelineReference']
 
+interface PresetItem {
+  id: string
+  provider: string
+  display_name: string
+  default_model_id: string
+  description: string
+  api_key_docs_url: string
+}
+
 const { t } = useI18n()
 
 interface BackendFormState {
@@ -462,6 +536,19 @@ const { data: backendsResp, loading, error, load: loadBackends } = useDataFetch(
   () => api.GET('/api/v1/model-backends'),
   { initialValue: { items: [] } as { items: ModelBackendItem[] } }
 )
+
+const { data: presetsResp } = useDataFetch(
+  () => api.GET('/api/v1/model-backends/presets'),
+  { initialValue: { items: [] } as { items: PresetItem[] } }
+)
+
+const presets = computed(() => presetsResp.value?.items ?? [])
+const selectedPresetId = ref<string | null>(null)
+const manualMode = ref(false)
+const selectedPreset = computed(() => {
+  if (!selectedPresetId.value) return null
+  return presets.value.find(p => p.id === selectedPresetId.value) ?? null
+})
 
 const nativeBackends = computed(() => (backendsResp.value?.items ?? []).filter(b => (b.tier ?? 'native') !== 'preview' && (b.tier ?? 'native') !== 'in_dev'))
 const previewBackends = computed(() => (backendsResp.value?.items ?? []).filter(b => b.tier === 'preview'))
@@ -554,6 +641,15 @@ function openAddForm() {
   editBackendId.value = null
   deleteConfirmBackendId.value = null
   formError.value = null
+  selectedPresetId.value = null
+  manualMode.value = false
+}
+
+function applyPreset(preset: PresetItem) {
+  selectedPresetId.value = preset.id
+  manualMode.value = false
+  formData.provider = preset.provider
+  formData.model_id = preset.default_model_id
 }
 
 function openEditForm(backend: ModelBackendItem) {

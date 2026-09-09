@@ -3327,6 +3327,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model-backends/presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Model Backend Presets Endpoint
+         * @description Return the curated provider presets for the quick-start create flow.
+         */
+        get: operations["list_model_backend_presets_endpoint_api_v1_model_backends_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model-backends/{backend_id}": {
         parameters: {
             query?: never;
@@ -12735,6 +12755,26 @@ export interface components {
             page: number;
             /** Page Size */
             page_size: number;
+        };
+        /** ModelBackendPresetListResponse */
+        ModelBackendPresetListResponse: {
+            /** Items */
+            items: components["schemas"]["ModelBackendPresetResponse"][];
+        };
+        /** ModelBackendPresetResponse */
+        ModelBackendPresetResponse: {
+            /** Id */
+            id: string;
+            /** Provider */
+            provider: string;
+            /** Display Name */
+            display_name: string;
+            /** Default Model Id */
+            default_model_id: string;
+            /** Description */
+            description: string;
+            /** Api Key Docs Url */
+            api_key_docs_url: string;
         };
         /** ModelBackendResponse */
         ModelBackendResponse: {
@@ -25359,6 +25399,44 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ModelBackendResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_model_backend_presets_endpoint_api_v1_model_backends_presets_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBackendPresetListResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
