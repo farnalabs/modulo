@@ -215,6 +215,34 @@ def resolve_node_retry(node: dict[str, Any] | None, pipeline_retry_policy: Any) 
     return _policy_from_pipeline_default(pipeline_retry_policy)
 
 
+def _is_valid_retry_budget(max_retries: Any) -> bool:
+    """A run-level ``max_retries`` budget is valid: a non-bool int within the executor's 1-5 bounds."""
+    return (
+        isinstance(max_retries, int)
+        and not isinstance(max_retries, bool)
+        and 1 <= max_retries <= RETRY_MAX_ATTEMPTS_BOUND
+    )
+
+
+def _map_run_level_events(events_raw: list[Any]) -> set[str]:
+    """Map run-level event names to node-level ones (``failure``/``error`` → ``error``; others pass through)."""
+    node_events: set[str] = set()
+    for e in events_raw:
+        if e == "stall":
+            node_events.add("stall")
+        elif e == "timeout":
+            node_events.add("timeout")
+        elif e in ("failure", "error"):
+            node_events.add("error")
+    return node_events
+
+
+def _clamped_backoff_seconds(backoff: Any) -> float:
+    """Clamp a run-level ``backoff`` to ``[0, RETRY_BACKOFF_CAP_SECONDS]``; non-numeric/overflowing yields 0.0."""
+    backoff_f = safe_float(backoff) if isinstance(backoff, (int, float)) else None
+    return min(max(backoff_f, 0.0), RETRY_BACKOFF_CAP_SECONDS) if backoff_f is not None else 0.0
+
+
 def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy:
     """Translate a run-level ``retry_policy`` to a :class:`NodeRetryPolicy`.
 
@@ -237,11 +265,7 @@ def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy
     if not isinstance(pipeline_retry_policy, dict):
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     max_retries = pipeline_retry_policy.get("max_retries", 0)
-    if (
-        isinstance(max_retries, bool)
-        or not isinstance(max_retries, int)
-        or not 1 <= max_retries <= RETRY_MAX_ATTEMPTS_BOUND
-    ):
+    if not _is_valid_retry_budget(max_retries):
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     events_raw = pipeline_retry_policy.get("on")
     if events_raw is None:
@@ -250,26 +274,14 @@ def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy
         # four-event run-level list maps to.
         node_events: set[str] = set(RETRY_EVENTS)
     elif isinstance(events_raw, list):
-        node_events = set()
-        for e in events_raw:
-            if e == "stall":
-                node_events.add("stall")
-            elif e == "timeout":
-                node_events.add("timeout")
-            elif e in ("failure", "error"):
-                node_events.add("error")
+        node_events = _map_run_level_events(events_raw)
     else:
         # A malformed non-list, non-null `on` (e.g. a string) fail-closes.
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     if not node_events:
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     max_attempts = min(max_retries + 1, RETRY_MAX_ATTEMPTS_BOUND)
-    backoff = pipeline_retry_policy.get("backoff", 0.0)
-    # A huge un-representable int (e.g. 10**400, direct-DB-written) overflows
-    # float(); treat it like any other non-numeric backoff — the documented
-    # 0.0 default (the else branch below) — instead of bricking graph compile.
-    backoff_f = safe_float(backoff) if isinstance(backoff, (int, float)) else None
-    backoff_sec = min(max(backoff_f, 0.0), RETRY_BACKOFF_CAP_SECONDS) if backoff_f is not None else 0.0
+    backoff_sec = _clamped_backoff_seconds(pipeline_retry_policy.get("backoff", 0.0))
     return NodeRetryPolicy(max_attempts=max_attempts, backoff_seconds=backoff_sec, events=frozenset(node_events))
 
 
@@ -604,22 +616,11 @@ def validate_compensation_target_exists(edges: list[dict[str, Any]], nodes: list
             )
 
 
-def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
-    """Return every compensation-edge cycle in the graph (empty = acyclic).
+def _compensation_adjacency(edges: list[dict[str, Any]], node_ids: set[str]) -> dict[str, list[str]]:
+    """Build the compensation adjacency (``source -> on_failure_target``), only edges with a real target node.
 
-    The compensation relation is ``source -> on_failure_target`` for each edge
-    carrying an ``on_failure_target``. A cycle among these edges means the
-    compensation path can loop infinitely (a compensation node's failure routes
-    back to an upstream compensation), which the design FORBIDS at compile time.
-    Nested / composite sub-pipelines are validated at their own boundary; this
-    detects cycles in the current graph's compensation edges.
+    Uses an insertion-ordered dict so results are deterministic.
     """
-    nodes = graph_json.get("nodes", []) if isinstance(graph_json, dict) else []
-    edges = graph_json.get("edges", []) if isinstance(graph_json, dict) else []
-    node_ids = {_string_or_default(n.get("id")) for n in nodes if isinstance(n, dict)}
-
-    # Build the compensation adjacency (only edges whose on_failure_target is a
-    # real node). Use an insertion-ordered dict so results are deterministic.
     adj: dict[str, list[str]] = {}
     for edge in edges:
         if not isinstance(edge, dict):
@@ -628,14 +629,18 @@ def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
         target = edge.get("on_failure_target")
         if target in (None, "") or _string_or_default(target) not in node_ids:
             continue
-        target = _string_or_default(target)
-        adj.setdefault(source, []).append(target)
+        adj.setdefault(source, []).append(_string_or_default(target))
+    return adj
 
-    # DFS with an explicit "in current stack" marker. Iterative to avoid recursion
-    # depth issues on wide graphs (there is no recursion limit concern here, but
-    # iterative is simpler to keep deterministic order).
+
+def _collect_compensation_cycles(node_ids: set[str], adj: dict[str, list[str]]) -> list[list[str]]:
+    """DFS over the compensation adjacency, collecting every cycle (possibly duplicated, rotation-variant).
+
+    Iterative-order DFS with an explicit "in current stack" marker (state:
+    0=unvisited, 1=in-stack, 2=done).
+    """
     cycles: list[list[str]] = []
-    state: dict[str, int] = {}  # 0=unvisited, 1=in-stack, 2=done
+    state: dict[str, int] = {}
 
     def _dfs(start: str, stack: list[str]) -> bool:
         # Returns True if a cycle was found rooted through ``start``.
@@ -656,9 +661,11 @@ def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
     for node in node_ids:
         if state.get(node, 0) == 0:
             _dfs(node, [])
+    return cycles
 
-    # De-duplicate cycles (rotation-invariant) and cap the count to keep the
-    # error message bounded.
+
+def _dedupe_compensation_cycles(cycles: list[list[str]]) -> list[list[str]]:
+    """De-duplicate cycles (rotation-invariant) so the error message stays bounded."""
     seen: set[str] = set()
     unique: list[list[str]] = []
     for cycle in cycles:
@@ -671,6 +678,26 @@ def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
         seen.add(key)
         unique.append(list(normalized))
     return unique
+
+
+def detect_compensation_cycle(graph_json: dict[str, Any]) -> list[list[str]]:
+    """Return every compensation-edge cycle in the graph (empty = acyclic).
+
+    The compensation relation is ``source -> on_failure_target`` for each edge
+    carrying an ``on_failure_target``. A cycle among these edges means the
+    compensation path can loop infinitely (a compensation node's failure routes
+    back to an upstream compensation), which the design FORBIDS at compile time.
+    Nested / composite sub-pipelines are validated at their own boundary; this
+    detects cycles in the current graph's compensation edges.
+    """
+    nodes = graph_json.get("nodes", []) if isinstance(graph_json, dict) else []
+    edges = graph_json.get("edges", []) if isinstance(graph_json, dict) else []
+    node_ids = {_string_or_default(n.get("id")) for n in nodes if isinstance(n, dict)}
+    adj = _compensation_adjacency(edges, node_ids)
+    cycles = _collect_compensation_cycles(node_ids, adj)
+    # De-duplicate cycles (rotation-invariant) and cap the count to keep the
+    # error message bounded.
+    return _dedupe_compensation_cycles(cycles)
 
 
 def validate_compensation_acyclic(graph_json: dict[str, Any], result: Any) -> None:

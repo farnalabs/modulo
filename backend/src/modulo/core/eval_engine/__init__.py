@@ -285,13 +285,13 @@ class EvalEngine:
             current = current[segment]
         return True, current
 
-    def _evaluate_regex(
+    def _regex_pattern_failure(
         self,
-        output: dict[str, Any],
+        pattern_raw: Any,
         eval_def: EvalDefinition,
         run_id: UUID,
-    ) -> EvalResult:
-        pattern_raw = eval_def.config.get("pattern")
+    ) -> EvalResult | None:
+        """Validate a regex eval's ``pattern`` config; return a fail result, or ``None`` when usable."""
         if not isinstance(pattern_raw, str) or not pattern_raw:
             _log.warning("Regex eval %s missing or invalid pattern", eval_def.id)
             return _fail_result(
@@ -300,34 +300,25 @@ class EvalEngine:
                 eval_id=eval_def.id,
                 detail="Regex eval missing or invalid 'pattern' in config",
             )
-        pattern_str: str = pattern_raw
-        if len(pattern_str) > _MAX_REGEX_PATTERN_LENGTH:
+        if len(pattern_raw) > _MAX_REGEX_PATTERN_LENGTH:
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
                 eval_id=eval_def.id,
                 detail=f"Regex pattern exceeds maximum length ({_MAX_REGEX_PATTERN_LENGTH})",
             )
-        if _RE_NESTED_QUANTIFIER.search(pattern_str):
+        if _RE_NESTED_QUANTIFIER.search(pattern_raw):
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
                 eval_id=eval_def.id,
                 detail="Regex pattern rejected: nested quantifiers detected (potential DoS)",
             )
-        field = eval_def.config.get("field", "")
-        if not field:
-            _log.warning("Regex eval %s missing field", eval_def.id)
-            return _fail_result(
-                run_id=run_id,
-                node_id=eval_def.node_id or "",
-                eval_id=eval_def.id,
-                detail="Regex eval missing 'field' in config",
-            )
-        found, raw_value = self._resolve_output_field(output, field)
-        value = "" if not found or raw_value is None else str(raw_value)
+        return None
+
+    def _regex_flags(self, flags_str: str, eval_def: EvalDefinition) -> int:
+        """Translate a ``flags`` string (e.g. ``"ims"``) into ``re`` module flags, warning on unknown chars."""
         flags = 0
-        flags_str = eval_def.config.get("flags", "")
         if flags_str:
             for ch in flags_str:
                 flag = self._RE_FLAG_MAP.get(ch)
@@ -335,6 +326,18 @@ class EvalEngine:
                     flags |= flag
                 else:
                     _log.warning("Regex eval %s unknown flag %r", eval_def.id, ch)
+        return flags
+
+    def _regex_search_result(
+        self,
+        pattern_str: str,
+        value: str,
+        field: str,
+        eval_def: EvalDefinition,
+        run_id: UUID,
+        flags: int,
+    ) -> EvalResult:
+        """Run the regex search and build the final pass/fail :class:`EvalResult`."""
         try:
             passed = bool(re.search(pattern_str, value, flags))
         except re.error as exc:
@@ -353,6 +356,30 @@ class EvalEngine:
             score=_SCORE_PASS if passed else _SCORE_FAIL,
             detail=f"regex {'matched' if passed else 'no match'}: /{pattern_str}/ on {field}",
         )
+
+    def _evaluate_regex(
+        self,
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+        run_id: UUID,
+    ) -> EvalResult:
+        pattern_failure = self._regex_pattern_failure(eval_def.config.get("pattern"), eval_def, run_id)
+        if pattern_failure is not None:
+            return pattern_failure
+        pattern_str: str = eval_def.config["pattern"]
+        field = eval_def.config.get("field", "")
+        if not field:
+            _log.warning("Regex eval %s missing field", eval_def.id)
+            return _fail_result(
+                run_id=run_id,
+                node_id=eval_def.node_id or "",
+                eval_id=eval_def.id,
+                detail="Regex eval missing 'field' in config",
+            )
+        found, raw_value = self._resolve_output_field(output, field)
+        value = "" if not found or raw_value is None else str(raw_value)
+        flags = self._regex_flags(eval_def.config.get("flags", ""), eval_def)
+        return self._regex_search_result(pattern_str, value, field, eval_def, run_id, flags)
 
     def _evaluate_json_schema(
         self,

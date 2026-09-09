@@ -92,6 +92,65 @@ async def _sample_query(
         return None, str(exc)[:200]
 
 
+async def _sample_repo_family(
+    connector: ConnectorBase,
+    connector_id: uuid.UUID,
+    ct: ConnectorType,
+    *,
+    list_resource: str,
+    detail_resource: str,
+    detail_filter_key: str,
+    open_state: str,
+) -> list[ScanSample]:
+    """Sample the top-level listing (repos/projects), then the open PRs/MRs of each named entry.
+
+    Shared shape of the GITHUB (repos -> pulls) and GITLAB (projects -> mrs)
+    sampling flows: a bounded listing query first, then one detail query per
+    entry that has a usable name.
+    """
+    samples: list[ScanSample] = []
+    listing_result, listing_error = await _sample_query(
+        connector, connector_id, list_resource, ConnectorQuery(resource=list_resource, limit=_SAMPLE_LIMIT)
+    )
+    listing = listing_result.records if listing_result is not None else []
+    _add(samples, connector_id, ct, list_resource, listing, len(listing), listing_error)
+
+    for item in listing:
+        name = _repo_name(item)
+        if not name:
+            continue
+        detail_result, detail_error = await _sample_query(
+            connector,
+            connector_id,
+            detail_resource,
+            ConnectorQuery(resource=detail_resource, filters={detail_filter_key: name, "state": open_state}),
+        )
+        details = detail_result.records if detail_result is not None else []
+        _add(samples, connector_id, ct, detail_resource, details, len(details), detail_error)
+    return samples
+
+
+async def _sample_jira_issues(connector: ConnectorBase, connector_id: uuid.UUID, ct: ConnectorType) -> list[ScanSample]:
+    """Sample Jira issues (most recent first, bounded by the sample limit)."""
+    samples: list[ScanSample] = []
+    result, error = await _sample_query(
+        connector,
+        connector_id,
+        "issues",
+        ConnectorQuery(resource="search", filters={"jql": "ORDER BY created DESC", "max_results": _SAMPLE_LIMIT}),
+    )
+    _add(
+        samples,
+        connector_id,
+        ct,
+        "issues",
+        result.records if result is not None else [],
+        (getattr(result, "total", None) or len(result.records)) if result is not None else 0,
+        error,
+    )
+    return samples
+
+
 async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -> list[ScanSample]:
     """Sample data from a single connector based on its type."""
     samples: list[ScanSample] = []
@@ -99,75 +158,32 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
     await connector.health_check()
     ct = connector.connector_type
 
-    match ct:
-        case ConnectorType.FILESYSTEM:
-            return samples
-
-        case ConnectorType.GITHUB:
-            repos_result, repos_error = await _sample_query(
+    if ct == ConnectorType.GITHUB:
+        samples.extend(
+            await _sample_repo_family(
                 connector,
-                connector_id,
-                "repos",
-                ConnectorQuery(resource="repos", limit=_SAMPLE_LIMIT),
-            )
-            repos = repos_result.records if repos_result is not None else []
-            _add(samples, connector_id, ct, "repos", repos, len(repos), repos_error)
-
-            for repo in repos:
-                name = _repo_name(repo)
-                if not name:
-                    continue
-                pulls_result, pulls_error = await _sample_query(
-                    connector,
-                    connector_id,
-                    "pulls",
-                    ConnectorQuery(resource="pulls", filters={"repo": name, "state": "open"}),
-                )
-                pulls = pulls_result.records if pulls_result is not None else []
-                _add(samples, connector_id, ct, "pulls", pulls, len(pulls), pulls_error)
-
-        case ConnectorType.GITLAB:
-            projects_result, projects_error = await _sample_query(
-                connector,
-                connector_id,
-                "projects",
-                ConnectorQuery(resource="projects", limit=_SAMPLE_LIMIT),
-            )
-            projects = projects_result.records if projects_result is not None else []
-            _add(samples, connector_id, ct, "projects", projects, len(projects), projects_error)
-
-            for project in projects:
-                name = _repo_name(project)
-                if not name:
-                    continue
-                mrs_result, mrs_error = await _sample_query(
-                    connector,
-                    connector_id,
-                    "mrs",
-                    ConnectorQuery(resource="mrs", filters={"project": name, "state": "opened"}),
-                )
-                mrs = mrs_result.records if mrs_result is not None else []
-                _add(samples, connector_id, ct, "mrs", mrs, len(mrs), mrs_error)
-
-        case ConnectorType.JIRA:
-            result, error = await _sample_query(
-                connector,
-                connector_id,
-                "issues",
-                ConnectorQuery(
-                    resource="search",
-                    filters={"jql": "ORDER BY created DESC", "max_results": _SAMPLE_LIMIT},
-                ),
-            )
-            _add(
-                samples,
                 connector_id,
                 ct,
-                "issues",
-                result.records if result is not None else [],
-                (getattr(result, "total", None) or len(result.records)) if result is not None else 0,
-                error,
+                list_resource="repos",
+                detail_resource="pulls",
+                detail_filter_key="repo",
+                open_state="open",
             )
+        )
+    elif ct == ConnectorType.GITLAB:
+        samples.extend(
+            await _sample_repo_family(
+                connector,
+                connector_id,
+                ct,
+                list_resource="projects",
+                detail_resource="mrs",
+                detail_filter_key="project",
+                open_state="opened",
+            )
+        )
+    elif ct == ConnectorType.JIRA:
+        samples.extend(await _sample_jira_issues(connector, connector_id, ct))
 
     return samples
 
