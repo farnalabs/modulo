@@ -64,13 +64,29 @@ may decide.
       session as read-only (claimed by \<user\> at \<time\>) and shows
       approve/reject only to the session holding that gate's claim token
 - [x] Claim is atomic — `claim()` issues a short-lived (15-minute) JWT
-      `claim_token` scoped to run + gate + client; an already-claimed gate →
-      409, expired/invalid claim token rejected; the gate's run must be in
-      `awaiting_human` status — claiming a gate whose run is not awaiting a
-      human decision → 409 `RunNotAwaitingError`, so a terminal run is never
-      flipped to `claimed` by a stale gate (re-claim after expiry works: the
-      expiry sweep resets the run back to `awaiting_human`) (FAR-612)
+      `claim_token` scoped to run + gate + client; expired/invalid claim
+      tokens are rejected. The three claim conflicts each return 409 with a
+      distinct machine-readable problem type the frontend discriminates on by
+      `type` rather than English prose (FAR-645): an already-claimed gate →
+      `urn:problem:modulo:hitl_gate_already_claimed`, an already-decided gate
+      → `urn:problem:modulo:hitl_gate_already_decided` (previously a generic
+      500), and a run that is not claimable →
+      `urn:problem:modulo:hitl_run_not_awaiting`. The run-status guard uses
+      `HITL_CLAIMABLE_RUN_STATUSES` (`awaiting_human` or `hitl_parked` — a
+      parked run's gate stays OPEN AND CLAIMABLE, park != decide, FAR-604 D2)
+      and is enforced atomically with the claim UPDATE via a `runs` EXISTS
+      predicate, so a run that goes terminal between the pre-check and the
+      write is refused, a terminal run is never flipped to `claimed` by a
+      stale gate (re-claim after expiry works: the expiry sweep resets the run
+      back to `awaiting_human`) (FAR-612, FAR-645)
       (claim.feature, `test_hitl_manager`, `test_hitl_jwt`)
+- [x] Same-account re-claim (FAR-686 token recovery): a reviewer who reloaded
+      the page may re-claim a gate they already hold, including during the
+      claimed-but-undecided window when the run status itself is `claimed` —
+      the EXISTS predicate carries a same-account `claimed` arm alongside the
+      `HITL_CLAIMABLE_RUN_STATUSES` base, so the atomic guard and the
+      pre-check cannot drift. Fresh and cross-account claims keep the strict
+      data-rot guard (`test_hitl_manager` same-account re-claim cases)
 - [x] Approve resumes the run (`action: approved`, optional notes) — gated by
       `hitl.approve`; a claimed-by-other caller cannot approve
 - [x] Reject records the decision and resumes the graph through a router on

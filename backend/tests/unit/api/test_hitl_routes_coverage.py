@@ -22,6 +22,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.models.problem import ProblemType
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import (
@@ -31,6 +32,7 @@ from modulo.core.hitl_manager import (
     DecisionPayloadError,
     GateAlreadyDecidedError,
     GateNotFoundError,
+    RunNotAwaitingError,
 )
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -171,6 +173,47 @@ def test_claim_gate_missing_claim_data_returns_500(client: tuple[TestClient, Asy
 
     assert resp.status_code == 500, resp.text
     assert "gate_missing_claim_data" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("exc", "problem_type", "detail_fragment"),
+    [
+        (
+            AlreadyClaimedError(_RUN_ID, "gate-1"),
+            ProblemType.HITL_GATE_ALREADY_CLAIMED,
+            "is already claimed",
+        ),
+        (
+            GateAlreadyDecidedError(_RUN_ID, "gate-1"),
+            ProblemType.HITL_GATE_ALREADY_DECIDED,
+            "already has a decision",
+        ),
+        (
+            RunNotAwaitingError(_RUN_ID, "complete"),
+            ProblemType.HITL_RUN_NOT_AWAITING,
+            "not awaiting a human decision (status: complete)",
+        ),
+    ],
+    ids=["already-claimed", "already-decided", "run-not-awaiting"],
+)
+def test_claim_gate_maps_domain_errors_to_typed_problems(
+    client: tuple[TestClient, AsyncMock],
+    exc: Exception,
+    problem_type: ProblemType,
+    detail_fragment: str,
+) -> None:
+    """FAR-645: the three claim conflicts carry distinct RFC 9457 problem types
+    (the frontend discriminates by ``type``, not by prose) with identical status
+    (409) and human detail text as before."""
+    http, _session = client
+    with patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=exc)):
+        resp = _claim_gate(http)
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["type"] == f"urn:problem:modulo:{problem_type.value}"
+    assert body["title"] == "Conflict"
+    assert detail_fragment in body["detail"]
 
 
 # ---------------------------------------------------------------------------
