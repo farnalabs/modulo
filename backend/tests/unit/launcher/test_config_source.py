@@ -130,6 +130,31 @@ def test_source_omits_keys_the_environment_already_sets(monkeypatch: pytest.Monk
     real_create(data_dir / "secrets.json")  # keep the tmp dir realistic for later asserts
 
 
+def test_source_derives_system_url_from_the_operators_database_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The app/system URL pair is atomic: an operator DATABASE_URL must never
+    end up paired with a system URL still pointing at the bundled Postgres."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
+    import modulo.launcher.secrets_file as sf
+
+    monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://app:op-pass@db.example.com:5432/modulo")
+    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    resolved = LauncherConfigSource(data_dir)()
+    assert "database_url" not in resolved
+    system = resolved.get("modulo_system_database_url", "")
+    expected_prefixes = (
+        "postgresql://modulo_system:op-pass@db.example.com:5432/modulo",
+        "postgresql+asyncpg://modulo_system:op-pass@db.example.com:5432/modulo",
+    )
+    assert system.startswith(expected_prefixes)
+    assert "127.0.0.1" not in system
+    assert "pg-pw" not in system
+
+
 def test_source_includes_everything_without_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -202,6 +227,36 @@ def test_write_pinned_env_file_content_and_mode(tmp_path: Path) -> None:
     if os.name == "posix":
         mode = path.stat().st_mode & 0o777
         assert mode == 0o600
+
+
+def test_write_pinned_env_file_warns_when_clobbering_different_content(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    first = write_pinned_env_file(data_dir, _state(), _secrets())
+    first.write_text("MANUALLY EDITED=1\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="modulo.launcher.config_source"):
+        write_pinned_env_file(data_dir, _state(), _secrets())
+    assert any("config_env_overwritten" in record.message for record in caplog.records)
+    rewritten = first.read_text(encoding="utf-8")
+    assert "DATABASE_URL=" in rewritten  # the composed content won
+
+
+def test_write_pinned_env_file_no_warning_on_identical_rewrite(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    first = write_pinned_env_file(data_dir, _state(), _secrets())
+    with caplog.at_level(logging.WARNING, logger="modulo.launcher.config_source"):
+        second = write_pinned_env_file(data_dir, _state(), _secrets())
+    assert not any("config_env_overwritten" in record.message for record in caplog.records)
+    assert second.read_text(encoding="utf-8") == first.read_text(encoding="utf-8")
 
 
 def test_write_pinned_env_file_refuses_symlink_squat(tmp_path: Path) -> None:

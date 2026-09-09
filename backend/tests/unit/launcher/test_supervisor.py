@@ -11,6 +11,7 @@ wall-clock sleeps; real-process tests use handshakes and bounded constant
 polls, never computed sleeps (repo timing lesson).
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -28,9 +29,11 @@ from modulo.launcher.supervisor import (
     DataDirLock,
     DataDirLockError,
     LauncherError,
+    ProbeOutcome,
     Supervisor,
     SupervisorKnobs,
     _children_of,
+    _is_postgres_process,
     _shim_should_abandon,
     child_shim_argv,
     collect_status,
@@ -111,6 +114,30 @@ class RecordingProc:
         return 0
 
 
+class AliveProc:
+    """Always-alive duck-typed process recording terminate/kill (deadline paths)."""
+
+    _next_pid = 61000
+
+    def __init__(self) -> None:
+        AliveProc._next_pid += 1
+        self.pid = AliveProc._next_pid
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return None
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+
 class Harness:
     """Manual-clock supervisor with recorded spawns/hooks (no threads)."""
 
@@ -156,7 +183,7 @@ def test_crash_cap_trips_degraded_stops_spawning_and_records_reason() -> None:
             crash_cap=3,
         )
     )
-    # Spawn, then four crash cycles (window 2s, cap 3 → the 4th trip).
+    # Spawn, then three crash cycles — the cap trips ON the Nth crash (>=).
     harness.supervisor.tick()  # spawn #1
     harness.clock.advance(0.02)
     harness.supervisor.tick()  # crash 1 → respawn scheduled at +0.01
@@ -165,19 +192,75 @@ def test_crash_cap_trips_degraded_stops_spawning_and_records_reason() -> None:
     harness.supervisor.tick()  # crash 2
     harness.clock.advance(0.03)
     harness.supervisor.tick()  # spawn #3
-    harness.supervisor.tick()  # crash 3 (== cap, no trip yet)
-    assert harness.supervisor.degraded_reason is None
-    harness.clock.advance(0.03)
-    harness.supervisor.tick()  # spawn #4
-    harness.supervisor.tick()  # crash 4 → cap tripped
+    harness.supervisor.tick()  # crash 3 (== cap → trips NOW)
     assert harness.supervisor.degraded_reason is not None
     assert "postgres" in harness.supervisor.degraded_reason
     assert len(harness.degraded) == 1
-    assert len(harness.crashes) == 4
+    assert len(harness.crashes) == 3
     spawns_after_degrade = len(harness.spawned_argv)
     harness.clock.advance(1.0)
     harness.supervisor.tick()
     assert len(harness.spawned_argv) == spawns_after_degrade
+
+
+def test_clean_exit_is_not_a_crash_and_clears_the_window() -> None:
+    """Exit code 0 never feeds the cap or the crash hook, and resets the window."""
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            restart_backoff_initial=0.01,
+            restart_backoff_max=0.02,
+            crash_window_seconds=10.0,
+            crash_cap=2,
+        )
+    )
+
+    class ExitCodeProc(FakeProc):
+        def __init__(self, code: int) -> None:
+            super().__init__(exit_code=code)
+
+    codes: list[int] = [7, 0, 7]
+    harness.supervisor._spawner = lambda argv, env: ExitCodeProc(codes.pop(0) if codes else 7)  # type: ignore[method-assign]
+    harness.supervisor.tick()  # spawn #1 (will exit 7)
+    harness.clock.advance(0.02)
+    harness.supervisor.tick()  # crash 1 recorded → respawn at +0.01, backoff 0.02
+    harness.clock.advance(0.02)
+    harness.supervisor.tick()  # spawn #2 (will exit 0)
+    harness.supervisor.tick()  # clean exit: window cleared, NOT a crash
+    assert harness.crashes == [("postgres", 7)]
+    child = harness.supervisor._children["postgres"]
+    assert not child.crash_times
+    harness.clock.advance(0.02)
+    harness.supervisor.tick()  # spawn #3 (exits 7 — the clean exit reset the window)
+    harness.supervisor.tick()  # crash with 7 — only ONE crash in the window now
+    assert harness.supervisor.degraded_reason is None
+
+
+def test_backoff_resets_to_initial_after_a_clean_exit() -> None:
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            restart_backoff_initial=0.01,
+            restart_backoff_max=0.02,
+            crash_window_seconds=1000.0,
+            crash_cap=100,
+        )
+    )
+
+    class ToggleProc(FakeProc):
+        def __init__(self, code: int) -> None:
+            super().__init__(exit_code=code)
+
+    codes: list[int] = [7, 0]
+    harness.supervisor._spawner = lambda argv, env: ToggleProc(codes.pop(0) if codes else 7)  # type: ignore[method-assign]
+    harness.supervisor.tick()  # spawn #1 → crash 7
+    harness.clock.advance(0.02)
+    harness.supervisor.tick()  # crash 1 → backoff doubled to 0.02
+    child = harness.supervisor._children["postgres"]
+    assert child.backoff == pytest.approx(0.02)
+    harness.clock.advance(0.02)
+    harness.supervisor.tick()  # spawn #2 → exits 0
+    harness.clock.advance(0.02)
+    harness.supervisor.tick()  # clean exit → backoff reset
+    assert child.backoff == pytest.approx(0.01)
 
 
 def test_backoff_progression_is_exponential_and_capped() -> None:
@@ -213,14 +296,11 @@ def test_sliding_window_eviction_prevents_cap_trip() -> None:
     harness.supervisor.tick()  # crash 1
     harness.clock.advance(0.02)
     harness.supervisor.tick()  # spawn #2
-    harness.supervisor.tick()  # crash 2
-    harness.clock.advance(0.02)
-    harness.supervisor.tick()  # spawn #3
-    harness.supervisor.tick()  # crash 3 — at the cap, not over it
+    harness.supervisor.tick()  # crash 2 — below the cap (3), no trip
     assert harness.supervisor.degraded_reason is None
     harness.clock.advance(5.0)  # the whole window slides out
-    harness.supervisor.tick()  # spawn #4
-    harness.supervisor.tick()  # crash 4 — only one crash in the window now
+    harness.supervisor.tick()  # spawn #3
+    harness.supervisor.tick()  # crash 3 — only one crash in the window now
     assert harness.supervisor.degraded_reason is None
 
 
@@ -261,6 +341,125 @@ def test_probe_failure_after_health_restarts_through_crash_path() -> None:
     harness.supervisor.tick()  # the terminated process is polled → real crash
     assert harness.crashes == [("postgres", 7)]
     assert child.process is None
+
+
+def test_probe_unavailable_never_terminates_a_healthy_child() -> None:
+    """A broken probe TOOL (UNAVAILABLE) must be distinguished from child-down."""
+    outcomes: list[bool | ProbeOutcome] = [True, ProbeOutcome.UNAVAILABLE, False, ProbeOutcome.UNAVAILABLE]
+
+    def probe() -> bool | ProbeOutcome:
+        return outcomes.pop(0)
+
+    proc = AliveProc()
+    spec = ChildSpec(name="postgres", argv_builder=lambda: ["postgres-child"], probe=probe)
+    harness = Harness(spec=spec)
+    harness.supervisor._children["postgres"].process = proc
+    harness.supervisor.tick()  # healthy
+    child = harness.supervisor._children["postgres"]
+    assert child.healthy
+    harness.supervisor.tick()  # probe tool broken → child untouched
+    assert child.healthy
+    assert not proc.terminated
+    harness.supervisor.tick()  # real probe failure → normal restart path
+    assert proc.terminated
+    harness.supervisor.tick()  # probe broken again while terminating — child untouched
+    assert child.healthy  # the UNAVAILABLE outcome never mutates the healthy flag
+    assert not proc.killed
+
+
+def test_probe_exception_maps_to_unavailable() -> None:
+    def broken() -> bool | ProbeOutcome:
+        raise RuntimeError("probe tool exploded")
+
+    proc = AliveProc()
+    spec = ChildSpec(name="postgres", argv_builder=lambda: ["postgres-child"], probe=broken)
+    harness = Harness(spec=spec)
+    harness.supervisor._children["postgres"].process = proc
+    harness.supervisor.tick()
+    assert not proc.terminated
+    assert not harness.crashes
+
+
+def test_never_healthy_child_is_terminated_at_the_startup_deadline() -> None:
+    """A child that never passes its probe must not wedge the supervisor."""
+    spec = ChildSpec(name="postgres", argv_builder=lambda: ["postgres-child"], probe=lambda: False)
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            restart_backoff_initial=0.01,
+            restart_backoff_max=0.02,
+            health_check_timeout=1.0,
+            shutdown_grace_seconds=0.01,
+        ),
+        spec=spec,
+    )
+    harness.supervisor._spawner = lambda argv, env: AliveProc()  # type: ignore[method-assign]
+    harness.supervisor.tick()  # spawn
+    child = harness.supervisor._children["postgres"]
+    assert child.process is not None
+    harness.clock.advance(0.5)
+    harness.supervisor.tick()  # within the startup deadline — still probed
+    assert not child.terminating_since
+    harness.clock.advance(0.6)  # past spawn_time + health_check_timeout
+    harness.supervisor.tick()  # deadline missed → terminate
+    assert child.terminating_since is not None
+    proc = child.process
+    assert proc is not None and proc.terminated
+    harness.clock.advance(0.02)
+    harness.supervisor.tick()  # grace elapsed → kill escalation
+    assert proc is not None and proc.killed
+
+
+def test_probe_less_child_is_presumed_live_after_the_liveness_deadline() -> None:
+    """SAQ children (probe=None) turn healthy by surviving the startup window."""
+    spec = ChildSpec(name="saq-runs", argv_builder=lambda: ["saq-worker"])
+    harness = Harness(
+        knobs=SupervisorKnobs(health_check_timeout=1.0),
+        spec=spec,
+    )
+    proc = AliveProc()
+    harness.supervisor._spawner = lambda argv, env: proc  # type: ignore[method-assign]
+    harness.supervisor.tick()  # alive but within the deadline → not yet presumed live
+    child = harness.supervisor._children["saq-runs"]
+    assert child.spawned_at is not None
+    assert not child.healthy
+    harness.clock.advance(1.1)
+    harness.supervisor.tick()  # liveness deadline passed → presumed live
+    assert child.healthy
+    harness.clock.advance(5.0)
+    harness.supervisor.tick()  # stays live; never terminated by the supervisor
+    assert not proc.terminated
+    assert child.process is proc
+
+
+def test_tick_survives_an_unexpected_child_exception() -> None:
+    """A raise inside the per-child tick body is logged, not fatal."""
+
+    class ExplodingProc:
+        pid = 7000
+
+        def poll(self) -> int | None:
+            raise RuntimeError("os race")
+
+        def terminate(self) -> None:
+            raise AssertionError("never reached")
+
+        def kill(self) -> None:
+            raise AssertionError("never reached")
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 1
+
+    spec = ChildSpec(name="postgres", argv_builder=lambda: ["postgres-child"])
+    harness = Harness(spec=spec)
+    harness.supervisor.tick()  # spawn
+    child = harness.supervisor._children["postgres"]
+    child.process = ExplodingProc()  # type: ignore[assignment]
+    harness.supervisor.tick()  # must not raise
+    # The OTHER child still gets supervised after the explosion.
+    harness.supervisor.add(ChildSpec(name="redis", argv_builder=lambda: ["redis-child"]))
+    harness.supervisor.tick()
+    assert harness.supervisor._children["redis"].process is not None
+    assert harness.supervisor.degraded_reason is None
 
 
 def test_teardown_order_and_escalation_follows_priority() -> None:
@@ -380,6 +579,35 @@ def test_lock_records_holder_metadata(tmp_path: Path) -> None:
     lock.release()
 
 
+@requires_posix
+def test_lock_records_holder_starttime_for_identity(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    lock = DataDirLock(data_dir, mode="serve")
+    lock.acquire()
+    holder = lock.holder
+    assert holder is not None
+    expected = read_proc_starttime(os.getpid())
+    if sys.platform == "linux":
+        assert holder.starttime == expected
+        assert holder.starttime is not None
+    else:
+        assert holder.starttime is None
+    lock.release()
+
+
+@requires_posix
+def test_lock_release_clears_the_holder_record(tmp_path: Path) -> None:
+    """A clean release truncates the holder JSON — no stale identity survives."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    lock = DataDirLock(data_dir, mode="serve")
+    lock.acquire()
+    lock.release()
+    assert lock.holder is None
+    assert not (data_dir.parent / (data_dir.name + ".lock")).read_text(encoding="utf-8")
+
+
 _LOCK_CHILD_SCRIPT = """
 import sys
 from pathlib import Path
@@ -448,6 +676,73 @@ def test_request_stop_without_holder_is_noop(tmp_path: Path) -> None:
     assert request_stop(data_dir, timeout=0.5) == 0
 
 
+@requires_posix
+def test_request_stop_refuses_recycled_holder_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recycled PID is never SIGTERMed — the STARTTIME must match."""
+    from modulo.launcher import supervisor as supervisor_module
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    lock = DataDirLock(data_dir, mode="serve")
+    lock.acquire()
+    holder = lock.holder
+    assert holder is not None
+    # Rewrite the recorded starttime so the LIVE process no longer matches
+    # (the PID was "reused" by another process since acquire).
+    payload = {
+        "pid": holder.pid,
+        "mode": holder.mode,
+        "acquired_at": holder.acquired_at,
+        "starttime": (holder.starttime or 0) + 10_000,
+    }
+    lock_path = data_dir.parent / (data_dir.name + ".lock")
+    lock_path.write_text(json.dumps(payload), encoding="utf-8")
+    sent: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, signum: int) -> None:
+        sent.append((pid, signum))
+
+    monkeypatch.setattr(os, "kill", fake_kill)
+    monkeypatch.setattr(supervisor_module, "_lock_is_free", lambda _path: False)
+    with pytest.raises(LauncherError, match="was reused"):
+        request_stop(data_dir, timeout=0.5)
+    assert sent == []
+    lock.release()
+
+
+@requires_posix
+def test_request_stop_treats_dead_recorded_holder_as_stopped(tmp_path: Path) -> None:
+    """A recorded holder whose STARTTIME is gone (process dead) is not signalled."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    dead = _dead_pid()
+    payload = {"pid": dead, "mode": "serve", "acquired_at": 1.0, "starttime": 42}
+    lock_path = data_dir.parent / (data_dir.name + ".lock")
+    lock_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert request_stop(data_dir, timeout=0.5) == 0
+
+
+@requires_posix
+def test_request_stop_reports_unverifiable_holder_still_locking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy lock file (no starttime) + held lock → still verified via flock."""
+    from modulo.launcher import supervisor as supervisor_module
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    payload = {"pid": os.getpid(), "mode": "serve", "acquired_at": 1.0}
+    lock_path = data_dir.parent / (data_dir.name + ".lock")
+    lock_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(supervisor_module, "_lock_is_free", lambda _path: False)
+
+    def fake_kill(pid: int, signum: int) -> None:
+        pass
+
+    monkeypatch.setattr(os, "kill", fake_kill)
+    assert request_stop(data_dir, timeout=0.3) == 1
+
+
 # ---------------------------------------------------------------------------
 # Orphan reconciliation
 # ---------------------------------------------------------------------------
@@ -513,6 +808,25 @@ def test_reconcile_missing_pgdata_is_noop(tmp_path: Path) -> None:
     assert reconcile_orphans(tmp_path / "missing") == "swept_debris"
 
 
+def test_reconcile_sweeps_stale_redis_conf_files(tmp_path: Path) -> None:
+    from modulo.launcher.supervisor import REDIS_CONF_PREFIX
+
+    pgdata = tmp_path / "pgdata"
+    pgdata.mkdir()
+    stale = tmp_path / f"{REDIS_CONF_PREFIX}abc123"
+    stale.write_text("requirepass leaked", encoding="utf-8")
+    assert reconcile_orphans(pgdata) == "swept_debris"
+    assert not stale.exists()
+
+
+def test_is_postgres_process_refuses_on_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off Linux the identity is UNKNOWABLE (None), never 'not postgres'."""
+    if sys.platform == "linux":
+        pytest.skip("non-Linux refusal contract")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert _is_postgres_process(os.getpid()) is None
+
+
 # ---------------------------------------------------------------------------
 # Runtime manifest + status + knobs
 # ---------------------------------------------------------------------------
@@ -536,6 +850,18 @@ def test_knobs_from_env_overrides_and_ignores_garbage(monkeypatch: pytest.Monkey
     assert knobs.crash_window_seconds == 600.0
 
 
+def test_knobs_from_env_rejects_nonfinite_and_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MODULO_LAUNCHER_TICK_SECONDS", "nan")
+    monkeypatch.setenv("MODULO_LAUNCHER_SHUTDOWN_GRACE_SECONDS", "1e999")
+    monkeypatch.setenv("MODULO_LAUNCHER_CRASH_CAP", "100000")
+    monkeypatch.setenv("MODULO_LAUNCHER_RESTART_BACKOFF_INITIAL", "-3")
+    knobs = knobs_from_env()
+    assert knobs.tick_seconds == 1.0
+    assert knobs.shutdown_grace_seconds == 10.0
+    assert knobs.crash_cap == 5
+    assert knobs.restart_backoff_initial == 1.0
+
+
 def _write_bootstrapped_data_dir(tmp_path: Path) -> Path:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -555,6 +881,27 @@ def test_collect_status_uninitialized_dir(tmp_path: Path) -> None:
     status = collect_status(tmp_path / "data")
     assert status["initialized"] is False
     assert not status["components"]
+
+
+def test_collect_status_never_creates_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A status query is strictly read-only: no secrets file, no state file."""
+    if sys.platform == "win32":
+        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    status = collect_status(data_dir)
+    assert status["initialized"] is False
+    assert not (data_dir / "secrets.json").exists()
+    assert not (data_dir / "state.json").exists()
+
+
+def test_collect_status_reports_unreadable_secrets(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "secrets.json").write_text("corrupt{", encoding="utf-8")
+    status = collect_status(data_dir)
+    assert status["initialized"] is False
+    assert "secrets unavailable" in status["error"]
 
 
 def test_collect_status_full_payload(tmp_path: Path) -> None:
@@ -587,6 +934,24 @@ def test_child_shim_argv_falls_back_without_proc(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(sys, "platform", "win32")
     argv = child_shim_argv(["redis-server", "--port", "1"])
     assert argv == ["redis-server", "--port", "1"]
+
+
+def test_child_shim_argv_unwrapped_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No /proc STARTTIME on macOS → an unwrapped argv (a wrapped shim would
+    kill its child on the first watchdog tick)."""
+    if sys.platform == "linux":
+        pytest.skip("the shim wraps on Linux by design")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    argv = child_shim_argv(["redis-server", "--port", "1"])
+    assert argv == ["redis-server", "--port", "1"]
+
+
+@requires_posix
+def test_child_shim_argv_wraps_on_linux() -> None:
+    if sys.platform != "linux":
+        pytest.skip("Linux-only shim mechanics")
+    argv = child_shim_argv(["redis-server", "--port", "1"], parent_pid=os.getpid())
+    assert argv[:3] == [sys.executable, "-m", "modulo.launcher.supervisor"]
 
 
 # ---------------------------------------------------------------------------

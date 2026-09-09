@@ -8,6 +8,7 @@ with mocked launcher internals and the credential redaction discipline.
 """
 
 import json
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -77,15 +78,60 @@ def test_group_help_lists_both_surfaces() -> None:
         assert command in result.output
 
 
-def test_group_callback_scrubs_hostile_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PGHOST", "foreign.example")
-    result = CliRunner().invoke(cli_main.cli, ["version"])
-    assert result.exit_code == 0
+def test_launcher_owned_commands_scrub_hostile_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Launcher-owned commands re-scrub at invocation (defence-in-depth)."""
     import os
 
+    monkeypatch.setenv("PGHOST", "foreign.example")
+    result = CliRunner().invoke(cli_main.cli, ["status", "--data-dir", str(Path("unused"))])
+    assert result.exit_code == 0
     assert "PGHOST" not in os.environ
+
+
+def test_published_backup_surface_keeps_inherited_libpq_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scrub is NOT in the group callback: pg_dump/psql need libpq vars."""
+    import os
+
+    monkeypatch.setenv("PGHOST", "db.internal.example")
+    monkeypatch.setenv("PGPASSWORD", "libpq-secret")
+    result = CliRunner().invoke(cli_main.cli, ["version"])
+    assert result.exit_code == 0
+    assert os.environ.get("PGHOST") == "db.internal.example"
+    assert os.environ.get("PGPASSWORD") == "libpq-secret"
+
+
+def test_console_script_scrubs_before_any_project_import() -> None:
+    """The published entry point scrubs BEFORE importing psycopg/settings.
+
+    The console script is ``modulo.cli.main:cli``: its module-level import
+    graph (``modulo.cli.backup`` -> settings, apply, psycopg) loads before
+    any command runs, so the scrub must be the module's first action —
+    verified here on the REAL import path in a fresh subprocess.
+    """
+    script = "\n".join(
+        [
+            "import os, sys",
+            "os.environ['PGHOST'] = 'foreign.example'",
+            "import modulo.cli.main",
+            "print(os.environ.get('PGHOST'),",
+            "      'modulo.cli.backup' in sys.modules,",
+            "      'modulo.launcher.env_safety' in sys.modules)",
+        ]
+    )
+    result = subprocess.run(  # noqa: S603 — test driver
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    pg_host, backup_loaded, env_safety_loaded = result.stdout.split()
+    assert pg_host == "None"  # the scrub ran during the module import
+    assert backup_loaded == "True"  # the heavy graph loaded AFTER the scrub
+    assert env_safety_loaded == "True"
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +172,57 @@ def test_env_json_redacts_every_credential(monkeypatch: pytest.MonkeyPatch) -> N
     payload = json.loads(result.output)
     assert payload["database_url"] == "postgresql://<redacted>@db-host:5432/modulo"
     assert payload["fernet_key"] == "<redacted>"
+
+
+_USER_PASSWORD = "plaintext-password-1"
+_OIDC_CLIENT_SECRET = "oidc-client-secret-value"
+_WEBHOOK_TOKEN = "hooks/SlackTokenAbCdEf123456"
+_AWS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+_LICENSE_KEY = "lic-live-0123456789abcdef"
+
+
+def _set_credential_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
+    monkeypatch.setenv("FERNET_KEY", FERNET_KEY)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
+    monkeypatch.setenv("REDIS_URL", "redis://:redis-secret@cache-host:16379/0")
+    monkeypatch.setenv("MODULO_USERS", f"admin@modulo.run:{_USER_PASSWORD}")
+    monkeypatch.setenv(
+        "MODULO_OIDC_PROVIDERS",
+        f'[{{"provider_id": "okta", "client_id": "abc", "client_secret": "{_OIDC_CLIENT_SECRET}"}}]',
+    )
+    monkeypatch.setenv("ALERT_WEBHOOK_URL", f"https://hooks.example.com/{_WEBHOOK_TOKEN}")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", _AWS_KEY_ID)
+    monkeypatch.setenv("MODULO_LICENSE_KEY", _LICENSE_KEY)
+
+
+@pytest.mark.parametrize("as_json", [False, True], ids=["table", "json"])
+def test_env_redacts_every_real_credential_carrier(monkeypatch: pytest.MonkeyPatch, as_json: bool) -> None:
+    """No raw password/secret may survive the env output (table or JSON)."""
+    _set_credential_env(monkeypatch)
+    argv = ["env", "--json"] if as_json else ["env"]
+    result = CliRunner().invoke(cli_main.cli, argv)
+    assert result.exit_code == 0
+    secrets = (
+        _USER_PASSWORD,
+        _OIDC_CLIENT_SECRET,
+        _WEBHOOK_TOKEN,
+        _AWS_KEY_ID,
+        _LICENSE_KEY,
+        "super-secret",
+        "redis-secret",
+    )
+    for secret in secrets:
+        assert secret not in result.output, f"{secret!r} leaked through modulo env"
+    assert "admin@modulo.run:plaintext-password-1" not in result.output
+    if as_json:
+        payload = json.loads(result.output)
+        assert payload["modulo_users"] == "<redacted>"
+        assert payload["modulo_oidc_providers"] == "<redacted>"
+        assert payload["alert_webhook_url"] == "<redacted>"
+        assert payload["aws_access_key_id"] == "<redacted>"
+        assert payload["modulo_license_key"] == "<redacted>"
+        assert payload["redis_url"] == "redis://<redacted>@cache-host:16379/0"
 
 
 # ---------------------------------------------------------------------------

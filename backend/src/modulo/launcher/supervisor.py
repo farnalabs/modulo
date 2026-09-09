@@ -10,21 +10,44 @@ Contracts locked by tests (``tests/unit/launcher/test_supervisor.py``):
   ``flock`` on the ``<datadir>.lock`` sibling file for its WHOLE lifetime.
   The kernel releases it on process death, so a SIGKILLed launcher can never
   wedge the data dir. A concurrent start refuses and names the holder's
-  PID + mode. POSIX-only: Windows carries the TODO(P3) Job-Object seam and
-  refuses loudly.
+  PID + mode; the holder's /proc STARTTIME is recorded at acquire so
+  ``request_stop`` can verify the identity before signalling (a recycled
+  PID is never SIGTERMed) and a clean release truncates the holder record.
+  POSIX-only: Windows carries the TODO(P3) Job-Object seam and refuses
+  loudly.
 * **Restart backoff + sliding-window crash cap**: a crashed/unhealthy child
   is restarted with exponential backoff (initial → max); crash timestamps
-  land in a sliding window and exceeding the cap (default 5 failures per
-  10 minutes) trips the terminal degraded state: ordered teardown, nonzero
-  exit, and the doctor/repair hint. Counters arm at spawn; deferred children
-  (SAQ behind migration-head readiness) cannot crash before their start
-  condition is met because they are not spawned until it is.
-* **Child shim owns death**: every supervised child runs under a shim
-  process (``python -m modulo.launcher.supervisor child-shim``) that polls
-  the launcher's ``/proc/<ppid>/stat`` STARTTIME (field 22) at most every
-  2 seconds — PID-reuse safe — and kills the child when the parent is gone.
-  On Linux the child additionally carries PDEATHSIG (pre-exec) as a
-  belt-and-braces optimisation. TODO(P3): Windows Job Objects.
+  land in a sliding window and reaching the cap (default 5 crashes within
+  10 minutes — the cap trips ON the Nth crash, ``>=``) trips the terminal
+  degraded state: ordered teardown, nonzero exit, and the ``modulo status``
+  /launcher-log repair hint. A CLEAN exit (code 0) is not a crash: it does
+  not feed the window (the window is cleared — a service that ran long
+  enough to exit cleanly proves its crashes were transient), the crash
+  hook is not called, and the child is still respawned. Counters arm at
+  spawn; deferred children (SAQ behind migration-head readiness) cannot
+  crash before their start condition is met because they are not spawned
+  until it is.
+* **Child shim owns death**: every supervised child ON LINUX runs under a
+  shim process (``python -m modulo.launcher.supervisor child-shim``) that
+  polls the launcher's ``/proc/<ppid>/stat`` STARTTIME (field 22) at most
+  every 2 seconds — PID-reuse safe — and kills the child when the parent is
+  gone. On Linux the child additionally carries PDEATHSIG (pre-exec) as a
+  belt-and-braces optimisation. Off Linux the shim has no readable
+  STARTTIME, so the argv passes through UNWRAPPED (``read_proc_starttime``
+  returns None everywhere but Linux; a wrapped shim would kill its child on
+  the first watchdog tick) and the entry refuses non-Linux platforms loudly
+  until the platform-native death-binding lands (TODO(P2) macOS,
+  TODO(P3) Windows Job Objects).
+* **Probe tri-state + startup deadline**: a probe answers healthy,
+  unhealthy, or PROBE-UNAVAILABLE (the probe TOOL itself is broken — e.g.
+  the binary is missing). PROBE-UNAVAILABLE never terminates a child: the
+  healthy flag is left untouched and the failure is logged once per child
+  until a real outcome arrives. A child that never becomes healthy is not
+  re-probed forever: ``spawn_time + health_check_timeout`` is the startup
+  deadline — past it the child is terminated and its exit feeds the normal
+  crash/backoff path. Children WITHOUT a probe (the SAQ workers) get the
+  same deadline as a liveness contract: surviving the window without dying
+  marks them healthy (their death remains the crash signal).
 * **Ordered teardown on every exit path**: SAQ children → Postgres
   (fast shutdown via SIGINT to the process group, then smart SIGTERM, then
   SIGKILL) → Redis. Ctrl-C exits 0 with all children reaped.
@@ -47,8 +70,10 @@ until Settings grows launcher knob fields.
 
 import argparse
 import contextlib
+import enum
 import json
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -69,6 +94,11 @@ _log = logging.getLogger(__name__)
 LOCK_SUFFIX = ".lock"
 RUNTIME_FILENAME = "runtime.json"
 POSTMASTER_PIDFILE = "postmaster.pid"
+# Per-boot 0600 Redis config files (requirepass lives INSIDE the file so the
+# password never appears on the world-readable /proc cmdline). Written fresh
+# each boot next to pgdata; a SIGKILLed launcher leaves the previous one
+# behind, so they are swept with the other SIGKILL debris.
+REDIS_CONF_PREFIX = ".redis-conf-"
 
 # The shim polls its parent at most this often (ADR 031 Decision 5).
 SHIM_POLL_SECONDS = 2.0
@@ -88,11 +118,13 @@ _PRIORITY_REDIS = 2
 # the private names directly).
 __all__ = [
     "GATE_SUPERVISOR_PRE_TEARDOWN",
+    "REDIS_CONF_PREFIX",
     "RUNTIME_FILENAME",
     "ChildSpec",
     "DataDirLock",
     "DataDirLockError",
     "LauncherError",
+    "ProbeOutcome",
     "Supervisor",
     "SupervisorKnobs",
     "_children_of",
@@ -114,6 +146,20 @@ class LauncherError(RuntimeError):
 
 class DataDirLockError(LauncherError):
     """Raised when another launcher holds the exclusive data-dir lock."""
+
+
+class ProbeOutcome(enum.Enum):
+    """Tri-state probe result.
+
+    ``UNAVAILABLE`` means the probe TOOL could not produce an answer (the
+    binary is missing, the invocation failed, the probe timed out) — it is
+    NOT evidence that the child is down and must never terminate a healthy
+    child or feed the crash cap.
+    """
+
+    HEALTHY = "healthy"
+    UNHEALTHY = "unhealthy"
+    UNAVAILABLE = "probe_unavailable"
 
 
 class ChildProcess(Protocol):
@@ -140,6 +186,11 @@ class SupervisorKnobs:
     Tick-vs-reaction margins in tests follow the repo timing lesson: the
     tick is at least 6-8x smaller than the window it must observe, and the
     test runs long enough to outlast the window.
+
+    Crash-cap semantics: ``crash_cap`` is the number of NON-CLEAN crashes
+    that trips the degraded state — the cap trips ON the Nth crash
+    (``>=``), so ``crash_cap=5`` degrades after the 5th crash inside the
+    window. Clean exits (code 0) never count and clear the window.
     """
 
     tick_seconds: float = 1.0
@@ -153,11 +204,27 @@ class SupervisorKnobs:
     health_check_interval: float = 0.25
 
 
+# Sane upper bounds for the env-override seam: an operator typo (or a
+# hostile inherited variable) must not park a knob at an absurd value —
+# out-of-range values are rejected LOUDLY (warning + default) instead of
+# clamped silently.
+_KNOB_BOUNDS: dict[str, tuple[float, float]] = {
+    "tick_seconds": (0.001, 60.0),
+    "restart_backoff_initial": (0.001, 60.0),
+    "restart_backoff_max": (0.001, 3600.0),
+    "crash_window_seconds": (1.0, 86400.0),
+    "pg_fast_shutdown_timeout": (0.001, 600.0),
+    "shutdown_grace_seconds": (0.001, 600.0),
+    "crash_cap": (1, 1000),
+}
+
+
 def knobs_from_env(env: dict[str, str] | None = None) -> SupervisorKnobs:
     """Build knobs from ``MODULO_LAUNCHER_*`` env overrides (operator seam).
 
     Until Settings grows launcher fields, the launcher honours these env
-    overrides; unknown/invalid values fall back to the production default.
+    overrides; unknown/invalid/out-of-bounds values fall back to the
+    production default with a loud warning.
     """
     source = dict(os.environ if env is None else env)
     defaults = SupervisorKnobs()
@@ -179,8 +246,18 @@ def knobs_from_env(env: dict[str, str] | None = None) -> SupervisorKnobs:
         except ValueError:
             _log.warning("supervisor.knob_ignored name=%s value=%r", var, raw)
             continue
-        if value <= 0:
+        if not math.isfinite(value) or value <= 0:
             _log.warning("supervisor.knob_ignored_nonpositive name=%s value=%r", var, raw)
+            continue
+        lower, upper = _KNOB_BOUNDS[attr]
+        if not lower <= value <= upper:
+            _log.warning(
+                "supervisor.knob_ignored_out_of_bounds name=%s value=%r bounds=(%s, %s)",
+                var,
+                raw,
+                lower,
+                upper,
+            )
             continue
         default = getattr(defaults, attr)
         overrides[attr] = float(value) if isinstance(default, float) else int(value)
@@ -194,11 +271,17 @@ def knobs_from_env(env: dict[str, str] | None = None) -> SupervisorKnobs:
 
 @dataclass(frozen=True)
 class LockHolder:
-    """The launcher identity recorded inside the lock file after acquiring."""
+    """The launcher identity recorded inside the lock file after acquiring.
+
+    ``starttime`` is the holder's /proc STARTTIME (None off Linux): it
+    lets ``request_stop`` verify the identity before signalling so a
+    RECYCLED PID is never SIGTERMed.
+    """
 
     pid: int
     mode: str
     acquired_at: float
+    starttime: int | None = None
 
 
 def _read_lock_holder(path: Path) -> LockHolder | None:
@@ -209,9 +292,15 @@ def _read_lock_holder(path: Path) -> LockHolder | None:
     pid = payload.get("pid")
     mode = payload.get("mode")
     acquired_at = payload.get("acquired_at")
+    starttime = payload.get("starttime")
     if not isinstance(pid, int) or not isinstance(mode, str):
         return None
-    return LockHolder(pid=pid, mode=mode, acquired_at=acquired_at if isinstance(acquired_at, float) else 0.0)
+    return LockHolder(
+        pid=pid,
+        mode=mode,
+        acquired_at=acquired_at if isinstance(acquired_at, float) else 0.0,
+        starttime=starttime if isinstance(starttime, int) else None,
+    )
 
 
 class DataDirLock:
@@ -221,8 +310,11 @@ class DataDirLock:
     it, so a data-dir reset cannot hide a live lock). Acquisition is
     ``flock(LOCK_EX | LOCK_NB)``; the kernel releases it when the holding
     process dies, which is exactly the semantics ADR 031 Decision 5 wants.
-    The holder's PID + mode are written into the file after acquiring so a
-    refused concurrent start can name the culprit.
+    The holder's PID + mode + /proc STARTTIME are written into the file
+    after acquiring so a refused concurrent start can name the culprit and
+    ``modulo stop`` can verify the identity before signalling. A clean
+    release truncates the holder record — a stale identity must never
+    outlive the lock.
     """
 
     def __init__(self, data_dir: Path, *, mode: str = "serve") -> None:
@@ -267,13 +359,25 @@ class DataDirLock:
                 f"({exc}). Another launcher may be mid-boot."
             ) from exc
         self._fd = fd
-        holder = LockHolder(pid=os.getpid(), mode=self.mode, acquired_at=time.time())
+        holder = LockHolder(
+            pid=os.getpid(),
+            mode=self.mode,
+            acquired_at=time.time(),
+            starttime=read_proc_starttime(os.getpid()),
+        )
         try:
             os.ftruncate(fd, 0)
             os.lseek(fd, 0, os.SEEK_SET)
             os.write(
                 fd,
-                json.dumps({"pid": holder.pid, "mode": holder.mode, "acquired_at": holder.acquired_at}).encode(),
+                json.dumps(
+                    {
+                        "pid": holder.pid,
+                        "mode": holder.mode,
+                        "acquired_at": holder.acquired_at,
+                        "starttime": holder.starttime,
+                    }
+                ).encode(),
             )
             os.fsync(fd)
         except OSError:
@@ -281,7 +385,13 @@ class DataDirLock:
             raise
 
     def release(self) -> None:
-        """Release the flock (idempotent; the file itself is never unlinked)."""
+        """Release the flock AND clear the holder record (idempotent).
+
+        The file itself is never unlinked, but a clean release truncates the
+        holder JSON: a stale identity (PID + starttime) must never outlive
+        the lock it described, otherwise ``modulo stop`` would compare
+        against a recycled PID's history forever.
+        """
         if self._fd is None:
             return
         if sys.platform != "win32":
@@ -291,6 +401,9 @@ class DataDirLock:
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
             except OSError:
                 _log.warning("supervisor.lock_unlock_failed path=%s", self._path)
+        with contextlib.suppress(OSError):
+            os.ftruncate(self._fd, 0)
+            os.fsync(self._fd)
         os.close(self._fd)
         self._fd = None
 
@@ -302,11 +415,57 @@ class DataDirLock:
         self.release()
 
 
+def _lock_is_free(lock_path: Path) -> bool:
+    """True when no process holds the flock on *lock_path* (probe fd only).
+
+    Opens a FRESH descriptor and tries ``flock(LOCK_EX | LOCK_NB)``: a held
+    lock fails the probe, a free lock succeeds and is immediately released.
+    This is the ground truth for "has the launcher stopped" — the holder
+    JSON can be stale or cleared independently of the kernel lock.
+    """
+    if sys.platform == "win32":
+        return False
+    import fcntl
+
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    return True
+
+
+def _holder_identity_matches(holder: LockHolder) -> bool | None:
+    """True/False when the recorded holder identity can be verified.
+
+    Mirrors ``_postmaster_is_stale``: a missing current STARTTIME (process
+    gone) or a mismatched one (PID reused by another process) proves the
+    recorded holder is gone. ``None`` = unverifiable (recorded before the
+    STARTTIME field existed, or off Linux) — the caller falls back to the
+    recorded PID alone.
+    """
+    if holder.starttime is None:
+        return None
+    current = read_proc_starttime(holder.pid)
+    if current is None:
+        return False
+    return current == holder.starttime
+
+
 def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
     """Ask the launcher holding *data_dir* to stop (the ``modulo stop`` path).
 
-    Sends SIGTERM to the lock holder and waits for the lock to clear.
-    POSIX-only; returns 0 when the launcher stopped, 1 when it could not be
+    The recorded holder's /proc STARTTIME is verified BEFORE signalling —
+    a recycled PID is never SIGTERMed. Completion is detected by probing
+    the flock (not the holder JSON). POSIX-only; returns 0 when the
+    launcher stopped (or no live holder exists), 1 when it could not be
     confirmed stopped.
     """
     if sys.platform == "win32":
@@ -315,26 +474,49 @@ def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
     lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
     holder = _read_lock_holder(lock_path)
     if holder is None:
-        _log.info("stop.no_holder data_dir=%s", data_dir)
-        return 0
+        if _lock_is_free(lock_path):
+            _log.info("stop.no_holder data_dir=%s", data_dir)
+            return 0
+        raise LauncherError(
+            f"Refusing to stop: the data dir {data_dir} is locked but no holder is recorded "
+            "(a launcher may be mid-boot) — retry in a moment."
+        )
+    identity = _holder_identity_matches(holder)
+    if identity is False:
+        _log.warning("stop.stale_holder_identity pid=%s", holder.pid)
+        if _lock_is_free(lock_path):
+            return 0
+        raise LauncherError(
+            f"Refusing to stop: the recorded launcher PID {holder.pid} was reused by another "
+            "process and the lock is still held by an unidentified process — inspect the "
+            "data dir manually before signalling anything."
+        )
     try:
         os.kill(holder.pid, signal.SIGTERM)
     except ProcessLookupError:
-        return 0
+        return 0 if _lock_is_free(lock_path) else _raise_still_locked(holder.pid, timeout)
     except OSError as exc:
         raise LauncherError(f"could not signal launcher PID {holder.pid}: {exc}") from exc
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _read_lock_holder(lock_path) is None:
+        if _lock_is_free(lock_path):
             return 0
         try:
             os.kill(holder.pid, 0)
         except OSError:
-            return 0
+            if _lock_is_free(lock_path):
+                return 0
+            return 1
         time.sleep(0.2)
     raise LauncherError(
         f"launcher PID {holder.pid} did not stop within {timeout}s — check the launcher log in the data dir"
     )
+
+
+def _raise_still_locked(pid: int, timeout: float) -> int:
+    """The signalled holder is gone but the lock is still held: report 1."""
+    _log.warning("stop.holder_gone_lock_held pid=%s timeout=%s", pid, timeout)
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -390,12 +572,15 @@ def child_shim_argv(argv: list[str], *, parent_pid: int | None = None) -> list[s
 
     The shim process is the direct parent of the real service process; it
     watches the launcher (its own parent) and kills the service when the
-    launcher dies — PID-reuse safe via the STARTTIME comparison. On
-    platforms without ``/proc`` (Windows/macOS) the shim is unavailable and
-    the argv passes through unwrapped: TODO(P2)/TODO(P3) replace with the
-    platform-native death-binding mechanism.
+    launcher dies — PID-reuse safe via the STARTTIME comparison. The shim
+    is only viable where ``/proc/<pid>/stat`` is readable, i.e. LINUX: on
+    every other platform ``read_proc_starttime`` returns None and a wrapped
+    shim would kill its freshly spawned service on the first watchdog tick
+    (guaranteed crash loop), so the argv passes through UNWRAPPED and the
+    entry refuses those platforms loudly at boot. TODO(P2): macOS variant;
+    TODO(P3): Windows Job Objects.
     """
-    if sys.platform == "win32":
+    if sys.platform != "linux":
         return list(argv)
     parent = os.getpid() if parent_pid is None else parent_pid
     starttime = read_proc_starttime(parent)
@@ -472,27 +657,28 @@ def child_shim_main(argv: list[str]) -> int:
     parent_pid = ns.parent_pid
     recorded = ns.parent_starttime
     shutting_down = threading.Event()
+    child_holder: list[subprocess.Popen[bytes]] = []
 
-    def _mark_shutting_down(_signum: int, _frame: object) -> None:
-        # The group signal already reached the service; just keep reaping.
+    def _forward_signal(signum: int, _frame: object) -> None:
+        # ONE handler for SIGTERM+SIGINT, installed BEFORE the child is
+        # spawned: a signal arriving in the spawn window must not kill the
+        # shim by default action. The group signal already reached the
+        # service; a signal aimed at THIS pid only (not the group) is
+        # forwarded on SIGTERM.
         shutting_down.set()
+        if signum == signal.SIGTERM and child_holder:
+            with contextlib.suppress(OSError):
+                os.kill(child_holder[0].pid, signal.SIGTERM)
 
-    signal.signal(signal.SIGTERM, _mark_shutting_down)
-    signal.signal(signal.SIGINT, _mark_shutting_down)
+    signal.signal(signal.SIGTERM, _forward_signal)
+    signal.signal(signal.SIGINT, _forward_signal)
     preexec = _set_pdeathsig if sys.platform == "linux" else None
     child_proc = subprocess.Popen(  # noqa: S603 — argv built by the supervisor, never shell
         child_argv,
         preexec_fn=preexec,
     )
+    child_holder.append(child_proc)
 
-    def _forward_terminate(signum: int, _frame: object) -> None:
-        # Signal aimed at THIS pid only (not the group): forward it.
-        shutting_down.set()
-        if signum == signal.SIGTERM:
-            with contextlib.suppress(OSError):
-                os.kill(child_proc.pid, signal.SIGTERM)
-
-    signal.signal(signal.SIGTERM, _forward_terminate)
     next_watchdog = 0.0
     while True:
         code: int | None = child_proc.poll()
@@ -531,7 +717,9 @@ class ChildSpec:
 
     name: str
     argv_builder: Callable[[], list[str]]
-    probe: Callable[[], bool] | None = None
+    # The probe answers True (healthy), False (unhealthy) or
+    # ProbeOutcome.UNAVAILABLE (tool failure — never terminate on it).
+    probe: Callable[[], bool | ProbeOutcome] | None = None
     start_condition: Callable[[], bool] | None = None
     env_builder: Callable[[dict[str, str]], dict[str, str]] | None = None
     shutdown_priority: int = 100
@@ -551,7 +739,9 @@ class _Child:
     next_spawn_at: float | None = None
     backoff: float = 0.0
     healthy: bool = False
+    spawned_at: float | None = None
     terminating_since: float | None = None
+    probe_unavailable_logged: bool = False
     crash_times: deque[float] = field(default_factory=deque)
 
 
@@ -587,6 +777,7 @@ class Supervisor:
         self._mutex = threading.RLock()
         self._stop_event = threading.Event()
         self._degraded_reason: str | None = None
+        self._monitor_thread: threading.Thread | None = None
 
     # -- registration / lifecycle -------------------------------------------
 
@@ -609,14 +800,28 @@ class Supervisor:
         self.tick()
         if start_monitor:
             thread = threading.Thread(target=self.monitor_loop, name="modulo-supervisor", daemon=True)
+            self._monitor_thread = thread
             thread.start()
 
     def request_stop(self) -> None:
         self._stop_event.set()
 
+    def monitor_thread_alive(self) -> bool:
+        """True while the monitor thread is running (None = never started)."""
+        return self._monitor_thread is not None and self._monitor_thread.is_alive()
+
     def monitor_loop(self) -> None:
         while not self._stop_event.is_set():
-            self.tick()
+            try:
+                self.tick()
+            except Exception:
+                # An unexpected raise must never kill the monitor silently:
+                # degrade so the entry tears everything down and exits
+                # nonzero instead of leaving orphaned children behind.
+                _log.exception("supervisor.monitor_loop_failed")
+                reason = f"supervisor monitor crashed: {sys.exc_info()[1]!r}"
+                self._degrade_locked(reason)
+                return
             if self._degraded_reason is not None:
                 return
             self._sleep(self.knobs.tick_seconds)
@@ -624,39 +829,97 @@ class Supervisor:
     # -- monitor pass ---------------------------------------------------------
 
     def tick(self) -> None:
-        """One supervision pass: deferred spawns, crash detection, backoff."""
+        """One supervision pass: deferred spawns, crash detection, backoff.
+
+        Each child is guarded: ANY unexpected exception while supervising it
+        (a race with a dying process, a spawn failure, a manifest write
+        error) is logged and skipped — the monitor loop must survive to
+        restart the remaining children.
+        """
         if self._degraded_reason is not None:
             return
         with self._mutex:
             for child in self._children.values():
-                now = self._clock()
-                if child.process is None:
-                    if child.next_spawn_at is not None and now < child.next_spawn_at:
-                        continue
-                    if self._ready_to_spawn(child):
-                        self._spawn_locked(child)
+                try:
+                    self._tick_child_locked(child)
+                except Exception:
+                    _log.exception("supervisor.tick_child_failed name=%s", child.spec.name)
                     continue
-                code = child.process.poll()
-                if code is not None:
-                    self._on_exit_locked(child, code)
-                    continue
-                if child.spec.probe is None:
-                    continue
-                ok = self._run_probe(child)
-                if ok:
-                    child.healthy = True
-                    child.terminating_since = None
-                    child.backoff = self.knobs.restart_backoff_initial
-                elif child.healthy:
-                    # A once-healthy child that now fails its probe is
-                    # restarted through the same crash/backoff path: stop it
-                    # here and let the exit poll record the real crash.
-                    if child.terminating_since is None:
-                        self._terminate_locked(child)
-                        child.terminating_since = now
-                    elif now - child.terminating_since > self.knobs.shutdown_grace_seconds:
-                        with contextlib.suppress(OSError):
-                            child.process.kill()
+
+    def _tick_child_locked(self, child: _Child) -> None:
+        now = self._clock()
+        if child.process is None:
+            if child.next_spawn_at is not None and now < child.next_spawn_at:
+                return
+            if self._ready_to_spawn(child):
+                self._spawn_locked(child)
+            return
+        code = child.process.poll()
+        if code is not None:
+            self._on_exit_locked(child, code)
+            return
+        if child.spec.probe is None:
+            # No probe: the startup deadline is the liveness contract — a
+            # child that survives the window without dying is presumed live
+            # (its death remains the crash signal).
+            if not child.healthy and child.spawned_at is not None:
+                self._enforce_startup_deadline_locked(child, now)
+            return
+        outcome = self._run_probe(child)
+        if outcome is ProbeOutcome.UNAVAILABLE:
+            # The probe TOOL is broken, not the child: leave the healthy
+            # flag (and the child) untouched; log once per spell.
+            if not child.probe_unavailable_logged:
+                child.probe_unavailable_logged = True
+                _log.warning("supervisor.probe_unavailable name=%s", child.spec.name)
+            return
+        if outcome is not ProbeOutcome.UNHEALTHY:
+            child.healthy = True
+            child.probe_unavailable_logged = False
+            child.terminating_since = None
+            child.backoff = self.knobs.restart_backoff_initial
+            return
+        child.probe_unavailable_logged = False
+        if child.healthy:
+            # A once-healthy child that now fails its probe is
+            # restarted through the same crash/backoff path: stop it
+            # here and let the exit poll record the real crash.
+            if child.terminating_since is None:
+                self._terminate_locked(child)
+                child.terminating_since = now
+            elif now - child.terminating_since > self.knobs.shutdown_grace_seconds:
+                with contextlib.suppress(OSError):
+                    child.process.kill()
+            return
+        self._enforce_startup_deadline_locked(child, now)
+
+    def _enforce_startup_deadline_locked(self, child: _Child, now: float) -> None:
+        """A never-healthy child must not wedge the supervisor forever.
+
+        Past ``spawn_time + health_check_timeout``: probed children are
+        terminated (the exit feeds the normal crash/cap path); children
+        WITHOUT a probe (the SAQ workers) get the same deadline as a
+        liveness contract — surviving the window without dying marks them
+        healthy (their death remains the crash signal).
+        """
+        if child.spawned_at is None:
+            return
+        if now - child.spawned_at <= self.knobs.health_check_timeout:
+            return
+        if child.spec.probe is None:
+            child.healthy = True
+            _log.info("supervisor.child_presumed_live name=%s", child.spec.name)
+            return
+        process = child.process
+        if process is None:
+            return
+        if child.terminating_since is None:
+            _log.warning("supervisor.startup_deadline_missed name=%s", child.spec.name)
+            self._terminate_locked(child)
+            child.terminating_since = now
+        elif now - child.terminating_since > self.knobs.shutdown_grace_seconds:
+            with contextlib.suppress(OSError):
+                process.kill()
 
     def _ready_to_spawn(self, child: _Child) -> bool:
         condition = child.spec.start_condition
@@ -668,15 +931,18 @@ class Supervisor:
             _log.exception("supervisor.start_condition_failed name=%s", child.spec.name)
             return False
 
-    def _run_probe(self, child: _Child) -> bool:
+    def _run_probe(self, child: _Child) -> ProbeOutcome:
         probe = child.spec.probe
         if probe is None:
-            return False
+            return ProbeOutcome.UNHEALTHY
         try:
-            return bool(probe())
+            result = probe()
         except Exception:
             _log.exception("supervisor.probe_failed name=%s", child.spec.name)
-            return False
+            return ProbeOutcome.UNAVAILABLE
+        if result is ProbeOutcome.UNAVAILABLE:
+            return ProbeOutcome.UNAVAILABLE
+        return ProbeOutcome.HEALTHY if result else ProbeOutcome.UNHEALTHY
 
     def _spawn_locked(self, child: _Child) -> None:
         argv = child.spec.argv_builder()
@@ -684,22 +950,38 @@ class Supervisor:
         child.process = self._spawner(argv, env)
         child.next_spawn_at = None
         child.healthy = False
+        child.spawned_at = self._clock()
+        child.probe_unavailable_logged = False
         child.terminating_since = None
         self._record_runtime_locked()
 
     def _on_exit_locked(self, child: _Child, code: int) -> None:
         name = child.spec.name
         now = self._clock()
+        child.process = None
+        child.healthy = False
+        child.spawned_at = None
+        child.terminating_since = None
+        child.probe_unavailable_logged = False
+        if code == 0:
+            # A clean exit is NOT a crash: it never feeds the cap or the
+            # crash hook, and it clears the sliding window (a service that
+            # ran to a clean exit proves its earlier crashes were
+            # transient). The child is still respawned with the initial
+            # backoff — the supervisor owns long-running services.
+            child.crash_times.clear()
+            child.backoff = self.knobs.restart_backoff_initial
+            child.next_spawn_at = now + child.backoff
+            _log.info("supervisor.child_clean_exit name=%s code=0", name)
+            self._record_runtime_locked()
+            return
         child.crash_times.append(now)
         window = self.knobs.crash_window_seconds
         while child.crash_times and now - child.crash_times[0] > window:
             child.crash_times.popleft()
-        child.process = None
-        child.healthy = False
-        child.terminating_since = None
         if self._crash_hook is not None:
             self._crash_hook(name, code)
-        if len(child.crash_times) > self.knobs.crash_cap:
+        if len(child.crash_times) >= self.knobs.crash_cap:
             self._degrade_locked(
                 f"child {name!r} crashed {len(child.crash_times)} times in the last "
                 f"{window:.0f}s (cap {self.knobs.crash_cap})"
@@ -785,7 +1067,11 @@ class Supervisor:
         except OSError:
             pgid = -1
         if pgid == process.pid:
-            os.killpg(pgid, signum)
+            # A dying process can lose its group between getpgid and killpg
+            # — that race must never break the teardown of the remaining
+            # children.
+            with contextlib.suppress(OSError):
+                os.killpg(pgid, signum)
         else:
             with contextlib.suppress(OSError):
                 os.kill(process.pid, signum)
@@ -858,8 +1144,23 @@ def reconcile_orphans(pgdata: Path, *, tolerance_seconds: float = 5.0) -> str | 
         _log.warning("supervisor.stale_postmaster_pid_removed path=%s", pidfile)
     if pgdata.parent.exists():
         _sweep_stale_tmp_dirs(pgdata.parent)
+        _sweep_stale_redis_confs(pgdata.parent)
         action = action or "swept_debris"
     return action
+
+
+def _sweep_stale_redis_confs(parent: Path) -> None:
+    """Remove per-boot Redis config files left by a killed previous attempt.
+
+    Each boot writes a fresh ``.redis-conf-<random>`` (0600, requirepass
+    inside) next to pgdata; the SIGKILL-debris sweep treats them like the
+    initdb pwfiles — a surviving file carries the Redis password and must
+    never accumulate.
+    """
+    for entry in parent.glob(f"{REDIS_CONF_PREFIX}*"):
+        if entry.is_file():
+            with contextlib.suppress(OSError):
+                entry.unlink()
 
 
 def _postmaster_is_stale(pidfile: Path, *, tolerance_seconds: float) -> bool | None:
@@ -887,9 +1188,14 @@ def _postmaster_is_stale(pidfile: Path, *, tolerance_seconds: float) -> bool | N
 
 
 def _is_postgres_process(pid: int) -> bool | None:
-    """True/False when /proc/<pid>/cmdline is readable; None when unknowable."""
+    """True/False when /proc/<pid>/cmdline is readable; None when unknowable.
+
+    Off Linux the identity is UNKNOWABLE (no /proc) — returning False here
+    would let reconciliation delete a live foreign postgres's pidfile, so
+    the only safe answer is None (refuse).
+    """
     if sys.platform != "linux":
-        return False
+        return None
     try:
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
     except PermissionError:
@@ -972,19 +1278,25 @@ def _pid_alive(pid: int) -> bool:
 def collect_status(data_dir: Path) -> dict[str, Any]:
     """Assemble the ``modulo status`` payload (state + pids + lock holder).
 
-    Never touches credentials: state.json is verified with the secrets-file
+    Strictly READ-ONLY — a status query must never mutate the data dir: the
+    secrets file is parsed WITHOUT the create-if-missing behaviour (a
+    missing file simply means ``initialized: false``), nothing is created,
+    chmodded, or rewritten. state.json is verified with the secrets-file
     HMAC key when readable, and the result carries only ports/PIDs/modes.
     """
+    from modulo.launcher import secrets_file as secrets_file_module
     from modulo.launcher.secrets_file import SecretsFileError
     from modulo.launcher.state import LauncherState, StateIntegrityError, StateVersionError, load_state
 
     status: dict[str, Any] = {"data_dir": str(data_dir), "initialized": False, "components": {}}
     state: LauncherState | None = None
+    secrets_path = data_dir / "secrets.json"
     try:
-        from modulo.launcher.secrets_file import load_or_create
-
-        secrets_loaded = load_or_create(data_dir / "secrets.json")
-        state = load_state(data_dir / STATE_FILENAME, secrets_loaded.state_hmac_key)
+        if not secrets_path.exists():
+            status["error"] = "data dir is not initialized (no secrets file)"
+        else:
+            secrets_loaded = secrets_file_module._parse(secrets_path.read_bytes())
+            state = load_state(data_dir / STATE_FILENAME, secrets_loaded.state_hmac_key)
     except SecretsFileError as exc:
         status["error"] = f"secrets unavailable: {exc}"
     except (StateIntegrityError, StateVersionError) as exc:

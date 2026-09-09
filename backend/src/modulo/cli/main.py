@@ -9,9 +9,17 @@ even ``modulo --db-url ... --output-dir ...``) behave exactly as they did
 when ``backup:cli`` WAS the entry point (locked by ``tests/unit/cli/
 test_main_group.py``).
 
-The group callback scrubs the OS environment as defence-in-depth after the
-import-time graph has loaded (the real first-boot scrub runs inside
-``modulo.launcher.entry.run_start`` BEFORE any project import).
+IMPORT-TIME SCRUB (ADR 031 Decision 2, locked by the import-hygiene
+subprocess test): this module is the published console script, and its
+module-level import graph (``modulo.cli.backup`` -> settings, apply,
+psycopg) loads BEFORE any command runs — so the FIRST thing this module
+does at import time is scrub the OS environment. The launcher-owned
+commands additionally re-scrub at invocation (defence-in-depth after the
+import graph has loaded); ``run_start`` re-scrubs again inside the
+launcher boot. The scrub is deliberately NOT in the group callback:
+backup/restore shell out to pg_dump/psql, which legitimately need libpq
+variables (``PGPASSWORD``/``PGSSLMODE``/``PGHOST``) inherited from the
+operator's shell.
 """
 
 from __future__ import annotations
@@ -23,16 +31,40 @@ from typing import Any
 
 import click
 
-from modulo.cli.backup import cli as _legacy_backup_cli
+# FIRST modulo import — the scrub must precede the backup import graph
+# (psycopg, modulo.settings, modulo.cli.apply) so no launcher-hostile
+# variable is visible to any project import on the console-script path.
+from modulo.launcher.env_safety import scrub_os_environment
+
+scrub_os_environment()
+
+from modulo.cli.backup import cli as _legacy_backup_cli  # noqa: E402 — must follow the scrub
 
 _DEFAULT_COMMAND = "backup"
 _PACKAGE_NAME = "farnalabs-modulo"
 
-_SENSITIVE_FIELD_TOKENS = ("password", "secret", "token", "api_key", "private_key")
+# Fallback when the canonical sensitive-field classifier cannot be imported
+# (never expected on a normal install): a weaker but nonzero token list.
+_SENSITIVE_FIELD_TOKENS = ("password", "secret", "token", "api_key", "private_key", "webhook", "users", "oidc")
 _SENSITIVE_FIELD_NAMES = frozenset({"secret_key", "fernet_key", "fernet_key_old"})
+# Whole-value redaction regardless of the canonical classifier: structured
+# values that embed credentials the token/classifier match cannot see.
+_WHOLESALE_REDACT_FIELDS = frozenset(
+    {
+        "modulo_oidc_providers",  # JSON array with client_secret values
+        "modulo_users",  # "email:password" list
+        "alert_webhook_url",  # token embedded in the URL PATH, not userinfo
+        "alert_teams_webhook_url",
+    }
+)
 _URL_FIELD_SUFFIX = "_url"
 _REDACTED = "<redacted>"
 _CREDENTIAL_IN_URL_RE = re.compile(r"(//)([^@/\s]+)@")
+
+
+def _scrub_for_launcher_command() -> None:
+    """Defence-in-depth scrub for launcher-owned commands (after imports)."""
+    scrub_os_environment()
 
 
 def _package_version() -> str:
@@ -70,9 +102,6 @@ class ModuloGroup(click.Group):
 )
 def cli() -> None:
     """Modulo command line: start/stop/status plus backup and restore."""
-    from modulo.launcher.env_safety import scrub_os_environment
-
-    scrub_os_environment()
 
 
 def _eager_version(ctx: click.Context, value: bool) -> None:
@@ -84,6 +113,9 @@ def _eager_version(ctx: click.Context, value: bool) -> None:
 
 def _register_legacy_commands() -> None:
     for name, command in _legacy_backup_cli.commands.items():
+        existing = cli.commands.get(name)
+        if existing is not None and existing is not command:
+            raise RuntimeError(f"command {name!r} is already registered on the modulo group")
         cli.add_command(command, name=name)
 
 
@@ -111,21 +143,39 @@ def _redact_url_credentials(url: str) -> str:
 
 
 def _is_sensitive_field(name: str) -> bool:
-    lowered = name.lower()
-    if name in _SENSITIVE_FIELD_NAMES:
+    """Classify via the canonical sensitive-field classifier (single source).
+
+    The ad-hoc token list missed real credential carriers (``modulo_users``
+    is an email:password list, ``modulo_oidc_providers`` embeds OIDC client
+    secrets, webhook URLs carry their token in the URL path) — delegation to
+    ``modulo.api.middleware.sensitive_mask`` keeps the CLI's redaction in
+    lockstep with the API's.
+    """
+    if name in _WHOLESALE_REDACT_FIELDS:
         return True
-    return any(token in lowered for token in _SENSITIVE_FIELD_TOKENS)
+    try:
+        from modulo.api.middleware.sensitive_mask import is_sensitive_env_key
+    except Exception:
+        lowered = name.lower()
+        if name in _SENSITIVE_FIELD_NAMES:
+            return True
+        return any(token in lowered for token in _SENSITIVE_FIELD_TOKENS)
+    return is_sensitive_env_key(name.upper())
 
 
 def _redacted_settings_dump(settings: Any) -> dict[str, str]:
     dump: dict[str, str] = {}
     for name in type(settings).model_fields:
+        value = getattr(settings, name)
+        if name.endswith(_URL_FIELD_SUFFIX) and name not in _WHOLESALE_REDACT_FIELDS:
+            # URL fields keep their host/port (operator debugging value);
+            # only the credentials inside are masked — except the webhook
+            # URLs, whose token lives in the URL PATH and needs wholesale
+            # redaction.
+            dump[name] = _redact_url_credentials(value) if isinstance(value, str) else str(value)
+            continue
         if _is_sensitive_field(name):
             dump[name] = _REDACTED
-            continue
-        value = getattr(settings, name)
-        if name.endswith(_URL_FIELD_SUFFIX) and isinstance(value, str):
-            dump[name] = _redact_url_credentials(value)
             continue
         dump[name] = str(value)
     return dump
@@ -159,13 +209,14 @@ def _redacted_settings_dump(settings: Any) -> dict[str, str]:
 @click.pass_context
 def start(ctx: click.Context, data_dir: Path | None, detach: bool, bin_dir: Path | None) -> None:
     """Boot the single-install stack: bundled Postgres/Redis, SAQ, and the API."""
+    _scrub_for_launcher_command()
     from modulo.launcher.entry import run_start
 
     try:
         code = run_start(data_dir, detach=detach, bin_dir=bin_dir)
     except KeyboardInterrupt:
         ctx.exit(0)
-    except RuntimeError as exc:
+    except (RuntimeError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
     ctx.exit(code)
 
@@ -180,6 +231,7 @@ def start(ctx: click.Context, data_dir: Path | None, detach: bool, bin_dir: Path
 @click.pass_context
 def stop(ctx: click.Context, data_dir: Path | None) -> None:
     """Stop the launcher holding the data dir (SIGTERM, ordered teardown)."""
+    _scrub_for_launcher_command()
     from modulo.launcher.supervisor import request_stop
 
     resolved = _resolve_data_dir(data_dir)
@@ -200,6 +252,7 @@ def stop(ctx: click.Context, data_dir: Path | None) -> None:
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
 def status(data_dir: Path | None, as_json: bool) -> None:
     """Show per-component state (postgres/redis/api/workers) for the data dir."""
+    _scrub_for_launcher_command()
     from modulo.launcher.supervisor import collect_status
 
     payload = collect_status(_resolve_data_dir(data_dir))
@@ -242,6 +295,7 @@ def version_cmd() -> None:
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
 def env_cmd(as_json: bool) -> None:
     """Print the effective Settings with every credential redacted."""
+    _scrub_for_launcher_command()
     from modulo.settings import get_settings
 
     try:

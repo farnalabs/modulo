@@ -25,6 +25,7 @@ exclusive-create writer (``modulo.db.bootstrap._write_env_file``), which
 also refuses a symlink squatting on the contract path.
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,8 @@ from typing import Any
 from modulo.db.url_utils import derive_system_database_url
 from modulo.launcher.secrets_file import LauncherSecrets
 from modulo.launcher.state import STATE_FILENAME, LauncherState, load_state
+
+_log = logging.getLogger(__name__)
 
 CONFIG_ENV_FILENAME = "config.env"
 POSTGRES_HOST = "127.0.0.1"
@@ -104,13 +107,25 @@ def write_pinned_env_file(data_dir: Path, state: LauncherState, secrets: Launche
     The writer is the promoted exclusive-create implementation (random temp
     sibling + fsync + atomic rename + symlink rejection), so a concurrent
     boot or a symlink squatting on the contract path can never leak or
-    hijack the credential-bearing config.
+    hijack the credential-bearing config. When an EXISTING file's content
+    differs from the freshly composed one, a warning is logged first — a
+    silent clobber would hide a port/credential rotation or a manual edit.
     """
     from modulo.db.bootstrap import _write_env_file
 
     composed = compose_config(state, secrets)
+    rendered = render_env_file(composed)
     path = data_dir / CONFIG_ENV_FILENAME
-    _write_env_file(str(path), render_env_file(composed))
+    try:
+        if path.exists() and path.read_text(encoding="utf-8") != rendered:
+            _log.warning(
+                "launcher.config_env_overwritten path=%s (existing content differs — "
+                "likely a port/credential rotation or a manual edit)",
+                path,
+            )
+    except OSError:
+        pass  # unreadable existing file: the overwrite proceeds and is logged by the writer
+    _write_env_file(str(path), rendered)
     return path
 
 
@@ -120,8 +135,12 @@ class LauncherConfigSource:
     ``__call__`` returns ONLY the composed keys whose environment variable
     is not already set (the env wins; the init-kwargs layer this dict feeds
     outranks the env source, so the filtering is what preserves the
-    priority). Keys absent from both sources fall through to field
-    defaults.
+    priority). The app/system URL pair is treated as a SET: when the
+    operator overrides ``DATABASE_URL``, the system URL is derived FROM THE
+    OPERATOR'S URL instead of injecting the bundled one — deriving or
+    overriding both together is the only way the pair can never split
+    across two different Postgres instances (app on the operator's DB,
+    system still pointing at bundled Postgres).
     """
 
     def __init__(self, data_dir: Path) -> None:
@@ -130,8 +149,24 @@ class LauncherConfigSource:
     def __call__(self) -> dict[str, Any]:
         state, secrets = load_launcher_config_inputs(self.data_dir)
         composed = compose_config(state, secrets)
+        operator_database_url = os.environ.get("DATABASE_URL")
+        operator_system_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL")
+        derived_system = (
+            derive_system_database_url(operator_database_url)
+            if operator_database_url is not None and not operator_system_url
+            else None
+        )
         resolved: dict[str, Any] = {}
         for env_name, field_name in _COMPOSED_FIELDS.items():
+            if env_name == "DATABASE_URL" and operator_database_url:
+                # The operator's URL wins for the app; the system URL is
+                # handled below (derived from the operator's URL so the
+                # pair stays on one Postgres instance).
+                continue
+            if env_name == "MODULO_SYSTEM_DATABASE_URL" and operator_database_url:
+                if derived_system:
+                    resolved[field_name] = derived_system
+                continue
             value = composed.get(env_name, "")
             if not value:
                 continue

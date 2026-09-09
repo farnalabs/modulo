@@ -216,6 +216,7 @@ def _install_boot_mocks(monkeypatch: pytest.MonkeyPatch, order: list[str], *, mo
         return None
 
     monkeypatch.setattr(supervisor_mod, "reconcile_orphans", recorded_reconcile)
+    monkeypatch.setattr(entry_module, "_verify_bundled_binaries", lambda bin_dir: None)
 
     def recorded_initdb(pgdata: Path, *, password: str, bin_dir: Path | None = None, **kwargs: object) -> Path:
         order.append("initdb")
@@ -352,7 +353,7 @@ def test_ambient_url_refusal_precedes_any_bootstrap_artefact(monkeypatch: pytest
     assert not created
 
 
-def test_degraded_boot_exits_nonzero_with_doctor_hint(
+def test_degraded_boot_exits_nonzero_with_status_hint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     import modulo.launcher.config_source as config_source_module
@@ -370,6 +371,7 @@ def test_degraded_boot_exits_nonzero_with_doctor_hint(
             pass
 
     monkeypatch.setattr(supervisor_mod, "DataDirLock", FakeLock)
+    monkeypatch.setattr(entry_module, "_verify_bundled_binaries", lambda bin_dir: None)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
     monkeypatch.setattr(
@@ -445,7 +447,8 @@ def test_degraded_boot_exits_nonzero_with_doctor_hint(
     captured = capsys.readouterr()
     assert code == 1
     assert "launcher degraded" in captured.err
-    assert "modulo doctor" in captured.err
+    assert "modulo status" in captured.err
+    assert "launcher.log" in captured.err
 
 
 def test_saq_children_gated_on_migration_head(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -468,6 +471,9 @@ def test_saq_children_gated_on_migration_head(monkeypatch: pytest.MonkeyPatch, t
 
         def request_stop(self) -> None:
             pass
+
+        def monitor_thread_alive(self) -> bool:
+            return True
 
     import modulo.api.dependencies as deps_module
     import modulo.db.health_checks as health_module
@@ -506,6 +512,149 @@ def test_saq_children_gated_on_migration_head(monkeypatch: pytest.MonkeyPatch, t
     assert head_calls["n"] == 1
 
 
+def _fake_clock(start: float = 0.0):
+    class Clock:
+        def __init__(self) -> None:
+            self.now = start
+
+        def __call__(self) -> float:
+            return self.now
+
+        def advance(self, delta: float) -> None:
+            self.now += delta
+
+    return Clock()
+
+
+def test_saq_gate_reopens_when_the_first_tick_sees_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A False first answer must NOT be memoized — the gate re-opens next tick.
+
+    Regression: the old gate cached the FIRST db_is_at_migration_head result
+    unconditionally, so on a fresh install (migrations still running in the
+    lifespan) the API served forever with zero SAQ workers.
+    """
+    import modulo.api.dependencies as deps_module
+    import modulo.db.health_checks as health_module
+    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+
+    migrated = {"value": False}
+    calls: list[int] = []
+
+    async def fake_head(engine: object, alembic_ini: object = None) -> bool:
+        calls.append(1)
+        return migrated["value"]
+
+    monkeypatch.setattr(health_module, "db_is_at_migration_head", fake_head)
+    monkeypatch.setattr(deps_module, "get_or_create_engine", lambda settings: object())
+
+    clock = _fake_clock()
+    spawned: list[list[str]] = []
+
+    def spawn(argv: list[str], env: dict[str, str] | None) -> object:
+        spawned.append(argv)
+        return FakeProc()
+
+    supervisor = Supervisor(
+        SupervisorKnobs(tick_seconds=0.01, restart_backoff_initial=0.01, restart_backoff_max=0.02),
+        spawner=spawn,
+        clock=clock,
+        sleep=lambda _s: None,
+    )
+    entry_module._add_saq_children(supervisor, settings=object(), composed={})
+    supervisor.tick()  # migrations still running → gate False → nothing spawns
+    assert not spawned
+    migrated["value"] = True
+    clock.advance(0.02)
+    supervisor.tick()  # the gate was RE-ASKED (False not memoized) → now True → spawn
+    assert len(spawned) == 2
+    assert len(calls) >= 3  # a False answer is re-evaluated, never cached
+
+
+def test_run_probe_command_maps_missing_binary_to_unavailable(tmp_path: Path) -> None:
+    from modulo.launcher.supervisor import ProbeOutcome
+
+    missing = tmp_path / "no-such-binary"
+    outcome = entry_module._run_probe_command([str(missing)])
+    assert outcome is ProbeOutcome.UNAVAILABLE
+
+
+def test_run_probe_command_maps_timeout_to_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import subprocess
+
+    from modulo.launcher.supervisor import ProbeOutcome
+
+    def raise_timeout(argv: list[str], **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", raise_timeout)
+    outcome = entry_module._run_probe_command([str(tmp_path / "probe")])
+    assert outcome is ProbeOutcome.UNAVAILABLE
+
+
+def test_verify_bundled_binaries_names_the_missing_ones(tmp_path: Path) -> None:
+    from modulo.launcher.entry import BootError
+
+    with pytest.raises(BootError, match=r"--bin-dir"):
+        entry_module._verify_bundled_binaries(tmp_path)
+    with pytest.raises(BootError) as excinfo:
+        entry_module._verify_bundled_binaries(tmp_path)
+    assert str(tmp_path) in str(excinfo.value)
+    assert "postgres" in str(excinfo.value)
+
+
+def test_verify_bundled_binaries_passes_when_all_present(tmp_path: Path) -> None:
+    from modulo.launcher.initdb import _binary
+
+    for name in ("initdb", "postgres", "pg_isready", "redis-server", "redis-cli"):
+        Path(_binary(tmp_path, name)).write_text("", encoding="utf-8")
+    assert entry_module._verify_bundled_binaries(tmp_path) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS refusal seam")
+def test_macos_is_refused_loudly_at_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(BootError, match="macOS"):
+        run_start(tmp_path / "data")
+
+
+def test_bundled_children_get_allowlisted_environments() -> None:
+    """postgres/redis inherit ONLY PATH/HOME/locale/tmp — never the full env."""
+    base = {
+        "PATH": "/usr/bin",
+        "HOME": "/root",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TMPDIR": "/tmp",
+        "SECRET_TOKEN": "operator-secret",
+        "HTTP_PROXY": "http://proxy:3128",
+        "REDIS_URL": "redis://somewhere",
+    }
+    env = entry_module._bundled_service_env(base)
+    assert env == {"PATH": "/usr/bin", "HOME": "/root", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TMPDIR": "/tmp"}
+
+
+def test_postgres_and_redis_children_use_the_allowlist() -> None:
+    """The ChildSpec env_builders actually delegate to the allowlist."""
+    pg_child = entry_module._postgres_child(LauncherStateLike(), Path("/pgdata"), Path("/bin"), SupervisorKnobsLike())
+    redis_child = entry_module._redis_child(LauncherStateLike(), SecretsLike(), Path("/bin"), Path("/data"))
+    base = {"PATH": "/usr/bin", "SECRET_TOKEN": "x"}
+    assert pg_child.env_builder(base) == {"PATH": "/usr/bin"}
+    assert redis_child.env_builder(base) == {"PATH": "/usr/bin"}
+
+
+class LauncherStateLike:
+    postgres_port = 15432
+    redis_port = 16379
+
+
+class SupervisorKnobsLike:
+    pg_fast_shutdown_timeout = 15.0
+
+
+class SecretsLike:
+    redis_password = "pw"
+
+
 # ---------------------------------------------------------------------------
 # Detach + helpers
 # ---------------------------------------------------------------------------
@@ -517,17 +666,81 @@ def test_detach_forks_twice_and_setsid(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     def fake_fork() -> int:
         forks.append(1)
-        return 0  # always the child
+        return 0  # always the child (grandchild path: no waitpid on a fake pid)
 
     monkeypatch.setattr(os, "fork", fake_fork)
     monkeypatch.setattr(os, "setsid", lambda: None)
     redirected: list[Path] = []
     monkeypatch.setattr(entry_module, "_redirect_stdio", lambda log: redirected.append(log))
-    monkeypatch.setattr(entry_module, "_run_foreground", lambda data_dir, bin_dir=None, serve=None: 7)
+
+    def fake_run_foreground(
+        data_dir: Path, *, bin_dir: Path | None = None, serve=None, ready_fd: int | None = None
+    ) -> int:
+        return 7
+
+    monkeypatch.setattr(entry_module, "_run_foreground", fake_run_foreground)
     code = run_start(tmp_path / "data", detach=True)
     assert code == 7
     assert len(forks) == 2
     assert redirected == [tmp_path / "data" / "launcher.log"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fork mechanics")
+def test_detach_failure_is_signalled_through_the_handshake(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed detached boot must surface, never report silent success."""
+    forks: list[int] = []
+
+    def fake_fork() -> int:
+        forks.append(1)
+        return 0
+
+    monkeypatch.setattr(os, "fork", fake_fork)
+    monkeypatch.setattr(os, "setsid", lambda: None)
+    monkeypatch.setattr(entry_module, "_redirect_stdio", lambda log: None)
+
+    def failing_run_foreground(
+        data_dir: Path, *, bin_dir: Path | None = None, serve=None, ready_fd: int | None = None
+    ) -> int:
+        raise BootError("bundled binaries not found at /nowhere - pass --bin-dir")
+
+    monkeypatch.setattr(entry_module, "_run_foreground", failing_run_foreground)
+    code = run_start(tmp_path / "data", detach=True)
+    assert code == 1
+    assert "bundled binaries not found" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipe mechanics")
+def test_detach_handshake_reader_parses_outcomes() -> None:
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"ready\n")
+        assert entry_module._await_detached_handshake(read_fd) is None
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"failed: boom\n")
+        outcome = entry_module._await_detached_handshake(read_fd)
+        assert outcome is not None
+        assert "boom" in outcome
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipe mechanics")
+def test_detach_handshake_eof_reports_launcher_log_hint() -> None:
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)  # the grandchild died without a word
+    try:
+        outcome = entry_module._await_detached_handshake(read_fd)
+    finally:
+        os.close(read_fd)
+    assert outcome is not None
+    assert "launcher.log" in outcome
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows refusal seam")
@@ -559,8 +772,32 @@ def test_resolve_bin_dir_param_env_and_default(monkeypatch: pytest.MonkeyPatch, 
     assert resolve_bin_dir() == Path(sys.prefix) / "bundled" / "bin"
 
 
-def test_redis_server_argv_pins_every_argument(tmp_path: Path) -> None:
-    argv = entry_module._redis_server_argv(tmp_path, 16379, "sekrit")
+def test_redis_server_argv_never_carries_the_password(tmp_path: Path) -> None:
+    """The password lives in the 0600 conf file — NEVER on the argv (cmdline)."""
+    password = "sekrit-redis-pw"
+    argv = entry_module._redis_server_argv(tmp_path, 16379, password, tmp_path)
     assert Path(argv[0]).name.startswith("redis-server")
-    assert "16379" in argv
-    assert "sekrit" in argv
+    assert password not in " ".join(argv)
+    assert len(argv) == 2
+    conf_path = Path(argv[1])
+    assert conf_path.parent == tmp_path
+    content = conf_path.read_text(encoding="utf-8")
+    assert f"requirepass {password}" in content
+    assert "port 16379" in content
+    assert "bind 127.0.0.1" in content
+    if os.name == "posix":
+        mode = conf_path.stat().st_mode & 0o777
+        assert mode == 0o600
+
+
+def test_redis_conf_is_swept_with_sigkill_debris(tmp_path: Path) -> None:
+    from modulo.launcher.supervisor import REDIS_CONF_PREFIX, reconcile_orphans
+
+    pgdata = tmp_path / "pgdata"
+    pgdata.mkdir()
+    entry_module._redis_server_argv(tmp_path, 16379, "pw", tmp_path)
+    stale = tmp_path / f"{REDIS_CONF_PREFIX}deadbeef"
+    stale.write_text("requirepass stale", encoding="utf-8")
+    reconcile_orphans(pgdata)
+    stale_conf = [p for p in tmp_path.iterdir() if p.name.startswith(REDIS_CONF_PREFIX)]
+    assert not stale_conf
