@@ -564,12 +564,10 @@ jobs:
 
           # /release.sh is the in-image path of deploy/fly/release.sh. The
           # rehearsal is the SAME script with ALEMBIC_REHEARSAL=1 injected as
-          # machine env (env.py reads os.environ). ALEMBIC_REHEARSAL also
-          # makes a rehearsal-mode migration failure exit 0 on the FIRST
-          # retry-bearing path only where release.sh retries: a failing
-          # rehearsal is retried by release.sh's 3-attempt loop exactly like
-          # a failing real migration (every attempt rolls back, so retries
-          # are safe) before the non-zero exit reaches the gate below.
+          # machine env (env.py reads os.environ). A failing rehearsal exits
+          # non-zero and aborts the deploy before the real migration runs
+          # (see the exit-code gate below); every attempt rolls back, so the
+          # real pre-migrate run still gates the deploy on migration success.
           echo "Launching REHEARSAL migration machine from ${PREMIGRATE_IMAGE_REF} ..."
           LAUNCH_ATTEMPTS=6
           LAUNCH_INTERVAL_SEC=10

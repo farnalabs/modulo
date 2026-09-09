@@ -8,6 +8,8 @@ rollback, real upgrade, escape-hatch refusal through the live chain) is
 covered by ``tests/integration/db/test_migration_rehearsal.py``.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from modulo.db.migrations import env as rehearsal_env
@@ -134,6 +136,66 @@ def test_step_callback_ignores_missing_revision() -> None:
     finally:
         rehearsal_env._rehearsal_applied_steps = []
         rehearsal_env._rehearsal_current_revision = None
+
+
+def test_to_sync_url_maps_asyncpg_to_psycopg() -> None:
+    # Regression for FAR-717 review finding #1: the sync URL the rehearsal
+    # fixtures build must select the postgresql+psycopg dialect (psycopg v3 /
+    # psycopg-binary), NOT postgresql+psycopg2 — psycopg2 is not in the
+    # dependency tree, so a bare postgresql:// mapping blows up at fixture
+    # setup with ModuleNotFoundError: No module named 'psycopg2'.
+    url = rehearsal_env._to_sync_url("postgresql+asyncpg://u:p@host:5432/db")
+    assert url.startswith("postgresql+psycopg://")
+    assert "asyncpg" not in url
+    assert "psycopg2" not in url
+
+
+def test_rehearsal_plan_returns_upgrade_order(monkeypatch, rehearsal_flags_unset) -> None:
+    # Regression for FAR-717 review finding #2: ScriptDirectory.iterate_revisions
+    # yields NEWEST-first (head -> current), but the chain is APPLIED
+    # oldest-first. _rehearsal_plan must reverse that into real application
+    # order so the failing-step report names the step actually in flight.
+    class _FakeScript:
+        def __init__(self, rev: str) -> None:
+            self.revision = rev
+
+    # alembic's iterate_revisions yields head-first: newest (c) -> oldest (a).
+    newest_first = [_FakeScript(r) for r in ["c", "b", "a"]]
+    fake_script = MagicMock()
+    fake_script.get_current_head.return_value = "c"
+    fake_script.iterate_revisions.return_value = newest_first
+
+    # engine.connect() is only used to read the DB's current revision; the
+    # plan never needs a real connection for this assertion.
+    fake_engine = MagicMock()
+    # env.py's module-global `config` is None outside an alembic run; stub it so
+    # _rehearsal_plan does not short-circuit with "Alembic env config unavailable".
+    monkeypatch.setattr(rehearsal_env, "config", MagicMock())
+    monkeypatch.setattr(rehearsal_env, "ScriptDirectory", lambda cfg: fake_script)
+    monkeypatch.setattr(
+        rehearsal_env,
+        "MigrationContext",
+        MagicMock(configure=MagicMock(return_value=MagicMock(get_current_revision=MagicMock(return_value="a")))),
+    )
+
+    planned, db_current, script_head = rehearsal_env._rehearsal_plan(fake_engine)
+
+    # iterate_revisions was asked for the chain from head down to current.
+    fake_script.iterate_revisions.assert_called_once_with("c", "a")
+    assert script_head == "c"
+    assert db_current == "a"
+    # Reversed into application order: oldest first.
+    assert [step.revision for step in planned] == ["a", "b", "c"]
+
+
+def test_rehearsal_failure_step_pins_reversed_mapping(rehearsal_flags_unset) -> None:
+    # The reversed plan (oldest-first) must align with _rehearsal_applied_steps
+    # so the reported failing revision is the in-flight one, not a misaligned
+    # entry. A first-step failure (nothing applied yet) names the OLDEST
+    # revision, never the newest.
+    rehearsal_env._rehearsal_planned_steps = ["a", "b", "c"]  # upgrade order
+    rehearsal_env._rehearsal_applied_steps = []  # failure before any step ran
+    assert rehearsal_env._rehearsal_failure_step() == "a"
 
 
 def test_rehearsal_requested_reads_env_var(monkeypatch) -> None:
