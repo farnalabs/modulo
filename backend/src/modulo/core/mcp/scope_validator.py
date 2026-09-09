@@ -140,6 +140,19 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "get_model_backend": "model_backend.list",
     "list_environment_profiles": "environment_profile.list",
     "list_parameter_schemas": "parameter_schema.list",
+    "create_parameter_schema": "parameter_schema.create",
+    "get_parameter_schema": "parameter_schema.list",
+    "update_parameter_schema": "parameter_schema.update",
+    "delete_parameter_schema": "parameter_schema.delete",
+    "restore_parameter_schema": "parameter_schema.update",
+    "get_parameter_schema_references": "parameter_schema.list",
+    "validate_parameter_schema": "parameter_schema.validate",
+    "list_parameter_sets": "parameter_schema.list",
+    "create_parameter_set": "parameter_schema.set.create",
+    "get_parameter_set": "parameter_schema.list",
+    "update_parameter_set": "parameter_schema.set.update",
+    "delete_parameter_set": "parameter_schema.set.delete",
+    "restore_parameter_set": "parameter_schema.set.update",
 }
 
 TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)
