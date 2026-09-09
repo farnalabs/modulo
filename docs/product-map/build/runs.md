@@ -16,6 +16,7 @@ bdd:
   - backend/tests/bdd/features/errors
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
   - backend/tests/bdd/features/pipelines/run_sequential.feature
+  - backend/tests/bdd/steps/test_pipelines.py
 depends-on:
   - feat-pipelines
 status: covered
