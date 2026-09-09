@@ -253,8 +253,7 @@ Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to
 
 ## Cost Tracking
 
-Anti-abuse knobs for self-reported model cost (see
-`docs/design/multi-component-cost-tracking.md`). A violating value fails at
+Anti-abuse knobs for self-reported model cost. A violating value fails at
 Settings load (fail-fast) – a bad env value blocks boot with a recovery message.
 
 | Variable | Required | Default | Description |
