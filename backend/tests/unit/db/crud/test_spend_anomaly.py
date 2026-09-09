@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies
+from modulo.db.crud.spend_anomaly import dismiss_anomaly, list_anomalies, record_or_get_anomaly
 from modulo.db.models.base import Base
 from modulo.db.models.spend_anomaly import SpendAnomaly
 
@@ -130,6 +130,64 @@ class TestListAnomalies:
     async def test_returns_empty_when_no_anomalies(self, session: AsyncSession) -> None:
         result = await list_anomalies(session, organisation_id=_ORG_A)
         assert result == []
+
+
+class TestRecordOrGetAnomaly:
+    _DATE = date(2025, 6, 1)
+
+    async def test_persists_new_detection_and_returns_it(self, session: AsyncSession) -> None:
+        anomaly = await record_or_get_anomaly(
+            session,
+            organisation_id=_ORG_A,
+            anomaly_date=self._DATE,
+            amount=Decimal("500.00"),
+            baseline=Decimal("200.00"),
+            percent_above=Decimal("150.00"),
+        )
+
+        assert anomaly.id is not None
+        assert anomaly.dismissed is False
+
+        stored = await list_anomalies(session, organisation_id=_ORG_A)
+        assert len(stored) == 1
+        assert stored[0].id == anomaly.id
+
+    async def test_returns_existing_row_for_same_org_and_date(self, session: AsyncSession) -> None:
+        [existing] = await _seed(
+            session,
+            _make_anomaly(organisation_id=_ORG_A, anomaly_date=self._DATE, dismissed=True),
+        )
+
+        anomaly = await record_or_get_anomaly(
+            session,
+            organisation_id=_ORG_A,
+            anomaly_date=self._DATE,
+            amount=Decimal("900.00"),
+            baseline=Decimal("100.00"),
+            percent_above=Decimal("800.00"),
+        )
+
+        assert anomaly.id == existing.id
+        assert anomaly.dismissed is True
+
+        stored = await list_anomalies(session, organisation_id=_ORG_A)
+        assert len(stored) == 1
+
+    async def test_same_date_in_other_org_stays_distinct(self, session: AsyncSession) -> None:
+        await _seed(session, _make_anomaly(organisation_id=_ORG_B, anomaly_date=self._DATE))
+
+        anomaly = await record_or_get_anomaly(
+            session,
+            organisation_id=_ORG_A,
+            anomaly_date=self._DATE,
+            amount=Decimal("500.00"),
+            baseline=Decimal("200.00"),
+            percent_above=Decimal("150.00"),
+        )
+
+        assert anomaly.organisation_id == _ORG_A
+        stored = await list_anomalies(session, organisation_id=_ORG_A)
+        assert len(stored) == 1
 
 
 class TestDismissAnomaly:

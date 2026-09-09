@@ -25,6 +25,7 @@ from modulo.db.models.model_backend import ModelBackend
 
 pytestmark = pytest.mark.integration
 
+
 _VALID_32 = "a" * 32
 _VALID_FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
@@ -294,6 +295,7 @@ def _token(org_id: uuid.UUID, user_id: uuid.UUID) -> str:
         organisation_id=str(org_id),
         account_id=str(user_id),
         org_role="admin",
+        client_kind="browser",
     )
 
 

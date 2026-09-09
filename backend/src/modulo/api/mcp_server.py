@@ -2343,10 +2343,24 @@ async def _update_pipeline_graph_impl(
     # agent-authored gate is exactly where an unexplained gate most needs its
     # decision briefing: a node-level or edge-level gate without a
     # human-provided description is rejected with the same
-    # ``validation_failed`` shape as structural validation failures. The
-    # check is single-sourced with the save-time validator via the public
+    # ``validation_failed`` shape as structural validation failures.
+    # The check is single-sourced with the save-time validator via the public
     # helper (deliberately NOT the full ``validate_definition`` — that would
     # surface every pre-existing issue and break MCP flows).
+    #
+    # DECIDED (FAR-688, Conductor decision): KEEP this narrow node-level
+    # description check; do NOT wire the full ``validate_definition`` here.
+    # Rationale for keeping the narrow check: it enforces the one rule an
+    # agent-authored graph would most plausibly violate (an unexplained
+    # gate) at the only surface that bypasses the Pydantic contract, with
+    # zero false positives. Rationale for deferring full validation: the
+    # MCP tool writes onto pipelines that may predate any validator rule —
+    # running the full validator would reject a write because of PRE-EXISTING
+    # unrelated issues (legacy topology, schema drift), blocking legitimate
+    # MCP flows for defects this call did not introduce; save-time
+    # enforcement for REST writes stays the forcing function, and the
+    # editor surfaces legacy violations to the user (PipelineEditorView
+    # banner, FAR-688) instead of blocking the read.
     from modulo.core.graph_validator import check_hitl_gate_descriptions as _check_hitl_descriptions
 
     hitl_issues = _check_hitl_descriptions({"nodes": nodes, "edges": edges})
@@ -3582,10 +3596,10 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
         gates, total = await _load_pending_hitl_gates(s, base_where, page, page_size)
-        # FAR-613: resolve each gate's description from its run's snapshot
-        # graph (shared batched resolver — same normalisation the REST
-        # pending endpoints use) while the session is open. Context comes
-        # from the claim row itself.
+        # FAR-613: resolve each gate's description via the shared batched
+        # resolver (same normalisation + the FAR-688 unified context-first
+        # precedence the REST pending endpoints use) while the session is
+        # open. Context comes from the claim row itself.
         from modulo.db.crud.hitl_gate_config import resolve_gate_descriptions
 
         description_by_gate = await resolve_gate_descriptions(s, gates=gates, org_id=org_id)
@@ -3896,11 +3910,81 @@ async def _load_hitl_run(
     return run
 
 
+def _hitl_human_only_denial_payload(
+    *,
+    run_id: uuid.UUID,
+    gate_id: str,
+    action: str,
+    verdict: str,
+) -> dict[str, Any]:
+    """The shared ``hitl.human_only_denied`` audit payload for MCP denials (FAR-634)."""
+    return {
+        "run_id": str(run_id),
+        "gate_id": gate_id,
+        "action": action,
+        "surface": "mcp",
+        "principal_kind": _ctx_auth_type.get(None) or "api_key",
+        "client_kind": None,
+        "reason": verdict,
+    }
+
+
+async def _append_hitl_human_only_denied_audit(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    run_id: uuid.UUID,
+    gate_id: str,
+    action: str,
+    verdict: str,
+) -> None:
+    """Append the ``hitl.human_only_denied`` audit event for an MCP denial (FAR-634).
+
+    Appends on the CURRENT session (no rollback happens on this path — the
+    denial returns an error dict and the ``_session`` context commits on clean
+    exit), so the event commits together with the request. ``append_audit_event``
+    scopes its own savepoint; the wrapper is failure-isolated: an audit failure
+    is logged and NEVER changes the denial outcome (it is already a denial —
+    the error dict below still returns). ``CancelledError`` always propagates.
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED
+
+        try:
+            actor_user_id = _ctx_user_id_val()
+        except McpAuthContextError:
+            actor_user_id = None
+        await append_audit_event(
+            s,
+            org_id=org_id,
+            event_type=EVENT_HUMAN_ONLY_DENIED,
+            actor_user_id=actor_user_id,
+            resource_type="run",
+            resource_id=run_id,
+            payload_json=_hitl_human_only_denial_payload(
+                run_id=run_id,
+                gate_id=gate_id,
+                action=action,
+                verdict=verdict,
+            ),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "mcp.hitl_human_only_denial_audit_failed",
+            extra={"run_id": str(run_id), "gate_id": gate_id, "action": action},
+            exc_info=True,
+        )
+
+
 async def _check_human_only_gate(
     s: AsyncSession,
     org_id: uuid.UUID,
     run: Any,
     gate_id: str,
+    action: str,
 ) -> dict[str, Any] | None:
     """Return an error dict when the gate is human_only, else ``None``.
 
@@ -3928,8 +4012,18 @@ async def _check_human_only_gate(
     shared pure function ``hitl_gate_config.human_only_denial`` so REST and
     MCP enforce one policy with one wording (FAR-610 review); the claim
     lookup runs only when the config is unresolvable.
+
+    MCP stays deny-BY-DEFAULT regardless of credential class (FAR-634): even
+    a browser-class JWT through the MCP surface is denied — the browser UI is
+    the human path, and agent sessions hold the admin password (a
+    password-minted JWT is indistinguishable from a browser login at
+    issuance), so relaxing the MCP denial would reopen the exact attack path
+    FAR-610 closed. Every denial emits a warning log + the
+    ``hitl.human_only_denied`` audit event (FAR-634) before the error dict is
+    returned.
     """
     from modulo.db.crud.hitl_gate_config import (
+        EVENT_HUMAN_ONLY_DENIED,
         hitl_gate_exists_but_unresolved,
         human_only_denial,
         resolve_hitl_gate_config,
@@ -3942,6 +4036,24 @@ async def _check_human_only_gate(
     # MCP callers authenticate with API keys — always a non-browser credential.
     verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
     if verdict is not None:
+        _log.warning(
+            EVENT_HUMAN_ONLY_DENIED,
+            extra={
+                "run_id": str(run.id),
+                "gate_id": gate_id,
+                "action": action,
+                "surface": "mcp",
+                "principal_kind": _ctx_auth_type.get(None) or "api_key",
+            },
+        )
+        await _append_hitl_human_only_denied_audit(
+            s,
+            org_id,
+            run_id=run.id,
+            gate_id=gate_id,
+            action=action,
+            verdict=verdict,
+        )
         return {"error": "human_only_gate", "detail": verdict}
     return None
 
@@ -4118,7 +4230,7 @@ async def _review_hitl_impl(
             # FAR-610: deliver_manual is a decision exactly like approve — a
             # human_only gate must not be decided by an API-key/MCP client.
             # reject stays allowed (safe direction).
-            human_only_err = await _check_human_only_gate(s, org_id, run, gate_id)
+            human_only_err = await _check_human_only_gate(s, org_id, run, gate_id, action)
             if human_only_err:
                 return human_only_err
 
@@ -7555,6 +7667,13 @@ async def _hitl_required_team_name(s: AsyncSession, gate: HitlClaim) -> str | No
     return team.name if team else None
 
 
+#: FAR-688: the fire-context dump on the ``modulo://runs/{run_id}/hitl/{gate_id}``
+#: resource is sliced to this many characters (with the shared truncation
+#: marker appended when sliced) so one briefing can never dominate the
+#: resource payload.
+_FIRE_CONTEXT_MAX_CHARS = 2048
+
+
 @mcp.resource("modulo://runs/{run_id}/hitl/{gate_id}")
 async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
@@ -7577,19 +7696,21 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
             if scope_error is not None:
                 return scope_error
             required_team_name = await _hitl_required_team_name(s, gate)
-            # FAR-613: the fire-time briefing. Context comes from the claim
-            # row (captured at gate-fire time); the description falls back to
-            # the snapshot config resolver for gates that fired before
-            # context capture existed.
+            # FAR-613: the fire-time briefing. FAR-688 unified precedence
+            # (context-first, snapshot fallback — the context IS the fire-time
+            # truth): the shared helper in ``hitl_gate_config`` is the SAME
+            # rule the REST pending endpoints apply via
+            # ``resolve_gate_descriptions``, so every surface renders one
+            # description for the same gate. The snapshot-config fallback
+            # read runs only when the capture carries no usable description
+            # (gates that fired before capture existed).
             context = gate.context_json if isinstance(gate.context_json, dict) else None
-            raw_description = context.get("description") if context is not None else None
-            from modulo.db.crud.hitl_gate_config import normalize_gate_description, resolve_hitl_gate_config
+            from modulo.db.crud.hitl_gate_config import resolve_gate_description, resolve_hitl_gate_config
 
-            if isinstance(raw_description, str) and raw_description.strip():
-                description = raw_description.strip()
-            else:
-                description = normalize_gate_description(
-                    await resolve_hitl_gate_config(s, run_id=rid, gate_id=gate_id, org_id=org_id)
+            description = resolve_gate_description(context, None)
+            if description is None:
+                description = resolve_gate_description(
+                    None, await resolve_hitl_gate_config(s, run_id=rid, gate_id=gate_id, org_id=org_id)
                 )
     if gate is None:
         return f"HITL gate '{gate_id}' not found on run {run_id}."
@@ -7611,10 +7732,15 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         parts.append(f"Claim expires: {gate.expires_at.isoformat()}")
     # FAR-613: the decision briefing — WHY the gate exists and WHAT the
     # reviewer is looking at. Deterministic bound: the context block is a
-    # fixed character slice of the serialised bundle.
+    # fixed character slice of the serialised bundle, marked when truncated
+    # (FAR-688) so the agent can tell a partial dump from a complete one.
     parts.append(f"Description: {description or 'No description provided for this gate'}")
     if context is not None:
-        parts.append("Fire context: " + json.dumps(context, sort_keys=True, default=str)[:2048])
+        from modulo.core.pipeline_engine.hitl_context import slice_with_marker
+
+        # Marker WITHIN the cap: the slice never exceeds _FIRE_CONTEXT_MAX_CHARS.
+        fire_context = slice_with_marker(json.dumps(context, sort_keys=True, default=str), _FIRE_CONTEXT_MAX_CHARS)
+        parts.append("Fire context: " + fire_context)
     return "\n".join(parts)
 
 

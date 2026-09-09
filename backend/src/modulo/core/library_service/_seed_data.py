@@ -189,6 +189,39 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         tags=["schema", "requirements", "prd"],
     ),
     _make_modulo(
+        pid="00000000-0000-0000-0000-000000000012",
+        primitive_type="schema",
+        name="PR Review Decision",
+        slug="pr-review-decision",
+        description=(
+            "Structured verdict for automated PR reviews: APPROVE or"
+            " REQUEST_CHANGES plus summary and per-finding details."
+        ),
+        content_json={
+            "fields": [
+                {
+                    "name": "decision",
+                    "type": "string",
+                    "enum": ["APPROVE", "REQUEST_CHANGES"],
+                    "required": True,
+                },
+                {"name": "summary", "type": "string", "required": True},
+                {
+                    "name": "findings",
+                    "type": "array",
+                    "items": {
+                        "severity": {"type": "string", "enum": ["critical", "major", "minor", "nit"]},
+                        "file": {"type": "string"},
+                        "line": {"type": "integer"},
+                        "comment": {"type": "string"},
+                    },
+                    "required": False,
+                },
+            ]
+        },
+        tags=["schema", "code-review", "pr", "decision"],
+    ),
+    _make_modulo(
         pid="00000000-0000-0000-0000-000000000020",
         primitive_type="agent",
         name="PRD Ingestion Agent",

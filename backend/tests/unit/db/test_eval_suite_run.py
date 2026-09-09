@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0196."""
+    """Exactly one migration chains off each predecessor, and the head is 0195."""
     import re
 
     revisions = {}
@@ -804,11 +804,11 @@ def test_single_migration_head() -> None:
     chaining_off_0192 = [p for p in revisions if parents[p] == "0192_run_node_outputs"]
     assert [_basename(p) for p in chaining_off_0192] == ["0193_run_node_outputs_sweep_index.py"]
     # 0194_uuid_pk_server_defaults (FAR-718, from main) chains off 0193.
-    chaining_off_0193b = [p for p in revisions if parents[p] == "0193_run_node_outputs_sweep_index"]
-    assert [_basename(p) for p in chaining_off_0193b] == ["0194_uuid_pk_server_defaults.py"]
+    chaining_off_0193 = [p for p in revisions if parents[p] == "0193_run_node_outputs_sweep_index"]
+    assert [_basename(p) for p in chaining_off_0193] == ["0194_uuid_pk_server_defaults.py"]
     # 0197_runs_index_and_constraint_fixes (improve-database) chains off 0194_uuid_pk_server_defaults.
-    chaining_off_0194b = [p for p in revisions if parents[p] == "0194_uuid_pk_server_defaults"]
-    assert [_basename(p) for p in chaining_off_0194b] == ["0197_runs_index_and_constraint_fixes.py"]
+    chaining_off_0194 = [p for p in revisions if parents[p] == "0194_uuid_pk_server_defaults"]
+    assert [_basename(p) for p in chaining_off_0194] == ["0197_runs_index_and_constraint_fixes.py"]
     # 0198_runs_add_missing_indexes (improve-database) chains off 0197.
     chaining_off_0197 = [p for p in revisions if parents[p] == "0197_runs_index_and_constraint_fixes"]
     assert [_basename(p) for p in chaining_off_0197] == ["0198_runs_add_missing_indexes.py"]
@@ -816,12 +816,22 @@ def test_single_migration_head() -> None:
     chaining_off_0198 = [p for p in revisions if parents[p] == "0198_runs_add_missing_indexes"]
     assert [_basename(p) for p in chaining_off_0198] == ["0199_runs_json_to_jsonb.py"]
     # 0200_runs_runner_marker_sweep_index (FAR-594 D8 qa F8, the marker sweep's
-    # partial index) chains off 0199 and is the single head.
+    # partial index) chains off 0199.
     chaining_off_0199 = [p for p in revisions if parents[p] == "0199_runs_json_to_jsonb"]
     assert [_basename(p) for p in chaining_off_0199] == ["0200_runs_runner_marker_sweep_index.py"]
-    # Nothing chains off 0200 -> it is the single head.
-    chaining_off_0200 = [p for p in revisions if parents[p] == "0200_runs_runner_marker_sweep_index"]
-    assert chaining_off_0200 == []
+    # 0201_spend_anomaly_unique_org_date (from main) chains off 0200.
+    chaining_off_0200_runner = [p for p in revisions if parents[p] == "0200_runs_runner_marker_sweep_index"]
+    assert [_basename(p) for p in chaining_off_0200_runner] == ["0201_spend_anomaly_unique_org_date.py"]
+    # 0202_runs_error_code_claimed_by_indexes (from main) chains off 0201.
+    chaining_off_0201 = [p for p in revisions if parents[p] == "0201_spend_anomaly_unique_org_date"]
+    assert [_basename(p) for p in chaining_off_0201] == ["0202_runs_error_code_claimed_by_indexes.py"]
+    # 0195_hitl_claim_gate_config_json (FAR-634) chains off 0202 and is the
+    # single head.
+    chaining_off_0202 = [p for p in revisions if parents[p] == "0202_runs_error_code_claimed_by_indexes"]
+    assert [_basename(p) for p in chaining_off_0202] == ["0195_hitl_claim_gate_config_json.py"]
+    # Nothing chains off 0195 -> it is the single head.
+    chaining_off_0195 = [p for p in revisions if parents[p] == "0195_hitl_claim_gate_config_json"]
+    assert not chaining_off_0195
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

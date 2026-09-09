@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { createI18n } from 'vue-i18n'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapTransition } from '../../stores/lifecycleMaps'
 import type { JourneySummary } from '../../types/lifecycleMap'
 
@@ -35,7 +36,24 @@ vi.mock('../../components/lifecycle-map/JourneyCard.vue', () => ({
   },
 }))
 
-import LifecycleMapRenderer from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
+import LifecycleMapRenderer, { MAX_CARDS_PER_NODE } from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
+
+const i18n = createI18n({
+  legacy: false,
+  locale: 'en-US',
+  messages: {
+    'en-US': {
+      views: {
+        LifecycleMapView: {
+          journey: {
+            more_on_node: '+{count} more',
+            more_on_node_title: '{count} older work items hidden',
+          },
+        },
+      },
+    },
+  },
+})
 
 function makeStage(overrides: Partial<LifecycleMapStage> = {}): LifecycleMapStage {
   return {
@@ -93,7 +111,7 @@ interface RendererProps {
 }
 
 function mountRenderer(props: RendererProps) {
-  return mount(LifecycleMapRenderer, { props })
+  return mount(LifecycleMapRenderer, { props, global: { plugins: [i18n] } })
 }
 
 describe('LifecycleMapRenderer', () => {
@@ -229,6 +247,55 @@ describe('LifecycleMapRenderer', () => {
       journeys: [makeJourney({ current_stage: null })],
     })
     expect(wrapper.findAll('.journey-card-stub')).toHaveLength(0)
+  })
+
+  it('exports the per-node card cap constant', () => {
+    expect(MAX_CARDS_PER_NODE).toBe(5)
+  })
+
+  it('caps cards per node at MAX_CARDS_PER_NODE, newest-moved first, with a +N more chip', async () => {
+    const journeys = Array.from({ length: 8 }, (_, i) =>
+      makeJourney({ ref: `flow-${i}`, updated_at: `2026-01-01T00:0${i}:00Z` }),
+    )
+    const wrapper = mountRenderer({ mapData: makeMap(), journeys })
+
+    const cards = wrapper.findAll('.journey-card-stub')
+    expect(cards).toHaveLength(MAX_CARDS_PER_NODE)
+    expect(cards[0].text()).toBe('flow-7')
+    expect(cards[4].text()).toBe('flow-3')
+
+    const chip = wrapper.find('[data-testid="journey-overflow-chip"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.text()).toContain('+3 more')
+    // The chip is muted and non-interactive — a span, not a button.
+    expect(chip.element.tagName).toBe('SPAN')
+  })
+
+  it('renders no overflow chip when the node has at most MAX_CARDS_PER_NODE journeys', async () => {
+    const journeys = Array.from({ length: MAX_CARDS_PER_NODE }, (_, i) =>
+      makeJourney({ ref: `flow-${i}`, updated_at: `2026-01-01T00:0${i}:00Z` }),
+    )
+    const wrapper = mountRenderer({ mapData: makeMap(), journeys })
+
+    expect(wrapper.findAll('.journey-card-stub')).toHaveLength(MAX_CARDS_PER_NODE)
+    expect(wrapper.find('[data-testid="journey-overflow-chip"]').exists()).toBe(false)
+  })
+
+  it('caps each node independently', async () => {
+    const journeys = [
+      ...Array.from({ length: 7 }, (_, i) =>
+        makeJourney({ ref: `a-${i}`, updated_at: `2026-01-01T00:0${i}:00Z` }),
+      ),
+      makeJourney({ ref: 'b-0', current_stage: { map_id: 'map-1', version: 1, stage_id: 'stage-2' } as JourneySummary['current_stage'] }),
+    ]
+    const wrapper = mountRenderer({
+      mapData: makeMap({ stages: [makeStage(), makeStage({ id: 'stage-2', name: 'Review' })] }),
+      journeys,
+    })
+
+    const cards = wrapper.findAll('.journey-card-stub')
+    expect(cards).toHaveLength(MAX_CARDS_PER_NODE + 1)
+    expect(wrapper.find('[data-testid="journey-overflow-chip"]').text()).toContain('+2 more')
   })
 
   it('applies type-specific styling classes to stage nodes', () => {

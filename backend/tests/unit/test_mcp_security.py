@@ -184,14 +184,25 @@ class TestHumanOnlyGateBypass:
             snapshot_result = MagicMock()
             snapshot_result.scalar_one_or_none.return_value = snapshot
 
-            mock_session.execute.side_effect = [run_result, snapshot_result]
+            # FAR-634: the claim-stamp lookup runs before the snapshot walk.
+            stamp_none_result = MagicMock()
+            stamp_none_result.scalar_one_or_none.return_value = None
 
-            result = await _rh(
-                run_id=_FAKE_ID,
-                gate_id=gate_id,
-                action="approve",
-                claim_token="test-token",
-            )
+            mock_session.execute.side_effect = [run_result, stamp_none_result, snapshot_result]
+
+            # FAR-634: the denial now also emits the human_only denial audit
+            # event; stub the emit so the denial path stays query-exact here
+            # (the audit itself is asserted in test_mcp_runtime_tools).
+            with patch(
+                "modulo.api.mcp_server._append_hitl_human_only_denied_audit",
+                new=AsyncMock(),
+            ):
+                result = await _rh(
+                    run_id=_FAKE_ID,
+                    gate_id=gate_id,
+                    action="approve",
+                    claim_token="test-token",
+                )
 
         assert result.get("error") == "human_only_gate", f"Expected human_only_gate error, got {result}"
 

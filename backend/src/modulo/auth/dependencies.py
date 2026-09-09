@@ -7,7 +7,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
+from modulo.auth.jwt import (
+    CLIENT_KIND_PROGRAMMATIC,
+    AuthenticatedPrincipal,
+    TenantPrincipal,
+    decode_principal,
+)
 from modulo.auth.permissions import _clamp_role
 from modulo.settings import Settings, get_settings
 
@@ -121,6 +126,10 @@ async def get_current_tenant_user(
         # through decode_principal (via_api_key=False); only the mk_ branch
         # below sets it True.
         via_api_key=current_user.via_api_key,
+        # FAR-634: propagate the JWT's credential class (browser for legacy
+        # tokens without the claim). The human_only gate reads this instead
+        # of hardcoding a credential-type assumption.
+        client_kind=current_user.client_kind,
     )
 
 
@@ -267,6 +276,10 @@ async def get_current_tenant_user_or_api_key(
             # JWT. human_only HITL gates deny API-key principals on decision
             # actions; this marker is the mechanism that distinguishes them.
             via_api_key=True,
+            # FAR-634: an API key is a programmatic credential by definition —
+            # the human_only enforcement's ``client_kind != browser`` rule
+            # subsumes the via_api_key check through this stamp.
+            client_kind=CLIENT_KIND_PROGRAMMATIC,
         )
 
     try:

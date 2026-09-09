@@ -894,6 +894,9 @@ async def get_current_tenant_user_optional(
         account_id=principal.account_id,
         org_role=principal.org_role,
         is_system_admin=principal.is_system_admin,
+        # FAR-634: propagate the JWT's credential class (browser for legacy
+        # tokens without the claim).
+        client_kind=principal.client_kind,
     )
 
 

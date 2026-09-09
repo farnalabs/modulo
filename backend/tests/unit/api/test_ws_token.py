@@ -127,6 +127,7 @@ def test_access_token_not_accepted_as_ws_token():
         organisation_id=str(_ORG_ID),
         account_id=str(_USER_ID),
         org_role="admin",
+        client_kind="browser",
     )
     with pytest.raises(JWTError, match="purpose"):
         decode_principal(token, settings.secret_key, allowed_purposes=["ws"])
@@ -298,6 +299,7 @@ def test_refresh_removed_member_returns_401_without_advancing_sequence(mock_sess
         org_role="admin",
         token_family="00000000-0000-0000-0000-000000000001",
         token_sequence=1,
+        client_kind="browser",
     )
 
     app.dependency_overrides[get_settings] = _make_settings

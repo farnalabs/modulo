@@ -81,11 +81,11 @@ def no_org_client() -> Generator[TestClient, None, None]:
 def _clear_registry_overrides() -> Generator[None, None, None]:
     """Clear the class-level FeatureFlagRegistry._overrides after each test.
 
-    The toggle endpoint calls ``registry.set_override`` which mutates the
-    shared class variable. Without cleanup it leaks into other test modules
-    that construct a registry (e.g. tests/unit/core/test_plan_context.py) when
-    they run in the same pytest process, making team-tier flags appear active
-    on community tier.
+    The toggle endpoint no longer mutates this shared class variable (it
+    persists org overrides instead), but the hygiene stays: any test that
+    touches the system-level override mechanism must not leak into other test
+    modules that construct a registry (e.g. tests/unit/core/test_plan_context.py)
+    in the same pytest process.
     """
     yield
     FeatureFlagRegistry._overrides.clear()
@@ -284,6 +284,93 @@ class TestGetFeatureFlag:
         assert "error" in body
         assert body["error"]["code"] == "INTERNAL_ERROR"
 
+    def test_org_override_reflected_in_single_flag_payload(self, client: TestClient) -> None:
+        """The single-flag GET must apply the org override so it agrees with the
+        list endpoint (which the frontend consumes). Regression: with an org
+        override persisted, the list showed the flag active while the
+        single-flag GET still showed the registry default — the list and the
+        debug endpoint disagreed (observed live 2026-09-09)."""
+        org = _org_with_overrides(sso=True)
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags/sso")
+        assert resp.status_code == 200
+        # sso is a team-tier flag, inactive on the community mock registry —
+        # the org override flips it to True in the single-flag payload too.
+        assert resp.json()["currently_active"] is True
+
+    def test_org_override_false_wins_in_single_flag_payload(self, client: TestClient) -> None:
+        """A persisted org override of False must hide a flag that is active by
+        tier — the override wins in BOTH directions, matching the list."""
+        org = _org_with_overrides(parallel_branches=False)
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags/parallel_branches")
+        assert resp.status_code == 200
+        # parallel_branches is community-tier (active on the mock registry);
+        # the org override flips it to False.
+        assert resp.json()["currently_active"] is False
+
+    def test_single_flag_get_agrees_with_list_payload(self, client: TestClient) -> None:
+        """Both GET endpoints must report the same effective currently_active
+        for the caller's org when an org override exists."""
+        org = _org_with_overrides(sso=True)
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+        ):
+            single = client.get("/api/v1/admin/feature-flags/sso")
+            listing = client.get("/api/v1/admin/feature-flags")
+        assert single.status_code == 200
+        assert listing.status_code == 200
+        sso = next(f for f in listing.json()["flags"] if f["name"] == "sso")
+        assert single.json()["currently_active"] == sso["currently_active"]
+
+    def test_org_settings_read_failure_falls_back_to_default(self, client: TestClient) -> None:
+        """A missing/unreadable org settings payload must fall back to the
+        registry default instead of failing the request."""
+        org = MagicMock()
+        org.settings_json = None
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags/sso")
+        assert resp.status_code == 200
+        assert resp.json()["currently_active"] is False
+
 
 # ---------------------------------------------------------------------------
 # ProgrammingError -> 501
@@ -329,9 +416,24 @@ class TestProgrammingError:
 
 class TestToggleFeatureFlag:
     def test_toggle_known_flag_returns_200(self, client: TestClient) -> None:
-        with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
-            return_value=_mock_registry(),
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        redis_mock.get.return_value = None
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
         ):
             resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
         assert resp.status_code == 200
@@ -371,6 +473,130 @@ class TestToggleFeatureFlag:
         assert resp.status_code == 500
         body = resp.json()
         assert body["error"]["code"] == "INTERNAL_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/v1/admin/feature-flags/{flag_name} — durable persistence
+# ---------------------------------------------------------------------------
+# Regression: the toggle endpoint used to call ``registry.set_override`` on a
+# per-request registry — an in-memory mutation with no DB write. The response
+# claimed ``overridden: true`` while the very next request (or process) saw the
+# flag inactive again (observed live on app.modulo.run 2026-09-09). The toggle
+# now persists via the same org-settings path as the org-override endpoint.
+
+
+class TestTogglePersistence:
+    def test_toggle_persists_and_second_request_sees_flag_active(self, client: TestClient) -> None:
+        """A toggle must survive a fresh request: the org override lands in the
+        org's settings (the durable store) and the subsequent list read — which
+        overlays org overrides — reports the flag as active."""
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        redis_mock.get.return_value = None
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["overridden"] is True
+            assert body["currently_active"] is True
+            # The durable write landed in the org settings (the DB-row proxy).
+            assert org.settings_json["feature_overrides"]["sso"] is True
+            # Cache invalidated so app-wide readers see the change immediately.
+            redis_mock.delete.assert_awaited_once_with("feature-flags:00000000-0000-0000-0000-000000000001")
+            # Second request: a fresh build + org-override overlay must agree.
+            listing = client.get("/api/v1/admin/feature-flags")
+            assert listing.status_code == 200
+            sso = next(f for f in listing.json()["flags"] if f["name"] == "sso")
+            assert sso["currently_active"] is True
+
+    def test_toggle_off_persists_and_second_request_sees_flag_inactive(self, client: TestClient) -> None:
+        """Disabling via toggle must persist too: parallel_branches is active on
+        community tier by default, so only the persisted org override can flip
+        the second request's read to inactive."""
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        redis_mock.get.return_value = None
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/parallel_branches", json={"enabled": False})
+            assert resp.status_code == 200
+            assert org.settings_json["feature_overrides"]["parallel_branches"] is False
+            listing = client.get("/api/v1/admin/feature-flags")
+            assert listing.status_code == 200
+            flag = next(f for f in listing.json()["flags"] if f["name"] == "parallel_branches")
+            assert flag["currently_active"] is False
+
+    def test_toggle_write_failure_never_claims_overridden(self, client: TestClient) -> None:
+        """A failed durable write must return an error, never ``overridden: true``
+        for a write that did not happen."""
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("db down"),
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+        assert resp.status_code == 500
+        body = resp.json()
+        assert "overridden" not in body
+        assert body["error"]["code"] == "INTERNAL_ERROR"
+
+    def test_toggle_survives_cache_invalidation_failure(self, client: TestClient) -> None:
+        """The best-effort cache delete must never fail an already-committed
+        toggle (the DB write is the source of truth)."""
+        org = _org_with_overrides()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                side_effect=RuntimeError("redis down"),
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["overridden"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +679,60 @@ class TestOrgOverrideCacheInvalidation:
         assert resp.json()["override"] is True
 
 
+class TestOrgOverrideRoundTrip:
+    def test_set_then_get_org_override_round_trips(self, client: TestClient) -> None:
+        """PUT /{flag}/org-override writes the org settings entry and
+        GET /{flag}/org-override reads the same persisted value back."""
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            set_resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+            assert set_resp.status_code == 200
+            assert set_resp.json()["override"] is True
+            get_resp = client.get("/api/v1/admin/feature-flags/sso/org-override")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["override"] is True
+
+    def test_toggle_and_org_override_share_persistence_path(self, client: TestClient) -> None:
+        """The toggle (PUT /{flag}) and the explicit org-override (PUT
+        /{flag}/org-override) write the SAME org settings entry — whichever the
+        operator uses, GET /{flag}/org-override must report the persisted value."""
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            toggle_resp = client.put("/api/v1/admin/feature-flags/webhook_trigger", json={"enabled": True})
+            assert toggle_resp.status_code == 200
+            get_resp = client.get("/api/v1/admin/feature-flags/webhook_trigger/org-override")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["override"] is True
+
+
 class TestOrgOverrideOrgIdGuard:
     def test_org_override_rejects_missing_organisation_id(self, no_org_client: TestClient) -> None:
         """A system admin without an organisation_id must be rejected (403) on
@@ -462,6 +742,7 @@ class TestOrgOverrideOrgIdGuard:
             ("get", "/api/v1/admin/feature-flags/sso/org-override"),
             ("put", "/api/v1/admin/feature-flags/sso/org-override"),
             ("delete", "/api/v1/admin/feature-flags/sso/org-override"),
+            ("put", "/api/v1/admin/feature-flags/sso"),
         ):
             if method == "get":
                 resp = no_org_client.get(url)

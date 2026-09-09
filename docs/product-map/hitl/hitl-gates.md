@@ -8,9 +8,13 @@ code:
   - backend/src/modulo/core/hitl_manager/expiry_job.py
   - backend/src/modulo/core/hitl_manager/overdue_warning.py
   - backend/src/modulo/core/hitl_manager/sweep_alarm.py
+  - backend/src/modulo/core/pipeline_engine/hitl_context.py
+  - backend/src/modulo/db/crud/hitl_gate_config.py
   - backend/src/modulo/core/run_context/autonomy.py
+  - backend/src/modulo/db/crud/hitl_gate_config.py
   - backend/src/modulo/db/models/hitl_claim.py
   - frontend/src/views/SettingsHitlReviewView.vue
+  - frontend/src/components/HitlBriefing.vue
 unit-tests:
   - backend/tests/unit/hitl_manager/test_hitl_manager.py
   - backend/tests/unit/hitl_manager/test_output_delivery_audit.py
@@ -22,7 +26,10 @@ unit-tests:
   - backend/tests/unit/api/test_hitl_resilience.py
   - backend/tests/unit/api/test_rate_limit_hitl_review.py
   - backend/tests/unit/pipeline_engine/test_node_runner_hitl.py
+  - backend/tests/unit/pipeline_engine/test_hitl_context.py
+  - backend/tests/unit/db/test_hitl_gate_config.py
   - frontend/src/__tests__/SettingsHitlReviewView.spec.ts
+  - frontend/src/__tests__/components/HitlBriefing.spec.ts
 bdd:
   - backend/tests/bdd/features/hitl/claim.feature
   - backend/tests/bdd/features/hitl/approve.feature
@@ -103,7 +110,29 @@ may decide.
       (deliver_manual.feature, `test_output_delivery_audit`)
 - [x] `human_only` gates refuse automation/MCP clients entirely
       (team_hitl_gate.feature, `test_mcp_security`, `test_mcp_runtime_tools`,
-      `test_node_runner_hitl`)
+      `test_node_runner_hitl`). REST enforcement keys on the credential
+      class: a principal is denied when it is an API key OR its JWT
+      `client_kind` claim is not `browser` (FAR-634 — every access/refresh
+      token carries `client_kind` stamped at mint time; legacy tokens without
+      the claim decode as `browser`). MCP denies outright regardless of
+      credential class. Every denial (REST + MCP) emits a warning log and the
+      `hitl.human_only_denied` audit event, failure-isolated so an audit
+      failure never changes the denial outcome. Honest limitation: agent
+      sessions hold the admin password, so a password-minted JWT is
+      indistinguishable from a browser login at issuance — the credential
+      class is defense-in-depth, and the FAR-611 sweep alarm is the detective
+      control (`test_hitl_resilience`, `test_mcp_runtime_tools`)
+- [x] The fired gate's config is stamped on the claim row at fire time — the
+      executor's interrupt handler resolves the gate's `hitl_gate_config` and
+      writes it to `hitl_claims.gate_config_json` (migration 0195) inside the
+      interrupt savepoint; a stamp failure is failure-isolated and the gate
+      still fires with a NULL config (FAR-634). The human_only resolver reads
+      the stamp FIRST — one claim-row lookup instead of walking snapshot
+      edges → node configs → live edges — so gate policy is the graph state
+      at fire time even if the pipeline is edited afterwards; the walk stays
+      as the fallback for legacy rows (fired before the column existed) and
+      never-fired gates, with the fail-closed unresolved semantics intact
+      (`test_hitl_gate_config`, `test_executor`)
 - [x] Team-scoped gates restrict claiming to members whose team role is
       `runner`/`operator` — otherwise `NotTeamMemberError` (`_TEAM_CLAIM_ROLES`)
 - [x] Stale gates warn their owners and expired claims are reset to unclaimed
@@ -111,6 +140,25 @@ may decide.
       `expiry_job.py`)
 - [x] Conditional HITL: an eval condition decides whether a gate activates at
       run time (conditional_hitl BDD + `test_conditional_hitl`)
+- [x] Fire-time decision briefing: a fired gate captures a bounded, redacted
+      context bundle on the claim row (`context_json`): the gate description,
+      the JMESPath condition, the MATCHED condition value as PRIMARY evidence
+      (FAR-688 — threaded from the gate node's interrupt payload; the
+      regex-extracted artifact excerpts stay supplementary), the trigger kind
+      (`condition` / `node` / `unknown` — never guessed when the snapshot
+      cannot resolve the config), source node + label, bounded artifact
+      summaries (marked when truncated), and the pipeline name. The review
+      UI renders the bundle (`HitlBriefing.vue`), and every briefing surface
+      resolves the description with ONE precedence rule: the fire-time
+      captured description wins, the snapshot config is the fallback
+      (FAR-613/FAR-688; `test_hitl_context`, `test_node_runner_hitl`,
+      `test_executor`, `test_hitl_gate_config`, `HitlBriefing.spec.ts`)
+- [x] The pipeline editor surfaces legacy gates whose descriptions predate
+      the minimum in a dismissible banner (graph reads never hard-fail on
+      them; the editor scans the loaded graph client-side and lists the
+      offending edges/nodes) — and the MCP graph-write path keeps its narrow
+      HITL-description check while deferring full validation (FAR-688;
+      PipelineEditorView.spec.ts)
 - [x] Decisions and deliveries are audited (`hitl.output_delivered`,
       `hitl.claim_expired`) and feed the HITL effort-trends panel
       (`/api/v1/dashboard/trends`: hitl_volume, rejection_trend,
@@ -187,6 +235,14 @@ may decide.
   folded into `bdd:` here: that feature file ships but no step module registers
   it via `scenarios(...)`, so citing it would claim BDD coverage for scenarios
   that never execute. Status: covered.
+- 2026-09-08: **improve-architecture (product-map walk)** — registered the
+  FAR-727 HITL review queue testids (`hitl-review-column-headers`,
+  `hitl-review-node-name`, `hitl-review-pipeline-name`) in the manifest
+  `/settings/hitl-review` `elements` list. They shipped in the view
+  (`SettingsHitlReviewView.vue`) without a manifest entry, failing the reverse
+  element-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`);
+  the elements list now covers the owning view's testids exactly. Status:
+  covered.
 - 2026-09-07: **improve-architecture (product-map walk)** — closed the stale-BDD
   drift: removed the never-executed, superseded feature files
   (`hitl/approval_gate.feature` marked `@deprecated`, `hitl/human_only_gate.feature`,
@@ -196,3 +252,14 @@ may decide.
   unchanged; the architecture suite now guards against new orphaned `.feature`
   files (see `backend/tests/architecture/test_product_map_feature_gaps.py`).
   Status: covered.
+- 2026-09-09: **FAR-688 (briefing follow-ups)** — the gate node now stamps the
+  matched condition value into the interrupt payload and the briefing stores
+  it as PRIMARY evidence (`condition_result`: expression, serialised redacted
+  value, evaluated-at node); trigger inference never guesses `condition` for
+  an unresolvable snapshot (`unknown` instead); description precedence unified
+  context-first across REST + MCP via `hitl_gate_config.resolve_gate_description`;
+  artifact/condition-value truncation is marked; name fields bounded at 255;
+  the editor renders the matched value, lists legacy description violations in
+  a dismissible banner, and counts description length in code points
+  (matching the backend); the MCP `update_pipeline_graph` narrow description
+  check is kept with full-validation deferral documented. Status: covered.

@@ -48,6 +48,7 @@ def _token(org_id: uuid.UUID, user_id: uuid.UUID, role: str, is_system_admin: bo
         account_id=str(user_id),
         org_role=role,
         is_system_admin=is_system_admin,
+        client_kind="browser",
     )
 
 

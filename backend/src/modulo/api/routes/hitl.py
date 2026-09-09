@@ -18,6 +18,7 @@ API keys and are never browser sessions.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any, Literal
@@ -30,9 +31,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import _get_engine, get_db_session, pg_connection_string, require_permission
+from modulo.api.dependencies import (
+    _get_engine,
+    get_db_session,
+    get_or_create_engine,
+    get_or_create_session_factory,
+    pg_connection_string,
+    require_permission,
+)
 from modulo.api.models.problem import ProblemException, ProblemType
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
+from modulo.core.audit_logger import append_audit_event
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -51,11 +60,12 @@ from modulo.core.pipeline_engine.executor import (
     org_sandbox_capacity_free,
 )
 from modulo.db.crud.hitl_gate_config import (
+    EVENT_HUMAN_ONLY_DENIED,
     edge_source_or_target,
     hitl_gate_exists_but_unresolved,
     human_only_denial,
     make_gate_id,
-    normalize_gate_description,
+    resolve_gate_description,
     resolve_gate_descriptions,
     resolve_hitl_gate_config,
     snapshot_gate_config_map,
@@ -96,6 +106,46 @@ def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
+
+#: FAR-634: the audit event type emitted on EVERY human_only denial (REST +
+#: MCP) — imported from ``db.crud.hitl_gate_config`` (the shared cross-surface
+#: home) so the REST and MCP emitters cannot fork the audit stream on a rename.
+#: Denied-attempt visibility is cheap probe detection (post FAR-611 sweep).
+
+
+class HumanOnlyDenied(HTTPException):
+    """403 raised when a non-browser credential decides a ``human_only`` gate.
+
+    Subclass (not a bare ``HTTPException``) so ``_run_hitl_manager`` — the
+    single choke point of every REST decision route — can distinguish the
+    human_only denial from any other 4xx, emit the failure-isolated denial
+    audit event (FAR-634), and re-raise with byte-identical client behaviour.
+    Carries the denial fields for the audit payload.
+    """
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        run_id: uuid.UUID,
+        gate_id: str,
+        action: str,
+        org_id: uuid.UUID,
+        account_id: uuid.UUID,
+        org_role: str,
+        principal_kind: str,
+        client_kind: str,
+    ) -> None:
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        self.run_id = run_id
+        self.gate_id = gate_id
+        self.action = action
+        self.org_id = org_id
+        self.account_id = account_id
+        self.org_role = org_role
+        self.principal_kind = principal_kind
+        self.client_kind = client_kind
+        self.reason = detail
 
 
 # ---------------------------------------------------------------------------
@@ -154,13 +204,23 @@ class GateResponse(BaseModel):
     #: (frontend UUID hygiene — falls back to shortId when absent).
     label: str | None = None
     #: FAR-613: the gate config's human description — WHY this gate exists.
-    #: Resolved from the snapshot gate config (edge-level or FAR-402
-    #: node-level). None for legacy gates → the UI renders the muted
-    #: no-description fallback.
+    #: Resolved with the FAR-688 unified precedence (context-first, snapshot
+    #: fallback via ``hitl_gate_config.resolve_gate_description`` — the same
+    #: rule every briefing surface applies). None for legacy gates → the UI
+    #: renders the muted no-description fallback.
+    #:
+    #: NOTE (kept duplication): the description ALSO rides inside
+    #: ``context.description`` (the fire-time capture). The top-level field
+    #: is the frontend contract — the render source; the two agree under the
+    #: unified precedence and may only differ when the snapshot was edited
+    #: after the gate fired.
     description: str | None = None
     #: FAR-613: the fire-time briefing bundle persisted on the claim row
-    #: (condition, trigger, source node, bounded artifacts, reason,
-    #: pipeline_name). None for legacy gates.
+    #: (condition, FAR-688 matched ``condition_result``, trigger, source
+    #: node, bounded artifacts, reason, pipeline_name). None for legacy
+    #: gates. Shape: ``modulo.core.pipeline_engine.hitl_context.HitlGateContext``
+    #: (kept as an open dict here — the API contract must accept legacy
+    #: bundles that predate any key).
     context: dict[str, Any] | None = None
     #: FAR-691: the claimant's human-readable display name (batched accounts
     #: lookup). None when the account row is missing — the frontend falls
@@ -242,8 +302,9 @@ async def _enforce_human_only_gate(
     principal: TenantPrincipal,
     run_id: uuid.UUID,
     gate_id: str,
+    action: str,
 ) -> None:
-    """Raise ``403`` when a non-browser (API-key) principal decides a ``human_only`` gate.
+    """Raise 403 when a non-browser credential decides a ``human_only`` gate.
 
     FAR-610: the decision routes previously performed no ``human_only`` check.
     The gate's config is resolved from the run's snapshot graph (falling back
@@ -256,7 +317,7 @@ async def _enforce_human_only_gate(
     Fail closed (FAR-610 review): when the config is UNRESOLVABLE but the
     gate actually fired (a claim row exists — see
     :func:`modulo.db.crud.hitl_gate_config.hitl_gate_exists_but_unresolved`),
-    the human_only policy cannot be verified, so API-key principals are
+    the human_only policy cannot be verified, so non-browser principals are
     denied rather than silently allowed. Browser JWTs pass either way (the
     UI is their enforcement surface), and manual-node ids short-circuit
     inside the helper, so ``submit_manual_output`` is unaffected.
@@ -265,24 +326,36 @@ async def _enforce_human_only_gate(
     deliver-manual / submit-manual). ``reject_gate`` is deliberately exempt:
     rejection is the safe direction.
 
-    Credential semantics (FAR-610 finding): REST resolves principals only from
-    browser-login JWTs today — org API keys (``mk_``) are accepted solely by
-    the MCP server and the few ``require_permission_any_credential`` routes.
-    JWTs carry no client-type claim (no amr / token-type / client_id marker),
-    so the principal's ``via_api_key`` credential-kind marker is the only
-    reliable signal available. Browser JWTs pass this check; if API keys are
-    ever wired into these routes (operator keys are reserved for
-    HITL-approval wiring), enforcement is already in place. MCP approvals —
-    the observed attack path — are denied outright for ``human_only`` gates in
-    ``mcp_server._check_human_only_gate``.
+    Credential semantics (FAR-610 finding + FAR-634 hardening): REST resolves
+    principals from browser-login JWTs today — org API keys (``mk_``) are
+    accepted solely by the MCP server and the few
+    ``require_permission_any_credential`` routes. FAR-634 extends the
+    credential marker to the JWT-level ``client_kind`` claim (stamped at mint
+    time; legacy tokens without the claim decode as ``browser``): the denial
+    rule is now ``via_api_key OR client_kind != "browser"`` — a future
+    programmatic JWT mint path is denied by construction, and unknown claim
+    values fail closed. HONEST LIMITATION (defense-in-depth, not absolute):
+    in this org agent sessions hold the admin password and mint through the
+    same login endpoint, so a password-minted JWT is indistinguishable from a
+    browser login at issuance — the FAR-611 sweep alarm is the detective
+    control for that residual. Step-up re-auth is a separate product
+    decision (deliberately NOT attempted here). MCP approvals — the observed
+    attack path — remain denied outright for ``human_only`` gates in
+    ``mcp_server._check_human_only_gate`` regardless of credential class.
+
+    Every denial emits a warning log + the ``hitl.human_only_denied`` audit
+    event (FAR-634) via :func:`_emit_human_only_denial_audit`, invoked by the
+    caller (``_run_hitl_manager``) so the write happens outside the decision
+    transaction that the raise rolls back.
 
     Hot path (FAR-610 review): the first line short-circuits browser JWTs —
-    they are always allowed, so the resolver's 1-3 queries never run on the
+    they are always allowed, so the resolver's queries never run on the
     common UI approve flow. The deny policy itself lives in the shared pure
     verdict :func:`modulo.db.crud.hitl_gate_config.human_only_denial`; the
     fail-closed claim lookup runs only when the config is unresolvable.
     """
-    if not principal.via_api_key:
+    non_browser_credential = principal.via_api_key or principal.client_kind != CLIENT_KIND_BROWSER
+    if not non_browser_credential:
         return
     config = await resolve_hitl_gate_config(
         session,
@@ -300,7 +373,74 @@ async def _enforce_human_only_gate(
         )
     verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
     if verdict is not None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=verdict)
+        raise HumanOnlyDenied(
+            verdict,
+            run_id=run_id,
+            gate_id=gate_id,
+            action=action,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            principal_kind="api_key" if principal.via_api_key else "jwt",
+            client_kind=principal.client_kind,
+        )
+
+
+async def _emit_human_only_denial_audit(exc: HumanOnlyDenied) -> None:
+    """Emit the ``hitl.human_only_denied`` audit event for a REST denial (FAR-634).
+
+    The warning log fires on EVERY denial (denied-attempt visibility is cheap
+    probe detection); the audit event is best-effort. The write runs in a
+    FRESH session + transaction — the denial is raised inside
+    ``_run_hitl_manager``'s decision transaction, which ROLLS BACK on the
+    raise, so an audit write on that session would be lost with it (the same
+    post-append pattern as ``mcp_server._append_mcp_hitl_denial_audit``).
+    Failure-isolated: an audit failure is logged and never changes the denial
+    outcome (it is already a 403).
+    """
+    logger.warning(
+        EVENT_HUMAN_ONLY_DENIED,
+        extra={
+            "run_id": str(exc.run_id),
+            "gate_id": exc.gate_id,
+            "action": exc.action,
+            "surface": "rest",
+            "principal_kind": exc.principal_kind,
+            "client_kind": exc.client_kind,
+        },
+    )
+    payload: dict[str, Any] = {
+        "run_id": str(exc.run_id),
+        "gate_id": exc.gate_id,
+        "action": exc.action,
+        "surface": "rest",
+        "principal_kind": exc.principal_kind,
+        "client_kind": exc.client_kind,
+        "reason": exc.reason,
+    }
+    try:
+        engine = get_or_create_engine(get_settings())
+        factory = get_or_create_session_factory(engine)
+        async with factory() as audit_session, audit_session.begin():
+            await set_rls_org(audit_session, exc.org_id)
+            await set_rls_user_context(audit_session, exc.account_id, exc.org_role)
+            await append_audit_event(
+                audit_session,
+                org_id=exc.org_id,
+                event_type=EVENT_HUMAN_ONLY_DENIED,
+                actor_user_id=exc.account_id,
+                resource_type="run",
+                resource_id=exc.run_id,
+                payload_json=payload,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "hitl.human_only_denial_audit_failed",
+            extra={"run_id": str(exc.run_id), "gate_id": exc.gate_id, "action": exc.action},
+            exc_info=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +568,7 @@ async def _run_hitl_manager(
     enforce_human_only: bool,
     require_sandbox: bool,
     mgr_method: str,
+    action: str | None = None,
     **call_kwargs: Any,
 ) -> Any:
     """Open a tenant-scoped transaction and invoke a HITLManager decision method.
@@ -437,13 +578,18 @@ async def _run_hitl_manager(
     domain-exception-mapping boilerplate is not copy-pasted into every route.
     ``org_id`` and ``actor_id`` come from the principal; callers pass only the
     method-specific kwargs (``claim_token``, ``decision_payload``, ``output`` …).
+
+    ``action`` (FAR-634) is the REST action label for the human_only denial
+    audit event; it defaults to ``mgr_method`` (identical for every route
+    except submit-manual, whose manager call is ``approve``).
     """
+    audit_action = action or mgr_method
     mgr = HITLManager()
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             if enforce_human_only:
-                await _enforce_human_only_gate(session, principal, run_id, gate_id)
+                await _enforce_human_only_gate(session, principal, run_id, gate_id, audit_action)
             if require_sandbox:
                 await _require_org_sandbox_capacity(session, run_id, principal.organisation_id)
             try:
@@ -467,6 +613,12 @@ async def _run_hitl_manager(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
             except DecisionPayloadError as exc:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    except HumanOnlyDenied as exc:
+        # FAR-634: the decision transaction rolled back on the raise — emit
+        # the denial audit event in a FRESH session (failure-isolated) so the
+        # denied attempt is never lost, then re-raise the byte-identical 403.
+        await _emit_human_only_denial_audit(exc)
+        raise
     except ProgrammingError as exc:
         logger.exception("hitl._run_hitl_manager")
         raise HTTPException(
@@ -775,6 +927,7 @@ async def submit_manual_output(
         enforce_human_only=True,
         require_sandbox=True,
         mgr_method="approve",
+        action="submit_manual",
         claim_token=req.claim_token,
         decision_payload=resume_data,
         client_type=_client_type(principal),
@@ -848,7 +1001,34 @@ async def list_run_pending_gates(
                 snapshot = snap_result.scalar_one_or_none()
                 if snapshot is not None and isinstance(snapshot.graph_json, dict):
                     gate_label_map = _build_gate_label_map(snapshot.graph_json)
-                    gate_description_map = _build_gate_description_map(snapshot.graph_json)
+                    # FAR-688 unified precedence: the fire-time captured
+                    # description (the claim's context) wins; the snapshot
+                    # config's description is the fallback — the SAME rule
+                    # the org-level endpoints apply via
+                    # ``resolve_gate_descriptions``.
+                    gate_config_map = snapshot_gate_config_map(snapshot.graph_json)
+                    gate_description_map = {
+                        g.gate_id: resolve_gate_description(
+                            g.context_json if isinstance(g.context_json, dict) else None,
+                            gate_config_map.get(g.gate_id),
+                        )
+                        for g in gates
+                    }
+
+            if not gate_description_map and gates:
+                # FAR-688: when the snapshot is unavailable (no snapshot_id,
+                # retention pruned the row, or a non-dict graph) the
+                # context-first pass above never ran — resolve from the claim
+                # row's captured briefing ALONE (context-first, no snapshot
+                # fallback) so this surface agrees with the org-level
+                # ``resolve_gate_descriptions`` resolver instead of muting a
+                # description the capture carries.
+                gate_description_map = {
+                    g.gate_id: resolve_gate_description(
+                        g.context_json if isinstance(g.context_json, dict) else None, None
+                    )
+                    for g in gates
+                }
 
             # FAR-691: batched claimant display names + the caller-owns-claim
             # stamp, resolved inside the same transaction/RLS context.
@@ -1254,34 +1434,6 @@ def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
         if source and target:
             gate_label_map[make_gate_id(source, target)] = str(label)
     return gate_label_map
-
-
-def _gate_description_from_graph(graph_json: dict[str, Any] | None, gate_id: str) -> str | None:
-    """The gate's human description from a snapshot graph, or None (FAR-613).
-
-    Shared normalisation lives in ``hitl_gate_config.normalize_gate_description``
-    so both pending endpoints and the MCP gate resource render the same muted
-    no-description fallback for the same gates.
-    """
-    if not isinstance(graph_json, dict):
-        return None
-    config = snapshot_gate_config_map(graph_json).get(gate_id)
-    return normalize_gate_description(config)
-
-
-def _build_gate_description_map(graph_json: dict[str, Any]) -> dict[str, str | None]:
-    """Map gate_id -> the gate config's human description (FAR-613).
-
-    Sibling of :func:`_build_gate_label_map` — same snapshot walk (via the
-    shared ``snapshot_gate_config_map``, which covers BOTH gate shapes:
-    edge-level configs and FAR-402 node-level ``hitl_config``), keyed by the
-    same derived gate ids, so labels and descriptions always agree on the
-    gate id derivation. Gates whose config carries no usable description map
-    to ``None`` (the frontend renders the muted no-description fallback).
-    """
-    return {
-        gate_id: _gate_description_from_graph(graph_json, gate_id) for gate_id in snapshot_gate_config_map(graph_json)
-    }
 
 
 def _gate_to_response(

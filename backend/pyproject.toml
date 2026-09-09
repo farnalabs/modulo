@@ -594,6 +594,11 @@ dev = [
     "pytest-recording>=0.13.0",
     "pip-audit>=2.9.0",
     "types-jsonschema>=4.26.0",
+    # Real Lua VM used by the unit test that compile-checks the Redis rate-limit
+    # Lua script (_CONSUME_LUA in modulo.connectors._rate_bucket). Without a real
+    # Lua parser, a syntax defect (e.g. a duplicate `end`) can only surface at
+    # runtime as a Redis compile error (FAR-439 fail-closed regression).
+    "lupa>=2.0",
 ]
 
 [tool.uv]

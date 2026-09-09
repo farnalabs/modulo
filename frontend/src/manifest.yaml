@@ -2313,6 +2313,12 @@ elements:
       - testid: pipeline-editor-save-edge
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-legacy-hitl-banner
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-legacy-hitl-banner-dismiss
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-agent-select
         type: select
         dynamic_testid: false
@@ -2880,16 +2886,16 @@ elements:
       - testid: hitl-review-date-to
         type: input
         dynamic_testid: false
-      - testid: hitl-review-column-headers
+      - testid: hitl-review-node-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-pipeline-name
         type: element
         dynamic_testid: false
       - testid: hitl-review-toggle-expand
         type: button
         dynamic_testid: false
-      - testid: hitl-review-pipeline-name
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-node-name
+      - testid: hitl-review-column-headers
         type: element
         dynamic_testid: false
       - testid: hitl-gate-card
@@ -3585,8 +3591,11 @@ features:
             - "[x] Stage layout positions persist: editor drags save stage x/y into content_json (GET/PUT /versions round-trips them), the read-only renderer uses persisted x/y when present, and maps saved before position persistence fall back to a topology-aware auto-layout"
             - "[x] Auto-layout is layered: linear chains render left-to-right, split sources and their branches share a column, and rejoin targets cluster — computed from stage/transition topology, not array index"
             - "[x] Unattributed journeys list is keyset-paginated (GET /{id}/journeys?limit&cursor) with a load-more control, never dumps 200 rows at once; journey cards render the kind uppercased (PR 2391), are keyboard-accessible with an aria-label, and open the journeys detail endpoint"
-            # Journeys display gated behind the default-OFF lifecycle_map_journeys flag (FAR-654)
-            - "[x] All journey display on the detail view (journey cards on stage nodes, the Unattributed journeys section, load-more pagination, and the journey detail panel) is gated behind the default-OFF `lifecycle_map_journeys` feature flag: with the flag disabled the view makes no journeys API call, passes an empty journeys list to the renderer, and hides all journey UI while stages/edges render normally; with the flag enabled behaviour is unchanged (frontend/src/__tests__/LifecycleMapView.spec.ts, FAR-654 block)"
+            # Journeys display double-gated: default-OFF lifecycle_map_journeys flag (FAR-654)
+            # plus a per-visit "Show work items" checkbox, also default OFF (FAR-742)
+            - "[x] All journey display on the detail view (journey cards on stage nodes, the Unattributed journeys section, load-more pagination, and the journey detail panel) is double-gated behind the default-OFF `lifecycle_map_journeys` feature flag AND a per-visit 'Show work items' checkbox (default unchecked): with either gate off the view makes no journeys API call, passes an empty journeys list to the renderer, and hides all journey UI while stages/edges render normally (frontend/src/__tests__/LifecycleMapView.spec.ts, FAR-654 + FAR-742 blocks)"
+            # FAR-742: server-side journeys filters + per-node card cap + tense fix
+            - "[x] With both gates on, the map view exposes Period (Last 24h / Last 3 days / Last 7 days / Last 30 days / All time — default Last 7 days) and Status (All / Completed / Failed — default All) filters that hit the journeys endpoint server-side (`updated_since` ISO-8601 lower bound on journeys.updated_at — the last-move evidence timestamp — and `status` on latest_status, validated to complete|failed with 422 otherwise) and reset pagination on change; each page-1 fetch pins its window for the pagination session; the renderer caps journey cards at MAX_CARDS_PER_NODE=5 per stage node (newest-moved first) behind a non-interactive '+N more' chip; the complete status displays as 'Completed' (underlying value unchanged)"
         deferrals:
             - Attributed journeys on the read-only renderer are grouped per stage as before; only the unattributed list is paginated
     feat-mcp:

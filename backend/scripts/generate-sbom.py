@@ -15,6 +15,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -33,11 +34,11 @@ def _safe_output_path(path: Path) -> Path:
     return Path(resolved)
 
 
-def parse_uv_lock(lock_path: Path) -> list[dict]:
+def parse_uv_lock(lock_path: Path) -> list[dict[str, Any]]:
     with lock_path.open("rb") as f:
         data = tomllib.load(f)
 
-    components = []
+    components: list[dict[str, Any]] = []
     for pkg in data.get("package", []):
         name = pkg.get("name", "")
         version = pkg.get("version", "")
@@ -67,28 +68,34 @@ def parse_uv_lock(lock_path: Path) -> list[dict]:
     return sorted(components, key=lambda c: c["name"].lower())
 
 
-def parse_pnpm_lock(lock_path: Path) -> list[dict]:
+def _package_name_and_version(key: str, info: dict[str, Any]) -> tuple[str, str]:
+    """Derive ``(name, version)`` for one pnpm-lock package entry."""
+    version = info.get("version", "")
+    key_without_peers = key.split("(", 1)[0].strip()
+
+    if "node_modules/" in key_without_peers:
+        name = key_without_peers.split("node_modules/")[-1]
+    else:
+        match = re.match(r"^(.*?)@([^@]+)$", key_without_peers)
+        if match:
+            name, version_from_key = match.group(1), match.group(2)
+            name, version = name.strip(), version or version_from_key
+        else:
+            name = key_without_peers
+
+    return name, version
+
+
+def parse_pnpm_lock(lock_path: Path) -> list[dict[str, Any]]:
     with lock_path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
-    components = []
+    components: list[dict[str, Any]] = []
     for key, info in data.get("packages", {}).items():
         if not key or not isinstance(info, dict):
             continue
 
-        version = info.get("version", "")
-        key_without_peers = key.split("(", 1)[0].strip()
-
-        if "node_modules/" in key_without_peers:
-            name = key_without_peers.split("node_modules/")[-1]
-        else:
-            match = re.match(r"^(.*?)@([^@]+)$", key_without_peers)
-            if match:
-                name, version_from_key = match.group(1), match.group(2)
-                name, version = name.strip(), version or version_from_key
-            else:
-                name = key_without_peers
-
+        name, version = _package_name_and_version(key, info)
         if not name or not version:
             continue
 
@@ -113,7 +120,9 @@ def parse_pnpm_lock(lock_path: Path) -> list[dict]:
     return sorted(components, key=lambda c: c["name"].lower())
 
 
-def generate_sbom(components: list[dict], version: str, timestamp: str, supplier: str, product: str) -> dict:
+def generate_sbom(
+    components: list[dict[str, Any]], version: str, timestamp: str, supplier: str, product: str
+) -> dict[str, Any]:
     serial = str(uuid.uuid4())
 
     return {
@@ -142,7 +151,7 @@ def generate_sbom(components: list[dict], version: str, timestamp: str, supplier
     }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Generate CycloneDX SBOM for Modulo")
     parser.add_argument("--output", "-o", help="Output file path (default: stdout)")
     args = parser.parse_args()

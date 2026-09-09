@@ -150,7 +150,7 @@ When upgrading, check for changes to:
 - [ ] Existing pipeline runs appear in the UI
 - [ ] WebSocket connections establish successfully
 - [ ] Rate limiting is functional
-- [ ] Audit log chain is intact (verified via the API's audit `verify_chain` endpoint)
+- [ ] Audit log chain is intact (verified via `GET /api/v1/admin/audit/verify`)
 - [ ] All env vars are set correctly (no deprecation warnings in logs)
 - [ ] Frontend loads without errors (check browser console)
 - [ ] Cross-origin requests work (CORS)

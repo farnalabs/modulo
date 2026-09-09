@@ -10,15 +10,19 @@ code:
   - backend/src/modulo/core/spend_ceiling.py
   - backend/src/modulo/db/crud/scheduled_report.py
   - backend/src/modulo/db/crud/spend_anomaly.py
+  - backend/src/modulo/db/models/spend_anomaly.py
+  - backend/src/modulo/db/migrations/versions/0201_spend_anomaly_unique_org_date.py
 unit-tests:
   - backend/tests/unit/api/test_costs.py
   - backend/tests/unit/api/test_cost_controls_bdd.py
   - backend/tests/unit/api/test_admin_spend_limits_gating.py
+  - backend/tests/unit/api/test_costs_routes_coverage.py
   - backend/tests/unit/core/test_cost_settings.py
   - backend/tests/unit/core/test_spend_ceiling.py
   - backend/tests/unit/core/cost_controller/test_cost_components_crud.py
   - backend/tests/unit/core/cost_controller/test_cost_finalize.py
   - backend/tests/unit/core/cost_controller/test_cost_finalize_ceiling.py
+  - backend/tests/unit/db/crud/test_spend_anomaly.py
 bdd:
   - backend/tests/bdd/features/costs/cost_controls.feature
 depends-on:
@@ -65,15 +69,22 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 - [x] Pipeline cost circuit breaker (§8.10): a pipeline crossing its monthly spend
       threshold trips the breaker and permanently pauses triggers until an admin
       re-enables it via `POST /circuit-breaker/{pipeline_id}/reset`
-- [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team|pipeline|model`
-      streams a CSV attachment with a `costs-export-{period}.csv` disposition
+- [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team`
+      streams a CSV attachment with a `costs-export-{period}.csv` disposition;
+      the exposed `pipeline`/`model` granularities are refused with an explicit
+      422 (the per-model / per-pipeline export surface is not implemented) so a
+      caller never receives mislabelled team rows or an internal error
 - [x] Scheduled cost reports: `POST/GET/DELETE /reports` manage org-owned
       daily/weekly/monthly, team/org, csv/json, one-time/recurring reports with
       `recipients` (email) required (min 1)
 - [x] Rolling spend-anomaly detection: days whose org spend exceeds 2x the trailing
-      7-day average are detected from `OrgDailyRunCount`, merged with persisted
-      anomalies so dismissals survive, and dismissible via
-      `POST /anomalies/dismiss/{id}`
+      7-day average are detected from `OrgDailyRunCount`, each fresh detection is
+      persisted on first sight (`record_or_get_anomaly`, unique per detected
+      org-day via `uq_spend_anomalies_org_date`) so it carries a real id and is
+      dismissible via `POST /anomalies/dismiss/{id}`, repeat detections inherit
+      the saved dismissal state, and previously stored still-flagged rows are
+      merged into the response (`test_costs_routes_coverage.py`,
+      `test_spend_anomaly.py`)
 - [x] Cost-component admin CRUD (attribution of spend to named components) in
       `api/routes/cost_components.py` + `cost_controller/test_cost_components_crud.py`
 - [x] The verification canary (`cost_controller/probe.py`, spec §4.7) and system
@@ -81,15 +92,16 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 
 ## Known Gaps
 
-- **Export grouping is a façade for `pipeline` / `model`** — the export handler maps
-  any `group_by != "team"` to the team report, so pipeline- and model-level export
-  granularity is not independently implemented.
+- **Pipeline- and model-level export granularity is not implemented** — the
+  endpoint's `group_by` enum still advertises `pipeline`/`model` (for forward
+  compatibility), but the CSV export is team-ledger only: those values now fail
+  with an explicit 422 instead of silently returning the team report (`model`)
+  or 500ing via `get_cost_report`'s `ValueError` (`pipeline`). Independent
+  pipeline/model grouping needs a runs-table/cost-component aggregation that is
+  not yet shipped.
 - **No BDD for the ceiling / scheduled-report / anomaly / cost-component surfaces** —
   `cost_controls.feature` covers only token budget, org/team spend limits and the
   circuit breaker; the rest are unit-only.
-- **Anomaly detection has no persistence on first detection path in the endpoint** —
-  freshly detected anomalies carry an empty `id` and are merged with stored rows, so
-  a dismissal can only target previously persisted anomalies.
 
 ## QA History
 
@@ -98,3 +110,14 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   `docs/product-map/` entry. Behaviours verified against `api/routes/costs.py`,
   `api/routes/cost_components.py`, `core/cost_controller/*` and the costs unit/BDD
   suites. Status: covered.
+- 2026-09-08: **improve-architecture (product-map walk)** — closed the anomaly
+  persistence gap: freshly detected anomalies are now written on first sight
+  (`record_or_get_anomaly`) and uniqueness per detected org-day is enforced
+  (`uq_spend_anomalies_org_date`, migration 0201_spend_anomaly_unique_org_date), so every returned anomaly has a
+  stable id that `POST /anomalies/dismiss/{id}` can target and dismissal state
+  survives repeat detection. Endpoint + CRUD unit suites updated.
+- 2026-09-09: **improve-architecture (product-map walk)** — closed the export
+  façade gap: `GET /export` no longer silently maps `model` -> team nor crashes
+  (`500`) on `pipeline`; unimplemented granularities now fail with an explicit
+  422 naming `team` as the supported export grouping. `api/routes/costs.py` +
+  `test_costs.py` / `test_costs_routes_coverage.py` updated.

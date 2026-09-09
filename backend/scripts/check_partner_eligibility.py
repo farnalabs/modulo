@@ -283,7 +283,7 @@ def _coerce_int(value: Any, *, field: str) -> int:
 _TRANSIENT_GH = object()
 
 
-def _run_gh_once(path: str):
+def _run_gh_once(path: str) -> Any:
     """Launch one `gh api -i` call.
 
     Returns the :class:`subprocess.CompletedProcess` on success, or
@@ -304,7 +304,7 @@ def _run_gh_once(path: str):
         return _TRANSIENT_GH
 
 
-def _gh_fetch_with_retries(path: str):
+def _gh_fetch_with_retries(path: str) -> tuple[dict[str, Any], Any] | None:
     """Try the `gh` CLI with retries.
 
     Returns ``(parsed_json, headers)`` on a successful call, or ``None`` when
@@ -329,6 +329,29 @@ def _gh_fetch_with_retries(path: str):
     return None
 
 
+def _process_response(
+    resp: requests.Response, attempt: int, allow_codes: tuple[int, ...]
+) -> tuple[dict[str, Any], Any] | None:
+    """Interpret one API response. Returns ``(json, headers)``, or ``None`` to
+    signal the caller to retry."""
+    if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
+        raise GithubApiError("GitHub API rate limit exceeded.")
+    if resp.status_code in (401, 403):
+        raise GithubApiError(f"GitHub API auth/permission error: HTTP {resp.status_code}.")
+    if resp.status_code < 400:
+        try:
+            return resp.json(), resp.headers
+        except json.JSONDecodeError as exc:
+            raise GithubApiError(f"GitHub API returned non-JSON body: {exc}") from None
+    if resp.status_code in allow_codes:
+        return {}, resp.headers
+    # Retry only on rate-limit / server errors; never on other 4xx.
+    if (resp.status_code == 429 or resp.status_code >= 500) and attempt < _MAX_RETRIES - 1:
+        _backoff(attempt, resp.headers.get("Retry-After"))
+        return None
+    raise GithubApiError(f"GitHub API error: HTTP {resp.status_code}.")
+
+
 def _requests_fetch_with_retries(url: str, allow_codes: tuple[int, ...]) -> tuple[dict[str, Any], Any]:
     """Fetch *url* with `requests`, retrying on 429/5xx.
 
@@ -343,33 +366,16 @@ def _requests_fetch_with_retries(url: str, allow_codes: tuple[int, ...]) -> tupl
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    last_exc: Exception | None = None
     for attempt in range(_MAX_RETRIES):
         try:
             resp = requests.get(url, headers=headers, timeout=_API_TIMEOUT_SECONDS)
         except requests.RequestException as exc:
-            last_exc = exc
-            break
+            raise GithubApiError(f"GitHub API request failed: {exc}") from None
 
-        if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
-            raise GithubApiError("GitHub API rate limit exceeded.")
-        if resp.status_code in (401, 403):
-            raise GithubApiError(f"GitHub API auth/permission error: HTTP {resp.status_code}.")
-        if resp.status_code < 400:
-            try:
-                return resp.json(), resp.headers
-            except json.JSONDecodeError as exc:
-                raise GithubApiError(f"GitHub API returned non-JSON body: {exc}") from None
-        if resp.status_code in allow_codes:
-            return {}, resp.headers
-        # Retry only on rate-limit / server errors; never on other 4xx.
-        if (resp.status_code == 429 or resp.status_code >= 500) and attempt < _MAX_RETRIES - 1:
-            _backoff(attempt, resp.headers.get("Retry-After"))
-            continue
-        raise GithubApiError(f"GitHub API error: HTTP {resp.status_code}.")
+        result = _process_response(resp, attempt, allow_codes)
+        if result is not None:
+            return result
 
-    if last_exc is not None:
-        raise GithubApiError(f"GitHub API request failed: {last_exc}") from None
     raise GithubApiError("GitHub API request failed after retries.")
 
 

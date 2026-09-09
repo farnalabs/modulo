@@ -752,7 +752,16 @@ export interface paths {
         };
         /** Get Feature Flag */
         get: operations["get_feature_flag_api_v1_admin_feature_flags__flag_name__get"];
-        /** Toggle Feature Flag */
+        /**
+         * Toggle Feature Flag
+         * @description Toggle a feature flag for the caller's organisation — persists durably.
+         *
+         *     Writes ``feature_overrides[flag_name]`` into the org's settings (the same
+         *     persistence path as ``PUT /{flag_name}/org-override``) and invalidates the
+         *     list cache, so the toggle survives a fresh request/process and both
+         *     endpoints write the same truth. ``overridden: true`` is only returned
+         *     after the durable write has committed.
+         */
         put: operations["toggle_feature_flag_api_v1_admin_feature_flags__flag_name__put"];
         post?: never;
         delete?: never;
@@ -3318,6 +3327,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model-backends/presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Model Backend Presets Endpoint
+         * @description Return the curated provider presets for the quick-start create flow.
+         */
+        get: operations["list_model_backend_presets_endpoint_api_v1_model_backends_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model-backends/{backend_id}": {
         parameters: {
             query?: never;
@@ -5328,7 +5357,7 @@ export interface paths {
         };
         /**
          * List Journeys Endpoint
-         * @description Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref.
+         * @description Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref, status, and last-move time.
          */
         get: operations["list_journeys_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys_get"];
         put?: never;
@@ -12726,6 +12755,26 @@ export interface components {
             page: number;
             /** Page Size */
             page_size: number;
+        };
+        /** ModelBackendPresetListResponse */
+        ModelBackendPresetListResponse: {
+            /** Items */
+            items: components["schemas"]["ModelBackendPresetResponse"][];
+        };
+        /** ModelBackendPresetResponse */
+        ModelBackendPresetResponse: {
+            /** Id */
+            id: string;
+            /** Provider */
+            provider: string;
+            /** Display Name */
+            display_name: string;
+            /** Default Model Id */
+            default_model_id: string;
+            /** Description */
+            description: string;
+            /** Api Key Docs Url */
+            api_key_docs_url: string;
         };
         /** ModelBackendResponse */
         ModelBackendResponse: {
@@ -25362,6 +25411,44 @@ export interface operations {
             };
         };
     };
+    list_model_backend_presets_endpoint_api_v1_model_backends_presets_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBackendPresetListResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_model_backend_endpoint_api_v1_model_backends__backend_id__get: {
         parameters: {
             query?: {
@@ -29914,6 +30001,10 @@ export interface operations {
             query?: {
                 kind?: string | null;
                 ref?: string | null;
+                /** @description Filter on the journey's latest status. */
+                status?: string | null;
+                /** @description Only journeys whose updated_at (last move) is at or after this ISO-8601 instant. */
+                updated_since?: string | null;
                 cursor?: string | null;
                 limit?: number;
                 _fresh?: boolean;

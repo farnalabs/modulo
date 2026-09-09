@@ -92,8 +92,10 @@ from modulo.core.node_output_split import (
     resolve_node_contract_output,
 )
 from modulo.core.pipeline_engine.decorator import cancellable_node
+from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
+from modulo.core.pipeline_engine.hitl_context import serialize_value, slice_with_marker
 from modulo.core.pipeline_engine.idempotency import (
     node_idempotency_key,
     read_before_write_ambiguous,
@@ -476,6 +478,45 @@ async def _resolve_egress_allowlist(
 # (sandbox.rate_limited) — never the permanent ``harness.unknown`` fallback.
 _SANDBOX_RATE_LIMIT_MAX_RETRIES = 3
 _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S = 5
+
+# FAR-766 module-level fallbacks. The runtime values are read at call time from
+# settings so tests can patch them without a full settings round-trip; a settings
+# read/parse failure falls back to these defaults (fail-open in the FAILED-
+# direction of a too-tight bound, never an unbounded provisioning hang).
+_SANDBOX_PROVISIONING_TIMEOUT_DEFAULT_S = 90.0
+_SANDBOX_BINDING_RESOLVE_TIMEOUT_DEFAULT_S = 30.0
+
+
+def _sandbox_provisioning_timeout() -> float:
+    """FAR-766: the pre-sandbox-create provisioning watchdog bound (seconds).
+
+    Bound the phase from the ``dispatching`` dispatch marker to a created
+    sandbox so a stuck ``AsyncSandbox.create`` fails the node RETRYABLY within
+    this window instead of riding the 35-min ``dispatcher_reconcile`` nodeless
+    sweep. Read at call time (patchable); a settings error falls back to the
+    safe default.
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().sandbox_provisioning_timeout_seconds)
+    except Exception:
+        return _SANDBOX_PROVISIONING_TIMEOUT_DEFAULT_S
+
+
+def _sandbox_binding_resolve_timeout() -> float:
+    """FAR-766: bound for ``resolve_agent_bindings`` at provision time (seconds).
+
+    Previously unbounded — a hard secrets-backend / DB stall also rode to the
+    node timeout. A timeout classifies as a retryable binding resolution
+    failure (never the terminal ``harness.unknown`` path).
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().sandbox_binding_resolve_timeout_seconds)
+    except Exception:
+        return _SANDBOX_BINDING_RESOLVE_TIMEOUT_DEFAULT_S
 
 
 # The raw returned value is a non-metric Python number (int/float, not bool).
@@ -3480,22 +3521,80 @@ async def _hitl_gate_resume_result(
     return (True, _hitl_gate_approve_reject_result(gate_id, decision, is_rejected))
 
 
-def _hitl_gate_condition_skip(gate_id: str, condition_expr: str | None, state: dict[str, Any]) -> dict[str, Any] | None:
-    """Evaluate the conditional-gate JMESPath expression; skip artifact when falsy."""
-    if condition_expr:
-        try:
-            compiled = compile_jmespath(condition_expr)
-        except ValueError:
-            _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
-            raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
-        result = compiled.search(state)
-        if not bool(result):
-            # Condition falsy — skip the gate entirely. Preserve the raw result
-            # in the artifact (mirrors the pre-refactor behaviour).
-            return _build_hitl_gate_artifact(
-                gate_id, "condition_skipped", condition=condition_expr, condition_result=result
-            )
-    return None
+#: Deterministic cap for each serialised ``condition_result`` member carried
+#: in the interrupt payload (FAR-688). The matched value is derived from run
+#: STATE (node outputs — redacted, then bounded); the expression is
+#: user-authored but can exceed the REST save contract's 500-char cap on an
+#: MCP-authored graph (which bypasses the Pydantic contract), so BOTH members
+#: are bounded before they can reach persistence (the checkpointer persists
+#: interrupt payloads) or the briefing. A sliced member carries the shared
+#: truncation marker (WITHIN the cap).
+_CONDITION_RESULT_FIELD_MAX_CHARS = 2000
+
+
+def _serialize_condition_value(value: Any) -> str:
+    """Serialise a matched condition value deterministically, redacted + bounded.
+
+    FAR-688: the value the JMESPath condition matched is derived from run
+    state (node outputs — agent/connector content), so it runs through the
+    shared redaction primitive BEFORE truncation (FAR-163: a secret
+    straddling the cut point must still be removed) and is then bounded,
+    marked when sliced. Serialisation reuses the briefing's deterministic
+    serializer (:func:`modulo.core.pipeline_engine.hitl_context.serialize_value`)
+    instead of re-implementing it; the slice carries the marker WITHIN the cap.
+    """
+    return slice_with_marker(sanitize_error_text(serialize_value(value)), _CONDITION_RESULT_FIELD_MAX_CHARS)
+
+
+def _bound_condition_expression(expression: str) -> str:
+    """The payload's ``condition_result.expression``, bounded with the marker.
+
+    User-authored (save-time) text, so redaction does not apply — but the cap
+    does: an MCP-authored graph bypasses the REST 500-char condition cap and
+    the expression rides into checkpointer-persisted payloads. The marker is
+    carved out of the slice (WITHIN the cap).
+    """
+    return slice_with_marker(expression, _CONDITION_RESULT_FIELD_MAX_CHARS)
+
+
+def _hitl_gate_condition_evaluate(
+    gate_id: str, condition_expr: str | None, state: dict[str, Any]
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    """Evaluate the conditional-gate JMESPath expression (FAR-688).
+
+    Returns ``(skip_artifact, condition_result)``:
+
+    * No condition → ``(None, None)`` — the gate fires unconditionally.
+    * Falsy result → ``(condition_skipped artifact, None)`` — the gate is
+      skipped entirely (no interrupt); the raw result stays in the artifact
+      (mirrors the pre-refactor behaviour).
+    * Truthy result → ``(None, payload)`` — the gate proceeds and the payload
+      rides in the interrupt payload (``{"expression", "value"}``): the
+      MATCHED value + the expression that produced it, so the fire-time
+      briefing records what actually made the condition true instead of
+      re-guessing it from the expression string (FAR-613's regex heuristic
+      extracts zero node ids for conditions authored against merged-state
+      keys like ``output.score > 0.5``).
+    """
+    if not condition_expr:
+        return None, None
+    try:
+        compiled = compile_jmespath(condition_expr)
+    except ValueError:
+        _log.exception("hitl_gate.invalid_condition", extra={"condition": condition_expr})
+        raise ValueError(f"Invalid HITL gate condition expression: {condition_expr}") from None
+    result = compiled.search(state)
+    if not bool(result):
+        # Condition falsy — skip the gate entirely. Preserve the raw result
+        # in the artifact (mirrors the pre-refactor behaviour).
+        return (
+            _build_hitl_gate_artifact(gate_id, "condition_skipped", condition=condition_expr, condition_result=result),
+            None,
+        )
+    return None, {
+        "expression": _bound_condition_expression(condition_expr),
+        "value": _serialize_condition_value(result),
+    }
 
 
 def _resolve_llm_judge_callable(eval_def: Any) -> Any:
@@ -3698,7 +3797,12 @@ def make_hitl_gate_fn(
             return resume_result  # type: ignore[return-value]
 
         # --- Conditional gate (Section 8.17) — evaluate condition against state. ---
-        condition_skip = _hitl_gate_condition_skip(gate_id, condition_expr, state)
+        # FAR-688: on the fire (truthy) path the MATCHED value rides in the
+        # interrupt payload as ``condition_result`` so the executor's briefing
+        # capture records what made the condition true. The FAR-604 coalescing
+        # hash is over ``Run.input_hash``, never this payload — adding a
+        # member cannot change coalescing outcomes.
+        condition_skip, condition_result = _hitl_gate_condition_evaluate(gate_id, condition_expr, state)
         if condition_skip is not None:
             return condition_skip
 
@@ -3757,6 +3861,9 @@ def make_hitl_gate_fn(
                 "human_only": human_only,
                 "overdue_threshold_minutes": hitl_gate_config.get("overdue_threshold_minutes"),
                 "required_team_id": required_team_id,
+                # FAR-688: the matched condition value ({"expression", "value"},
+                # redacted + bounded) or None when the gate has no condition.
+                "condition_result": condition_result,
             }
         )
         return await _hitl_gate({**state, "_hitl_decision": decision})
@@ -6302,14 +6409,34 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _runner_bindings: dict[str, str] = {}
         if agent_id is not None:
             try:
-                _runner_bindings = await resolve_agent_bindings(
-                    session_factory=session_factory,
-                    org_id=org_id,
-                    agent_id=agent_id,
-                    environment_profile_id=_runner_binding_env_profile_id(),
-                    run_id=run_id,
-                    node_id=node_id,
+                _runner_bindings = await asyncio.wait_for(
+                    resolve_agent_bindings(
+                        session_factory=session_factory,
+                        org_id=org_id,
+                        agent_id=agent_id,
+                        environment_profile_id=_runner_binding_env_profile_id(),
+                        run_id=run_id,
+                        node_id=node_id,
+                    ),
+                    # FAR-766: bound the previously-unbounded pre-claim secrets
+                    # backend / DB read. A hard stall here also used to ride the
+                    # slow nodeless sweep — a timeout is a retryable binding
+                    # resolution failure (never terminal harness.unknown).
+                    timeout=_sandbox_binding_resolve_timeout(),
                 )
+            except TimeoutError:
+                _log.warning(
+                    "sandbox_agent.bindings_resolution_timed_out",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "timeout_seconds": _sandbox_binding_resolve_timeout(),
+                    },
+                )
+                raise SandboxBindingResolutionError(
+                    f"Runner binding resolution timed out after {_sandbox_binding_resolve_timeout()}s "
+                    f"for node '{node_id}'"
+                ) from None
             except LocalProviderBindingsRefusedError as exc:
                 _log.warning(
                     "sandbox_agent.bindings_local_refused",
@@ -6367,64 +6494,89 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # (sandbox.rate_limited) — it must NOT permanently fail as
         # harness.unknown.
         _rate_limit_attempt = 0
-        while True:
-            try:
-                sandbox = await asyncio.wait_for(
-                    AsyncSandbox.create(
-                        template=template_id,
-                        # FAR-487: lifetime STRICTLY greater than the command
-                        # timeout (+ _SANDBOX_LIFETIME_GRACE_S) so the platform
-                        # endAt kill can never preempt the runner's own timeout
-                        # path — a mid-command sandbox death fabricated a
-                        # zero-exit completion and misreported the failure as
-                        # "no parseable output.json (exit code 0)".
-                        # FAR-489: int() — the e2b SDK's attrs model does NOT
-                        # coerce a float, and E2B's Go server rejects
-                        # "1320.0" with 400 (int32 unmarshal), instantly
-                        # failing every sandbox create.
-                        timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
-                        allow_internet_access=(egress_policy not in ("deny_all", "selected")),
-                        # deny_all/selected -> no internet; default/None ->
-                        # internet allowed (e2b default). IMPORTANT
-                        # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
-                        # at this boolean level — the host:port egress_allowlist
-                        # is carried only as metadata and is NOT yet honored by
-                        # any enforcement point (no template-side mechanism
-                        # exists; the e2b SDK has no native allowlist control).
-                        # ``selected`` is functionally equivalent to ``deny_all``
-                        # until that point lands.
-                        metadata=_metadata or None,
-                    ),
-                    timeout=min(sandbox_timeout, 120),
-                )
-                break
-            except RateLimitException as _rle:
-                _rate_limit_attempt += 1
-                if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
-                    raise SandboxQueueTimeoutError(
-                        f"E2B rate-limited after {_rate_limit_attempt} attempts creating sandbox for node '{node_id}'"
-                    ) from None
-                _backoff = _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S * (2 ** (_rate_limit_attempt - 1))
-                _log.warning(
-                    "sandbox_agent.e2b_rate_limited_retrying",
-                    extra={
-                        "run_id": run_id,
-                        "node_id": node_id,
-                        "attempt": _rate_limit_attempt,
-                        "backoff_seconds": _backoff,
-                    },
-                )
-                _emit_script_span_event(
-                    "script.rate_limited_retry",
-                    {
-                        "attempt": _rate_limit_attempt,
-                        "backoff_seconds": _backoff,
-                    },
-                )
-                await asyncio.wait_for(
-                    asyncio.sleep(_backoff),
-                    timeout=min(sandbox_timeout, 120),
-                )
+        # FAR-766: provisioning watchdog. The dispatch marker is written
+        # ("dispatching") BEFORE ``AsyncSandbox.create``; if create never returns
+        # (E2B provider degradation observed 06:05-13:58), the node never reaches
+        # "script_executing" and sits claimed-but-never-dispatched until the
+        # slow 35-min ``dispatcher_reconcile`` nodeless sweep. Bound the
+        # provisioning await so the node fails RETRYABLY within this window.
+        # The bound applies to the create await AND the rate-limit backoff sleeps
+        # so a retry train cannot stack past the window.
+        _provision_timeout = _sandbox_provisioning_timeout()
+        try:
+            while True:
+                try:
+                    sandbox = await asyncio.wait_for(
+                        AsyncSandbox.create(
+                            template=template_id,
+                            # FAR-487: lifetime STRICTLY greater than the command
+                            # timeout (+ _SANDBOX_LIFETIME_GRACE_S) so the platform
+                            # endAt kill can never preempt the runner's own timeout
+                            # path — a mid-command sandbox death fabricated a
+                            # zero-exit completion and misreported the failure as
+                            # "no parseable output.json (exit code 0)".
+                            # FAR-489: int() — the e2b SDK's attrs model does NOT
+                            # coerce a float, and E2B's Go server rejects
+                            # "1320.0" with 400 (int32 unmarshal), instantly
+                            # failing every sandbox create.
+                            timeout=int(sandbox_timeout + _SANDBOX_LIFETIME_GRACE_S),
+                            allow_internet_access=(egress_policy not in ("deny_all", "selected")),
+                            # deny_all/selected -> no internet; default/None ->
+                            # internet allowed (e2b default). IMPORTANT
+                            # (FAR-296 Phase 3b-3): ``selected`` DENIES ALL egress
+                            # at this boolean level — the host:port egress_allowlist
+                            # is carried only as metadata and is NOT yet honored by
+                            # any enforcement point (no template-side mechanism
+                            # exists; the e2b SDK has no native allowlist control).
+                            # ``selected`` is functionally equivalent to ``deny_all``
+                            # until that point lands.
+                            metadata=_metadata or None,
+                        ),
+                        timeout=min(sandbox_timeout, _provision_timeout),
+                    )
+                    break
+                except RateLimitException as _rle:
+                    _rate_limit_attempt += 1
+                    if _rate_limit_attempt > _SANDBOX_RATE_LIMIT_MAX_RETRIES:
+                        raise SandboxQueueTimeoutError(
+                            f"E2B rate-limited after {_rate_limit_attempt} attempts "
+                            f"creating sandbox for node '{node_id}'"
+                        ) from None
+                    _backoff = _SANDBOX_RATE_LIMIT_BASE_BACKOFF_S * (2 ** (_rate_limit_attempt - 1))
+                    _log.warning(
+                        "sandbox_agent.e2b_rate_limited_retrying",
+                        extra={
+                            "run_id": run_id,
+                            "node_id": node_id,
+                            "attempt": _rate_limit_attempt,
+                            "backoff_seconds": _backoff,
+                        },
+                    )
+                    _emit_script_span_event(
+                        "script.rate_limited_retry",
+                        {
+                            "attempt": _rate_limit_attempt,
+                            "backoff_seconds": _backoff,
+                        },
+                    )
+                    await asyncio.wait_for(
+                        asyncio.sleep(_backoff),
+                        timeout=min(sandbox_timeout, _provision_timeout),
+                    )
+        except TimeoutError:
+            _log.warning(
+                "sandbox_agent.provisioning_watchdog_fired",
+                extra={
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "timeout_seconds": _provision_timeout,
+                    "state": "dispatching",
+                },
+            )
+            raise SandboxQueueTimeoutError(
+                f"Sandbox provisioning for node '{node_id}' exceeded {_provision_timeout}s bound "
+                "(AsyncSandbox.create never returned — stuck dispatching; provider may be degraded)"
+            ) from None
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
         _sandbox_id = getattr(sandbox, "sandbox_id", None) or None

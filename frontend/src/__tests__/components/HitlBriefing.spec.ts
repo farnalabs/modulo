@@ -1,10 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import HitlBriefing from '../components/HitlBriefing.vue'
+import HitlBriefing from '../../components/HitlBriefing.vue'
 
 const fullContext = {
   description: 'Review the generated comments before posting to the PR.',
   condition: "node_id=='550e8400-e29b-41d4-a716-446655440000'",
+  condition_result: {
+    expression: "node_id=='550e8400-e29b-41d4-a716-446655440000'",
+    value: '{"comment":"ship it"}',
+    evaluated_at_node: '550e8400-e29b-41d4-a716-446655440000',
+  },
   trigger: 'condition',
   source_node_id: '550e8400-e29b-41d4-a716-446655440000',
   source_node_label: 'Comment Generator',
@@ -67,6 +72,89 @@ describe('HitlBriefing', () => {
     const details = wrapper.find('[data-testid="hitl-briefing-details"]')
     expect(details.text()).toContain('Raised by a HITL node')
     expect(details.text()).toContain('Two failed escalations in a row.')
+  })
+
+  it('renders the matched condition value as primary evidence (FAR-688)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: { description: 'Why this gate exists.', context: fullContext },
+    })
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    const matched = wrapper.find('[data-testid="hitl-briefing-condition-result"]')
+    expect(matched.exists()).toBe(true)
+    expect(matched.text()).toContain('Condition evaluated to')
+    expect(matched.text()).toContain('{"comment":"ship it"}')
+    // The snapshot condition row already shows the expression — no duplicate.
+    expect(wrapper.find('[data-testid="hitl-briefing-condition-result-expression"]').exists()).toBe(false)
+  })
+
+  it('renders the payload expression when the snapshot condition is unresolvable (FAR-688)', async () => {
+    // Graph drift / legacy snapshot: the condition row is absent but the
+    // payload carries the fire-time expression — it must still be shown.
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Why this gate exists.',
+        context: { ...fullContext, condition: null, trigger: 'unknown' },
+      },
+    })
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    const expression = wrapper.find('[data-testid="hitl-briefing-condition-result-expression"]')
+    expect(expression.exists()).toBe(true)
+    expect(expression.text()).toContain("node_id=='550e8400-e29b-41d4-a716-446655440000'")
+  })
+
+  it('hides the matched-value block for a legacy payload without condition_result', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: { description: 'Why this gate exists.', context: { ...fullContext, condition_result: null } },
+    })
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="hitl-briefing-condition-result"]').exists()).toBe(false)
+    // The supplementary artifacts still render (existing behaviour unchanged).
+    expect(wrapper.text()).toContain('{"comment":"Looks good"}')
+  })
+
+  it('renders a truncated artifact summary verbatim with its marker', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Why this gate exists.',
+        context: {
+          ...fullContext,
+          artifacts: [{ node_id: '550e8400-e29b-41d4-a716-446655440000', summary: '{"blob":"xxxx…(truncated)"}' }],
+        },
+      },
+    })
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    const details = wrapper.find('[data-testid="hitl-briefing-details"]')
+    expect(details.text()).toContain('{"blob":"xxxx…(truncated)"}')
+  })
+
+  it('renders two artifacts sharing one node_id without duplicate keys (FAR-688)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Why this gate exists.',
+        context: {
+          ...fullContext,
+          artifacts: [
+            { node_id: '550e8400-e29b-41d4-a716-446655440000', summary: 'first' },
+            { node_id: '550e8400-e29b-41d4-a716-446655440000', summary: 'second' },
+          ],
+        },
+      },
+    })
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    const summaries = wrapper.findAll('[data-testid="hitl-briefing-details"] pre')
+    expect(summaries).toHaveLength(2)
+    expect(summaries[0].text()).toBe('first')
+    expect(summaries[1].text()).toBe('second')
+  })
+
+  it('renders the unknown trigger for an unresolvable gate config (FAR-688)', async () => {
+    const wrapper = mount(HitlBriefing, {
+      props: { description: 'Why this gate exists.', context: { ...fullContext, trigger: 'unknown' } },
+    })
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="hitl-briefing-details"]').text()).toContain(
+      'Trigger unknown (gate config could not be resolved)',
+    )
   })
 
   it('renders bounded artifact excerpts in the details', async () => {

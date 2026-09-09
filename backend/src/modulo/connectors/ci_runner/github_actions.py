@@ -115,6 +115,61 @@ class GitHubActionsCIRunner(CIRunnerBase):
         except httpx.HTTPError as exc:
             return HealthResult(ok=False, detail=f"HTTP error: {exc}")
 
+    @staticmethod
+    def _split_pipeline_id(pipeline_id: str) -> tuple[str, str]:
+        """Split a pipeline_id into ``(owner_repo, workflow_filename)``.
+
+        ``workflow_filename`` is empty for the repository-dispatch form.
+        """
+        parts = pipeline_id.rsplit("/", 1)
+        owner_repo = parts[0]
+        if not owner_repo:
+            raise ValueError(f"pipeline_id must be 'owner/repo' or 'owner/repo/workflow.yml', got {pipeline_id!r}")
+        workflow_filename = parts[1] if len(parts) > 1 else ""
+        return owner_repo, workflow_filename
+
+    async def _post_dispatch(
+        self,
+        client: httpx.AsyncClient,
+        owner_repo: str,
+        workflow_filename: str,
+        branch: str,
+        variables: dict[str, str] | None,
+    ) -> httpx.Response:
+        if workflow_filename:
+            return await client.post(
+                f"/repos/{owner_repo}/actions/workflows/{workflow_filename}/dispatches",
+                json={
+                    "ref": branch or "main",
+                    "inputs": variables or {},
+                },
+            )
+        return await client.post(
+            f"/repos/{owner_repo}/dispatches",
+            json={"event_type": "modulo-trigger", "client_payload": variables or {}},
+        )
+
+    async def _latest_dispatched_run(
+        self,
+        client: httpx.AsyncClient,
+        owner_repo: str,
+        workflow_filename: str,
+        branch: str,
+    ) -> CIRun | None:
+        """Fetch the most recent run for a just-dispatched workflow, or None."""
+        params: dict[str, Any] = {"per_page": 1, "branch": branch or "main"}
+        if workflow_filename:
+            params["workflow_id"] = workflow_filename
+        workflows_r = await client.get(
+            f"/repos/{owner_repo}/actions/runs",
+            params=params,
+        )
+        workflows_r.raise_for_status()
+        runs = _safe_records(workflows_r.json(), "workflow_runs")
+        if runs:
+            return self._parse_run(runs[0])
+        return None
+
     async def trigger_run(
         self,
         pipeline_id: str,
@@ -123,41 +178,17 @@ class GitHubActionsCIRunner(CIRunnerBase):
     ) -> CIRun:
         if not pipeline_id:
             raise ValueError("pipeline_id is required")
-        parts = pipeline_id.rsplit("/", 1)
-        owner_repo = parts[0]
-        if not owner_repo:
-            raise ValueError(f"pipeline_id must be 'owner/repo' or 'owner/repo/workflow.yml', got {pipeline_id!r}")
-        workflow_filename = parts[1] if len(parts) > 1 else ""
+        owner_repo, workflow_filename = self._split_pipeline_id(pipeline_id)
 
         try:
             async with self._client() as client:
-                if workflow_filename:
-                    r = await client.post(
-                        f"/repos/{owner_repo}/actions/workflows/{workflow_filename}/dispatches",
-                        json={
-                            "ref": branch or "main",
-                            "inputs": variables or {},
-                        },
-                    )
-                else:
-                    r = await client.post(
-                        f"/repos/{owner_repo}/dispatches",
-                        json={"event_type": "modulo-trigger", "client_payload": variables or {}},
-                    )
+                r = await self._post_dispatch(client, owner_repo, workflow_filename, branch, variables)
                 r.raise_for_status()
 
                 if r.status_code == 204:
-                    params: dict[str, Any] = {"per_page": 1, "branch": branch or "main"}
-                    if workflow_filename:
-                        params["workflow_id"] = workflow_filename
-                    workflows_r = await client.get(
-                        f"/repos/{owner_repo}/actions/runs",
-                        params=params,
-                    )
-                    workflows_r.raise_for_status()
-                    runs = _safe_records(workflows_r.json(), "workflow_runs")
-                    if runs:
-                        return self._parse_run(runs[0])
+                    latest = await self._latest_dispatched_run(client, owner_repo, workflow_filename, branch)
+                    if latest is not None:
+                        return latest
 
                 return CIRun(
                     id="",
