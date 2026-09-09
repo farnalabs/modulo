@@ -4093,16 +4093,23 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     never-re-claimable zombie is ultimately bounded by the B4 mid-graph-wedge
     age backstop.
 
+    FAR-733: when a stall-covered ``retry_policy`` exists, the decision
+    consults the SHARED ``_retry_after_policy`` matcher (the same event
+    resolution the in-execute path and watchdog kills use —
+    ``pipeline_engine.watchdog_retry``). The attempt budget uses
+    ``max(0, claim_count - 1)`` (the watchdog path's
+    ``max(node_attempt_count, claim_count - 1)`` where ``node_attempt_count``
+    is 0 for nodeless runs), so nodeless zombie deaths under a stall-covered
+    policy are re-dispatched on exactly the same cycle the watchdog would allow.
+
     Retry budgeting (FAR-509, re-keyed on EVENT CONTENT by the FAR-525 qa
     gate; absent-``on`` re-classified by FAR-649) — the budget bounds
-    successful-claim CYCLES (terminal-fail once ``claim_count`` exceeds it; it
-    does NOT bound the enqueue count):
-      * ``retry_policy`` covering "stall" — either ``"stall"`` in an explicit
-        non-empty ``on`` list, OR (FAR-649) an ABSENT ``on`` key (missing or
-        ``null``) with a valid ``max_retries`` > 0 (all-events default):
-        honor the ``max_retries`` budget. ``claim_count`` is 1 for the initial
-        claim, so a re-dispatch is allowed while ``claim_count <= max_retries``
-        (initial attempt + up to ``max_retries`` retries).
+    successful-claim CYCLES (terminal-fail once the adjusted attempt count
+    exceeds it; it does NOT bound the enqueue count):
+      * ``retry_policy`` covering "stall" (via ``_retry_after_policy``): honor
+        the ``max_retries`` budget. The attempt count is
+        ``max(0, claim_count - 1)`` (the watchdog path's budget for nodeless
+        runs), so a re-dispatch is allowed while this count <= ``max_retries``.
       * ``retry_policy`` absent/None, a non-dict, OR an explicit ``on`` that is
         empty (this includes the ``{}`` column default AND the FAR-525 GUI's
         no-op panel save ``{on: [], max_retries: 0, backoff_schedule: {...}}``):
@@ -4112,36 +4119,39 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         budget is exhausted. The decision keys on the POLICY's EVENT CONTENT
         (what it covers), never on dict non-emptiness — a no-op panel save
         must not silently convert budget-default repair into terminal-fail.
-      * ``retry_policy`` whose ``on`` is non-empty but does NOT contain
+      * ``retry_policy`` whose ``on`` is non-empty but does NOT cover
         ``"stall"``: terminal-fail — never re-dispatch a nodeless zombie for a
         trigger it does not cover.
     """
-    from modulo.core.pipeline_engine.retry_compensation import RETRY_MAX_ATTEMPTS_BOUND
+    from modulo.core.pipeline_engine.executor import _retry_after_policy
 
     retry_policy = getattr(row, "retry_policy", None)
     if isinstance(retry_policy, dict):
-        # FAR-649: an ABSENT `on` (key missing or null) with a VALID budget > 0
-        # is now ALL-events coverage (stall included) — the zombie repair
-        # honors the POLICY budget, not the budget-default. An absent-`on`
-        # policy with a malformed or 0 budget falls through to the
-        # event-content branches below (budget-default repair for an empty
-        # `on`, matching the no-policy treatment of unusable data).
-        raw_budget = retry_policy.get("max_retries", 0)
-        budget_is_valid_int = (
-            isinstance(raw_budget, int)
-            and not isinstance(raw_budget, bool)
-            and 1 <= raw_budget <= RETRY_MAX_ATTEMPTS_BOUND
-        )
-        if budget_is_valid_int and ("on" not in retry_policy or retry_policy["on"] is None):
-            return bool(row.claim_count <= raw_budget)
-        on = retry_policy.get("on") or []
-        if "stall" in on:
-            max_retries = int(retry_policy.get("max_retries", 0) or 0)
-            return bool(row.claim_count <= max_retries)
-        if on:
-            # A policy whose `on` names events but does NOT cover "stall" must
-            # NOT re-dispatch a nodeless zombie — terminal-fail it.
+        # FAR-733: use the SHARED _retry_after_policy matcher — the same event
+        # resolution the in-execute path and watchdog kills use.  The nodeless
+        # zombie's terminal outcome is status="running" + error_code
+        # "executor_stalled" (not yet terminalized), so we call the matcher
+        # with the terminal shape the watchdog would present: status="stalled",
+        # code="executor_stalled".  When the budget is non-None the policy
+        # covers stall; when None it does not (or the policy is malformed /
+        # zero-budget / empty-on).
+        retry_budget = _retry_after_policy(retry_policy, "stalled", "executor_stalled")
+        if retry_budget is not None:
+            # The watchdog path's attempt budget for nodeless runs:
+            # max(node_attempt_count, claim_count - 1) where
+            # node_attempt_count = 0 (no node ever executed).
+            attempt_count = max(0, row.claim_count - 1)
+            return bool(attempt_count <= retry_budget)
+        # _retry_after_policy returned None: either the policy is malformed /
+        # zero-budget / empty-on, or its `on` does not cover "stall".  Check
+        # whether the policy is non-empty but does NOT cover stall — those
+        # must terminal-fail (never re-dispatch for an uncovered trigger).
+        on = retry_policy.get("on")
+        if isinstance(on, list) and on:
+            # Non-empty `on` without "stall" — terminal-fail.
             return False
+        # Empty / missing `on` / zero-budget / malformed policy: fall through
+        # to the budget-default repair (SAQ_NODELESS_REDISPATCH_BUDGET).
     # No stall coverage (no/empty/None policy, an empty/missing `on`, or the
     # GUI's no-op all-empty panel save): re-dispatch while within the
     # configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2 — FAR-509;

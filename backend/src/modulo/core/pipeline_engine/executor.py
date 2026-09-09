@@ -441,6 +441,15 @@ def _retry_after_policy(
     therefore cover both the in-execute outcome spellings AND the raw watchdog
     codes (both resolve through ``map_legacy_code``).
 
+    Nodeless zombie deaths also consult this matcher (FAR-733): the
+    dispatcher_reconcile cron path's ``_should_redispatch_nodeless`` calls
+    this function with ``final_status="stalled"`` and
+    ``error_code="executor_stalled"`` so that a stall-covered policy
+    re-dispatches nodeless zombies on the SAME cycle the watchdog would allow.
+    The attempt budget uses ``max(0, claim_count - 1)`` (the watchdog path's
+    ``max(node_attempt_count, claim_count - 1)`` where ``node_attempt_count``
+    is 0 for nodeless runs).
+
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
 

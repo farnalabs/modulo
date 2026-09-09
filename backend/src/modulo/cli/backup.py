@@ -37,6 +37,12 @@ _CHECKPOINTS_JSON_FILE = "checkpoints.json"
 _WRITES_JSON_FILE = "checkpoint_writes.json"
 _CREDS_JSON_FILE = "credentials_references.json"
 
+# The published entry point moved to modulo.cli.main (FAR-671 slice 2): the
+# top-level group lifts THIS module's commands (backup/restore/apply) onto
+# itself so `modulo backup` / `modulo restore` keep working verbatim. Listing
+# the group surface here keeps it explicit for the vulture dead-code gate.
+__all__ = ["backup", "cli", "restore"]
+
 
 # ── URL helpers ──────────────────────────────────────────────────────────────
 
