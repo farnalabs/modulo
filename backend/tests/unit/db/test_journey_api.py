@@ -325,6 +325,44 @@ class TestListMapJourneys:
         items, _ = await list_map_journeys(session, map_id=_MAP, owner_team_id=_TEAM_A)
         assert [j.id for j, _ in items] == [team_a.id]
 
+    async def test_list_status_filter_narrows_on_latest_status(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        failed = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP, latest_status="failed")
+        await _seed_journey(session, kind="github_issue", ref="c/d#7", map_id=_MAP, latest_status="complete")
+
+        items, _ = await list_map_journeys(session, map_id=_MAP, status="failed")
+
+        assert [j.id for j, _ in items] == [failed.id]
+
+    async def test_list_updated_since_filter_narrows_on_last_move(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        recent = await _seed_journey(
+            session, kind="github_issue", ref="a/b#5", map_id=_MAP, updated_at=datetime(2026, 9, 1, tzinfo=UTC)
+        )
+        await _seed_journey(
+            session, kind="github_issue", ref="c/d#7", map_id=_MAP, updated_at=datetime(2026, 8, 1, tzinfo=UTC)
+        )
+
+        items, _ = await list_map_journeys(session, map_id=_MAP, updated_since=datetime(2026, 8, 25, tzinfo=UTC))
+
+        assert [j.id for j, _ in items] == [recent.id]
+
+    async def test_list_updated_since_includes_journey_moved_at_boundary(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        boundary = await _seed_journey(
+            session, kind="github_issue", ref="a/b#5", map_id=_MAP, updated_at=datetime(2026, 8, 25, tzinfo=UTC)
+        )
+
+        items, _ = await list_map_journeys(session, map_id=_MAP, updated_since=datetime(2026, 8, 25, tzinfo=UTC))
+
+        assert [j.id for j, _ in items] == [boundary.id]
+
 
 class TestListPagination:
     async def test_pagination_respects_limit_and_cursor_roundtrip(self, session: AsyncSession) -> None:

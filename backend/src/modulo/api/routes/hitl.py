@@ -65,7 +65,7 @@ from modulo.db.crud.hitl_gate_config import (
     hitl_gate_exists_but_unresolved,
     human_only_denial,
     make_gate_id,
-    normalize_gate_description,
+    resolve_gate_description,
     resolve_gate_descriptions,
     resolve_hitl_gate_config,
     snapshot_gate_config_map,
@@ -204,13 +204,23 @@ class GateResponse(BaseModel):
     #: (frontend UUID hygiene — falls back to shortId when absent).
     label: str | None = None
     #: FAR-613: the gate config's human description — WHY this gate exists.
-    #: Resolved from the snapshot gate config (edge-level or FAR-402
-    #: node-level). None for legacy gates → the UI renders the muted
-    #: no-description fallback.
+    #: Resolved with the FAR-688 unified precedence (context-first, snapshot
+    #: fallback via ``hitl_gate_config.resolve_gate_description`` — the same
+    #: rule every briefing surface applies). None for legacy gates → the UI
+    #: renders the muted no-description fallback.
+    #:
+    #: NOTE (kept duplication): the description ALSO rides inside
+    #: ``context.description`` (the fire-time capture). The top-level field
+    #: is the frontend contract — the render source; the two agree under the
+    #: unified precedence and may only differ when the snapshot was edited
+    #: after the gate fired.
     description: str | None = None
     #: FAR-613: the fire-time briefing bundle persisted on the claim row
-    #: (condition, trigger, source node, bounded artifacts, reason,
-    #: pipeline_name). None for legacy gates.
+    #: (condition, FAR-688 matched ``condition_result``, trigger, source
+    #: node, bounded artifacts, reason, pipeline_name). None for legacy
+    #: gates. Shape: ``modulo.core.pipeline_engine.hitl_context.HitlGateContext``
+    #: (kept as an open dict here — the API contract must accept legacy
+    #: bundles that predate any key).
     context: dict[str, Any] | None = None
     #: FAR-691: the claimant's human-readable display name (batched accounts
     #: lookup). None when the account row is missing — the frontend falls
@@ -991,7 +1001,34 @@ async def list_run_pending_gates(
                 snapshot = snap_result.scalar_one_or_none()
                 if snapshot is not None and isinstance(snapshot.graph_json, dict):
                     gate_label_map = _build_gate_label_map(snapshot.graph_json)
-                    gate_description_map = _build_gate_description_map(snapshot.graph_json)
+                    # FAR-688 unified precedence: the fire-time captured
+                    # description (the claim's context) wins; the snapshot
+                    # config's description is the fallback — the SAME rule
+                    # the org-level endpoints apply via
+                    # ``resolve_gate_descriptions``.
+                    gate_config_map = snapshot_gate_config_map(snapshot.graph_json)
+                    gate_description_map = {
+                        g.gate_id: resolve_gate_description(
+                            g.context_json if isinstance(g.context_json, dict) else None,
+                            gate_config_map.get(g.gate_id),
+                        )
+                        for g in gates
+                    }
+
+            if not gate_description_map and gates:
+                # FAR-688: when the snapshot is unavailable (no snapshot_id,
+                # retention pruned the row, or a non-dict graph) the
+                # context-first pass above never ran — resolve from the claim
+                # row's captured briefing ALONE (context-first, no snapshot
+                # fallback) so this surface agrees with the org-level
+                # ``resolve_gate_descriptions`` resolver instead of muting a
+                # description the capture carries.
+                gate_description_map = {
+                    g.gate_id: resolve_gate_description(
+                        g.context_json if isinstance(g.context_json, dict) else None, None
+                    )
+                    for g in gates
+                }
 
             # FAR-691: batched claimant display names + the caller-owns-claim
             # stamp, resolved inside the same transaction/RLS context.
@@ -1397,34 +1434,6 @@ def _build_gate_label_map(graph_json: dict[str, Any]) -> dict[str, str]:
         if source and target:
             gate_label_map[make_gate_id(source, target)] = str(label)
     return gate_label_map
-
-
-def _gate_description_from_graph(graph_json: dict[str, Any] | None, gate_id: str) -> str | None:
-    """The gate's human description from a snapshot graph, or None (FAR-613).
-
-    Shared normalisation lives in ``hitl_gate_config.normalize_gate_description``
-    so both pending endpoints and the MCP gate resource render the same muted
-    no-description fallback for the same gates.
-    """
-    if not isinstance(graph_json, dict):
-        return None
-    config = snapshot_gate_config_map(graph_json).get(gate_id)
-    return normalize_gate_description(config)
-
-
-def _build_gate_description_map(graph_json: dict[str, Any]) -> dict[str, str | None]:
-    """Map gate_id -> the gate config's human description (FAR-613).
-
-    Sibling of :func:`_build_gate_label_map` — same snapshot walk (via the
-    shared ``snapshot_gate_config_map``, which covers BOTH gate shapes:
-    edge-level configs and FAR-402 node-level ``hitl_config``), keyed by the
-    same derived gate ids, so labels and descriptions always agree on the
-    gate id derivation. Gates whose config carries no usable description map
-    to ``None`` (the frontend renders the muted no-description fallback).
-    """
-    return {
-        gate_id: _gate_description_from_graph(graph_json, gate_id) for gate_id in snapshot_gate_config_map(graph_json)
-    }
 
 
 def _gate_to_response(

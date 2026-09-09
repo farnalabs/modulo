@@ -133,7 +133,7 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
         <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</div>
         <div data-testid="run-detail-heartbeat" id="run-detail-heartbeat-anchor">
-          <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span> <span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
+          <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>{{ ' ' }}<span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
         </div>
       </div>
 
@@ -1001,12 +1001,25 @@ function nodeLabel(nodeId: string): string {
 
 const GITHUB_KINDS = ['github', 'github_pr', 'github_issue'] as const
 
+// The PR Reviewer pipeline derives work items with bare kinds ('pr',
+// 'pull_request', 'issue') rather than the 'github_*' kinds the badge
+// originally expected (FAR-726). Normalize every alias onto the canonical
+// kind so kind-based branching (badge label, URL, title) treats them
+// identically; unknown kinds pass through unchanged so the generic
+// fallback chip still renders them.
+function normalizeGithubKind(kind: string | null | undefined): string {
+  const normalized = (kind || '').toLowerCase()
+  if (normalized === 'pr' || normalized === 'pull_request') return 'github_pr'
+  if (normalized === 'issue') return 'github_issue'
+  return normalized
+}
+
 function isGithubWorkItem(item: WorkItemRef): boolean {
-  return GITHUB_KINDS.includes((item.kind || '').toLowerCase() as (typeof GITHUB_KINDS)[number])
+  return GITHUB_KINDS.includes(normalizeGithubKind(item.kind) as (typeof GITHUB_KINDS)[number])
 }
 
 function githubKindLabel(item: WorkItemRef): string {
-  const kind = (item.kind || '').toLowerCase()
+  const kind = normalizeGithubKind(item.kind)
   const key =
     kind === 'github' || kind === 'github_pr' || kind === 'github_issue'
       ? `views.RunDetailView.work_item_kind_${kind}`
@@ -1019,7 +1032,7 @@ function githubRefId(item: WorkItemRef): string {
 }
 
 function getPrUrl(item: WorkItemRef): string | null {
-  const kind = (item.kind || '').toLowerCase()
+  const kind = normalizeGithubKind(item.kind)
   const ref = (item.ref || '').trim()
   const hashIndex = ref.indexOf('#')
   if (hashIndex > 0) {
@@ -1069,7 +1082,7 @@ function githubWorkItemBadgeLabel(item: WorkItemRef): string {
 }
 
 function prTitle(item: WorkItemRef): string | null {
-  if ((item.kind || '').toLowerCase() !== 'github_pr') return null
+  if (normalizeGithubKind(item.kind) !== 'github_pr') return null
   const ctx = prContext.value
   if (!ctx || !ctx.title || !ctx.number) return null
   const refId = githubRefId(item)

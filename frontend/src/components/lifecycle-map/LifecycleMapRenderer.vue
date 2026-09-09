@@ -64,12 +64,28 @@
               @keydown.space.stop
               @open="onJourneyOpen(journey)"
             />
+            <span
+              v-if="nodeOverflowCount(nodeProps.data.stageId) > 0"
+              class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+              :title="$t('views.LifecycleMapView.journey.more_on_node_title', { count: nodeOverflowCount(nodeProps.data.stageId) })"
+              data-testid="journey-overflow-chip"
+            >
+              {{ $t('views.LifecycleMapView.journey.more_on_node', { count: nodeOverflowCount(nodeProps.data.stageId) }) }}
+            </span>
           </div>
         </div>
       </template>
     </VueFlow>
   </div>
 </template>
+
+<script lang="ts">
+/**
+ * Maximum journey cards rendered per stage node (FAR-742). Newest-moved
+ * journeys render first; the remainder collapses into a "+N more" chip.
+ */
+export const MAX_CARDS_PER_NODE = 5
+</script>
 
 <script setup lang="ts">
 import { computed } from 'vue'
@@ -105,8 +121,25 @@ const journeysByStage = computed<Record<string, JourneySummary[]>>(() => {
   return grouped
 })
 
+function journeyTimestamp(journey: JourneySummary): number {
+  const parsed = Date.parse(journey.updated_at ?? '')
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function nodeAllJourneys(stageId: unknown): JourneySummary[] {
+  const list = stageId ? (journeysByStage.value[stageId as string] ?? []) : []
+  // Newest-moved first (updated_at = when the journey last moved).
+  return [...list].sort((a, b) => journeyTimestamp(b) - journeyTimestamp(a))
+}
+
+/** Journeys shown on a node: capped at MAX_CARDS_PER_NODE, newest first. */
 function nodeJourneys(stageId: unknown): JourneySummary[] {
-  return stageId ? (journeysByStage.value[stageId as string] ?? []) : []
+  return nodeAllJourneys(stageId).slice(0, MAX_CARDS_PER_NODE)
+}
+
+/** How many journeys on a node are hidden behind the "+N more" chip. */
+function nodeOverflowCount(stageId: unknown): number {
+  return Math.max(0, nodeAllJourneys(stageId).length - MAX_CARDS_PER_NODE)
 }
 
 function onJourneyOpen(journey: JourneySummary): void {

@@ -39,7 +39,7 @@ const i18n = createI18n({
               reported: 'Reported',
             },
             status: {
-              complete: 'Complete',
+              complete: 'Completed',
               failed: 'Failed',
               stalled: 'Stalled',
               running: 'Running',
@@ -123,6 +123,12 @@ describe('JourneyCard', () => {
     const wrapper = mountCard(makeJourney({ status: 'running' }))
     expect(wrapper.text()).toContain('Running')
     expect(wrapper.find('[data-testid="journey-status-running"]').classes()).toContain('badge-context-blue')
+  })
+
+  it('renders the completed tense for the complete status (FAR-742)', () => {
+    const wrapper = mountCard(makeJourney({ status: 'complete' }))
+    expect(wrapper.find('[data-testid="journey-status-complete"]').text()).toBe('Completed')
+    expect(wrapper.find('[data-testid="journey-status-complete"]').classes()).toContain('badge-context-green')
   })
 
   it('renders the provenance badge', () => {

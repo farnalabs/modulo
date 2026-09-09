@@ -707,6 +707,51 @@ def test_list_journeys_invalid_cursor_maps_to_422(client: tuple[TestClient, _Har
     assert resp.status_code == 422
 
 
+def test_list_journeys_status_filter_passes_through(client: tuple[TestClient, _Harness]) -> None:
+    stub = AsyncMock(return_value=([(_journey_row(), False)], None))
+    http, harness = client
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+    harness.stub("list_map_journeys", stub)
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/journeys", params={"status": "failed"})
+
+    assert resp.status_code == 200, resp.text
+    assert stub.call_args.kwargs["status"] == "failed"
+    assert stub.call_args.kwargs["updated_since"] is None
+
+
+def test_list_journeys_invalid_status_returns_422(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/journeys", params={"status": "running"})
+
+    assert resp.status_code == 422
+
+
+def test_list_journeys_updated_since_passes_through(client: tuple[TestClient, _Harness]) -> None:
+    since = datetime(2026, 8, 25, 0, 0, 0, tzinfo=UTC)
+    stub = AsyncMock(return_value=([(_journey_row(), False)], None))
+    http, harness = client
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+    harness.stub("list_map_journeys", stub)
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/journeys", params={"updated_since": "2026-08-25T00:00:00Z"})
+
+    assert resp.status_code == 200, resp.text
+    assert stub.call_args.kwargs["updated_since"] == since
+    assert stub.call_args.kwargs["status"] is None
+
+
+def test_list_journeys_malformed_updated_since_returns_422(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/journeys", params={"updated_since": "not-a-date"})
+
+    assert resp.status_code == 422
+
+
 def test_get_journey_detail_includes_run_history(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))

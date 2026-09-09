@@ -190,6 +190,85 @@ class TestCheckDispatcherReconcile:
         assert "age_terminalized=4" in result.detail
         assert "claimed_but_never_dispatched=5" in result.detail
 
+    @pytest.mark.asyncio
+    async def test_fresh_timeout_status_degraded(self) -> None:
+        """FAR-746: a fresh stats blob with status='timeout' (inner deadline
+        fired) must return 'degraded' (non-gating) — a partially-working
+        background sweep degrades the health report, not prod routing."""
+        fake = _FakeStatsRedis(blob=_fresh_payload(status="timeout", last_error="TimeoutError: ...").encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "degraded"
+        assert "status=timeout" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_failed_status_degraded(self) -> None:
+        """FAR-746: a fresh stats blob with status='failed' (unexpected
+        exception) must return 'degraded' (non-gating)."""
+        fake = _FakeStatsRedis(blob=_fresh_payload(status="failed", last_error="RuntimeError: boom").encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "degraded"
+        assert "status=failed" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_stale_timeout_still_unavailable(self) -> None:
+        """FAR-746: staleness >300s wins even when status='timeout' — the
+        system worker's cron is dead, not just partially failing."""
+        stale = _fresh_payload(
+            last_run_at=(datetime.now(UTC) - timedelta(minutes=6)).isoformat(),
+            status="timeout",
+            last_error="TimeoutError: ...",
+        )
+        fake = _FakeStatsRedis(blob=stale.encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "unavailable"
+        assert "stale" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_ok_status_ok(self) -> None:
+        """FAR-746: a fresh stats blob with status='ok' (or absent, default)
+        returns 'ok' — the normal path."""
+        fake = _FakeStatsRedis(blob=_fresh_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+
+    @pytest.mark.asyncio
+    async def test_fresh_legacy_blob_without_status_ok(self) -> None:
+        """FAR-746 backward compat: a pre-FAR-746 stats blob without the
+        'status' key defaults to 'ok' (not degraded)."""
+        payload: dict[str, Any] = {
+            "last_run_at": datetime.now(UTC).isoformat(),
+            "scanned": 3,
+            "repaired": 1,
+            "skipped": 2,
+            "redis_errors": 0,
+            "deduped": 0,
+            "nodeless_failed": 0,
+            "capacity_deferred": 0,
+        }
+        fake = _FakeStatsRedis(blob=json.dumps(payload).encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+
 
 def _srr_payload(**overrides: Any) -> str:
     payload: dict[str, Any] = {

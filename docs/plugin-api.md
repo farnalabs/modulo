@@ -292,7 +292,7 @@ def build_slack_connector(config: dict, creds: dict) -> SlackNotifier:
 ```toml
 [build-system]
 requires = ["setuptools"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "modulo-connector-slack"

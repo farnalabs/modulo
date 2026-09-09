@@ -672,6 +672,86 @@ def test_list_run_pending_gates_carries_description_and_context(client: tuple[Te
     assert gate_payload["context"] == context
 
 
+def test_list_run_pending_gates_prefers_the_captured_description(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-688: context-first precedence at the run-level endpoint — the
+    fire-time captured description wins over the snapshot config's
+    description (which may have been edited after the gate fired)."""
+    http, session = client
+    graph = _graph_with_gate("hitl_gate_src-1_tgt-2", description="Stale snapshot briefing.")
+    context = {
+        "trigger": "condition",
+        "description": "Captured fire-time briefing.",
+        "condition": "output.severity == 'high'",
+    }
+    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
+
+    run = MagicMock()
+    run.snapshot_id = _SNAPSHOT_ID
+    claims_result = MagicMock()
+    claims_result.scalars.return_value = [gate]
+    snapshot = MagicMock()
+    snapshot.graph_json = graph
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one_or_none.return_value = snapshot
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        text = str(stmt)
+        if "hitl_claims" in text:
+            return claims_result
+        return snapshot_result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gate_payload = resp.json()["gates"][0]
+    assert gate_payload["description"] == "Captured fire-time briefing."
+
+
+def test_list_run_pending_gates_resolves_context_description_without_a_snapshot(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """FAR-688 review fix: when the run carries NO snapshot (legacy run,
+    retention pruned the row, or a non-dict graph) the context-first pass
+    inside the snapshot branch never ran and the captured briefing was muted
+    behind the no-description fallback. The empty-map fallback now resolves
+    from the claim row ALONE (context-first, no snapshot fallback) — the same
+    behaviour the org-level ``resolve_gate_descriptions`` resolver applies."""
+    http, session = client
+    context = {
+        "trigger": "condition",
+        "description": "Captured fire-time briefing without a snapshot.",
+        "condition": "output.severity == 'high'",
+    }
+    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
+
+    run = MagicMock()
+    run.snapshot_id = None
+    claims_result = MagicMock()
+    claims_result.scalars.return_value = [gate]
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        assert "pipeline_snapshots" not in str(stmt), "no snapshot read is expected without a snapshot_id"
+        if "hitl_claims" in str(stmt):
+            return claims_result
+        return MagicMock()
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gate_payload = resp.json()["gates"][0]
+    assert gate_payload["description"] == "Captured fire-time briefing without a snapshot."
+
+
 def test_list_org_pending_gates_carries_description_and_context(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     gate = _briefed_gate("hitl_gate_src-1_tgt-2", context={"trigger": "node", "reason": "two failures"})
@@ -702,6 +782,45 @@ def test_list_org_pending_gates_carries_description_and_context(client: tuple[Te
     assert gate_payload["pipeline_name"] == "Reviewer Pipeline"
     assert gate_payload["description"] == "Org-level briefing."
     assert gate_payload["context"] == {"trigger": "node", "reason": "two failures"}
+
+
+def test_list_org_pending_gates_prefers_the_captured_description(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-688: context-first precedence at the org-level endpoint — the
+    fire-time captured description wins over the snapshot config's
+    description, via the same ``resolve_gate_descriptions`` helper the
+    MCP ``list_pending_hitl`` surface applies."""
+    http, session = client
+    context = {
+        "trigger": "node",
+        "reason": "two failures",
+        "description": "Captured org briefing.",
+    }
+    gate = _briefed_gate("hitl_gate_src-1_tgt-2", context=context)
+    graph = _graph_with_gate("hitl_gate_src-1_tgt-2", description="Stale snapshot briefing.")
+
+    pipeline_rows = MagicMock()
+    pipeline_rows.all.return_value = [(gate.pipeline_id, "Reviewer Pipeline")]
+    run_rows = MagicMock()
+    run_rows.all.return_value = [(_RUN_ID, _SNAPSHOT_ID)]
+    snapshot_rows = MagicMock()
+    snapshot_rows.all.return_value = [(_SNAPSHOT_ID, graph)]
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        text = str(stmt)
+        if "pipeline_snapshots" in text:
+            return snapshot_rows
+        if "runs" in text:
+            return run_rows
+        return pipeline_rows
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with patch("modulo.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(return_value=[gate])):
+        resp = http.get("/api/v1/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    gate_payload = resp.json()["gates"][0]
+    assert gate_payload["description"] == "Captured org briefing."
 
 
 def test_list_run_pending_gates_resolves_claimant_names(
