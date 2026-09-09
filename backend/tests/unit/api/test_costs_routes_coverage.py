@@ -478,7 +478,7 @@ def test_export_costs_streams_csv(client: tuple[TestClient, AsyncMock]) -> None:
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}get_cost_report", new=AsyncMock(return_value=rows)))
         stack.enter_context(_rls_cm())
-        resp = http.get("/api/v1/admin/costs/export", params={"period": "30d", "group_by": "pipeline"})
+        resp = http.get("/api/v1/admin/costs/export", params={"period": "30d", "group_by": "team"})
 
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"].startswith("text/csv")
