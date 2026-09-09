@@ -115,7 +115,7 @@ Source = "https://github.com/farnalabs/modulo"
 BugTracker = "https://github.com/farnalabs/modulo/issues"
 
 [project.scripts]
-modulo = "modulo.cli.backup:cli"
+modulo = "modulo.cli.main:cli"
 modulo-migrate = "modulo.cli.migrate:cli"
 modulo-break-glass = "modulo.cli.break_glass:cli"
 

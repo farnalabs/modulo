@@ -58,8 +58,18 @@ def pin_env_file(path: str | Path) -> None:
     time. Passing ``None`` here would silently restore the CWD ".env" read;
     unpinning is therefore not supported through this function (the process
     would have to restart).
+
+    Sealed (FAR-671 slice 2): once the ``get_settings`` cache is warm a
+    Settings object already exists with the OLD pin (or none) — pinning now
+    would be silently ineffective for the cached instance, so this raises
+    instead. A launcher that pins late is a boot-order bug, not a warning.
     """
     global _pinned_env_file
+    if get_settings.cache_info().currsize > 0:
+        raise RuntimeError(
+            "pin_env_file must be called before the first Settings construction: "
+            "get_settings' cache is already warm, so the pin would be silently ignored"
+        )
     _pinned_env_file = path
 
 
