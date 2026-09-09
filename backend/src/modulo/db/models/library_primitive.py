@@ -73,6 +73,10 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
             "review_count IS NULL OR review_count >= 0",
             name="ck_library_primitives_review_count",
         ),
+        CheckConstraint(
+            "status IS NULL OR status IN ('draft', 'published')",
+            name="ck_library_primitives_status",
+        ),
         Index(
             "uq_library_primitive_version",
             "organisation_id",

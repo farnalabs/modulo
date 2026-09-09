@@ -17,6 +17,7 @@ from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.permissions import PERMISSIONS
+from modulo.core.feature_flags import FeatureFlagRegistry
 from modulo.core.library_service.primitive_types import (
     COLLECTION_PIN_TYPES,
     MAX_COLLECTION_PINS,
@@ -72,7 +73,13 @@ def _build_client(principal: AuthenticatedPrincipal) -> tuple[TestClient, AsyncM
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    test_client = TestClient(app)
+
+    # Feature flag registry with library_collection enabled
+    mock_registry = FeatureFlagRegistry(current_tier="community")
+    mock_registry.set_override("library_collection", True)
+
+    with patch("modulo.api.routes.library.get_registry", return_value=mock_registry):
+        test_client = TestClient(app)
     test_client.mock_session = mock_session  # type: ignore[attr-defined]
     return test_client, mock_session
 

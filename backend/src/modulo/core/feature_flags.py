@@ -317,6 +317,15 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Webhook notification delivery log (admin delivery-log UI)",
         tier="community",
     ),
+    # ── Community tier — library collections (FAR-760, default OFF) ───────
+    # Ships default-OFF on every tier until an org ``feature_overrides``
+    # entry enables it.  Gates create/update/publish on the collection
+    # authoring lifecycle endpoints.
+    FeatureFlag(
+        name="library_collection",
+        description="Library collections — pin multiple primitives into a browsable bundle",
+        tier="community",
+    ),
 ]
 
 
@@ -337,6 +346,7 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "user_scoped_mcp_keys",
         "lifecycle_map_journeys",
         "webhook_notification_log",
+        "library_collection",
     }
 )
 

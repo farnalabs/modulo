@@ -420,14 +420,22 @@ function onClickOutside(e: MouseEvent) {
 function prevPage() {
   if (page.value > 1) {
     page.value--
-    loadPrimitives()
+    if (section.value === 'collections') {
+      loadCollections()
+    } else {
+      loadPrimitives()
+    }
   }
 }
 
 function nextPage() {
   if (page.value < Math.ceil(total.value / pageSize.value)) {
     page.value++
-    loadPrimitives()
+    if (section.value === 'collections') {
+      loadCollections()
+    } else {
+      loadPrimitives()
+    }
   }
 }
 

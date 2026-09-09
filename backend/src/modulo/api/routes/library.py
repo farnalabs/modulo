@@ -21,6 +21,7 @@ from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.routes.lifecycle_maps import LifecycleMapResponse
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.feature_flags import get_registry
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     ContributionInvalidTransitionError,
@@ -376,6 +377,16 @@ class PipelineFromTemplateResponse(BaseModel):
 _COLLECTION_PIN_TYPES_ALLOWED = COLLECTION_PIN_TYPES
 
 
+async def _require_library_collection_flag(org_id: uuid.UUID) -> None:
+    """Reject the request when the ``library_collection`` feature flag is off."""
+    registry = get_registry()
+    if not await registry.resolve_flag("library_collection", org_id=org_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Library collections are not enabled for this organisation",
+        )
+
+
 class CollectionPin(BaseModel):
     slug: str = Field(..., min_length=1, max_length=255)
     version: str = Field(..., min_length=1, max_length=50)
@@ -471,6 +482,22 @@ async def _validate_manifest_pins(
             )
 
     return errors
+
+
+def _collection_response(prim: LibraryPrimitive) -> CollectionResponse:
+    """Build a CollectionResponse from a LibraryPrimitive ORM instance."""
+    return CollectionResponse(
+        id=prim.id,
+        organisation_id=prim.organisation_id,
+        name=prim.name,
+        slug=prim.slug,
+        description=prim.description,
+        status=prim.status,
+        manifest_pins=prim.manifest_pins,
+        trust_header=prim.trust_header,
+        created_at=prim.created_at,
+        updated_at=prim.updated_at,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1870,6 +1897,7 @@ async def create_collection_endpoint(
 ) -> CollectionResponse:
     """Create a new library collection (status=draft)."""
     org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
@@ -1919,18 +1947,7 @@ async def create_collection_endpoint(
     except SQLAlchemyError:
         _log.exception("create_collection_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
-    return CollectionResponse(
-        id=prim.id,
-        organisation_id=prim.organisation_id,
-        name=prim.name,
-        slug=prim.slug,
-        description=prim.description,
-        status=prim.status,
-        manifest_pins=prim.manifest_pins,
-        trust_header=prim.trust_header,
-        created_at=prim.created_at,
-        updated_at=prim.updated_at,
-    )
+    return _collection_response(prim)
 
 
 @router.patch("/collections/{primitive_id}")
@@ -1943,6 +1960,7 @@ async def update_collection_endpoint(
 ) -> CollectionResponse:
     """Update a draft collection's manifest pins."""
     org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
@@ -1973,18 +1991,7 @@ async def update_collection_endpoint(
     except SQLAlchemyError:
         _log.exception("update_collection_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
-    return CollectionResponse(
-        id=prim.id,
-        organisation_id=prim.organisation_id,
-        name=prim.name,
-        slug=prim.slug,
-        description=prim.description,
-        status=prim.status,
-        manifest_pins=prim.manifest_pins,
-        trust_header=prim.trust_header,
-        created_at=prim.created_at,
-        updated_at=prim.updated_at,
-    )
+    return _collection_response(prim)
 
 
 @router.post(
@@ -1999,6 +2006,7 @@ async def publish_collection_endpoint(
 ) -> CollectionResponse:
     """Publish a draft collection — validates pins and sets status=published."""
     org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
@@ -2037,15 +2045,4 @@ async def publish_collection_endpoint(
     except SQLAlchemyError:
         _log.exception("publish_collection_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
-    return CollectionResponse(
-        id=prim.id,
-        organisation_id=prim.organisation_id,
-        name=prim.name,
-        slug=prim.slug,
-        description=prim.description,
-        status=prim.status,
-        manifest_pins=prim.manifest_pins,
-        trust_header=prim.trust_header,
-        created_at=prim.created_at,
-        updated_at=prim.updated_at,
-    )
+    return _collection_response(prim)
