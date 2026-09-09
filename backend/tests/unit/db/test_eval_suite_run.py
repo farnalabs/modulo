@@ -822,10 +822,13 @@ def test_single_migration_head() -> None:
     # 0201_spend_anomaly_unique_org_date (from main) chains off 0200.
     chaining_off_0200_runner = [p for p in revisions if parents[p] == "0200_runs_runner_marker_sweep_index"]
     assert [_basename(p) for p in chaining_off_0200_runner] == ["0201_spend_anomaly_unique_org_date.py"]
-    # 0195_hitl_claim_gate_config_json (FAR-634) chains off 0201 and is the
-    # single head.
+    # 0202_runs_error_code_claimed_by_indexes (from main) chains off 0201.
     chaining_off_0201 = [p for p in revisions if parents[p] == "0201_spend_anomaly_unique_org_date"]
-    assert [_basename(p) for p in chaining_off_0201] == ["0195_hitl_claim_gate_config_json.py"]
+    assert [_basename(p) for p in chaining_off_0201] == ["0202_runs_error_code_claimed_by_indexes.py"]
+    # 0195_hitl_claim_gate_config_json (FAR-634) chains off 0202 and is the
+    # single head.
+    chaining_off_0202 = [p for p in revisions if parents[p] == "0202_runs_error_code_claimed_by_indexes"]
+    assert [_basename(p) for p in chaining_off_0202] == ["0195_hitl_claim_gate_config_json.py"]
     # Nothing chains off 0195 -> it is the single head.
     chaining_off_0195 = [p for p in revisions if parents[p] == "0195_hitl_claim_gate_config_json"]
     assert not chaining_off_0195

@@ -14,6 +14,9 @@ unit-tests:
   - backend/tests/unit/api/test_run_api_key_auth.py
 bdd:
   - backend/tests/bdd/features/errors
+  - backend/tests/bdd/features/pipelines/run_lifecycle.feature
+  - backend/tests/bdd/features/pipelines/run_sequential.feature
+  - backend/tests/bdd/steps/test_pipelines.py
 depends-on:
   - feat-pipelines
 status: covered
@@ -56,6 +59,16 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
       principals are scoped per key policy (`test_run_api_key_auth.py`)
 - [x] Error-state handling: failed states, retries and recovery flows are covered by
       `backend/tests/bdd/features/errors/{failed_state,retry,recovery}.feature`
+- [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending run
+      (202), the engine moves it pending → running, a clean completion lands on
+      `completed` with a `final_state`, an unhandled node exception lands on `failed`
+      with an `error_detail`, and a mid-run cancellation is terminal (`cancelled`, no
+      further nodes execute). A node that returns `None` output is a normal empty
+      result — the run continues to the next node with no error — and sequential
+      pipelines complete nodes strictly in order. A trigger refused by
+      `max_concurrent_runs` while a pending run is already active surfaces 429
+      (`run_lifecycle.feature`, `run_sequential.feature`, registered for execution by
+      `steps/test_pipelines.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut — restore from git history when re-enabling. See FAR-542._
@@ -67,18 +80,19 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
 - **Wasm/Sandbox surfaces are split** — workspace leases/events live here, but the
   run sandbox lifecycle is tracked under `feat-environments`; cross-cutting coverage
   is not unified in one tracker.
-- **`run_lifecycle.feature` / `run_sequential.feature` are dead BDD files** — the two
-  run-time feature files ship under `backend/tests/bdd/features/pipelines/` but no step
-  module registers them via `scenarios(...)`, so they never execute. The lifecycle
-  transitions they describe are otherwise pinned by the `steps/test_pipelines.py` step
-  suite and the unit suites (`test_runs_endpoint.py`); wiring them up needs a few missing
-  step definitions written.
 
 ## QA History
 
+- 2026-09-09: **improve-architecture (product-map walk)** — closed the dead-BDD-file
+  Known Gap recorded here on 2026-09-08: `run_lifecycle.feature` / `run_sequential.feature`
+  are no longer orphaned — they were wired into `steps/test_pipelines.py` (12 scenarios)
+  when the same gap was closed on the `feat-pipelines` tracker, but this entry was not
+  updated. Both files are now cited in `bdd:` and the run-lifecycle / sequential-ordering
+  behaviour is ticked. Status: covered.
 - 2026-09-08: **improve-architecture (product-map walk)** — recorded `run_lifecycle.feature`
   / `run_sequential.feature` as a dead-BDD-file known gap (run-time surfaces owned here that
-  no step module registers).
+  no step module registers). Superseded by the 2026-09-09 closure above once
+  `steps/test_pipelines.py` registered both files.
 - 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-runs`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/runs.py`,

@@ -294,9 +294,7 @@ def restore_config(extract_dir: str) -> None:
         print(f"  Tool version: {manifest.get('version', 'unknown')}")
 
 
-async def main() -> None:
-    args = parse_args()
-
+def _validate_restore_args(args: argparse.Namespace) -> None:
     if not Path(args.input).exists():
         print(f"ERROR: input file not found: {args.input}")
         sys.exit(1)
@@ -309,13 +307,8 @@ async def main() -> None:
         print("ERROR: specify --dry-run, --full, --data-only, or --config-only")
         sys.exit(1)
 
-    passphrase = resolve_passphrase(args.passphrase)
-    if not passphrase:
-        print("ERROR: passphrase cannot be empty")
-        sys.exit(1)
 
-    db_url = get_db_url(args.db_url) if (args.full or args.data_only) else ""
-
+def _print_restore_mode(args: argparse.Namespace) -> None:
     if args.dry_run:
         print(f"Dry-run mode: verifying archive {args.input}")
     elif args.data_only:
@@ -325,6 +318,8 @@ async def main() -> None:
     else:
         print("Full restore mode")
 
+
+def _restore_from_archive(args: argparse.Namespace, passphrase: str, db_url: str) -> None:
     tmpdir = tempfile.mkdtemp(prefix="modulo-restore-")
     try:
         tar_path = str(Path(tmpdir) / "backup.tar.gz")
@@ -350,6 +345,21 @@ async def main() -> None:
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
         print("Temp directory cleaned up.")
+
+
+async def main() -> None:
+    args = parse_args()
+    _validate_restore_args(args)
+
+    passphrase = resolve_passphrase(args.passphrase)
+    if not passphrase:
+        print("ERROR: passphrase cannot be empty")
+        sys.exit(1)
+
+    db_url = get_db_url(args.db_url) if (args.full or args.data_only) else ""
+
+    _print_restore_mode(args)
+    _restore_from_archive(args, passphrase, db_url)
 
 
 if __name__ == "__main__":
