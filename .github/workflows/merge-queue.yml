@@ -64,12 +64,26 @@ jobs:
           # main is frozen and the merge queue must not merge anything.
           # Manual escape: delete the 'release-freeze' tag. Do NOT use Release ->
           # release as an escape - that promotes GA prematurely.
-          COUNT=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/release-freeze" --jq 'length' 2>/dev/null || true)
+          # Retry the freeze-tag query so a transient gh/API blip (e.g. 503s or
+          # snapshot-lock contention during a pipeline burst) cannot masquerade
+          # as a freeze and silently stall every approved PR in the queue. We
+          # still FAIL CLOSED, but only after the call persists in failing across
+          # retries - a genuine release freeze (tag present) is detected on the
+          # very first successful response, so release safety is unchanged.
+          COUNT=""
+          for attempt in 1 2 3 4 5; do
+            COUNT=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/release-freeze" --jq 'length' 2>/dev/null || true)
+            if [ -n "$COUNT" ]; then
+              break
+            fi
+            echo "::warning::release-freeze query returned no data (attempt ${attempt}/5) - retrying"
+            sleep $((attempt * 5))
+          done
           if [ -z "$COUNT" ]; then
-            # Fail CLOSED: an API error must never be read as "not frozen", or a
-            # transient gh failure would silently lift the freeze mid-release.
+            # Fail CLOSED: a *persistent* API error must never be read as "not
+            # frozen", or a gh failure would silently lift the freeze mid-release.
             # Skipping this 15-min tick costs nothing; a wrongly-open gate costs the RC.
-            echo "::error::gh api failed querying release-freeze tag - failing CLOSED, skipping this merge-queue tick."
+            echo "::error::gh api failed querying release-freeze tag after 5 attempts - failing CLOSED, skipping this merge-queue tick."
             echo "frozen=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
