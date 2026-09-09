@@ -113,6 +113,17 @@ _HITL_PARK_SWEEP_STALE_SECONDS = 15 * 60
 _RUNNER_WORKSPACE_RECONCILE_STATS_KEY = "saq:cron:stats:runner_workspace_reconcile"
 _RUNNER_WORKSPACE_RECONCILE_STALE_SECONDS = 15 * 60
 
+# runner_marker_sweep (FAR-594 D8, qa F9): the runner dispatch-marker
+# reconciliation sweep runs every 5 min on the system worker (plus the 60s
+# dispatcher_reconcile path) and persists its outcome to this Redis key.
+# Same advisory contract as its siblings: a dead sweep does not wedge
+# dispatch (the gate fails open) — but stale markers would silently
+# accumulate as phantom capacity and the D8 rollback signal
+# (runner.capacity.violation) would go dark, so a missing or >15min-stale
+# key warns without gating readiness.
+_RUNNER_MARKER_SWEEP_STATS_KEY = "saq:cron:stats:runner_marker_sweep"
+_RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
+
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
 # 2x the cadence has a silently dead cron scheduler and fails readiness so Fly
@@ -724,6 +735,27 @@ async def _check_runner_workspace_reconcile() -> CheckResult:
     )
 
 
+async def _check_runner_marker_sweep() -> CheckResult:
+    """ADVISORY — last runner_marker_sweep outcome (never gates readiness).
+
+    The FAR-594 D8 runner dispatch-marker reconciliation sweep
+    (``saq_worker.runner_marker_sweep``) runs in the SYSTEM WORKER process
+    every 5 min (plus the 60s dispatcher_reconcile path) and persists its
+    outcome (``cleared`` + ``last_run_at``) to
+    ``saq:cron:stats:runner_marker_sweep`` (qa F9). A silently dead sweep
+    lets stale markers accumulate as phantom capacity and the D8 rollback
+    signal (``runner.capacity.violation``) goes dark — the gate itself fails
+    open, so nothing wedges, but the capacity numbers rot. A missing or
+    >15min-stale key reports "degraded" to alert operators while the app
+    remains healthy. Fail-open on Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _RUNNER_MARKER_SWEEP_STATS_KEY,
+        _RUNNER_MARKER_SWEEP_STALE_SECONDS,
+        "cleared",
+    )
+
+
 async def _check_fleet_system_crons() -> CheckResult:
     """Fleet-wide system-cron liveness for ``app`` machines (plan F8, PR dist/separate-workers).
 
@@ -859,6 +891,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         sr_check,
         hps_check,
         rwr_check,
+        rms_check,
     ) = await asyncio.gather(
         _check_database(),
         _check_redis(),
@@ -871,6 +904,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_slot_reconciliation(),
         _check_hitl_park_sweep(),
         _check_runner_workspace_reconcile(),
+        _check_runner_marker_sweep(),
     )
     bg_check = _check_break_glass()
 
@@ -903,6 +937,11 @@ async def readiness(response: Response) -> ReadinessResponse:
         # repair (destroy path soak-gated, so no capacity wedge), so it stays
         # alert-only.
         "runner_workspace_reconcile": rwr_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-594 D8 (qa F9): a dead marker sweep lets stale markers
+        # accumulate as phantom capacity and the rollback signal goes dark;
+        # the gate fails open, so it stays alert-only.
+        "runner_marker_sweep": rms_check,
     }
 
     # Aggregate over the NON-advisory checks only.
