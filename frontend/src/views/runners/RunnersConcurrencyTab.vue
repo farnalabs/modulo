@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="space-y-6">
     <LoadingSpinner v-if="loading" />
 
@@ -67,8 +67,7 @@ import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import { api } from '../../lib/api/client'
 import { useDataFetch } from '../../composables/useDataFetch'
 import { formatApiError } from '../../lib/api/formatError'
-import { usePlanStore } from '../../stores/planStore'
-import type { RunnersStatus } from '../../lib/runnersStatus'
+import type { ConcurrencyPreflight, RunnersStatus } from '../../lib/runnersStatus'
 
 const props = defineProps<{
   status: RunnersStatus | null | undefined
@@ -76,7 +75,6 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const planStore = usePlanStore()
 
 const { data: limitData, loading, error: loadError, load: loadData } = useDataFetch<{
   sandbox_concurrency_limit?: number | null
@@ -98,7 +96,7 @@ const effectiveLabel = computed(() => {
   const e = effective.value
   if (!e) return ''
   if (e.isDefault) {
-    return t('views.RunnersConcurrencyTab.effective_default', { value: e.cap ?? 4 })
+    return t('views.RunnersConcurrencyTab.effective_default', { value: e.cap })
   }
   if (e.cap === null) {
     return t('views.RunnersConcurrencyTab.effective_no_gate')
@@ -111,10 +109,11 @@ const effectiveLabel = computed(() => {
 
 const semanticsLabel = computed(() => t('views.RunnersConcurrencyTab.semantics_full'))
 
-const preflight = computed(() => props.status?.concurrency.preflight ?? null)
+const preflight = computed<ConcurrencyPreflight | null>(() => props.status?.concurrency.preflight ?? null)
 
 const preflightLabel = computed(() => {
-  switch (preflight.value?.state) {
+  const state = preflight.value?.state
+  switch (state) {
     case 'ok':
       return t('views.RunnersConcurrencyTab.preflight_ok')
     case 'exceeds_cpu':
@@ -125,8 +124,10 @@ const preflightLabel = computed(() => {
       return t('views.RunnersConcurrencyTab.preflight_exceeds_both')
     case 'uncapped':
       return t('views.RunnersConcurrencyTab.preflight_uncapped')
-    default:
+    case 'unknown':
       return t('views.RunnersConcurrencyTab.preflight_unknown')
+    default:
+      return state ?? ''
   }
 })
 
@@ -134,7 +135,7 @@ const preflightDetail = computed(() => {
   const p = preflight.value
   if (!p) return null
   if (p.engine_cpu_count !== null && p.engine_mem_total_mb !== null) {
-    return `${t('views.RunnersConcurrencyTab.engine_resources', { cpu: p.engine_cpu_count, mem: p.engine_mem_total_mb })}${p.needed_cpu !== null && p.needed_mem_mb !== null ? ' â€” ' + t('views.RunnersConcurrencyTab.needed_resources', { cpu: p.needed_cpu, mem: p.needed_mem_mb }) : ''}`
+    return `${t('views.RunnersConcurrencyTab.engine_resources', { cpu: p.engine_cpu_count, mem: p.engine_mem_total_mb })} — ${t('views.RunnersConcurrencyTab.needed_resources', { cpu: p.needed_cpu, mem: p.needed_mem_mb })}`
   }
   return p.detail
 })
@@ -149,6 +150,7 @@ const preflightClass = computed(() => {
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const saveSuccess = ref(false)
+const savedOnce = ref(false)
 
 async function saveLimit() {
   // The REST boundary enforces ge=0 le=100 (FAR-589 D3b); 0 is a meaningful
@@ -167,7 +169,11 @@ async function saveLimit() {
       saveError.value = `${t('views.RunnersConcurrencyTab.save_failed')}: ${formatApiError(err)}`
     } else {
       saveSuccess.value = true
-      await props.reloadStatus()
+      savedOnce.value = true
+      // qa F6: the effective-cap panel reads the limit via limitData; a
+      // successful PUT must refetch the LIMIT SOURCE too (or the panel
+      // shows the PRE-save cap until the next manual reload).
+      await Promise.all([loadData(), props.reloadStatus()])
     }
   } catch (e: unknown) {
     saveError.value = `${t('views.RunnersConcurrencyTab.save_failed')}: ${formatApiError(e)}`
@@ -175,6 +181,4 @@ async function saveLimit() {
     saving.value = false
   }
 }
-
-planStore.fetchPlan()
 </script>

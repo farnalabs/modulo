@@ -9765,8 +9765,11 @@ export interface components {
         };
         /** ConcurrencyPreflightResponse */
         ConcurrencyPreflightResponse: {
-            /** State */
-            state: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ok" | "exceeds_cpu" | "exceeds_mem" | "exceeds_cpu_and_mem" | "uncapped" | "unknown";
             /** Detail */
             detail?: string | null;
             /** Engine Cpu Count */
@@ -12701,8 +12704,11 @@ export interface components {
         MachineProbeResponse: {
             /** Machine Id */
             machine_id: string;
-            /** State */
-            state: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "healthy" | "engine_unreachable" | "image_not_pulled" | "stale";
             /** Engine Reachable */
             engine_reachable: boolean;
             /** Images Present */
@@ -14304,7 +14310,7 @@ export interface components {
             /** Status */
             status: string;
             /** Health State */
-            health_state?: string | null;
+            health_state?: ("healthy" | "engine_unreachable" | "image_not_pulled" | "stale") | null;
             /** Available */
             available: boolean;
             /**
@@ -15400,8 +15406,11 @@ export interface components {
         };
         /** RunnersStatusResponse */
         RunnersStatusResponse: {
-            /** Aggregate State */
-            aggregate_state: string;
+            /**
+             * Aggregate State
+             * @enum {string}
+             */
+            aggregate_state: "healthy" | "engine_unreachable" | "image_not_pulled" | "stale";
             /** Probe Interval Seconds */
             probe_interval_seconds: number;
             /** Staleness Threshold Seconds */

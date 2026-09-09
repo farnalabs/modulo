@@ -2,7 +2,7 @@
 
 Exercises the D5 Runners-page read model in isolation: probe-cache rows ->
 strip-state mapping, worst-of aggregation, per-profile health + drift,
-the concurrency contract (D3b reader), and the engine-resource preflight â€”
+the concurrency contract (D3b reader), and the engine-resource preflight —
 all with a mocked session + CRUD layer. No synchronous engine probe ever
 runs on the request path (the endpoint only reads the cache).
 """
@@ -24,7 +24,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.bundled_runner_template import BUNDLED_RUNNER_IMAGE_REF, TEMPLATE_CONFIG_JSON
 from modulo.db.crud.base import PageResult
-from modulo.db.crud.runner_probe import PROBE_STALENESS_THRESHOLD_SECONDS
+from modulo.db.crud.runner_probe import PROBE_RETENTION_SECONDS, PROBE_STALENESS_THRESHOLD_SECONDS
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -295,6 +295,72 @@ class TestRunnersStatusConcurrency:
         with _enter_patchers(_patch_status(rows=[_probe_row()], cap=4)):
             resp = client.get(self.URL)
         assert resp.json()["concurrency"]["preflight"]["state"] == "unknown"
+
+    def test_preflight_aggregates_worst_of_across_machines(self, client: TestClient) -> None:
+        """qa F7: sizing uses the SMALLEST reported engine across machines —
+        dispatches can land on any machine, so the big engine's headroom
+        must not mask the small one's shortage."""
+        rows = [
+            _probe_row(engine_info={"cpu_count": 16, "mem_total_mb": 32768}),
+            _probe_row(engine_info={"cpu_count": 2, "mem_total_mb": 2048}, seconds_ago=31),
+        ]
+        with _enter_patchers(_patch_status(rows=rows, cap=4)):
+            resp = client.get(self.URL)
+        pre = resp.json()["concurrency"]["preflight"]
+        assert pre["state"] == "exceeds_cpu_and_mem"
+        assert pre["engine_cpu_count"] == 2
+        assert pre["engine_mem_total_mb"] == 2048
+
+    def test_preflight_per_machine_limitations_are_independent(self, client: TestClient) -> None:
+        """Worst-of is independent per resource: a mem-short machine trips
+        exceeds_mem even when every machine has ample CPU."""
+        rows = [
+            _probe_row(engine_info={"cpu_count": 16, "mem_total_mb": 16384}),
+            _probe_row(engine_info={"cpu_count": 8, "mem_total_mb": 2048}, seconds_ago=31),
+        ]
+        with _enter_patchers(_patch_status(rows=rows, cap=8)):
+            resp = client.get(self.URL)
+        pre = resp.json()["concurrency"]["preflight"]
+        assert pre["state"] == "exceeds_mem"
+        assert pre["engine_cpu_count"] == 8
+
+    def test_orphaned_machine_rows_beyond_retention_are_filtered(self, client: TestClient) -> None:
+        """qa F8: a corpse row older than the retention window is invisible
+        to the aggregate — a decommissioned machine cannot pin the strip to
+        stale forever."""
+        fresh = _probe_row(engine_reachable=True, images_present=True)
+        corpse = _probe_row(engine_reachable=True, images_present=True)
+        corpse.probed_at = datetime.now(UTC) - timedelta(seconds=PROBE_RETENTION_SECONDS + 60)
+        corpse.machine_id = "dead-machine"
+        with _enter_patchers(_patch_status(rows=[fresh, corpse])):
+            resp = client.get(self.URL)
+        data = resp.json()
+        assert [m["machine_id"] for m in data["machines"]] == ["machine-1"]
+        assert data["aggregate_state"] == "healthy"
+
+    def test_profile_read_loops_past_the_single_page_cap(self, client: TestClient) -> None:
+        """qa F18: the org has >100 profiles — the read paginates instead of
+        silently capping at page 1."""
+        call_count = {"n": 0}
+
+        def _paged(_session: Any, page: int = 1, page_size: int = 100) -> Any:
+            call_count["n"] += 1
+            items = [_profile_row() for _ in range(150 if page == 1 else 0)]
+            return PageResult(items=items, total=150, page=page, page_size=page_size)
+
+        contract = SimpleNamespace(cap=None, is_default=False)
+        with _enter_patchers(
+            (
+                patch(f"{_ROUTES}.list_runner_probe_cache", new=AsyncMock(return_value=[])),
+                patch(f"{_ROUTES}.list_environment_profiles", new=AsyncMock(side_effect=_paged)),
+                patch(f"{_ROUTES}.get_sandbox_concurrency_limit", new=AsyncMock(return_value=contract)),
+                patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+                patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            )
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        assert call_count["n"] == 2
 
 
 def _enter_patchers(patchers: tuple[Any, ...]) -> contextlib.ExitStack:

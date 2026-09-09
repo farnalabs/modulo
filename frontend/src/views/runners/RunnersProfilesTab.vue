@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="space-y-6">
     <LoadingSpinner v-if="store.isLoading" />
 
@@ -82,12 +82,12 @@
               severity="secondary"
               outlined
               data-testid="runners-profiles-apply"
-              :loading="applying"
+              :loading="applyingId === row.profile.id"
               @click="applyTemplate(row.profile.id)"
             >
               {{ $t('views.RunnersProfilesTab.apply') }}
             </Button>
-            <p v-if="applyError" class="mt-2 text-xs text-destructive">{{ applyError }}</p>
+            <p v-if="applyErrorId === row.profile.id && applyError" class="mt-2 text-xs text-destructive">{{ applyError }}</p>
           </div>
 
           <div class="flex items-center gap-2 mt-auto">
@@ -136,9 +136,9 @@
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.image_ref') }}</dt>
               <dd class="font-mono truncate" :title="row.profile.image_ref ?? ''">{{ row.profile.image_ref }}</dd>
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.network_policy') }}</dt>
-              <dd>{{ row.health?.network_policy ?? 'â€”' }}</dd>
+              <dd>{{ row.health?.network_policy ?? '—' }}</dd>
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.persistence_policy') }}</dt>
-              <dd>{{ row.health?.persistence_policy ?? 'â€”' }}</dd>
+              <dd>{{ row.health?.persistence_policy ?? '—' }}</dd>
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.resource_limits') }}</dt>
               <dd>{{ resourceSummary(row) }}</dd>
               <template v-if="row.probeError">
@@ -231,7 +231,10 @@ const deleting = ref(false)
 const deleteError = ref<string | null>(null)
 const deleteConfirmId = ref<string | null>(null)
 const deleteConfirmName = ref('')
-const applying = ref(false)
+// qa F18: apply progress/error are PER-ROW — a single global `applying`
+// boolean put every card's button into a spinner when any one apply ran.
+const applyingId = ref<string | null>(null)
+const applyErrorId = ref<string | null>(null)
 const applyError = ref<string | null>(null)
 
 interface TestEvent {
@@ -258,6 +261,9 @@ interface ProfileRow {
 
 const rows = computed<ProfileRow[]>(() => {
   const byId = new Map((props.status?.profiles ?? []).map((p) => [p.id, p]))
+  // qa F18: the probe-error lookup is the SAME machine-level error for
+  // every row — hoist the find() out of the per-row map (was O(rows²)).
+  const probeError = props.status?.machines?.find((m) => m.probe_error)?.probe_error ?? null
   return store.profiles.map((profile) => {
     const health = byId.get(profile.id) ?? null
     const isTemplate = health?.drift?.is_seeded ?? profile.provider_type === 'runner_docker'
@@ -267,7 +273,7 @@ const rows = computed<ProfileRow[]>(() => {
       isTemplate,
       available: health?.available ?? true,
       drift: health?.drift ?? { is_seeded: false, drifted: false, drifted_fields: [] },
-      probeError: props.status?.machines?.find((m) => m.probe_error)?.probe_error ?? null,
+      probeError,
       configJson: health?.config_json ?? {},
     }
   })
@@ -344,7 +350,8 @@ function resourceSummary(row: ProfileRow): string {
 }
 
 async function applyTemplate(profileId: string) {
-  applying.value = true
+  applyingId.value = profileId
+  applyErrorId.value = profileId
   applyError.value = null
   try {
     const { error } = await api.POST('/api/v1/runners/profiles/{profile_id}/apply-template', {
@@ -353,12 +360,13 @@ async function applyTemplate(profileId: string) {
     if (error) {
       applyError.value = formatApiError(error)
     } else {
+      applyErrorId.value = null
       await Promise.all([store.fetchProfiles(), props.reloadStatus()])
     }
   } catch (e: unknown) {
     applyError.value = formatApiError(e)
   } finally {
-    applying.value = false
+    applyingId.value = null
   }
 }
 

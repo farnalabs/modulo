@@ -11,3 +11,8 @@ export type ProfileHealth = NonNullable<RunnersStatus['profiles']>[number]
 export type ProfileDrift = NonNullable<ProfileHealth['drift']>
 export type ConcurrencyContract = RunnersStatus['concurrency']
 export type ConcurrencyPreflight = ConcurrencyContract['preflight']
+
+// qa F17: the strip states are a closed wire contract (the backend's
+// Literal types) — derive the union here so the frontend switches below
+// are exhaustively checkable.
+export type StripState = MachineProbe['state']

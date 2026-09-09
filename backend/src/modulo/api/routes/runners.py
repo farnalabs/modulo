@@ -19,8 +19,8 @@ operators); apply-template requires ``environment_profile.update``.
 
 import logging
 import uuid
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -35,6 +35,7 @@ from modulo.core.bundled_runner import template_drift_status
 from modulo.core.bundled_runner.health_probe import (
     PER_CONTAINER_CPU,
     PER_CONTAINER_MEM_MB,
+    StripState,
     aggregate_strip_state,
     strip_state_for_row,
 )
@@ -45,6 +46,7 @@ from modulo.db.crud.environment_profile import (
 from modulo.db.crud.run import get_sandbox_concurrency_limit
 from modulo.db.crud.runner_probe import (
     PROBE_INTERVAL_SECONDS,
+    PROBE_RETENTION_SECONDS,
     PROBE_STALENESS_THRESHOLD_SECONDS,
     list_runner_probe_cache,
     probe_age_seconds,
@@ -59,6 +61,10 @@ _MSG_ENVIRONMENT_PROFILE_NOT_FOUND = "Environment profile not found"
 _CODE_RUNNERS_STATUS = "runners.status"
 _CODE_RUNNERS_APPLY_TEMPLATE = "runners.apply_template"
 
+#: qa F17: the preflight states are a closed contract — Literal types pin
+#: the wire shape AND the frontend derives its switches from the same union.
+PreflightState = Literal["ok", "exceeds_cpu", "exceeds_mem", "exceeds_cpu_and_mem", "uncapped", "unknown"]
+
 
 router = APIRouter(
     prefix="/api/v1/runners",
@@ -69,7 +75,7 @@ router = APIRouter(
 
 class MachineProbeResponse(BaseModel):
     machine_id: str
-    state: str  # healthy | engine_unreachable | image_not_pulled | stale
+    state: StripState
     engine_reachable: bool
     images_present: bool | None = None
     probed_at: datetime
@@ -86,8 +92,7 @@ class ProfileDriftResponse(BaseModel):
 
 
 class ConcurrencyPreflightResponse(BaseModel):
-    #: ok | exceeds_cpu | exceeds_mem | exceeds_cpu_and_mem | uncapped | unknown
-    state: str
+    state: PreflightState
     detail: str | None = None
     engine_cpu_count: int | None = None
     engine_mem_total_mb: int | None = None
@@ -115,7 +120,7 @@ class ProfileHealthResponse(BaseModel):
     status: str
     #: Worst-of machine strip state for runner_docker rows; null when no
     #: probe applies (E2B / local tiers are not engine-probed).
-    health_state: str | None = None
+    health_state: StripState | None = None
     #: True when the row can dispatch right now (healthy OR an un-probed
     #: tier); the editor greys/hides rows where this is False.
     available: bool
@@ -124,7 +129,7 @@ class ProfileHealthResponse(BaseModel):
 
 
 class RunnersStatusResponse(BaseModel):
-    aggregate_state: str
+    aggregate_state: StripState
     probe_interval_seconds: int
     staleness_threshold_seconds: int
     machines: list[MachineProbeResponse] = Field(default_factory=list)
@@ -132,34 +137,26 @@ class RunnersStatusResponse(BaseModel):
     concurrency: ConcurrencyContractResponse
 
 
-def _worst_machine_state_for_org(rows: list[Any], now: datetime) -> str:
-    return aggregate_strip_state(
-        [
-            strip_state_for_row(
-                engine_reachable=row.engine_reachable,
-                images_present=row.images_present,
-                probed_at=row.probed_at,
-                now=now,
-            )
-            for row in rows
-        ]
-    )
-
-
 def _preflight(limit_cap: int | None, engine_infos: list[dict[str, Any]]) -> ConcurrencyPreflightResponse:
     """Engine-resource preflight (D5): limit x per-container limits vs ``/info``.
 
     ``null`` cap → ``uncapped`` (cannot assess host headroom); no engine info
     (engine unreachable / never probed) → ``unknown``.
+
+    qa F7: multi-machine deployments aggregate WORST-OF across machines —
+    the minimum reported CPU count and the minimum reported memory — since
+    dispatches can land on ANY machine; sizing against the biggest engine
+    would overcommit the smallest one.
     """
     if limit_cap is None:
         return ConcurrencyPreflightResponse(
             state="uncapped",
             detail="No concurrency cap is set — host headroom cannot be assessed.",
         )
-    info = engine_infos[0] if engine_infos else {}
-    cpu_count = info.get("cpu_count")
-    mem_total_mb = info.get("mem_total_mb")
+    cpu_counts = [info["cpu_count"] for info in engine_infos if info.get("cpu_count") is not None]
+    mem_totals = [info["mem_total_mb"] for info in engine_infos if info.get("mem_total_mb") is not None]
+    cpu_count = min(cpu_counts) if cpu_counts else None
+    mem_total_mb = min(mem_totals) if mem_totals else None
     if cpu_count is None and mem_total_mb is None:
         return ConcurrencyPreflightResponse(
             state="unknown",
@@ -189,7 +186,7 @@ def _preflight(limit_cap: int | None, engine_infos: list[dict[str, Any]]) -> Con
 
 def _profile_health(
     profile: EnvironmentProfile,
-    worst_state: str | None,
+    worst_state: StripState | None,
 ) -> ProfileHealthResponse:
     from modulo.db.bundled_runner_template import is_placeholder_bundled_runner_image_ref
 
@@ -233,8 +230,24 @@ async def get_runners_status(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            rows = await list_runner_probe_cache(session, org_id=principal.organisation_id)
-            page = await list_environment_profiles(session, page=1, page_size=100)
+            all_rows = await list_runner_probe_cache(session, org_id=principal.organisation_id)
+            # qa F8: orphaned machine rows are pruned by the probe tick, but
+            # the read ALSO bounds by the same retention window so a corpse
+            # row (a machine decommissioned mid-window) never pins the
+            # worst-of aggregate to "stale" between ticks.
+            retention_cutoff = now - timedelta(seconds=PROBE_RETENTION_SECONDS)
+            rows = [row for row in all_rows if row.probed_at and row.probed_at >= retention_cutoff]
+            # qa F18: paginate the profile read — the single page-1 call
+            # silently capped at 100 profiles; loop until the org's rows are
+            # exhausted.
+            profiles_page: list[EnvironmentProfile] = []
+            page = 1
+            while True:
+                result_page = await list_environment_profiles(session, page=page, page_size=100)
+                profiles_page.extend(result_page.items)
+                if page * 100 >= result_page.total or not result_page.items:
+                    break
+                page += 1
             contract = await get_sandbox_concurrency_limit(session, principal.organisation_id)
     except ProgrammingError:
         _log.exception(_CODE_RUNNERS_STATUS)
@@ -257,6 +270,9 @@ async def get_runners_status(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
+    # qa F18: the per-row strip state is computed once here and reused via
+    # ``machine_states`` below for both the worst-of aggregate AND the
+    # per-profile health — the old code computed the same states three times.
     machines = [
         MachineProbeResponse(
             machine_id=row.machine_id,
@@ -276,19 +292,16 @@ async def get_runners_status(
         )
         for row in rows
     ]
-    aggregate = _worst_machine_state_for_org(rows, now)
+    machine_states = [m.state for m in machines]
+    aggregate = aggregate_strip_state(machine_states)
 
     # Per-profile health: runner_docker rows inherit the worst-of machine
     # state (per-machine rows collapse per-profile — the profile executes on
     # whichever machine dispatches, so worst-of is the safe display). With
-    # NO machine rows at all (the probe never ran) the runner tier reads
-    # None → available=True stays honest? No: absent cache must NOT read
-    # healthy — the strip shows "status unknown", and the profile row shows
-    # the same unknown state via "stale".
-    worst_runner_state = aggregate_strip_state([m.state for m in machines]) if machines else "stale"
-    profiles = [
-        _profile_health(p, worst_runner_state if p.provider_type == "runner_docker" else None) for p in page.items
-    ]
+    # NO machine rows at all (the probe never ran) the aggregate reads
+    # "stale" — absent cache must NOT read healthy (the strip shows
+    # "status unknown", and the profile row shows the same unknown state).
+    profiles = [_profile_health(p, aggregate if p.provider_type == "runner_docker" else None) for p in profiles_page]
 
     engine_infos = [m.engine_info for m in machines if m.engine_info]
     concurrency = ConcurrencyContractResponse(

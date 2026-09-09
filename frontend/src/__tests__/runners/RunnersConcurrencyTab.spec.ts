@@ -178,4 +178,24 @@ describe('RunnersConcurrencyTab', () => {
 
     expect(reloadStatus).toHaveBeenCalled()
   })
+
+  it('refetches the limit source after a successful save (qa F6)', async () => {
+    const { api } = await import('../../lib/api/client')
+    const wrapper = mountTab()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    const initialGetCalls = (api.GET as any).mock.calls.length
+    expect(initialGetCalls).toBeGreaterThan(0)
+
+    await wrapper.find('[data-testid="admin-sandbox-concurrency-save"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    // qa F6: the effective-cap panel reads limitData — a successful PUT
+    // must refetch the limit endpoint too, or the panel shows the PRE-save
+    // cap until the next manual reload.
+    expect((api.GET as any).mock.calls.length).toBeGreaterThan(initialGetCalls)
+  })
 })

@@ -12,15 +12,19 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.core.bundled_runner.health_probe import (
     EngineProbeOutcome,
+    aggregate_image_presence,
     aggregate_strip_state,
     run_runner_health_probe,
+    scrub_url_credentials,
     strip_state_for_row,
 )
 from modulo.db.crud.runner_probe import (
     PROBE_INTERVAL_SECONDS,
+    PROBE_RETENTION_SECONDS,
     PROBE_STALENESS_THRESHOLD_SECONDS,
     probe_age_seconds,
     probe_is_stale,
@@ -79,7 +83,7 @@ class TestStripStateForRow:
 
 class TestAggregateStripState:
     def test_empty_reads_stale(self) -> None:
-        """No cached rows at all â€” the strip must read unknown, never green."""
+        """No cached rows at all — the strip must read unknown, never green."""
         assert aggregate_strip_state([]) == "stale"
 
     def test_all_healthy_reads_healthy(self) -> None:
@@ -93,6 +97,38 @@ class TestAggregateStripState:
 
     def test_image_not_pulled_dominates_healthy(self) -> None:
         assert aggregate_strip_state(["healthy", "image_not_pulled"]) == "image_not_pulled"
+
+
+class TestAggregateImagePresence:
+    def test_empty_is_unknown(self) -> None:
+        assert aggregate_image_presence([]) is None
+
+    def test_all_present_is_true(self) -> None:
+        assert aggregate_image_presence([True, True]) is True
+
+    def test_absent_dominates(self) -> None:
+        assert aggregate_image_presence([True, False]) is False
+
+    def test_unknown_state_keeps_unknown(self) -> None:
+        """A transient inspect failure must not read as absent (qa F4)."""
+        assert aggregate_image_presence([True, None]) is None
+
+
+class TestScrubUrlCredentials:
+    def test_scrubs_userinfo_in_error_string(self) -> None:
+        error = "Cannot connect to host tcp://admin:s3cret@proxy.internal:2375 ssl:default"
+        scrubbed = scrub_url_credentials(error)
+        assert "s3cret" not in scrubbed
+        assert "proxy.internal:2375" in scrubbed
+
+    def test_leaves_urls_without_userinfo_untouched(self) -> None:
+        url = "tcp://proxy.internal:2375"
+        assert scrub_url_credentials(url) == url
+
+    def test_preserves_non_url_colon_pairs(self) -> None:
+        # No "//" before the colon pair — not treated as URL userinfo.
+        text = "timeout value 5:5 exceeded"
+        assert scrub_url_credentials(text) == text
 
 
 def _fake_session_factory(session: AsyncMock) -> Any:
@@ -115,6 +151,7 @@ def _make_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.begin_nested = MagicMock(return_value=begin_cm)
     return session
 
 
@@ -236,17 +273,21 @@ class TestRunRunnerHealthProbe:
             patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
             patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
             patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
             patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
         ):
             result = await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
             )
         assert result["orgs_probed"] == 1
+        assert result["orgs_failed"] == 0
         assert calls["n"] == 1
 
     @pytest.mark.asyncio
-    async def test_placeholder_digest_image_skips_inspect(self) -> None:
-        """The un-landed placeholder digest never hits the engine inspect."""
+    async def test_placeholder_only_org_reads_unknown_never_false(self) -> None:
+        """A placeholder-only org has no inspectable image — unknown, not a
+        permanent false ``image_not_pulled`` (qa F4); the placeholder never
+        reaches the engine inspect."""
         session = _make_session()
         boundary = _fake_boundary(reachable=True)
         placeholder_ref = "modulo-runner:opencode@sha256:" + "0" * 64
@@ -261,4 +302,101 @@ class TestRunRunnerHealthProbe:
             )
         boundary.image_present.assert_not_awaited()
         kwargs = upsert.await_args.kwargs
-        assert kwargs["image_checks"][placeholder_ref] is None
+        assert kwargs["images_present"] is None
+        assert placeholder_ref not in kwargs["image_checks"]
+
+    @pytest.mark.asyncio
+    async def test_transient_inspect_failure_is_unknown_not_absent(self) -> None:
+        """A non-404 inspect failure records None (unknown) — the aggregate
+        must not read ``image_not_pulled`` from a transient error (qa F4)."""
+        session = _make_session()
+        boundary = _fake_boundary(reachable=True)
+        boundary.image_present = AsyncMock(return_value=None)
+        with (
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[_IMAGE_REF])),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+        ):
+            await run_runner_health_probe(
+                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        kwargs = upsert.await_args.kwargs
+        assert kwargs["images_present"] is None
+        assert kwargs["image_checks"][_IMAGE_REF] is None
+
+    @pytest.mark.asyncio
+    async def test_prunes_rows_past_retention_window(self) -> None:
+        """qa F8: the tick prunes orphaned (org, machine) rows past the
+        24h retention window."""
+        session = _make_session()
+        boundary = _fake_boundary(reachable=True)
+        with (
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
+            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()) as prune,
+        ):
+            await run_runner_health_probe(
+                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        prune.assert_awaited_once()
+        assert prune.await_args.kwargs["retention_seconds"] == PROBE_RETENTION_SECONDS
+
+    @pytest.mark.asyncio
+    async def test_placeholder_digest_image_skips_inspect(self) -> None:
+        """The un-landed placeholder digest never hits the engine inspect."""
+        session = _make_session()
+        boundary = _fake_boundary(reachable=True)
+        placeholder_ref = "modulo-runner:opencode@sha256:" + "0" * 64
+        real_ref = _IMAGE_REF
+        with (
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch(
+                "modulo.db.crud.runner_probe.list_org_image_refs",
+                new=AsyncMock(return_value=[placeholder_ref, real_ref]),
+            ),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+        ):
+            await run_runner_health_probe(
+                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        boundary.image_present.assert_awaited_once_with(real_ref)
+        kwargs = upsert.await_args.kwargs
+        assert kwargs["images_present"] is True
+        assert placeholder_ref not in kwargs["image_checks"]
+        assert kwargs["image_checks"][real_ref] is True
+
+    @pytest.mark.asyncio
+    async def test_poisoned_org_infra_error_isolates_and_reraises(self) -> None:
+        """qa F2: a poisoned org's infra failure ROLLS BACK ONLY ITSELF —
+        org #2 still upserts in the same tick — and the tick re-raises so
+        SAQ's retries engage (qa F3)."""
+        session = _make_session()
+        boundary = _fake_boundary(reachable=True)
+        other_org = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+        async def _list_orgs(s: Any) -> list[uuid.UUID]:
+            return [_ORG_ID, other_org]
+
+        upserted_orgs: list[uuid.UUID] = []
+
+        async def _upsert(_session: Any, **kwargs: Any) -> None:
+            upserted_orgs.append(kwargs["org_id"])
+            if kwargs["org_id"] == _ORG_ID:
+                raise SQLAlchemyError("statement poisoned")
+
+        with (
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
+            pytest.raises(SQLAlchemyError),
+        ):
+            await run_runner_health_probe(
+                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        assert other_org in upserted_orgs

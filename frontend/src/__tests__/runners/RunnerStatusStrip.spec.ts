@@ -166,4 +166,23 @@ describe('RunnerStatusStrip', () => {
     const wrapperMulti = mount(RunnerStatusStrip, { props: { status: multi } })
     expect(wrapperMulti.find('[data-testid="runner-status-strip-machines"]').text()).toContain('2')
   })
+
+  it('renders an explicit loading label while the status is absent (qa F11)', () => {
+    const wrapper = mount(RunnerStatusStrip, { props: { status: null } })
+    expect(wrapper.find('[data-testid="runner-status-strip-state"]').text()).toBe('checking runner status…')
+  })
+
+  it('renders the unavailable state when the status fetch failed (qa F11)', () => {
+    const wrapper = mount(RunnerStatusStrip, { props: { status: null, errored: true } })
+    expect(wrapper.find('[data-testid="runner-status-strip-state"]').text()).toBe('runner status unavailable')
+    expect(wrapper.find('[data-testid="runner-status-strip"]').classes().join(' ')).toContain('text-destructive')
+  })
+
+  it('renders an unknown probe state AS ITSELF, never as an empty label (qa F17)', () => {
+    const status = makeStatus({ aggregate_state: 'brand_new_state' as unknown as RunnersStatus['aggregate_state'] })
+    const wrapper = mount(RunnerStatusStrip, { props: { status } })
+    const label = wrapper.find('[data-testid="runner-status-strip-state"]').text()
+    expect(label).toBe('brand_new_state')
+    expect(label).not.toBe('')
+  })
 })

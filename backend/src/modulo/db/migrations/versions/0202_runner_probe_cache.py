@@ -1,7 +1,7 @@
 """runner_probe_cache — cached per-(org, machine) runner health probe (FAR-591 / D5).
 
-Revision ID: 0201_runner_probe_cache
-Revises: 0200_runs_runner_marker_sweep_index
+Revision ID: 0202_runner_probe_cache
+Revises: 0201_spend_anomaly_unique_org_date
 Create Date: 2026-09-09
 
 What this migration does:
@@ -28,13 +28,14 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0201_runner_probe_cache"
-down_revision: str | None = "0200_runs_runner_marker_sweep_index"
+revision: str = "0202_runner_probe_cache"
+down_revision: str | None = "0201_spend_anomaly_unique_org_date"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _MIGRATE_ROLE = "modulo_migrate"
 _APP_ROLE = "modulo_app"
+_SYSTEM_ROLE = "modulo_system"
 
 _ORG_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
 
@@ -78,12 +79,14 @@ def upgrade() -> None:
         op.execute("SET search_path TO public")
         migrate_role = _role_exists(bind, _MIGRATE_ROLE)
         app_role = _role_exists(bind, _APP_ROLE)
+        system_role = _role_exists(bind, _SYSTEM_ROLE)
         if migrate_role:
             op.execute(f"GRANT CREATE ON SCHEMA public TO {_MIGRATE_ROLE}")
             op.execute(f"GRANT REFERENCES ON TABLE public.organisations TO {_MIGRATE_ROLE}")
     else:
         migrate_role = False
         app_role = False
+        system_role = False
 
     if pg and migrate_role:
         op.execute(f"SET ROLE {_MIGRATE_ROLE}")
@@ -119,6 +122,13 @@ def upgrade() -> None:
         op.execute(f"CREATE POLICY rls_org_isolation ON {_TABLE} USING ({_ORG_SCOPE})")
         if app_role:
             op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_TABLE} TO {_APP_ROLE}")
+        # qa F14: EXPLICIT system-role privileges (0192 precedent) — the
+        # probe cron writes the cache as modulo_system (BYPASSRLS skips row
+        # security but NOT table privileges). A missing grant wedges every
+        # org's probe row write: the cache never refreshes and every strip
+        # ages to "status unknown".
+        if system_role:
+            op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_TABLE} TO {_SYSTEM_ROLE}")
 
 
 def downgrade() -> None:

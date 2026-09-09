@@ -8,7 +8,7 @@ without a database: a dead probe can never leave "healthy" on screen.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -22,6 +22,13 @@ PROBE_INTERVAL_SECONDS = 60
 #: A cached result older than 2x the interval renders as
 #: "status unknown (last checked Xs ago)" — a dead probe never reads healthy.
 PROBE_STALENESS_THRESHOLD_SECONDS = 2 * PROBE_INTERVAL_SECONDS
+
+#: Retention window for probe rows (qa F8): the probe tick prunes (org,
+#: machine) rows it has not refreshed within this window — a decommissioned
+#: machine's corpse row must not pin the strip to "stale" forever. The read
+#: side filters by the same window, so a corpse row is invisible even
+#: between ticks.
+PROBE_RETENTION_SECONDS = 24 * 60 * 60
 
 
 def probe_age_seconds(probed_at: datetime, now: datetime) -> int:
@@ -96,6 +103,23 @@ async def list_runner_probe_cache(
         select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_id).order_by(RunnerProbeCache.machine_id)
     )
     return list(result.scalars().all())
+
+
+async def prune_stale_runner_probe_rows(session: AsyncSession, *, retention_seconds: int) -> int:
+    """Delete probe rows not refreshed within ``retention_seconds`` (qa F8).
+
+    The probe tick (the sole writer) refreshes its own machine's row every
+    60s, so any row older than the retention window belongs to a machine
+    that stopped probing — a decommissioned machine whose corpse row would
+    otherwise pin the strip's worst-of aggregate to "stale" forever.
+    Returns the number of rows deleted. Cross-org by design: the probe runs
+    on the modulo_system role (BYPASSRLS) and prunes every org's corpses.
+    """
+    from sqlalchemy import delete
+
+    cutoff = datetime.now(UTC) - timedelta(seconds=retention_seconds)
+    result = await session.execute(delete(RunnerProbeCache).where(RunnerProbeCache.probed_at < cutoff))
+    return result.rowcount if hasattr(result, "rowcount") else 0
 
 
 async def list_orgs_with_runner_profiles(session: AsyncSession) -> list[uuid.UUID]:

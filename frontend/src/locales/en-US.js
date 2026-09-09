@@ -1599,15 +1599,6 @@ export default {
       "export_failed_status": "Export failed: {status}",
       "purge_result": "Purged {runs} run(s) and {checkpoints} checkpoint(s), freeing {bytes}."
     },
-    "AdminSandboxConcurrencyView": {
-      "max_concurrent_sandbox_runs": "Max concurrent Runner runs",
-      "limit_how_many_sandbox_agent_runs_execute_at_once_across_the_org": "Limit how many Runner runs execute at once across the org. Leave empty for unlimited.",
-      "leave_empty_for_unlimited": "Leave empty for unlimited.",
-      "concurrent_run_limit": "Concurrent Runner run limit",
-      "save": "Save",
-      "saving": "Saving\u2026",
-      "limit_updated": "Runner concurrency limit updated."
-    },
     "AdminRunnersView": {
       "runners": "Runners",
       "subtitle": "Workspace execution profiles and the org's runner concurrency",
@@ -1620,6 +1611,8 @@ export default {
       "engine_unreachable": "\u26a0 engine unreachable",
       "image_not_pulled": "\u26a0 image not pulled",
       "status_unknown": "status unknown (last checked {seconds}s ago)",
+      "loading": "checking runner status\u2026",
+      "fetch_failed": "runner status unavailable",
       "machine_count": "{count} machines"
     },
     "RunnersProfilesTab": {
@@ -1659,6 +1652,7 @@ export default {
       "test_connection": "Test connection",
       "testing": "Testing...",
       "test_connection_for": "Test connection for {name}",
+      "dismiss": "Dismiss",
       "no_response_body": "No response body"
     },
     "RunnersConcurrencyTab": {
@@ -3056,17 +3050,6 @@ export default {
         }
       }
     },
-    "EnvironmentProfileList": {
-      "try_a_different_search_term": "Try a different search term.",
-      "no_environment_profiles": "No environment profiles",
-      "no_profiles_match": "No profiles match \"{search}\"",
-      "soft_delete_warning": "This will soft-delete the profile. Existing runs using it are unaffected.",
-      "test_connection": "Test connection",
-      "test_connection_for": "Test connection: {name}",
-      "testing": "Testing...",
-      "dismiss": "Dismiss",
-      "no_response_body": "No response body"
-    },
     "CompositeEditorView": {
       "save_as_composite": "Save as Composite",
       "name": "Name",
@@ -3556,10 +3539,8 @@ export default {
       "item_model_backends": "Model Backends",
       "item_node_categories": "Node Categories",
       "item_feature_flags": "Feature Flags",
-      "item_environment_profiles": "Environment Profiles",
       "item_runners": "Runners",
       "item_run_retention": "Run Retention",
-      "item_sandbox_concurrency": "Runner Concurrency",
       "item_saved_views": "Saved Views",
       "item_error_dashboard": "Error Dashboard",
       "item_notification_log": "Webhook Notifications",
