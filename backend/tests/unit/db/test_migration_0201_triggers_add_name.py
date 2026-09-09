@@ -1,15 +1,15 @@
-"""FAR-681 slice 2: migration 0200 — ``triggers.name`` round-trip.
+"""FAR-681 slice 2: migration 0201 â€” ``triggers.name`` round-trip.
 
 Executes the migration against an in-memory SQLite engine (the 0190
-portable-DDL template — plain ``op.add_column`` with an inline type, round
+portable-DDL template â€” plain ``op.add_column`` with an inline type, round
 trips on both Postgres and SQLite). Proves:
 
-* **Round-trip** — the upgrade adds the column, the downgrade removes it,
+* **Round-trip** â€” the upgrade adds the column, the downgrade removes it,
   and a second upgrade re-adds it (schema asserted at every step).
-* **Nullable** — a legacy trigger row inserted BEFORE the upgrade (name NULL,
+* **Nullable** â€” a legacy trigger row inserted BEFORE the upgrade (name NULL,
   pre-slice-2) survives the upgrade untouched: name-based apply never claims
   unnamed rows.
-* **Model parity** — the ORM model carries the column the migration creates.
+* **Model parity** â€” the ORM model carries the column the migration creates.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from alembic.operations import Operations
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
-_REVISION = "0200_triggers_add_name"
+_REVISION = "0201_triggers_add_name"
 
 _ADD_COLUMN_RE = re.compile(r'op\.add_column\(\s*"(\w+)"\s*,\s*sa\.Column\(\s*"(\w+)"')
 _DROP_COLUMN_RE = re.compile(r'op\.drop_column\(\s*"(\w+)"\s*,\s*"(\w+)"')
@@ -96,7 +96,7 @@ def sqlite_engine() -> Iterator[sa.Engine]:
     engine.dispose()
 
 
-class TestRoundTrip0200:
+class TestRoundTrip0201:
     def test_upgrade_adds_name_column(self, sqlite_engine: sa.Engine) -> None:
         with sqlite_engine.begin() as conn:
             _scaffold(conn)
@@ -105,7 +105,7 @@ class TestRoundTrip0200:
         assert "name" in _table_columns(sqlite_engine, "triggers")
 
     def test_legacy_trigger_row_survives_upgrade_with_null_name(self, sqlite_engine: sa.Engine) -> None:
-        """A trigger created BEFORE the migration has NULL name — the row is
+        """A trigger created BEFORE the migration has NULL name â€” the row is
         untouched and stays invisible to name-based apply."""
         with sqlite_engine.begin() as conn:
             _scaffold(conn)
@@ -117,7 +117,7 @@ class TestRoundTrip0200:
 
     def test_declared_name_round_trips(self, sqlite_engine: sa.Engine) -> None:
         """Identity semantics: the declarative (pipeline, name) handle is the
-        value apply matches on — a written name survives the round-trip."""
+        value apply matches on â€” a written name survives the round-trip."""
         with sqlite_engine.begin() as conn:
             _scaffold(conn)
             _insert_legacy_trigger(conn)
@@ -159,7 +159,7 @@ class TestSymmetryAndModelParity:
         assert dropped == added, "downgrade must drop exactly the column the upgrade added"
 
     def test_migration_is_portable_ddl(self) -> None:
-        """No schema-qualified raw DDL (SQLite-incompatible) — op.add_column
+        """No schema-qualified raw DDL (SQLite-incompatible) â€” op.add_column
         keeps the sqlite round-trip harness honest. Assertions scope to the
         code body (docstring prose may mention the term)."""
         code = _source().split('"""', 2)[-1]
@@ -177,7 +177,7 @@ class TestSymmetryAndModelParity:
         """The migration chains onto the tip that `uv run alembic heads`
         resolved at delivery time (never edited after the fact)."""
         spec = _load_migration()
-        assert spec.down_revision == "0199_runs_json_to_jsonb"
+        assert spec.down_revision == "0200_runs_runner_marker_sweep_index"
 
     def test_model_matches_upgraded_schema(self) -> None:
         from modulo.db.models.trigger import Trigger
