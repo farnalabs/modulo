@@ -435,6 +435,12 @@ def _rehearsal_plan(engine: Engine) -> tuple[list[Script], str | None, str | Non
     if db_current == script_head:
         return [], db_current, script_head
     planned = list(script.iterate_revisions(script_head, db_current))
+    # iterate_revisions yields newest-first (head -> current), but the chain is
+    # APPLIED oldest-first. Reverse so the planned list matches application
+    # order, keeping _rehearsal_planned_steps aligned with _rehearsal_applied_steps
+    # (which on_version_apply fills in application order) for the failure-step /
+    # culprit-revision reporting.
+    planned.reverse()
     return planned, db_current, script_head
 
 

@@ -78,7 +78,11 @@ def _asyncio_run(coro):
 
 
 def _sync_url(asyncpg_url: str) -> str:
-    return asyncpg_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    # Reuse env.py's canonical async->sync driver mapping so the sync engine
+    # selects the postgresql+psycopg dialect (psycopg2 is not in the tree).
+    from modulo.db.migrations import env as migration_env
+
+    return migration_env._to_sync_url(asyncpg_url)
 
 
 def _script_head(db_url: str) -> str:
