@@ -40,14 +40,15 @@ _MODEL_DISABLED_PATTERN = re.compile(
 )
 
 _CONNECTION_ERROR_PATTERN = re.compile(
-    r'"type"\s*:\s*"error".*?"name"\s*:\s*'
-    r"(?:APIConnectionError|ConnectionError|NetworkError|ETIMEDOUT|ECONNREFUSED|ECONNRESET)",
+    r'"type"\s*:\s*"error".*?"name"\s*:\s*"'
+    r'(?:APIConnectionError|ConnectionError|NetworkError|ETIMEDOUT|ECONNREFUSED|ECONNRESET)"',
     re.DOTALL,
 )
 
 _RATE_LIMIT_PATTERN = re.compile(
-    r'"type"\s*:\s*"error".*?"name"\s*:\s*'
-    r"(?:RateLimitError|RateLimitExceededError|TooManyRequests|429)",
+    r'"type"\s*:\s*"error".*?(?:'
+    r'"name"\s*:\s*"(?:RateLimitError|RateLimitExceededError|TooManyRequests)"'
+    r'|"statusCode"\s*:\s*429)',
     re.DOTALL,
 )
 
