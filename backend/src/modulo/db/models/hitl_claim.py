@@ -52,6 +52,17 @@ class HitlClaim(OrgScoped):
     # "no description" fallback). jsonb in the parallel migration; generic
     # JSON keeps SQLite/MariaDB parity (same pattern as decision_payload).
     context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
+    # FAR-634: the resolved ``hitl_gate_config``, stamped by the executor's
+    # interrupt handler at fire time. The human_only resolver
+    # (``db.crud.hitl_gate_config.resolve_hitl_gate_config``) reads this FIRST
+    # (one claim-row lookup instead of the snapshot/live-edge walk), falling
+    # back to the walk for legacy rows that fired before this column existed.
+    # Nullable: legacy gates carry NULL and the resolver walk covers them; a
+    # stamp failure at fire time is failure-isolated (the gate still fires
+    # with NULL config and the resolver falls back). jsonb in the parallel
+    # migration; generic JSON keeps SQLite/MariaDB parity (same pattern as
+    # context_json).
+    gate_config_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
     # NOTE (qa F13): no ``parked_at`` column. The park sweep (run_admission.
     # park_expired_hitl_runs) marks a parked run via the RUN's ``hitl_parked``
     # status — the gate row is untouched (park ≠ decide) and a separate stamp

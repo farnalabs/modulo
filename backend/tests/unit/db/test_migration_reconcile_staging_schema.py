@@ -34,8 +34,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and FAR-583's 0192_run_node_outputs re-parents onto 0191 with its
 # 0193_run_node_outputs_sweep_index chaining onto 0192, and 0194_uuid_pk_server_defaults
 # (FAR-718, from main) chains off 0193; improve-database's 0197/0198/0199 chain off it,
-# and this PR's 0201_spend_anomaly_unique_org_date chains off 0200_runs_runner_marker_sweep_index as the chain head.
-_CHAIN_HEAD_MIGRATION = "0202_runs_error_code_claimed_by_indexes"
+# 0201_spend_anomaly_unique_org_date (from main) chains off 0200, 0202_runs_error_code_claimed_by_indexes
+# (from main) chains off 0201, and this PR's 0195_hitl_claim_gate_config_json (FAR-634) chains off
+# 0202 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0195_hitl_claim_gate_config_json"
 
 
 def _source(name: str) -> str:

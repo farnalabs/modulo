@@ -122,6 +122,7 @@ def _token(org_id: uuid.UUID, user_id: uuid.UUID) -> str:
         account_id=str(user_id),
         org_role="admin",
         is_system_admin=False,
+        client_kind="browser",
     )
 
 

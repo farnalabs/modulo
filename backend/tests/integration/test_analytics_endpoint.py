@@ -188,6 +188,7 @@ def _token(org_id: uuid.UUID | None, user_id: uuid.UUID, role: str, is_system_ad
         account_id=str(user_id),
         org_role=role,
         is_system_admin=is_system_admin,
+        client_kind="browser",
     )
 
 

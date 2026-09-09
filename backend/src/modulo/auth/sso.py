@@ -13,7 +13,7 @@ from defusedxml import ElementTree
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.jwt import create_access_token, create_refresh_token
+from modulo.auth.jwt import CLIENT_KIND_BROWSER, create_access_token, create_refresh_token
 from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.auth.secret_storage import decode_stored_secret
@@ -244,6 +244,9 @@ async def issue_sso_tokens(
         account_id=str(account.id),
         org_role=org_role,
         ttl_minutes=settings.modulo_access_token_minutes,
+        # FAR-634: SSO completes a browser redirect flow — explicit browser
+        # class, same as the password login mint.
+        client_kind=CLIENT_KIND_BROWSER,
     )
     refresh_token = create_refresh_token(
         account.email,
@@ -253,6 +256,7 @@ async def issue_sso_tokens(
         org_role=org_role,
         token_family=str(family.family_id),
         token_sequence=0,
+        client_kind=CLIENT_KIND_BROWSER,
     )
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}  # nosec B105 — OAuth token_type label, not a credential
 

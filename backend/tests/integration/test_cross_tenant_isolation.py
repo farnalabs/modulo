@@ -516,6 +516,7 @@ def _token(
         account_id=str(user_id),
         org_role=role,
         is_system_admin=is_system_admin,
+        client_kind="browser",
     )
 
 

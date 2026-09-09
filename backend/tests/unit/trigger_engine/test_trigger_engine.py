@@ -82,6 +82,7 @@ def _replay_auth_headers() -> dict[str, str]:
         organisation_id=str(_WEBHOOK_ORG_ID),
         account_id=str(uuid.uuid4()),
         org_role="admin",
+        client_kind="browser",
     )
     return {"Authorization": f"Bearer {token}"}
 

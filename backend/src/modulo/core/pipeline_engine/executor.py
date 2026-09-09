@@ -122,6 +122,7 @@ from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, Runaway
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
@@ -5304,6 +5305,32 @@ class PipelineExecutor:
                         exc_info=True,
                     )
                     gate_context = None
+                # FAR-634: resolve the fired gate's hitl_gate_config and stamp
+                # it on the claim row so the human_only resolver reads it in
+                # ONE claim-row lookup at decision time instead of the
+                # snapshot/live walk. Same failure-isolated savepoint contract
+                # as the briefing capture: a stamp failure must never block
+                # the interrupt — the row carries NULL config and the
+                # resolver's walk fallback covers it (legacy semantics
+                # unchanged).
+                gate_config: dict[str, Any] | None = None
+                try:
+                    async with session.begin_nested():
+                        gate_config = await resolve_hitl_gate_config(
+                            session,
+                            run_id=run_id,
+                            gate_id=gate_id,
+                            org_id=org_id,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "hitl_gate.config_stamp_failed",
+                        extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+                        exc_info=True,
+                    )
+                    gate_config = None
                 await mgr.create_gate(
                     session,
                     run_id=run_id,
@@ -5312,6 +5339,7 @@ class PipelineExecutor:
                     org_id=org_id,
                     required_team_id=required_team_id,
                     context_json=gate_context,
+                    gate_config_json=gate_config,
                 )
         return pipeline_name, coalesce_reused
 

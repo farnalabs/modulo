@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0196."""
+    """Exactly one migration chains off each predecessor, and the head is 0195."""
     import re
 
     revisions = {}
@@ -815,15 +815,23 @@ def test_single_migration_head() -> None:
     # 0199_runs_json_to_jsonb (improve-database) chains off 0198.
     chaining_off_0198 = [p for p in revisions if parents[p] == "0198_runs_add_missing_indexes"]
     assert [_basename(p) for p in chaining_off_0198] == ["0199_runs_json_to_jsonb.py"]
-    # This PR's 0201_spend_anomaly_unique_org_date chains off 0200_runs_runner_marker_sweep_index.
+    # 0200_runs_runner_marker_sweep_index (FAR-594 D8 qa F8, the marker sweep's
+    # partial index) chains off 0199.
+    chaining_off_0199 = [p for p in revisions if parents[p] == "0199_runs_json_to_jsonb"]
+    assert [_basename(p) for p in chaining_off_0199] == ["0200_runs_runner_marker_sweep_index.py"]
+    # 0201_spend_anomaly_unique_org_date (from main) chains off 0200.
     chaining_off_0200_runner = [p for p in revisions if parents[p] == "0200_runs_runner_marker_sweep_index"]
     assert [_basename(p) for p in chaining_off_0200_runner] == ["0201_spend_anomaly_unique_org_date.py"]
-    # 0202_runs_error_code_claimed_by_indexes chains off 0201.
+    # 0202_runs_error_code_claimed_by_indexes (from main) chains off 0201.
     chaining_off_0201 = [p for p in revisions if parents[p] == "0201_spend_anomaly_unique_org_date"]
     assert [_basename(p) for p in chaining_off_0201] == ["0202_runs_error_code_claimed_by_indexes.py"]
-    # Nothing chains off 0202 -> it is the single head.
+    # 0195_hitl_claim_gate_config_json (FAR-634) chains off 0202 and is the
+    # single head.
     chaining_off_0202 = [p for p in revisions if parents[p] == "0202_runs_error_code_claimed_by_indexes"]
-    assert chaining_off_0202 == []
+    assert [_basename(p) for p in chaining_off_0202] == ["0195_hitl_claim_gate_config_json.py"]
+    # Nothing chains off 0195 -> it is the single head.
+    chaining_off_0195 = [p for p in revisions if parents[p] == "0195_hitl_claim_gate_config_json"]
+    assert not chaining_off_0195
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
