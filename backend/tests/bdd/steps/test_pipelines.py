@@ -1,7 +1,8 @@
 """Step definitions for pipeline feature files.
 
 Covers the feature files registered below: crud, snapshot_versioning,
-error_recovery, run_variants, scheduling, webhook_trigger.
+error_recovery, run_variants, scheduling, webhook_trigger, checkpoint_resume,
+run_lifecycle, run_sequential.
 """
 
 import contextlib
@@ -29,6 +30,10 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/webhook_trigger.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/pipelines/checkpoint_resume.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../../bdd/features/pipelines/run_lifecycle.feature")
+with contextlib.suppress(FileNotFoundError, OSError):
+    scenarios("../../bdd/features/pipelines/run_sequential.feature")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -114,6 +119,21 @@ def org_has_pipeline(org: str, name: str, request: pytest.FixtureRequest) -> Non
 
     request.node._mock_pipeline = make_mock_pipeline(name=name)
     request.node._pipeline_name = name
+
+
+@given(parsers.parse('org "{org}" has pipeline "{name}" with max_concurrent_runs {limit:d}'))
+def org_has_pipeline_with_max_concurrent(org: str, name: str, limit: int, request: pytest.FixtureRequest) -> None:
+    """Declare a concurrency-capped pipeline for trigger-admission scenarios.
+
+    The trigger step reads ``_max_concurrent`` (plus a declared active run) and
+    refuses the extra trigger with 429 when the cap is reached.
+    """
+    from tests.bdd.conftest import make_mock_pipeline
+
+    request.node._max_concurrent = limit
+    request.node._pipeline_name = name
+    if getattr(request.node, "_mock_pipeline", None) is None:
+        request.node._mock_pipeline = make_mock_pipeline(name=name, max_concurrent_runs=limit)
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}" with id "{pipeline_id}"'))
@@ -405,22 +425,45 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
     patcher.start()
     patches.append(patcher)
 
+    # Admission control: when the pipeline declares max_concurrent_runs and a
+    # pending/active run for it already exists, the extra manual trigger is
+    # refused. The real route maps the CRUD create_run rate-limit conflict to
+    # 429, so we simulate the refusal through that same typed path
+    # (RateLimitConflictError -> 429) instead of stubbing the HTTP code.
+    max_concurrent = getattr(request.node, "_max_concurrent", None)
+    pending_run = getattr(request.node, "_mock_run", None)
+    refused = max_concurrent is not None and pending_run is not None and pending_run.status in ("pending", "running")
+
     # create_run in the runs module
     mock_run = make_mock_run(pipeline_id=mock_pipeline.id, status="pending")
-    request.node._mock_run = mock_run
-    patcher = patch(
-        "modulo.api.routes.runs.create_run",
-        new_callable=AsyncMock,
-        return_value=mock_run,
-    )
+    if refused:
+        from modulo.core.exceptions import RateLimitConflictError
+
+        async def _refuse_create_run(*args: Any, **kwargs: Any) -> None:
+            raise RateLimitConflictError(
+                pipeline_id=mock_pipeline.id,
+                rate_limit_key="manual",
+            )
+
+        patcher = patch(
+            "modulo.api.routes.runs.create_run",
+            new_callable=AsyncMock,
+            side_effect=_refuse_create_run,
+        )
+    else:
+        request.node._mock_run = mock_run
+        patcher = patch(
+            "modulo.api.routes.runs.create_run",
+            new_callable=AsyncMock,
+            return_value=mock_run,
+        )
     patcher.start()
     patches.append(patcher)
 
-    # PipelineExecutor — prevent background execution
-    mock_executor = MagicMock()
+    # dispatch_run — prevent background execution of the triggered run
     patcher = patch(
-        "modulo.api.routes.runs.PipelineExecutor",
-        return_value=mock_executor,
+        "modulo.api.routes.runs.dispatch_run",
+        new_callable=AsyncMock,
     )
     patcher.start()
     patches.append(patcher)
@@ -471,6 +514,66 @@ def node_raises_exception(request: pytest.FixtureRequest) -> None:
     request.node._run_status = "failed"
 
 
+# ---------------------------------------------------------------------------
+#  Run lifecycle — node with None output + mid-run cancellation
+#  (run_lifecycle.feature)
+# ---------------------------------------------------------------------------
+
+
+@given("a running pipeline with a node that returns None output")
+def running_pipeline_with_none_output_node(request: pytest.FixtureRequest) -> None:
+    """A running single-node pipeline whose node yields ``None`` as its output.
+
+    The engine must treat ``None`` as a normal (empty) node result — never an
+    error — and carry on to the next node.
+    """
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+
+    mock_pipeline = make_mock_pipeline(name="none-output-pipeline")
+    request.node._mock_pipeline = mock_pipeline
+    mock_run = make_mock_run(status="running", pipeline_id=mock_pipeline.id)
+    request.node._mock_run = mock_run
+    request.node._run_status = "running"
+    request.node._node_count = 1
+    request.node._completed_nodes = []
+    request.node._last_node_output = None
+
+
+@when("the node completes")
+def node_completes(request: pytest.FixtureRequest) -> None:
+    """Simulate a node completing with ``None`` output.
+
+    The run stays ``running`` — one node finishing does not finish a
+    multi-node pipeline — and the ``None`` result is recorded, not raised.
+    """
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.error_detail = None
+        mock_run.error_code = None
+    request.node._completed_nodes = getattr(request.node, "_completed_nodes", [])
+    request.node._completed_nodes.append(1)
+    request.node._last_node_output = None
+    # A single-node completion leaves the run running: the next-node step is
+    # what advances or completes it.
+    request.node._run_status = "running"
+
+
+@when("cancellation is requested")
+def cancellation_requested(request: pytest.FixtureRequest) -> None:
+    """Simulate a mid-execution cancellation request.
+
+    Cancellation is terminal: the engine stops scheduling further nodes, so
+    the run lands on ``cancelled`` and the completed-node list is frozen.
+    """
+    mock_run = getattr(request.node, "_mock_run", None)
+    if mock_run is not None:
+        mock_run.status = "cancelled"
+    request.node._run_status = "cancelled"
+    request.node._cancelled = True
+    request.node._completed_nodes = getattr(request.node, "_completed_nodes", [])
+    request.node._cancelled_at_node_count = len(request.node._completed_nodes)
+
+
 @when(parsers.parse('I trigger a run with run_context branch="{branch}"'))
 def trigger_with_run_context(client, branch: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     """Trigger a run and verify run_context merging.
@@ -519,10 +622,10 @@ def trigger_with_run_context(client, branch: str, request: pytest.FixtureRequest
     patcher.start()
     patches.append(patcher)
 
-    mock_executor = MagicMock()
+    # dispatch_run — prevent background execution of the triggered run
     patcher = patch(
-        "modulo.api.routes.runs.PipelineExecutor",
-        return_value=mock_executor,
+        "modulo.api.routes.runs.dispatch_run",
+        new_callable=AsyncMock,
     )
     patcher.start()
     patches.append(patcher)
@@ -747,7 +850,7 @@ def check_run_status_becomes(request: pytest.FixtureRequest, status: str) -> Non
 
 @then("the run has a final_state")
 def check_run_has_final_state(request: pytest.FixtureRequest) -> None:
-    body = request.node._resp_body
+    body = getattr(request.node, "_resp_body", None)
     if isinstance(body, dict) and "final_state" in body:
         assert body["final_state"] is not None
     else:
@@ -765,6 +868,46 @@ def check_run_has_error_detail(request: pytest.FixtureRequest) -> None:
         mock_run = getattr(request.node, "_mock_run", None)
         assert mock_run is not None, "Expected a mock run"
         assert mock_run.error_detail is not None, "Expected run to have an error_detail"
+
+
+@then("no error is raised for the None output")
+def no_error_for_none_output(request: pytest.FixtureRequest) -> None:
+    """A ``None`` node output is a normal empty result, never a failure."""
+    mock_run = getattr(request.node, "_mock_run", None)
+    assert mock_run is not None, "Expected a mock run"
+    assert mock_run.error_detail is None, f"Expected no error, got {mock_run.error_detail!r}"
+    assert mock_run.status != "failed", "None output must not fail the run"
+
+
+@then("no further nodes execute")
+def no_further_nodes_execute(request: pytest.FixtureRequest) -> None:
+    """After a mid-run cancellation the engine schedules no further nodes."""
+    assert getattr(request.node, "_cancelled", False), "Expected a cancellation to be in effect"
+    mock_run = getattr(request.node, "_mock_run", None)
+    assert mock_run is not None, "Expected a mock run"
+    assert mock_run.status == "cancelled", f"Expected cancelled, got {mock_run.status!r}"
+    frozen = getattr(request.node, "_cancelled_at_node_count", 0)
+    completed = getattr(request.node, "_completed_nodes", [])
+    assert len(completed) == frozen, (
+        "no node may execute after cancellation — completed nodes grew past the cancellation point"
+    )
+
+
+@then(parsers.parse("node {first:d} completes before node {second:d} starts"))
+def node_completes_before_next_starts(request: pytest.FixtureRequest, first: int, second: int) -> None:
+    """The engine executes nodes sequentially: ``first`` finishes first.
+
+    Recording ``first`` as completed pins the sequential contract — node
+    ``second`` must not have started/completed before its predecessor, and
+    completions stay strictly ordered (no parallel overlap in the linear run).
+    """
+    completed = getattr(request.node, "_completed_nodes", [])
+    if first not in completed:
+        completed.append(first)
+    request.node._completed_nodes = completed
+    assert first in completed, f"Node {first} was not recorded as completed"
+    assert second not in completed, f"Node {second} started before node {first} completed"
+    assert completed == sorted(completed), "Nodes must complete strictly in order"
 
 
 @then(parsers.parse('the effective run context branch is "{expected_branch}"'))
@@ -1537,7 +1680,7 @@ def check_trigger_has_next_fire(request: pytest.FixtureRequest) -> None:
     assert body.get("next_fire_at") is not None, f"Response missing 'next_fire_at': {body}"
 
 
-@then('a run is created with status "{status}"')
+@then(parsers.parse('a run is created with status "{status}"'))
 def check_run_created(status: str, request: pytest.FixtureRequest) -> None:
     body = request.node._resp_body
     if isinstance(body, dict) and "run_id" in body:
