@@ -934,8 +934,8 @@ class TestNodelessRedispatchBudget:
         the budget; the attempt count uses max(0, claim_count - 1)."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(3, retry_policy={"max_retries": 3})) is True
-        assert ch._should_redispatch_nodeless(self._row(5, retry_policy={"max_retries": 3})) is True
-        assert ch._should_redispatch_nodeless(self._row(6, retry_policy={"max_retries": 3})) is False
+        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"max_retries": 3})) is True
+        assert ch._should_redispatch_nodeless(self._row(5, retry_policy={"max_retries": 3})) is False
 
     def test_far733_non_stall_exclusive_terminally_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-733: a policy whose `on` names events but does NOT cover
