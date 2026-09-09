@@ -941,8 +941,14 @@ async def reconcile_runner_dispatch_markers(
             # Fail-open: the sweep proceeds; the per-row CAS guards + SAQ
             # unique=True remain the overlap guards.
         if not acquired:
-            _log.info("runner.capacity.marker_sweep_skipped_locked")
-            return {"scanned": 0, "cleared": 0, "transitioned": 0, "violations": 0, "orgs_failed": 0}
+            # Fail-open: proceed with the sweep rather than skipping it. The dedup
+            # lock is belt-and-braces ON TOP of the per-row CAS guards (F2) and
+            # SAQ's unique=True — those are the real overlap guards, so a missed
+            # lock must never abort the whole sweep. A skipped sweep would let
+            # stale markers accumulate as phantom capacity and take the D8
+            # rollback signal dark (qa F5 liveness contract); running the sweep
+            # is idempotent and safe under concurrent holders.
+            _log.debug("runner.capacity.marker_sweep_proceeding_without_lock")
 
         recovery_or, exclusion = _sweep_recoverability_predicate()
 
