@@ -4103,6 +4103,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Runners Status */
+        get: operations["get_runners_status_api_v1_runners_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/profiles/{profile_id}/apply-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply Template */
+        post: operations["apply_template_api_v1_runners_profiles__profile_id__apply_template_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/triggers": {
         parameters: {
             query?: never;
@@ -9165,6 +9199,27 @@ export interface components {
             /** Eval Result Ids */
             eval_result_ids?: string[] | null;
         };
+        /** ApplyTemplateResponse */
+        ApplyTemplateResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Image Ref */
+            image_ref?: string | null;
+            /** Network Policy */
+            network_policy: string;
+            /** Persistence Policy */
+            persistence_policy: string;
+            /** Config Json */
+            config_json: {
+                [key: string]: unknown;
+            };
+            drift: components["schemas"]["ProfileDriftResponse"];
+        };
         /** ApproveRequest */
         ApproveRequest: {
             /** Claim Token */
@@ -9696,6 +9751,32 @@ export interface components {
             avg_queued: number;
             /** Pool Reference */
             pool_reference?: number | null;
+        };
+        /** ConcurrencyContractResponse */
+        ConcurrencyContractResponse: {
+            /** Sandbox Concurrency Limit */
+            sandbox_concurrency_limit?: number | null;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            preflight: components["schemas"]["ConcurrencyPreflightResponse"];
+        };
+        /** ConcurrencyPreflightResponse */
+        ConcurrencyPreflightResponse: {
+            /** State */
+            state: string;
+            /** Detail */
+            detail?: string | null;
+            /** Engine Cpu Count */
+            engine_cpu_count?: number | null;
+            /** Engine Mem Total Mb */
+            engine_mem_total_mb?: number | null;
+            /** Needed Cpu */
+            needed_cpu?: number | null;
+            /** Needed Mem Mb */
+            needed_mem_mb?: number | null;
         };
         /** ConcurrencyResponse */
         ConcurrencyResponse: {
@@ -12616,6 +12697,34 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** MachineProbeResponse */
+        MachineProbeResponse: {
+            /** Machine Id */
+            machine_id: string;
+            /** State */
+            state: string;
+            /** Engine Reachable */
+            engine_reachable: boolean;
+            /** Images Present */
+            images_present?: boolean | null;
+            /**
+             * Probed At
+             * Format: date-time
+             */
+            probed_at: string;
+            /** Age Seconds */
+            age_seconds: number;
+            /** Engine Info */
+            engine_info?: {
+                [key: string]: unknown;
+            };
+            /** Image Checks */
+            image_checks?: {
+                [key: string]: unknown;
+            };
+            /** Probe Error */
+            probe_error?: string | null;
+        };
         /** ManualOutputRequest */
         ManualOutputRequest: {
             /** Claim Token */
@@ -14154,6 +14263,57 @@ export interface components {
              */
             visibility: string;
         };
+        /** ProfileDriftResponse */
+        ProfileDriftResponse: {
+            /**
+             * Is Seeded
+             * @default false
+             */
+            is_seeded: boolean;
+            /**
+             * Drifted
+             * @default false
+             */
+            drifted: boolean;
+            /** Drifted Fields */
+            drifted_fields?: string[];
+        };
+        /** ProfileHealthResponse */
+        ProfileHealthResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Provider Type */
+            provider_type: string;
+            /** Image Ref */
+            image_ref?: string | null;
+            /** Config Json */
+            config_json?: {
+                [key: string]: unknown;
+            };
+            /** Network Policy */
+            network_policy: string;
+            /** Persistence Policy */
+            persistence_policy: string;
+            /** Status */
+            status: string;
+            /** Health State */
+            health_state?: string | null;
+            /** Available */
+            available: boolean;
+            /**
+             * Placeholder Digest
+             * @default false
+             */
+            placeholder_digest: boolean;
+            drift?: components["schemas"]["ProfileDriftResponse"];
+        };
         /** ProfileListResponse */
         ProfileListResponse: {
             /** Items */
@@ -15237,6 +15397,20 @@ export interface components {
             merged_payload: {
                 [key: string]: unknown;
             };
+        };
+        /** RunnersStatusResponse */
+        RunnersStatusResponse: {
+            /** Aggregate State */
+            aggregate_state: string;
+            /** Probe Interval Seconds */
+            probe_interval_seconds: number;
+            /** Staleness Threshold Seconds */
+            staleness_threshold_seconds: number;
+            /** Machines */
+            machines?: components["schemas"]["MachineProbeResponse"][];
+            /** Profiles */
+            profiles?: components["schemas"]["ProfileHealthResponse"][];
+            concurrency: components["schemas"]["ConcurrencyContractResponse"];
         };
         /** SampleResponse */
         SampleResponse: {
@@ -27116,6 +27290,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeOutputDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_runners_status_api_v1_runners_status_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnersStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_template_api_v1_runners_profiles__profile_id__apply_template_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyTemplateResponse"];
                 };
             };
             /** @description Validation Error */

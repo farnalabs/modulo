@@ -66,13 +66,15 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'admin-node-categories': { icon: 'Tag', labelKey: 'components.SidebarNav.item_node_categories' },
   'admin-feature-flags': { icon: 'Flag', labelKey: 'components.SidebarNav.item_feature_flags' },
   'admin-run-retention': { icon: 'Clock', labelKey: 'components.SidebarNav.item_run_retention' },
-  'admin-sandbox-concurrency': { icon: 'Gauge', labelKey: 'components.SidebarNav.item_sandbox_concurrency' },
+  // FAR-591 D5: the Runners page replaced the Environment Profiles +
+  // Sandbox Concurrency surfaces (net -1 sidebar item). Only the profiles
+  // tab carries the sidebar_group; the concurrency tab is a child route.
+  'admin-runners-profiles': { icon: 'Container', labelKey: 'components.SidebarNav.item_runners' },
   'admin-views': { icon: 'Eye', labelKey: 'components.SidebarNav.item_saved_views' },
   'admin-errors': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },
   'admin-error-detail': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },
   'admin-notification-delivery': { icon: 'Bell', labelKey: 'components.SidebarNav.item_notification_log' },
   'admin-plugins': { icon: 'Puzzle', labelKey: 'components.SidebarNav.item_plugins' },
-  'environment-profiles': { icon: 'Container', labelKey: 'components.SidebarNav.item_environment_profiles' },
   'feedback-inbox': { icon: 'MessageSquare', labelKey: 'components.SidebarNav.item_feedback_inbox' },
   'admin-housekeeping': { icon: 'Broom', labelKey: 'components.SidebarNav.item_housekeeping' },
   'admin-parameter-schemas': { icon: 'FileText', labelKey: 'components.SidebarNav.item_parameter_schemas' },

@@ -105,6 +105,7 @@ from modulo.api.routes.product_analytics_transparency import router as product_a
 from modulo.api.routes.registry import router as registry_router
 from modulo.api.routes.remy import router as remy_router
 from modulo.api.routes.run_ws import router as run_ws_router
+from modulo.api.routes.runners import router as runners_router
 from modulo.api.routes.runs import router as runs_router
 from modulo.api.routes.schema_folders import router as schema_folders_router
 from modulo.api.routes.schemas import router as schemas_router
@@ -1106,6 +1107,7 @@ app.include_router(composite_templates_router)
 app.include_router(connectors_router)
 app.include_router(contributions_router)
 app.include_router(runs_router)
+app.include_router(runners_router)
 app.include_router(run_ws_router)
 app.include_router(triggers_router)
 app.include_router(pipeline_triggers_router)

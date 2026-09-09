@@ -1405,6 +1405,22 @@ async def runner_workspace_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+async def runner_health_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — FAR-591 D5 per-machine runner health probe (every 60s).
+
+    Probes the deployment's Docker engine THROUGH the socket-proxy (engine
+    reachability + pinned image presence + ``/info`` resources) and upserts
+    one probe-cache row per (organisation, machine). The Runners page + node
+    editor read ONLY the cache — never a synchronous probe on the request
+    path. A healthy→unreachable transition emits the error-dashboard entry +
+    the ``runner_unavailable`` in-app notification. Cross-org: uses the
+    system session factory on PostgreSQL (modulo_app is NOBYPASSRLS).
+    """
+    from modulo.core.bundled_runner.health_probe import run_runner_health_probe
+
+    return await run_runner_health_probe(_cleanup_session_factory())
+
+
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — the cost-tracking probe (spec §4.7, every 5 min, retries=0).
 
@@ -1696,6 +1712,7 @@ def _system_functions() -> list[Any]:
         hitl_park_sweep,
         runner_workspace_reconcile,
         runner_marker_sweep,
+        runner_health_probe,
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
@@ -1868,6 +1885,21 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         CronJob(
             runner_marker_sweep,
             cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # runner_health_probe: every 60s (FAR-591 D5) — per-machine engine
+        # reachability + pinned-image presence + /info resources cached in
+        # runner_probe_cache per (organisation, machine). Fail-open per org
+        # (one broken org never aborts the tick); retries=2 engages on real
+        # infrastructure errors. unique=True so overlapping ticks cannot
+        # double-probe.
+        CronJob(
+            runner_health_probe,
+            cron=_CRON_EVERY_MINUTE,
             unique=True,
             timeout=120,
             heartbeat=30,
