@@ -405,7 +405,7 @@ class TestTriggerEntityContracts:
         entity = TriggerEntity.model_validate(
             {"pipeline": "p", "name": "hook", "trigger_type": "cron", "daily_spend_limit": 10.55555}
         )
-        assert entity.managed_view()["daily_spend_limit"] == 10.5556
+        assert entity.managed_view()["daily_spend_limit"] == pytest.approx(10.5556)
 
     def test_config_declares_secrets(self) -> None:
         """The helper runs on the RESOLVED mapping: sensitive LEAF keys always

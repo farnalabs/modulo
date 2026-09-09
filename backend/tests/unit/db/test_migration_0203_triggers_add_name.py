@@ -221,6 +221,9 @@ class TestTriggerIdentityUniqueness:
                     "VALUES (2, 'org1', 11, 'cron', 1, NULL, 'nightly')"
                 )
             )
+        with engine.connect() as conn:
+            count = conn.execute(sa.text("SELECT COUNT(*) FROM triggers WHERE name = 'nightly'")).scalar_one()
+        assert count == 2, "same name on distinct pipelines must coexist"
 
     def test_null_names_never_collide(self, sqlite_engine: sa.Engine) -> None:
         """Legacy unnamed rows are outside the index predicate: several NULL
@@ -241,6 +244,9 @@ class TestTriggerIdentityUniqueness:
                     "VALUES (3, 'org1', 10, 'cron', 1, NULL, NULL)"
                 )
             )
+        with engine.connect() as conn:
+            null_count = conn.execute(sa.text("SELECT COUNT(*) FROM triggers WHERE name IS NULL")).scalar_one()
+        assert null_count == 2, "NULL names must never collide with each other or the empty string"
 
     def test_soft_deleted_row_releases_its_name(self, sqlite_engine: sa.Engine) -> None:
         """The 0127 soft-delete pattern: a soft-deleted row no longer occupies
@@ -249,6 +255,9 @@ class TestTriggerIdentityUniqueness:
         with engine.begin() as conn:
             _insert_named_trigger(conn, 1, "nightly", deleted=True)
             _insert_named_trigger(conn, 2, "nightly")
+        with engine.connect() as conn:
+            live_count = conn.execute(sa.text("SELECT COUNT(*) FROM triggers WHERE name = 'nightly'")).scalar_one()
+        assert live_count == 2, "a soft-deleted row must release its name for re-creation"
 
 
 class TestSymmetryAndModelParity:
