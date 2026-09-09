@@ -53,7 +53,7 @@ _EXPECTED_MODULO_SLUGS = {
         "pr-review-pipeline",
         "release-checklist-pipeline",
     },
-    "schema": {"prd-input", "requirements-output"},
+    "schema": {"prd-input", "requirements-output", "pr-review-decision"},
     "test_fixture": {"example-test-fixture"},
     "workflow": {"prd-to-requirements", "simplest-workflow"},
 }
