@@ -1,4 +1,4 @@
-schema_version: 1
+﻿schema_version: 1
 
 x-community: &community
     required_tier: community
@@ -2886,11 +2886,17 @@ elements:
       - testid: hitl-review-date-to
         type: input
         dynamic_testid: false
-      - testid: hitl-review-column-headers
+      - testid: hitl-review-node-name
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-pipeline-name
         type: element
         dynamic_testid: false
       - testid: hitl-review-toggle-expand
         type: button
+        dynamic_testid: false
+      - testid: hitl-review-column-headers
+        type: element
         dynamic_testid: false
       - testid: hitl-gate-card
         type: element
@@ -2933,12 +2939,6 @@ elements:
         dynamic_testid: false
       - testid: hitl-review-next-page
         type: button
-        dynamic_testid: false
-      - testid: hitl-review-pipeline-name
-        type: element
-        dynamic_testid: false
-      - testid: hitl-review-node-name
-        type: element
         dynamic_testid: false
     /settings/license:
       - testid: license-key-input
@@ -3389,25 +3389,25 @@ features:
             # In-app invitation enrollment (FAR-461).
 
             # Creation & admin management
-            - "[x] An admin mints an invitation scoped to their own organisation with email, display name and an org_role bounded to admin/operator/runner/viewer — any other role is rejected with 422"
+            - "[x] An admin mints an invitation scoped to their own organisation with email, display name and an org_role bounded to admin/operator/runner/viewer â€” any other role is rejected with 422"
             - "[x] Inviting an email that is already a member of the organisation is rejected with 409; a second LIVE (un-consumed / un-revoked / un-expired) invitation for the same email in the same organisation is also rejected with 409"
-            - "[x] The one-time plaintext token is returned exactly once in the create response and is never persisted — only its SHA-256 hash is stored; the invite URL is anchored to settings.modulo_public_url, not the request Host header"
+            - "[x] The one-time plaintext token is returned exactly once in the create response and is never persisted â€” only its SHA-256 hash is stored; the invite URL is anchored to settings.modulo_public_url, not the request Host header"
             - "[x] An invitation expires after settings.invitation_expiry_hours (default 72h, bounded 1-8760); consumed, revoked and expired invitations are never consumable"
-            - "[x] Pending-invitation listing and revocation are org-scoped — an admin only sees and can only revoke invitations owned by their own organisation"
+            - "[x] Pending-invitation listing and revocation are org-scoped â€” an admin only sees and can only revoke invitations owned by their own organisation"
 
             # Accept-invite (unauthenticated)
-            - "[x] accept-invite is unauthenticated by design — the invitation token IS the credential; IP-based rate limiting fails CLOSED, recording a failure on every denial path and clearing accumulated failures (record_success) once enrollment commits"
-            - "[x] Token lookup hashes the presented token (SHA-256), filters to still-live rows and row-locks; consumption is single-use compare-and-swap — a raced consumer matches zero rows and its whole transaction aborts, so an invitation can never enroll twice"
+            - "[x] accept-invite is unauthenticated by design â€” the invitation token IS the credential; IP-based rate limiting fails CLOSED, recording a failure on every denial path and clearing accumulated failures (record_success) once enrollment commits"
+            - "[x] Token lookup hashes the presented token (SHA-256), filters to still-live rows and row-locks; consumption is single-use compare-and-swap â€” a raced consumer matches zero rows and its whole transaction aborts, so an invitation can never enroll twice"
             - "[x] RLS context is set to the invitation's organisation before any membership write; the invitations table itself deliberately carries no RLS policy (pre-auth lookup)"
 
             # Account resolution
             - "[x] No existing account: a local account is created with the chosen password plus the invited membership"
-            - "[x] Non-local (SSO/SCIM) account: rejected with 409 — a local password is never set for a federated account"
+            - "[x] Non-local (SSO/SCIM) account: rejected with 409 â€” a local password is never set for a federated account"
             - "[x] Local account without a password: adopts the chosen password and gains the invited membership"
             - "[x] Local account with a password: the existing password is left untouched; a membership is added only when absent, and the response carries existing_account=true so the UI directs the user to sign in"
 
             # Audit
-            - "[x] Audit events invite_created / invite_revoked (admin paths) and invite_consumed (accept path) record the invitation lifecycle; consume audit is fail-open — an audit failure never fails enrollment"
+            - "[x] Audit events invite_created / invite_revoked (admin paths) and invite_consumed (accept path) record the invitation lifecycle; consume audit is fail-open â€” an audit failure never fails enrollment"
     feat-analytics:
         description: Reporting and analytics over runs, costs, and facts
     feat-audit:
@@ -3437,7 +3437,7 @@ features:
             # Frontend (AdminAuditLogView, /admin/audit)
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
         deferrals:
-            - Verification is bounded to VERIFY_MAX_EVENTS=10,000 most-recent events — there is no incremental from-chain-head verify for very long chains
+            - Verification is bounded to VERIFY_MAX_EVENTS=10,000 most-recent events â€” there is no incremental from-chain-head verify for very long chains
             - The export surface is paginated JSON only (no server-side streaming / scan export for the whole org in one response)
     feat-connectors:
         description: External tool connectors
@@ -3447,7 +3447,7 @@ features:
 
             # Happy Path
             - "[x] A REST connector instance is creatable with a declarative endpoint (base_url + path + method) and an auth credential profile (bearer / api_key / basic)"
-            - "[x] query() is the read surface and write() is the write surface; a mutating verb (PUT/DELETE/PATCH) is intended to be declared on the write surface — the connector does not infer semantics, the author declares the method, and the query/write surface fixes the ACL gate"
+            - "[x] query() is the read surface and write() is the write surface; a mutating verb (PUT/DELETE/PATCH) is intended to be declared on the write surface â€” the connector does not infer semantics, the author declares the method, and the query/write surface fixes the ACL gate"
             - "[x] A JSON response with a configured records_path JMESPath expression yields a list of dicts that feeds the downstream JMESPath consumer; a top-level JSON array and a whole-object single-record fallback also stay list-of-dicts"
             - "[x] When no records_path is configured, raw / passthrough content-types yield a single uniform {body, content_type, status_code, headers} record, so the result always stays a list-of-dicts (XML covered by test_query_xml_passthrough_yields_uniform_record)"
             - "[x] Templated fields (headers, params, body, path) render from runtime variables via the sandboxed Jinja environment"
@@ -3464,41 +3464,41 @@ features:
             - "[x] api_key-in-query credentials are applied right before the wire, after the injection guard, so the secret is never screened; a rendered/context query param that collides with the credential param name is a hard error, never a silent override"
             - "[x] health_check issues the configured request with the credentials applied and reports the endpoint OK only for a sub-400 status"
 
-            # Security — SSRF / egress / injection
+            # Security â€” SSRF / egress / injection
             - "[x] An allowed_hosts allowlist plus core SSRF validation (validate_outbound_url_async wired at the composition root) prevent private / loopback / metadata / off-allowlist targets; a non-http/https scheme is rejected"
             - "[x] Injection guard: rendered header names/values are rejected on CR/LF or C0 control chars, rendered headers may not override the protected set (authorization, proxy-authorization, host, content-length, plus the api_key header name), and query params are URL-encoded by httpx"
             - "[x] On the WRITE surface the rendered URL, header values, params and body are screened by the core output-injection filter (filter_output_for_injection); the READ surface deliberately does NOT run the text classifier to avoid false positives on legitimate search terms"
             - "[x] The api_key credential value is never fed through the injection filter (applied post-screening)"
 
             # Error Handling
-            - "[x] Non-2xx/3xx responses surface a typed RESTStatusError carrying status_code, location and Retry-After metadata instead of silently passing through — redirects are never followed (metadata fields asserted in test_three_xx_carries_status_location_and_retry_after_metadata)"
+            - "[x] Non-2xx/3xx responses surface a typed RESTStatusError carrying status_code, location and Retry-After metadata instead of silently passing through â€” redirects are never followed (metadata fields asserted in test_three_xx_carries_status_location_and_retry_after_metadata)"
             - "[x] The response body is capped at max_response_size (default 10 MiB): a Content-Length or streaming body exceeding the cap raises RESTResponseTooLargeError so an unbounded body never stalls a run"
             - "[x] Transport failures (connect / timeout / read) surface as a typed RESTConnectError"
-            - "[x] A fan-out source whose cardinality exceeds max_cardinality fails CLOSED before any request is emitted — a Sized source is len()-checked, a lazy generator is buffered to cap+1 then fails — raising RESTCardinalityExceededError with source_cardinality and the cardinality_over_cap flag"
-            - "[x] An empty or unresolved fan-out items path succeeds vacuously (0 items, no outbound calls — not a failure)"
+            - "[x] A fan-out source whose cardinality exceeds max_cardinality fails CLOSED before any request is emitted â€” a Sized source is len()-checked, a lazy generator is buffered to cap+1 then fails â€” raising RESTCardinalityExceededError with source_cardinality and the cardinality_over_cap flag"
+            - "[x] An empty or unresolved fan-out items path succeeds vacuously (0 items, no outbound calls â€” not a failure)"
             - "[x] A mid-fan-out per-item failure fails the node, raising RESTFanOutFailureError carrying the per-item outcomes and success/failure counts so an operator can reconcile exactly which items were written"
             - "[x] A mid-fan-out cancellation surfaces as RESTFanOutCancelledError carrying partial outcome state"
-            - "[x] A saturated per-destination token bucket never spins past the per-item budget — the rate-limit wait is bounded and raises RESTRateLimitTimeoutError"
+            - "[x] A saturated per-destination token bucket never spins past the per-item budget â€” the rate-limit wait is bounded and raises RESTRateLimitTimeoutError"
 
             # Retry / Idempotency / Concurrency
             - "[x] Idempotent verbs (GET/HEAD) retry on 429/5xx and transient transport failures with exponential backoff + jitter, honouring a Retry-After capped at 30s; mutating verbs retry only when the operation declares an idempotency_header, and never retry otherwise (idempotency key reuse across retries asserted in test_mutating_verb_with_idempotency_header_retries)"
-            - "[x] Fan-out emits items SEQUENTIALLY (one request per item, no concurrent or bounded-concurrency fork in v1); each item consumes a token from a per-destination rate bucket — a local per-process TokenBucket keyed by canonical rate key (base_url + path) with no Redis wired, or a SHARED Redis-atomic bucket keyed <tenant_id>:<destination> when a redis_client is provided (FAR-439)"
-            - "[x] The connector shares a single lazily-created, connection-pooled httpx.AsyncClient (max_connections / max_keepalive_connections) closed via close() — the shared client is not Redis-backed (only the per-destination rate limiter may be, via the composition-root redis_client)"
+            - "[x] Fan-out emits items SEQUENTIALLY (one request per item, no concurrent or bounded-concurrency fork in v1); each item consumes a token from a per-destination rate bucket â€” a local per-process TokenBucket keyed by canonical rate key (base_url + path) with no Redis wired, or a SHARED Redis-atomic bucket keyed <tenant_id>:<destination> when a redis_client is provided (FAR-439)"
+            - "[x] The connector shares a single lazily-created, connection-pooled httpx.AsyncClient (max_connections / max_keepalive_connections) closed via close() â€” the shared client is not Redis-backed (only the per-destination rate limiter may be, via the composition-root redis_client)"
             - "[x] The fan-out budget (max_cardinality x per_item_timeout x (max_retries + 1)) is reconciled against the node's timeout_seconds budget by the graph validator at save/run time (validator tests assert the multiplier in test_node_send_budget_*)"
             - "[x] A per-request timeout (default 30s, override via timeout_seconds) applies to both the read and write surfaces; the fan-out path uses its own per_item_timeout (default = connector timeout) (write-timeout surfacing a RESTConnectError asserted in test_write_timeout_is_typed_rest_connect_error_not_crash)"
 
             # Redaction
-            - "[x] Fan-out outcome records persist only a bounded, redacted item_summary / result_summary — never the raw item payload — so a credential-bearing item is not echoed into logs or the persisted run result"
+            - "[x] Fan-out outcome records persist only a bounded, redacted item_summary / result_summary â€” never the raw item payload â€” so a credential-bearing item is not echoed into logs or the persisted run result"
 
             # Shared per-destination rate limiting (FAR-439) + per-connector OTel metrics (FAR-413)
-            - "[x] A shared, Redis-atomic per-destination rate limiter (PerDestinationRateLimiter + RedisTokenBucket, Lua CTL with server-side redis.call('TIME') refill) enforces ONE budget per <tenant_id>:<destination> across a fleet of uvicorn/SAQ workers; a configured shared limiter FAILS CLOSED on Redis outage (SharedBudgetUnavailableError) — it never falls back to a per-process bucket that would multiply the effective cap by N workers (covered by tests/integration/test_rate_bucket_redis.py)"
+            - "[x] A shared, Redis-atomic per-destination rate limiter (PerDestinationRateLimiter + RedisTokenBucket, Lua CTL with server-side redis.call('TIME') refill) enforces ONE budget per <tenant_id>:<destination> across a fleet of uvicorn/SAQ workers; a configured shared limiter FAILS CLOSED on Redis outage (SharedBudgetUnavailableError) â€” it never falls back to a per-process bucket that would multiply the effective cap by N workers (covered by tests/integration/test_rate_bucket_redis.py)"
             - "[x] Shared vs local limiting composes safely: no redis_client wired => the per-process TokenBucket is authoritative (single-worker/dev parity); a shared limiter without a real tenant_id is rejected at the composition root (never a cross-tenant 'default' budget)"
             - "[x] Per-connector OpenTelemetry METRICS are emitted (modulo.connectors.rest.rest_metrics, lazy-initialised + exception-swallowed so metrics never surface as a connector failure): modulo_rest_request_duration_seconds histogram (host/method/outcome, one sample per logical operation), modulo_rest_outcome_total counter (closed cause-code taxonomy, labelled host), modulo_rest_retry_total, modulo_rest_ssrf_blocked_total and modulo_rest_redaction_events_total"
             - "[x] AdminConnectorsView renders a schema-driven structured form for the Generic REST connector type: flat operational config fields (base_url, method, timeout_seconds, verify_tls, on_unknown, records_path, allowed_hosts) are first-class controls, credentials (auth_mode bearer/api_key/basic + per-mode secrets) is a separate never-conflated section, and advanced/templated fields (headers, body, operations, fan_out, rate_limit) remain a JSON editor (FAR-466)"
             - "[x] Invalid method/auth_mode/on_unknown/timeout/advanced-JSON is a loud inline error, never silently accepted; the form submits operational config as config_json and auth as credentials, and leaves empty fields reset to defaults"
         deferrals:
-            - Per-tenant weighted concurrency semaphore / bounded-concurrency fan-out fork — fan-out emits sequentially in v1 (no concurrent fork); throughput relies on pipeline-level concurrency limits and the connector's single connection-pooled client
-            - "Per-ITEM fan-out outcome trace SPANS — operation-level OTel trace spans (from _TracedConnector: connector.<type>.query/write/health_check emitting connector.type/operation/resource/limit/result_total/error_type + duration) and per-destination outcome/latency METRICS are emitted in v1; only per-item trace spans are deferred"
+            - Per-tenant weighted concurrency semaphore / bounded-concurrency fan-out fork â€” fan-out emits sequentially in v1 (no concurrent fork); throughput relies on pipeline-level concurrency limits and the connector's single connection-pooled client
+            - "Per-ITEM fan-out outcome trace SPANS â€” operation-level OTel trace spans (from _TracedConnector: connector.<type>.query/write/health_check emitting connector.type/operation/resource/limit/result_total/error_type + duration) and per-destination outcome/latency METRICS are emitted in v1; only per-item trace spans are deferred"
             - DISTINCT classification layer (request-to-response ingestion classification runs as one opaque hop; a separate deduplicate/classify layer is deferred to FAR-404)
 
     feat-costs:
@@ -3516,7 +3516,7 @@ features:
             # Spend limits
             - "[x] GET /api/v1/admin/costs/limits returns the org daily spend limit plus one entry per team with its own daily limit (None when unset)"
             - "[x] PUT /api/v1/admin/costs/limits/org sets or clears (explicit null = unlimited) the org daily spend limit; a negative limit is rejected 422"
-            - "[x] PUT /api/v1/admin/costs/limits/teams/{team_id} sets or clears a team daily spend limit strictly scoped to the caller's org — a team id from another org is 404 with no mutation, a missing team is 404, and an invalid id or negative limit is 422"
+            - "[x] PUT /api/v1/admin/costs/limits/teams/{team_id} sets or clears a team daily spend limit strictly scoped to the caller's org â€” a team id from another org is 404 with no mutation, a missing team is 404, and an invalid id or negative limit is 422"
 
             # Spend-limit / token-budget / circuit-breaker enforcement at run finalize
             - "[x] Org and team daily spend limits are enforced at run finalization: an over-budget run is permanently refused with reason daily_limit_exceeded:organisation / daily_limit_exceeded:team and the run count is not incremented (BDD cost_controls.feature)"
@@ -3527,13 +3527,13 @@ features:
             - "[x] GET /api/v1/admin/costs/controls returns teams with daily limits, the org budget, max_run_cost / spend_ceiling (USD at the API boundary, stored as integer cents), org_cumulative_spend_usd, alert thresholds, the circuit-breaker toggle, currency (USD/EUR/GBP) and billing period (monthly/quarterly/annual)"
             - "[x] PUT /api/v1/admin/costs/controls updates cost-control fields; alert_thresholds must be a non-empty list of integers in 1..100 (422 otherwise) and omitted fields are preserved"
             - "[x] The dedicated /ceiling surface manages max_run_cost (per-run) and spend_ceiling (per-org) independently: explicit null clears one ceiling back to unlimited, omitting a field leaves it unchanged, and 0 is a kill-switch; remaining_budget_usd is derived from the org ceiling (test_spend_ceiling_endpoints.py)"
-            - "[x] Ceiling enforcement runs before the daily-ledger write: a run exceeding its per-run ceiling or the org cumulative ceiling has its ledger refused (never billed beyond the ceiling) and terminalizes as 'cost_ceiling_exceeded' — except an explicit cancelled status, which is preserved; within ceilings the org cumulative spend is incremented (test_cost_finalize_ceiling.py)"
+            - "[x] Ceiling enforcement runs before the daily-ledger write: a run exceeding its per-run ceiling or the org cumulative ceiling has its ledger refused (never billed beyond the ceiling) and terminalizes as 'cost_ceiling_exceeded' â€” except an explicit cancelled status, which is preserved; within ceilings the org cumulative spend is incremented (test_cost_finalize_ceiling.py)"
             - "[x] POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset re-enables a tripped pipeline and re-activates its non-deleted triggers; a missing pipeline is 404"
 
             # Cost components + formula engine (ADR 019)
             - "[x] Cost-component CRUD lives under /api/v1/admin/costs/components (list / create / update / delete) with an org-level component cap and 409 on a duplicate name"
             - "[x] Component authoring is cross-field validated: self_reported components require a null formula, calculated components require a formula, a rate component requires a source or a registered rate fallback (only e2b_rate), and reserved component names / report keys are rejected (test_cost_components_crud.py)"
-            - "[x] The cost formula engine is a hand-rolled tokenizer + recursive-descent parser supporting only + - * /, unary minus and parentheses over a whitelisted identifier registry — no eval; unknown identifiers, division by zero, nesting-depth / length cap breaches and attack strings are rejected (ADR 019, test_cost_formula.py)"
+            - "[x] The cost formula engine is a hand-rolled tokenizer + recursive-descent parser supporting only + - * /, unary minus and parentheses over a whitelisted identifier registry â€” no eval; unknown identifiers, division by zero, nesting-depth / length cap breaches and attack strings are rejected (ADR 019, test_cost_formula.py)"
 
             # Scheduled cost reports
             - "[x] Scheduled cost reports (/reports) are create/list/delete: a report is created (201) with period daily|weekly|monthly, group_by team|org, format csv|json, at least one recipient and a one_time/recurring schedule; missing recipients or an unsupported grouping is 422; delete is 204 and a missing report is 404"
@@ -3541,7 +3541,7 @@ features:
             # Spend anomaly detection
             - "[x] Cost anomalies are surfaced from the org daily-spend ledger: a day whose spend exceeds 2x the rolling 7-day average is reported (fresh detections merge with stored rows so dismissals survive), and dismissing an anomaly is a 204 POST with 404 for a missing one"
         deferrals:
-            - "No pre-flight / predictive run-cost ESTIMATE — spend limits and ceilings are enforced reactively at run finalization; there is no 'this run will cost ≈X' projection before dispatch"
+            - "No pre-flight / predictive run-cost ESTIMATE â€” spend limits and ceilings are enforced reactively at run finalization; there is no 'this run will cost â‰ˆX' projection before dispatch"
             - "Cost-probe ledger self-healing (core/cost_controller/probe.py) tracks run-total vs breakdown consistency as an operational probe, not a surfaced admin report"
     feat-dashboard:
         description: Home dashboard, metrics overview, and saved views
@@ -3549,12 +3549,12 @@ features:
         description: Environment profiles
         status: covered
         behaviours:
-            # Bundled Runner (Docker) — seeded profile (FAR-590 D4)
-            - "[x] Every organisation is seeded a 'Bundled Runner (Docker)' environment profile at org-creation (owned by the org's admin account, idempotent — an existing live runner_docker row is kept and operator-pinned older digests survive); orgs predating the hook receive it via the one-time backfill migration 0191, which also re-points the legacy 'modulo-dev' local_docker row to the Bundled Runner (rollback restores the re-point, backfill rows stay)"
-            - "[x] The seeded profile pins provider runner_docker, the release-advanced per-minor image digest constant (modulo/db/bundled_runner_template.py, mirrored by migration 0191 — the release job's digest-drift guard asserts they never diverge), the hardening preset (read-only rootfs + tmpfs workdir/tmp, dropped caps + no-new-privileges, 1.0 CPU / 1 GiB, non-root uid 1001), the dedicated modulo-runner-workspace bridge network, and persistence LOCKED to 'ephemeral' — the CRUD validator rejects retained/cache for runner_docker on create AND update, and dispatch re-checks (typed SandboxDispatchUnboundError)"
-            - "[x] Template drift is computed LIVE against the shipped constants (no fingerprint lifecycle): a divergent seeded row (older digest, edited template-owned config) reports drifted with the exact drifted fields so the Runners page (D5) can surface 'shipped template updated - apply'; apply refreshes template-owned fields while preserving operator-owned ones — an operator-pinned older digest is surfaced, never silently re-applied"
+            # Bundled Runner (Docker) â€” seeded profile (FAR-590 D4)
+            - "[x] Every organisation is seeded a 'Bundled Runner (Docker)' environment profile at org-creation (owned by the org's admin account, idempotent â€” an existing live runner_docker row is kept and operator-pinned older digests survive); orgs predating the hook receive it via the one-time backfill migration 0191, which also re-points the legacy 'modulo-dev' local_docker row to the Bundled Runner (rollback restores the re-point, backfill rows stay)"
+            - "[x] The seeded profile pins provider runner_docker, the release-advanced per-minor image digest constant (modulo/db/bundled_runner_template.py, mirrored by migration 0191 â€” the release job's digest-drift guard asserts they never diverge), the hardening preset (read-only rootfs + tmpfs workdir/tmp, dropped caps + no-new-privileges, 1.0 CPU / 1 GiB, non-root uid 1001), the dedicated modulo-runner-workspace bridge network, and persistence LOCKED to 'ephemeral' â€” the CRUD validator rejects retained/cache for runner_docker on create AND update, and dispatch re-checks (typed SandboxDispatchUnboundError)"
+            - "[x] Template drift is computed LIVE against the shipped constants (no fingerprint lifecycle): a divergent seeded row (older digest, edited template-owned config) reports drifted with the exact drifted fields so the Runners page (D5) can surface 'shipped template updated - apply'; apply refreshes template-owned fields while preserving operator-owned ones â€” an operator-pinned older digest is surfaced, never silently re-applied"
             - "[x] The sandbox_agent dispatch branches on the PIPELINE-LEVEL bound profile's provider (the same-org-enforced PipelineSnapshot.environment_profile_id): runner_docker routes through the hub-resolved Docker provider with both sandbox_mode values; e2b keeps its path and gains a LOUD dispatch-time timeout validation at <=3300 (GraphValidator parity, no silent clamp); local / legacy-inert local_docker bindings raise the typed SandboxDispatchUnboundError at dispatch instead of silently activating (the D4 upgrade rule); an unregistered runner_docker (no MODULO_RUNNER_*/Docker endpoint env) fails with remediation copy naming MODULO_DOCKER_HOST"
-            - "[x] Bundled Runner workspaces are provisioned hardened: non-root user, read-only rootfs + tmpfs, dropped caps + no-new-privileges, 1.0 CPU / 1 GiB, the dedicated workspace bridge network (never the compose/backend network; network_policy none provisions --network=none), structured labels (modulo.run/org/node.id + machine identity + creation marker); live output streams mid-exec via the streaming-exec primitive and a stall or total timeout fires the kill handle — an engine/proxy drop mid-exec is classified retryable and a zero exit code is never fabricated"
+            - "[x] Bundled Runner workspaces are provisioned hardened: non-root user, read-only rootfs + tmpfs, dropped caps + no-new-privileges, 1.0 CPU / 1 GiB, the dedicated workspace bridge network (never the compose/backend network; network_policy none provisions --network=none), structured labels (modulo.run/org/node.id + machine identity + creation marker); live output streams mid-exec via the streaming-exec primitive and a stall or total timeout fires the kill handle â€” an engine/proxy drop mid-exec is classified retryable and a zero exit code is never fabricated"
             - "[x] The orphan reconciler (system cron, 5 min) lists labelled workspace containers machine-scoped by the modulo.machine.id label, cross-references active runs fail-safe (any cross-reference error aborts the sweep destroying nothing and emits runner.reconciler.sweep_aborted), destroys orphans past the 5-min grace with a destroy-path false-positive re-check (suspected_false_positive is the rollback signal), applies the 24h max-lifetime backstop regardless of run state, runs LOG-ONLY until RUNNER_RECONCILER_DESTROY_ENABLED=true, and exposes the advisory runner_workspace_reconcile liveness check on /healthz/ready"
     feat-evals:
         description: Evaluation editor and proposal queue
@@ -3572,10 +3572,10 @@ features:
             # FAR-691 batch A: claimant display names + stale-token drop + silent refetch
             - "[x] Both pending-gate endpoints batch-resolve claimant display names (one accounts select per list, display_name falling back to email, None when the account row is gone) and stamp a server-side claimed_by_me from the principal; the shared card prefers the display name over the raw account UUID and shows 'You' for the caller's own claim"
             - "[x] A session claim token is dropped as stale when the server reports the gate claimed by ANOTHER account (claimed_by set + claimed_by_me=false): the card renders the claimed-by-other state with no approve/reject and no re-claim (the backend 409s foreign claims); an ABSENT claimed_by_me (older cached payloads) keeps the FAR-686 behaviour"
-            - "[x] The /settings/hitl-review page fetch runs with silentRefetch: only the FIRST load flips `loading`, so the 30s auto-refresh and filter/date-change refetches update the list in place — the expanded card and its notes textarea keep focus instead of being unmounted mid-edit; refetch errors still surface via the error channel"
+            - "[x] The /settings/hitl-review page fetch runs with silentRefetch: only the FIRST load flips `loading`, so the 30s auto-refresh and filter/date-change refetches update the list in place â€” the expanded card and its notes textarea keep focus instead of being unmounted mid-edit; refetch errors still surface via the error channel"
             # FAR-692: decided-gate history + server-side status filter + pagination
-            - "[x] GET /api/v1/hitl/gates lists org gates in EVERY state, paginated in the repo's standard items/total/page/page_size envelope: `status` accepts undecided (DEFAULT — decision IS NULL), pending (undecided + unclaimed), claimed (undecided + claimed), approved, rejected and all (a Literal-typed param, so unknown values 422); the pending-work statuses (undecided/pending/claimed) are data-rot fenced (FAR-612/FAR-604) — joined to runs and restricted to HITL_ACTIONABLE_RUN_STATUSES exactly like /hitl/pending — while approved/rejected history and the all audit view are deliberately unfenced (a decided gate's run has legitimately moved past awaiting_human, and the audit view must surface data-rot rows); page_size defaults to 25 and CLAMPS at 100 instead of failing; sort is decision_at DESC NULLS LAST, claimed_at DESC NULLS LAST, id DESC; /api/v1/hitl/pending is deliberately unchanged for API stability"
-            - "[x] The /settings/hitl-review page fetches /hitl/gates with the status filter mapped server-side (empty selection → undecided, preserving the default queue view): approved/rejected history is finally filterable, decided gates render through the same shared HitlGateCard (decision banners, no claim/approve/reject actions), and the status filter change resets pagination to page 1"
+            - "[x] GET /api/v1/hitl/gates lists org gates in EVERY state, paginated in the repo's standard items/total/page/page_size envelope: `status` accepts undecided (DEFAULT â€” decision IS NULL), pending (undecided + unclaimed), claimed (undecided + claimed), approved, rejected and all (a Literal-typed param, so unknown values 422); the pending-work statuses (undecided/pending/claimed) are data-rot fenced (FAR-612/FAR-604) â€” joined to runs and restricted to HITL_ACTIONABLE_RUN_STATUSES exactly like /hitl/pending â€” while approved/rejected history and the all audit view are deliberately unfenced (a decided gate's run has legitimately moved past awaiting_human, and the audit view must surface data-rot rows); page_size defaults to 25 and CLAMPS at 100 instead of failing; sort is decision_at DESC NULLS LAST, claimed_at DESC NULLS LAST, id DESC; /api/v1/hitl/pending is deliberately unchanged for API stability"
+            - "[x] The /settings/hitl-review page fetches /hitl/gates with the status filter mapped server-side (empty selection â†’ undecided, preserving the default queue view): approved/rejected history is finally filterable, decided gates render through the same shared HitlGateCard (decision banners, no claim/approve/reject actions), and the status filter change resets pagination to page 1"
             - "[x] The review page paginates server-side (page/page_size params on every fetch, minimal inline pager with Previous / 'Page X of Y' / Next shown only when total > page_size, disabled states at the bounds, aria-labelled buttons and a role=status page indicator); search/pipeline/date filters remain CLIENT-side over the loaded page (documented limitation: search matches within the current page only)"
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
@@ -3589,10 +3589,13 @@ features:
         behaviours:
             - "[x] Detail page delete: DELETE /api/v1/lifecycle-maps/{id} soft-deletes the map (204) and frees its stage pipelines; the detail page offers a Delete button behind a confirmation dialog and navigates back to the list on success"
             - "[x] Stage layout positions persist: editor drags save stage x/y into content_json (GET/PUT /versions round-trips them), the read-only renderer uses persisted x/y when present, and maps saved before position persistence fall back to a topology-aware auto-layout"
-            - "[x] Auto-layout is layered: linear chains render left-to-right, split sources and their branches share a column, and rejoin targets cluster — computed from stage/transition topology, not array index"
+            - "[x] Auto-layout is layered: linear chains render left-to-right, split sources and their branches share a column, and rejoin targets cluster â€” computed from stage/transition topology, not array index"
             - "[x] Unattributed journeys list is keyset-paginated (GET /{id}/journeys?limit&cursor) with a load-more control, never dumps 200 rows at once; journey cards render the kind uppercased (PR 2391), are keyboard-accessible with an aria-label, and open the journeys detail endpoint"
-            # Journeys display gated behind the default-OFF lifecycle_map_journeys flag (FAR-654)
-            - "[x] All journey display on the detail view (journey cards on stage nodes, the Unattributed journeys section, load-more pagination, and the journey detail panel) is gated behind the default-OFF `lifecycle_map_journeys` feature flag: with the flag disabled the view makes no journeys API call, passes an empty journeys list to the renderer, and hides all journey UI while stages/edges render normally; with the flag enabled behaviour is unchanged (frontend/src/__tests__/LifecycleMapView.spec.ts, FAR-654 block)"
+            # Journeys display double-gated: default-OFF lifecycle_map_journeys flag (FAR-654)
+            # plus a per-visit "Show work items" checkbox, also default OFF (FAR-742)
+            - "[x] All journey display on the detail view (journey cards on stage nodes, the Unattributed journeys section, load-more pagination, and the journey detail panel) is double-gated behind the default-OFF `lifecycle_map_journeys` feature flag AND a per-visit 'Show work items' checkbox (default unchecked): with either gate off the view makes no journeys API call, passes an empty journeys list to the renderer, and hides all journey UI while stages/edges render normally (frontend/src/__tests__/LifecycleMapView.spec.ts, FAR-654 + FAR-742 blocks)"
+            # FAR-742: server-side journeys filters + per-node card cap + tense fix
+            - "[x] With both gates on, the map view exposes Period (Last 24h / Last 3 days / Last 7 days / Last 30 days / All time — default Last 7 days) and Status (All / Completed / Failed — default All) filters that hit the journeys endpoint server-side (`updated_since` ISO-8601 lower bound on journeys.updated_at — the last-move evidence timestamp — and `status` on latest_status, validated to complete|failed with 422 otherwise) and reset pagination on change; each page-1 fetch pins its window for the pagination session; the renderer caps journey cards at MAX_CARDS_PER_NODE=5 per stage node (newest-moved first) behind a non-interactive '+N more' chip; the complete status displays as 'Completed' (underlying value unchanged)"
         deferrals:
             - Attributed journeys on the read-only renderer are grouped per stage as before; only the unattributed list is paginated
     feat-mcp:
@@ -3612,25 +3615,25 @@ features:
         description: Notifications, email delivery, and notification logs
         status: covered
         behaviours:
-            # Endpoint (webhook) CRUD — /api/v1/notifications
-            - "[x] Webhook endpoints are org-scoped CRUD (list endpoints with notification.view; create/get/update/delete/restore with notification.manage); create requires an http:// or https:// URL that ALSO passes SSRF validation (is_valid_http_url + validate_outbound_url at create, async revalidation on update — test_create_endpoint_rejects_relative_url)"
+            # Endpoint (webhook) CRUD â€” /api/v1/notifications
+            - "[x] Webhook endpoints are org-scoped CRUD (list endpoints with notification.view; create/get/update/delete/restore with notification.manage); create requires an http:// or https:// URL that ALSO passes SSRF validation (is_valid_http_url + validate_outbound_url at create, async revalidation on update â€” test_create_endpoint_rejects_relative_url)"
             - "[x] Endpoint secrets are Fernet-encrypted at rest and never exposed in responses; the events subscription is a JSON list matched per event type"
             - "[x] Endpoints soft-delete (DELETE -> 204) and restore; a missing or soft-deleted endpoint is 404 on every read/update/delete/restore path"
             - "[x] Team-scoped endpoints (team_id) may only be created/assigned by admins (403 otherwise), and dispatch prefers team-specific endpoints for a run's team, falling back to org-wide (team_id IS NULL) endpoints when none are subscribed"
-            - "[x] Break-glass hardening: create/update/delete are denied for break-glass-minted principals (deny_break_glass_mint), and at dispatch time endpoints owned by denied/inactive/deprecated break-glass accounts are re-checked and skipped fail-closed with per-endpoint isolation — a DB blip resolving owners is treated as denied and counted by the modulo_notifier_break_glass_owner_read_failures_total metric (test_break_glass_webhook_deny.py)"
+            - "[x] Break-glass hardening: create/update/delete are denied for break-glass-minted principals (deny_break_glass_mint), and at dispatch time endpoints owned by denied/inactive/deprecated break-glass accounts are re-checked and skipped fail-closed with per-endpoint isolation â€” a DB blip resolving owners is treated as denied and counted by the modulo_notifier_break_glass_owner_read_failures_total metric (test_break_glass_webhook_deny.py)"
 
             # Dispatch / retry / dead-letter (modulo.core.notifier)
             - "[x] A dispatched event POSTs a single {event, timestamp, payload} JSON body per subscribed endpoint with Content-Type application/json, X-Modulo-Signature sha256=<HMAC-SHA256 over the body> (empty string when the endpoint has no secret, or when the stored secret cannot be decrypted), X-Modulo-Timestamp and User-Agent Modulo-Notifier/1.0"
             - "[x] Delivery retries up to MAX_ATTEMPTS=4 (1 initial + 3 retries) on non-2xx or transport errors with exponential delays [1s, 5s, 30s], and a 429 honours Retry-After capped at 60s, falling back to the default backoff for invalid/missing values"
             - "[x] A delivery that exhausts its retries is dead-lettered: the endpoint's consecutive_dead_letter_count increments and the endpoint auto-disables (auto_disabled + disabled_at) at MAX_DEAD_LETTERS=10; a successful delivery resets the counter (only when non-zero); the bookkeeping survives DB errors and re-raises CancelledError"
-            - "[x] Every attempt is written to the delivery log (status delivered/dead_lettered, attempt_count, response_code, last_error, run_id), and the payload is retained ONLY when the caller opts in and is then Fernet-encrypted at rest — never stored plaintext"
+            - "[x] Every attempt is written to the delivery log (status delivered/dead_lettered, attempt_count, response_code, last_error, run_id), and the payload is retained ONLY when the caller opts in and is then Fernet-encrypted at rest â€” never stored plaintext"
             - "[x] In-app notification creation runs ALONGSIDE webhook dispatch as an independent always-executed step: an org with zero webhook endpoints still receives its in-app notification, an in-app failure never aborts webhook delivery, and webhook dispatch never silently skips in-app creation (guards the historical early-return silent-loss bug)"
 
             # Event surface
             - "[x] 17 named event types drive the pipeline: hitl_awaiting, run_failed, run_stalled, budget_exceeded, claim_expired, hitl_overdue, hitl_gate_removed, hitl_gate_removal_denied, eval_regression, eval_blocked, feedback_pending, system_announcement, trigger_deactivated, guardrail_enforcement_gap, guardrail_kill_switch, guardrail_unexpected_skip and circuit_breaker_tripped"
             - "[x] The NotificationEventMapper turns each dispatched event into a typed in-app notification with per-event config (level, scope, category, dismiss strategy, TTL) rendered from sanitised payload fields, and GET /api/v1/admin/notifications/available-events drives the endpoint editor's event picker"
 
-            # In-app notifications — /api/v1/notifications/in-app
+            # In-app notifications â€” /api/v1/notifications/in-app
             - "[x] GET /dashboard returns the dashboard feed, GET /unread-count the badge count, GET '' the paginated inbox, GET/PUT /preferences the per-user notification preferences, GET /{id} the detail, and POST /{id}/review-later + POST /{id}/dismiss action the record"
 
             # Admin delivery log + webhooks + email
@@ -3638,9 +3641,9 @@ features:
             - "[x] Admin webhook management lives under /api/v1/admin/notifications (list/create/get/update) with the same secret-handling and break-glass deny rules as the user surface"
             - "[x] Email delivery: GET/PUT /api/v1/admin/org/{org_id}/email-settings (feature email_config; org.email.view / org.email.manage) configures SMTP with a clear_password flag and smtp_timeout, and a POST test endpoint verifies the configuration"
             - "[x] Frontend surfaces: team-tier notification centre (/notifications, listed in the sidebar MONITOR group above Error Dashboard) with preferences, review-later and dismiss actions; team-tier email settings (/settings/email); admin webhook delivery-log UI (/admin/notification-delivery, titled 'Webhook Notifications') with status/event-type/date filters, a retry control, retry-all and an empty state"
-            - "[x] The webhook delivery-log UI is feature-flagged OFF by default: the webhook_notification_log flag (community tier, DEFAULT_OFF_FLAGS — default OFF on every tier, enabled per-org via feature_overrides) gates the /admin/notification-delivery manifest route; with the flag disabled the sidebar item is hidden (navigation.ts requiredFeatureFlag filter) and the router guard redirects the route to the dashboard (FAR-656)"
+            - "[x] The webhook delivery-log UI is feature-flagged OFF by default: the webhook_notification_log flag (community tier, DEFAULT_OFF_FLAGS â€” default OFF on every tier, enabled per-org via feature_overrides) gates the /admin/notification-delivery manifest route; with the flag disabled the sidebar item is hidden (navigation.ts requiredFeatureFlag filter) and the router guard redirects the route to the dashboard (FAR-656)"
         deferrals:
-            - A realtime/push transport is not part of the notifier — webhook (+ HMAC) and in-app notification are the only delivery channels; email settings exist but the notifier does not fan out to SMTP subscribers
+            - A realtime/push transport is not part of the notifier â€” webhook (+ HMAC) and in-app notification are the only delivery channels; email settings exist but the notifier does not fan out to SMTP subscribers
             - Dead-letter retry is manual-and-bulk only (retry-all-failed); there is no per-endpoint dead-letter replay of retained payloads in the API surface
     feat-observability:
         description: Error dashboard, monitoring, and observability exports
@@ -3698,7 +3701,7 @@ features:
         status: covered
         behaviours:
             # Trigger types + CRUD surface
-            - "[x] A trigger is creatable on a pipeline (POST /api/v1/pipelines/{id}/triggers, 201) for each supported type — manual / webhook / cron / polling / agent_signal / ongoing / slack_app_mention — with a validated cron expression/timezone, max_concurrent_runs, a daily spend limit, and an org-scoped config_json"
+            - "[x] A trigger is creatable on a pipeline (POST /api/v1/pipelines/{id}/triggers, 201) for each supported type â€” manual / webhook / cron / polling / agent_signal / ongoing / slack_app_mention â€” with a validated cron expression/timezone, max_concurrent_runs, a daily spend limit, and an org-scoped config_json"
             - "[x] Triggers are listed (GET /api/v1/triggers, paginated, created_at desc) filterable by pipeline_id and trigger_type; the response surfaces the org-wide triggers_paused state and paused_at, plus per-trigger daily_spend_limit, in_flight (ongoing), and the uniform 6-key streak_status"
             - "[x] Trigger list/streak state is serialized INSIDE the RLS transaction so the transaction-scoped SET LOCAL org context is never lost to a post-commit read"
             - "[x] A pipeline-scoped listing exists (GET /api/v1/pipelines/{id}/triggers) with optional trigger_type filter"
@@ -3710,7 +3713,7 @@ features:
             - "[x] Missing or soft-deleted triggers resolve 404 on every read/update/delete/toggle/test/events path; invalid cron resolves 422; DB ProgrammingError -> 501 and SQLAlchemyError -> 503 on the trigger route handlers"
 
             # Secret handling
-            - "[x] Secret config keys (hmac_secret, signing_secret) are encrypted at rest with Fernet (idempotent — never double-wrapped; masked/empty values untouched), and sensitive config keys are masked in every API response (mask_config_json)"
+            - "[x] Secret config keys (hmac_secret, signing_secret) are encrypted at rest with Fernet (idempotent â€” never double-wrapped; masked/empty values untouched), and sensitive config keys are masked in every API response (mask_config_json)"
             - "[x] An update that round-trips the masked placeholder preserves the stored secret; supplying a new value replaces it; an explicit null clears the key"
 
             # Cron
@@ -3721,10 +3724,10 @@ features:
             - "[x] A cron trigger's input_template populates the run input payload on fire; snapshot_id pins the fired graph"
 
             # Webhook
-            - "[x] Webhook delivery is HMAC-SHA256 verified via X-Modulo-Webhook-Secret with an X-Modulo-Timestamp validated within the ±300s replay window; invalid/missing signature -> 401, missing trigger -> 404, expired timestamp -> 400"
+            - "[x] Webhook delivery is HMAC-SHA256 verified via X-Modulo-Webhook-Secret with an X-Modulo-Timestamp validated within the Â±300s replay window; invalid/missing signature -> 401, missing trigger -> 404, expired timestamp -> 400"
             - "[x] HMAC-less triggers accept unauthenticated deliveries by design, with a log warning"
             - "[x] A valid delivery returns 202 {'run_id', status: 'accepted'}; the run is dispatched in the background via fail-fast SAQ enqueue, and dispatch failures are ingested as error events without blocking the 202 (capacity-deferred runs are left to dispatcher_reconcile)"
-            - "[x] Duplicate payloads are rejected 400 'Duplicate webhook payload'; concurrent-run-limit and pipeline rate-limit rejections are 429; a busy pipeline snapshot lock retries acquisition briefly, then surfaces an honest 503 'snapshot lock unavailable — retry the delivery' (never a fabricated 'queued' ack with no run behind it)"
+            - "[x] Duplicate payloads are rejected 400 'Duplicate webhook payload'; concurrent-run-limit and pipeline rate-limit rejections are 429; a busy pipeline snapshot lock retries acquisition briefly, then surfaces an honest 503 'snapshot lock unavailable â€” retry the delivery' (never a fabricated 'queued' ack with no run behind it)"
             - "[x] Every webhook delivery outcome is recorded as a TriggerEvent row (accepted, paused, guardrail_blocked, ...), and the stored raw payload supports replay"
             - "[x] Replay (POST /triggers/{id}/webhook/replay/{event_id}) re-fires a stored payload, reusing the original hash and preserving dedup + flood protection; an authenticated principal needs the 'run.trigger' runner permission, and an unauthenticated replay must present a valid HMAC over the stored payload"
             - "[x] Guardrail-blocked webhook deliveries are ack'd with a non-success 422 (never a false 'accepted'); the run + TriggerEvent rows stay committed for visibility"
@@ -3736,7 +3739,7 @@ features:
 
             # Ongoing
             - "[x] An ongoing trigger tops-up the pipeline to its target when below it, and fires no run at/above target; pending runs count toward the target; the daily spend limit and org pause both stop the top-up"
-            - "[x] Ongoing triggers REQUIRE daily_spend_limit — clearing it via update is rejected 422; creation and updates re-run the shared validator against the merged values and the pipeline max_concurrent_runs cap"
+            - "[x] Ongoing triggers REQUIRE daily_spend_limit â€” clearing it via update is rejected 422; creation and updates re-run the shared validator against the merged values and the pipeline max_concurrent_runs cap"
             - "[x] Ongoing config updates (scan_interval_seconds >= 60, target_runs 1-20) bump next_fire_at to now when the pool/cadence/active state actually changes so the new config fires on the next scheduler tick"
 
             # Polling

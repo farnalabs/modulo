@@ -68,7 +68,7 @@ _MIGRATION_PATH = (
 # chained onto 0192, 0194_uuid_pk_server_defaults (FAR-718, from main) chained onto
 # 0193, improve-database's 0197/0198/0199 chain off it, and this PR's
 # 0201_spend_anomaly_unique_org_date chained onto 0200_runs_runner_marker_sweep_index as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0201_spend_anomaly_unique_org_date"
+_CHAIN_HEAD_MIGRATION_NAME = "0203_runner_probe_cache"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

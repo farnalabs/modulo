@@ -33,6 +33,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.model_backend_hub import _build_backend
+from modulo.core.model_backend_presets import MODEL_BACKEND_PRESETS
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.model_backend import (
@@ -317,6 +318,19 @@ class PipelineReferenceListResponse(BaseModel):
     page_size: int
 
 
+class ModelBackendPresetResponse(BaseModel):
+    id: str
+    provider: str
+    display_name: str
+    default_model_id: str
+    description: str
+    api_key_docs_url: str
+
+
+class ModelBackendPresetListResponse(BaseModel):
+    items: list[ModelBackendPresetResponse]
+
+
 def _to_response(mb: Any) -> ModelBackendResponse:
     raw_fallback_ids = getattr(mb, "fallback_backend_ids", None)
     fallback_ids: list[uuid.UUID] | None = None
@@ -397,6 +411,42 @@ async def list_model_backends_endpoint(
         page=result.page,
         page_size=result.page_size,
     )
+
+
+_CODE_MODEL_BACKENDS_PRESETS = "model_backends.presets_endpoint"
+_MSG_MODEL_BACKENDS_PRESETS_NOT_AVAILABLE = "Model backend presets are not available."
+
+
+@router.get("/presets", responses={401: {"description": "Unauthorized"}})
+@handle_db_errors(_CODE_MODEL_BACKENDS_PRESETS)
+async def list_model_backend_presets_endpoint(
+    principal: TenantPrincipal = require_permission_any_credential(_PERM_MODEL_BACKEND_LIST),
+) -> ModelBackendPresetListResponse:
+    """Return the curated provider presets for the quick-start create flow."""
+    try:
+        return ModelBackendPresetListResponse(
+            items=[ModelBackendPresetResponse(**preset.model_dump()) for preset in MODEL_BACKEND_PRESETS]
+        )
+    except ProgrammingError:
+        logger.exception(_CODE_MODEL_BACKENDS_PRESETS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=_MSG_MODEL_BACKENDS_PRESETS_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        logger.exception(_CODE_MODEL_BACKENDS_PRESETS)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while fetching model backend presets.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error fetching model backend presets")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while fetching model backend presets.",
+        ) from None
 
 
 _VALID_PROVIDERS = {

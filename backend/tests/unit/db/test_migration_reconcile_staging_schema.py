@@ -35,7 +35,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0193_run_node_outputs_sweep_index chaining onto 0192, and 0194_uuid_pk_server_defaults
 # (FAR-718, from main) chains off 0193; improve-database's 0197/0198/0199 chain off it,
 # and this PR's 0201_spend_anomaly_unique_org_date chains off 0200_runs_runner_marker_sweep_index as the chain head.
-_CHAIN_HEAD_MIGRATION = "0201_spend_anomaly_unique_org_date"
+_CHAIN_HEAD_MIGRATION = "0203_runner_probe_cache"
 
 
 def _source(name: str) -> str:

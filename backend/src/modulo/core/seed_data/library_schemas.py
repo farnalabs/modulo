@@ -649,4 +649,48 @@ SCHEMAS: list[dict[str, object]] = [
             "required": ["id", "title", "type"],
         },
     },
+    {
+        "name": "pr-review-decision",
+        "description": (
+            "Structured verdict for automated PR reviews: APPROVE or"
+            " REQUEST_CHANGES plus summary and per-finding details"
+        ),
+        "definition": {
+            "title": "PR Review Decision",
+            "description": (
+                "Structured verdict for automated PR reviews: APPROVE or"
+                " REQUEST_CHANGES plus summary and per-finding details"
+            ),
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": ["APPROVE", "REQUEST_CHANGES"],
+                    "description": "Overall review verdict",
+                },
+                "summary": {"type": "string", "description": "One-paragraph overall review verdict"},
+                "findings": {
+                    "type": "array",
+                    "description": "Specific findings; empty when approving a clean diff",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "severity": {
+                                "type": "string",
+                                "enum": ["critical", "major", "minor", "nit"],
+                                "description": "Finding severity",
+                            },
+                            "file": {"type": "string", "description": "File path"},
+                            "line": {"type": "integer", "description": "Line number"},
+                            "comment": {"type": "string", "description": "Finding comment"},
+                        },
+                        "required": ["severity", "comment"],
+                    },
+                },
+            },
+            "required": ["decision", "summary"],
+        },
+    },
 ]

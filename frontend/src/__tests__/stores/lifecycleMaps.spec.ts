@@ -9,9 +9,13 @@ vi.mock('../../lib/api/auth', () => ({
   redirectToLogin: vi.fn(),
 }))
 
-import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
+import { useLifecycleMapsStore, updatedSinceForPeriod } from '../../stores/lifecycleMaps'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapVersion, LifecycleStage } from '../../stores/lifecycleMaps'
 import type { JourneySummary, LifecycleMapTransfer } from '../../types/lifecycleMap'
+
+function journeysUrl(callIndex: number): URL {
+  return new URL(fetchMock.mock.calls[callIndex][0] as string, 'http://localhost')
+}
 
 function okJsonResponse(data: unknown) {
   return {
@@ -372,9 +376,15 @@ describe('useLifecycleMapsStore', () => {
     await store.fetchJourneys('map-1')
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/lifecycle-maps/map-1/journeys?limit=50',
+      expect.stringMatching(/^\/api\/v1\/lifecycle-maps\/map-1\/journeys\?/),
       expect.objectContaining({ method: 'GET' }),
     )
+    const url = journeysUrl(0)
+    expect(url.searchParams.get('limit')).toBe('50')
+    // Default period is the last 7 days (FAR-742) → an updated_since window
+    // is always sent unless the period is 'all'.
+    expect(url.searchParams.get('updated_since')).toBeTruthy()
+    expect(url.searchParams.get('status')).toBeNull()
     expect(store.journeys).toHaveLength(1)
     expect(store.journeys[0].kind).toBe('pr')
     expect(store.isLoadingJourneys).toBe(false)
@@ -600,12 +610,64 @@ describe('useLifecycleMapsStore', () => {
     }))
     await store.loadMoreJourneys('map-1')
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/lifecycle-maps/map-1/journeys?limit=50&cursor=cursor-abc',
-      expect.objectContaining({ method: 'GET' }),
-    )
+    const url = journeysUrl(1)
+    expect(url.pathname).toBe('/api/v1/lifecycle-maps/map-1/journeys')
+    expect(url.searchParams.get('limit')).toBe('50')
+    expect(url.searchParams.get('cursor')).toBe('cursor-abc')
+    // The load-more request reuses the same period window as page 1.
+    expect(url.searchParams.get('updated_since')).toBeTruthy()
     expect(store.journeys).toHaveLength(2)
     expect(store.hasMoreJourneys).toBe(false)
+  })
+
+  it('setJourneysFilters sends the status filter on the next fetch', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({ items: [journey()], next_cursor: null }))
+    const store = useLifecycleMapsStore()
+    store.setJourneysFilters({ status: 'failed' })
+
+    await store.fetchJourneys('map-1')
+
+    const url = journeysUrl(0)
+    expect(url.searchParams.get('status')).toBe('failed')
+    expect(url.searchParams.get('updated_since')).toBeTruthy()
+  })
+
+  it('setJourneysFilters period=all drops the updated_since window', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({ items: [], next_cursor: null }))
+    const store = useLifecycleMapsStore()
+    store.setJourneysFilters({ period: 'all' })
+
+    await store.fetchJourneys('map-1')
+
+    const url = journeysUrl(0)
+    expect(url.searchParams.get('updated_since')).toBeNull()
+    expect(url.searchParams.get('status')).toBeNull()
+  })
+
+  it('refetching after a filter change resets pagination to a cursorless page 1', async () => {
+    fetchMock.mockResolvedValueOnce(okJsonResponse({ items: [journey()], next_cursor: 'cursor-abc' }))
+    const store = useLifecycleMapsStore()
+    await store.fetchJourneys('map-1')
+    expect(store.hasMoreJourneys).toBe(true)
+
+    store.setJourneysFilters({ status: 'complete' })
+    fetchMock.mockResolvedValueOnce(okJsonResponse({ items: [journey({ ref: '456' })], next_cursor: null }))
+    await store.fetchJourneys('map-1')
+
+    const url = journeysUrl(1)
+    expect(url.searchParams.get('cursor')).toBeNull()
+    expect(url.searchParams.get('status')).toBe('complete')
+    expect(store.journeys).toHaveLength(1)
+    expect(store.hasMoreJourneys).toBe(false)
+  })
+
+  it('updatedSinceForPeriod maps the period vocabulary to ISO windows', () => {
+    const now = Date.parse('2026-09-09T12:00:00Z')
+    expect(updatedSinceForPeriod('24h', now)).toBe('2026-09-08T12:00:00.000Z')
+    expect(updatedSinceForPeriod('3d', now)).toBe('2026-09-06T12:00:00.000Z')
+    expect(updatedSinceForPeriod('7d', now)).toBe('2026-09-02T12:00:00.000Z')
+    expect(updatedSinceForPeriod('30d', now)).toBe('2026-08-10T12:00:00.000Z')
+    expect(updatedSinceForPeriod('all', now)).toBeUndefined()
   })
 
   it('loadMoreJourneys is a no-op when there is no next cursor', async () => {
