@@ -54,6 +54,8 @@ jobs:
     outputs:
       frozen: ${{ steps.check.outputs.frozen }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
       - name: Check for release-freeze tag
         id: check
         env:
@@ -71,7 +73,7 @@ jobs:
           # cannot masquerade as a freeze; we still FAIL CLOSED, but only after
           # the call persists in failing across retries. A genuine release freeze
           # (tag present) is detected on the very first successful response.
-          OUT=$(python3 .github/scripts/release-freeze-check.py)
+          OUT=$(python3 .github/scripts/release-freeze-check.py) || true
           VERDICT="${OUT%%|*}"
           MSG="${OUT#*|}"
           case "$VERDICT" in
@@ -722,7 +724,7 @@ jobs:
           # Same shared helper + fail-closed policy as freeze-gate, so the two
           # safety-critical checks cannot diverge (a single gh blip mid-tick
           # must not abort the merge, but a persistent outage must).
-          OUT=$(python3 .github/scripts/release-freeze-check.py)
+          OUT=$(python3 .github/scripts/release-freeze-check.py) || true
           VERDICT="${OUT%%|*}"
           MSG="${OUT#*|}"
           case "$VERDICT" in
