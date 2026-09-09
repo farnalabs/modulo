@@ -308,8 +308,9 @@ class TestMigrationBackfillGrace:
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
         # FAR-634 added 0195_hitl_claim_gate_config_json as the child of the
         # current head (0202_runs_error_code_claimed_by_indexes after re-merge
-        # with main), so it is now the single linear head of the chain.
-        assert heads == ["0195_hitl_claim_gate_config_json"], f"expected a single head, got {heads}"
+        # with main); FAR-681 slice 2 added 0203_triggers_add_name on top of
+        # 0195, so it is now the single linear head of the chain.
+        assert heads == ["0203_triggers_add_name"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

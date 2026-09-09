@@ -71,7 +71,7 @@ _MIGRATION_PATH = (
 # chained onto 0201, and this PR's
 # 0195_hitl_claim_gate_config_json (FAR-634) chained onto 0202
 # as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0195_hitl_claim_gate_config_json"
+_CHAIN_HEAD_MIGRATION_NAME = "0203_triggers_add_name"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

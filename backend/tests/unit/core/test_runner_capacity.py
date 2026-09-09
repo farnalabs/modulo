@@ -1267,7 +1267,8 @@ async def test_sweep_proceeds_when_advisory_lock_not_acquired(
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
 
     factory = _LockNotAcquiredFactory([stale_awaiting])
-    result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
+    with caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"):
+        result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
 
     assert any("runner.capacity.marker_sweep_lock_not_acquired_proceeding" in r.message for r in caplog.records), (
         "the fail-open proceed path must log marker_sweep_lock_not_acquired_proceeding"
