@@ -1114,10 +1114,13 @@ async def test_sweep_acquires_marker_lock_in_explicit_transaction(
     ``autobegin=False`` double: ``connection()`` raises unless a ``begin()``
     transaction is currently open. The OLD code (calling ``connection()`` before
     ``begin()``) hits the raise -> ``marker_sweep_lock_failed`` -> ``acquired``
-    stays False -> the sweep returns the ``skipped_locked`` early zero result
+    stays False -> the OLD code returned the ``skipped_locked`` early zero result
     (cleared == 0). The FIXED code enters ``begin()`` first, so ``connection()``
     resolves, the lock is acquired and the sweep proceeds to clear the stale
-    marker.
+    marker. Fail-open contract: even when the lock is NOT acquired for any other
+    reason (e.g. ``pg_try_advisory_lock`` returns False under contention), the
+    sweep STILL proceeds to clear stale markers rather than returning
+    ``skipped_locked`` — see ``test_sweep_proceeds_when_advisory_lock_not_acquired``.
     """
     _patch_gate(monkeypatch, flag_on=False)
 
@@ -1198,6 +1201,76 @@ async def test_sweep_acquires_marker_lock_in_explicit_transaction(
     )
     assert result["cleared"] == 1, "with the lock held, the sweep proceeds to clear the stale marker"
     assert stale_awaiting.id in parent_factory.cleared
+
+
+async def test_sweep_proceeds_when_advisory_lock_not_acquired(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-766 follow-up (review gap): when the session-scoped DEDUP advisory
+    lock CANNOT be acquired — ``pg_try_advisory_lock`` returns False, e.g. the
+    SAQ-worker / cron sweep holds it on another xdist worker in the full
+    ``-n 2`` suite — the sweep must FAIL OPEN and STILL clear stale markers.
+
+    The OLD code returned early (the ``skipped_locked`` zero result: cleared ==
+    0) so stale terminal/leaked markers accumulated as phantom capacity — the
+    worse failure mode. The FIXED code proceeds without the dedup lock; the
+    per-row CAS guards (``marker_seen`` equality) keep the concurrent
+    re-process idempotent, and the ``finally`` block only releases the lock when
+    ``acquired`` is True.
+    """
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    class _LockNotAcquiredFactory(_FakeSweepFactory):
+        """Lock session whose ``pg_try_advisory_lock`` returns False — the lock
+        is NOT acquired, exercising the fail-open proceed path."""
+
+        def _lock_session(self) -> MagicMock:
+            session = MagicMock()
+            conn = MagicMock()
+
+            async def _conn_execute(stmt: Any, params: Any = None) -> Any:
+                result = MagicMock()
+                result.scalar_one.return_value = False  # lock NOT acquired
+                return result
+
+            conn.execute = AsyncMock(side_effect=_conn_execute)
+            conn.commit = AsyncMock()
+            session.connection = AsyncMock(return_value=conn)
+            session.close = AsyncMock()
+            begin_cm = MagicMock()
+            begin_cm.__aenter__ = AsyncMock(return_value=session)
+            begin_cm.__aexit__ = AsyncMock(return_value=False)
+            session.begin = MagicMock(return_value=begin_cm)
+            return session
+
+    stale_marker = json.dumps(
+        {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
+    )
+    stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
+
+    factory = _LockNotAcquiredFactory([stale_awaiting])
+    result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
+
+    assert any("runner.capacity.marker_sweep_lock_not_acquired_proceeding" in r.message for r in caplog.records), (
+        "the fail-open proceed path must log marker_sweep_lock_not_acquired_proceeding"
+    )
+    assert not any("runner.capacity.marker_sweep_skipped_locked" in r.message for r in caplog.records), (
+        "the OLD skipped_locked early-return must NOT fire"
+    )
+    assert result["cleared"] == 1, "fail-open: the sweep still clears the stale marker without the lock"
+    assert stale_awaiting.id in factory.cleared
 
 
 def test_sweep_sql_sandbox_id_asymmetry() -> None:
