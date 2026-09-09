@@ -8,8 +8,14 @@ at, and persists it on the ``hitl_claims.context_json`` column (migration
 * ``description`` — the resolved gate config's human description (edge config
   or node ``hitl_config``).
 * ``condition`` — the JMESPath condition expression (edge gates only).
+* ``condition_result`` — FAR-688 PRIMARY evidence: the matched value the
+  condition evaluated to at fire time ({"expression", "value",
+  "evaluated_at_node"}), carried in the interrupt payload by the gate node.
+  ``None`` for gates without a condition and for legacy payloads — the
+  regex-extracted ``artifacts`` stay the (supplementary) evidence then,
+  unchanged.
 * ``trigger`` — ``"condition"`` for edge gates, ``"node"`` for FAR-402
-  HITL-node gates.
+  HITL-node gates, ``"unknown"`` when the snapshot cannot resolve either.
 * ``source_node_id`` / ``source_node_label`` — the node whose output fed the
   gate (the edge's source / the HITL node itself).
 * ``artifacts`` — a bounded excerpt of the outputs relevant to the condition.
@@ -21,15 +27,22 @@ Truncation is DETERMINISTIC: JSON serialised with ``sort_keys=True`` and
 ``default=str``, then sliced to fixed character budgets — the same gate always
 produces the same stored bundle (no wall-clock or dict-order variance). Every
 string field is bounded (artifacts ~2KB total; description / condition /
-reason capped at :data:`_TEXT_FIELD_MAX_CHARS`).
+reason / condition value capped at :data:`_TEXT_FIELD_MAX_CHARS`;
+``source_node_label`` / ``pipeline_name`` at :data:`_NAME_FIELD_MAX_CHARS`).
+Sliced summaries carry the :data:`TRUNCATION_MARKER` suffix so a reviewer can
+see an excerpt is partial.
 
-Redaction (FAR-188): artifacts and ``reason`` are derived from NODE OUTPUTS
-(LLM / connector content), so they run through the shared redaction primitive
+Redaction (FAR-188): artifacts, ``reason`` and the matched condition value are
+derived from NODE OUTPUTS / run STATE (LLM / connector content), so they run
+through the shared redaction primitive
 (:func:`modulo.core.pipeline_engine.error_codes.sanitize_error_text`) BEFORE
-truncation — credentials must never enter persistence unmasked. User-authored
-save-time fields (``description``, ``condition``, ``pipeline_name``,
-``source_node_label``) are bounded but not redacted: they were authored
-through the validated save path, not produced by agent/connector output.
+truncation — credentials must never enter persistence unmasked. The condition
+value is redacted capture-side (``node_runner._serialize_condition_value``)
+because it rides in the interrupt payload (which the checkpointer persists);
+the builder re-bounds it defensively. User-authored save-time fields
+(``description``, ``condition``, ``pipeline_name``, ``source_node_label``) are
+bounded but not redacted: they were authored through the validated save path,
+not produced by agent/connector output.
 
 The capture is FAILURE-ISOLATED by contract: :func:`build_hitl_gate_context`
 never raises (any internal error logs and yields ``None`` context) so a
@@ -43,13 +56,13 @@ import json
 import logging
 import re
 import uuid
-from typing import Any
+from typing import Any, TypedDict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
-from modulo.db.crud.hitl_gate_config import _config_from_graph, _config_from_hitl_nodes, parse_hitl_gate_id
+from modulo.db.crud.hitl_gate_config import config_from_graph, config_from_hitl_nodes, parse_hitl_gate_id
 from modulo.db.crud.run import get_run
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
@@ -62,12 +75,18 @@ _ARTIFACT_ENTRY_MAX_CHARS = 1200
 #: Hard cap on the number of artifact entries (a condition can name many nodes).
 _ARTIFACT_MAX_ENTRIES = 5
 #: Deterministic cap for the bundle's single-string fields (``description``,
-#: ``condition``, ``reason``). The edge-config contract already caps
-#: description at 2000 and condition at 500 (api.routes.pipelines
-#: HitlGateConfig); this is the capture-side backstop for node-level
-#: ``hitl_config`` descriptions (GraphValidator enforces only the minimum)
-#: and LLM-derived ``reason`` values, which have no upstream bound.
+#: ``condition``, ``reason``, the matched condition value). The edge-config
+#: contract already caps description at 2000 and condition at 500
+#: (api.routes.pipelines HitlGateConfig); this is the capture-side backstop
+#: for node-level ``hitl_config`` descriptions (GraphValidator enforces only
+#: the minimum) and LLM-derived ``reason`` values, which have no upstream bound.
 _TEXT_FIELD_MAX_CHARS = 2000
+#: Capture-side cap for human-name fields (``source_node_label``,
+#: ``pipeline_name``) — matches the save contracts' 255-char name columns.
+_NAME_FIELD_MAX_CHARS = 255
+#: Marker appended to a string field that was actually sliced, so a reviewer
+#: can tell a truncated excerpt from a complete one (FAR-688).
+TRUNCATION_MARKER = "…(truncated)"
 #: ``reason`` fallback when a node gate's raising output carries no reasoning.
 REASON_ABSENT = "no reasoning provided"
 
@@ -79,6 +98,42 @@ REASON_ABSENT = "no reasoning provided"
 _NODE_ID_IN_CONDITION_RE = re.compile(
     r"""['"\[]\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*['"\]]"""
 )
+
+#: Trigger values recorded in the bundle. ``"unknown"`` (FAR-688) marks a gate
+#: whose config (and snapshot node type) cannot be resolved — the trigger is
+#: genuinely undeterminable, never guessed.
+TRIGGER_CONDITION = "condition"
+TRIGGER_NODE = "node"
+TRIGGER_UNKNOWN = "unknown"
+
+
+class HitlGateConditionResult(TypedDict, total=False):
+    """The matched condition value as PRIMARY briefing evidence (FAR-688)."""
+
+    #: The expression that was evaluated (fire-time truth).
+    expression: str
+    #: The serialised, redacted, bounded value the expression matched.
+    value: str
+    #: The node whose output fed the gate (the gate id's source node).
+    evaluated_at_node: str | None
+
+
+class HitlGateContext(TypedDict, total=False):
+    """The ``hitl_claims.context_json`` briefing bundle (FAR-613/FAR-688).
+
+    ``total=False``: legacy bundles persisted before a key existed simply omit
+    it; readers must tolerate missing members.
+    """
+
+    description: str | None
+    condition: str | None
+    condition_result: HitlGateConditionResult | None
+    trigger: str
+    source_node_id: str | None
+    source_node_label: str | None
+    artifacts: list[dict[str, str]]
+    reason: str | None
+    pipeline_name: str | None
 
 
 def _serialize(value: Any) -> str:
@@ -92,6 +147,24 @@ def _serialize(value: Any) -> str:
         return json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
     except Exception:  # pragma: no cover - defensive: default=str makes this near-impossible
         return repr(value)
+
+
+def _bound_text(value: Any, cap: int = _TEXT_FIELD_MAX_CHARS) -> str | None:
+    """A bounded string form of *value*, or None when unusable.
+
+    Strings are trimmed and sliced to *cap* (with the truncation marker when a
+    slice happens — the marker is included WITHIN the cap); non-string
+    non-None values are serialised first. None / non-strings that serialise
+    to nothing usable return None.
+    """
+    if value is None:
+        return None
+    text = value.strip() if isinstance(value, str) else _serialize(value).strip()
+    if not text:
+        return None
+    if len(text) <= cap:
+        return text
+    return text[: cap - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
 
 
 def extract_condition_node_ids(condition: str | None) -> list[str]:
@@ -121,6 +194,13 @@ def _bound_artifacts(entries: list[dict[str, str]]) -> list[dict[str, str]]:
     has its summary sliced to the remaining budget (or is dropped when even
     its fixed overhead does not fit). The serialised total never exceeds the
     budget.
+
+    The remaining budget accounts for the entry's REAL serialised overhead
+    (keys, quotes, JSON escaping) — not the raw summary length: slicing a
+    summary by raw characters can lengthen the escaped form (an escape
+    sequence cut in half), so the sliced entry is re-serialised and, when it
+    still overflows, shrunk by the measured overshoot until it fits. A
+    sliced summary carries :data:`TRUNCATION_MARKER`.
     """
     bounded: list[dict[str, str]] = []
     total = 2  # the surrounding "[]"
@@ -133,16 +213,27 @@ def _bound_artifacts(entries: list[dict[str, str]]) -> list[dict[str, str]]:
             bounded.append(entry)
             total += separator + len(serialized)
             continue
-        # Truncate the summary so the entry fits the remaining budget.
-        remaining = ARTIFACTS_BUDGET_CHARS - total - separator - len(serialized) + len(entry["summary"])
+        # JSON overhead of the entry minus the summary itself (keys, quotes,
+        # escaping) — the budget the summary actually has left.
+        overhead = len(serialized) - len(entry["summary"])
+        remaining = ARTIFACTS_BUDGET_CHARS - total - separator - overhead
         if remaining <= 0:
             break
-        truncated = {"node_id": entry["node_id"], "summary": entry["summary"][:remaining]}
-        serialized = json.dumps(truncated, sort_keys=True, ensure_ascii=False)
-        if total + separator + len(serialized) > ARTIFACTS_BUDGET_CHARS:
-            break
-        bounded.append(truncated)
-        total += separator + len(serialized)
+        summary = entry["summary"][:remaining]
+        serialized = ""
+        while summary:
+            candidate = {"node_id": entry["node_id"], "summary": summary + TRUNCATION_MARKER}
+            serialized = json.dumps(candidate, sort_keys=True, ensure_ascii=False)
+            overflow = total + separator + len(serialized) - ARTIFACTS_BUDGET_CHARS
+            if overflow <= 0:
+                break
+            # Escaping can expand the sliced form — shrink by the measured
+            # overshoot and re-serialise. Each pass removes at least one
+            # character, so the loop terminates.
+            summary = summary[: max(0, len(summary) - overflow)]
+        if serialized and total + separator + len(serialized) <= ARTIFACTS_BUDGET_CHARS:
+            bounded.append(candidate)
+            total += separator + len(serialized)
     return bounded
 
 
@@ -152,11 +243,15 @@ def _artifact_entry(node_id: str, output: Any) -> dict[str, str]:
     Node outputs are agent/connector content, so the summary runs through the
     shared redaction primitive BEFORE truncation (FAR-163: a secret
     straddling the cut point must still be removed; FAR-188: credentials
-    never enter persistence unmasked).
+    never enter persistence unmasked). A sliced summary carries
+    :data:`TRUNCATION_MARKER`.
     """
+    summary = sanitize_error_text(_serialize(output))
+    if len(summary) > _ARTIFACT_ENTRY_MAX_CHARS:
+        summary = summary[:_ARTIFACT_ENTRY_MAX_CHARS] + TRUNCATION_MARKER
     return {
         "node_id": node_id,
-        "summary": sanitize_error_text(_serialize(output))[:_ARTIFACT_ENTRY_MAX_CHARS],
+        "summary": summary,
     }
 
 
@@ -185,15 +280,19 @@ async def build_hitl_gate_context(
     org_id: uuid.UUID,
     pipeline_name: str | None,
     completed_node_outputs: dict[str, Any] | None,
-) -> dict[str, Any] | None:
+    condition_result: dict[str, Any] | None = None,
+) -> HitlGateContext | None:
     """Build the fire-time briefing bundle for a HITL gate, or ``None``.
 
     Reads the run's snapshot graph (the graph the run actually executes) to
     resolve the gate's config, trigger kind, and source node. The live
     pipeline definition is NOT consulted — a mid-run edit must not change the
     briefing of a gate that already fired (the snapshot is the authoritative
-    fire-time state). Any error logs and returns ``None``: a briefing defect
-    must never block the interrupt (failure-isolation contract).
+    fire-time state). ``condition_result`` (FAR-688) is the matched value the
+    gate node evaluated — when present on a condition gate it becomes the
+    bundle's PRIMARY evidence. Any error logs and returns ``None``: a
+    briefing defect must never block the interrupt (failure-isolation
+    contract).
     """
     try:
         return await _build_context_inner(
@@ -203,6 +302,7 @@ async def build_hitl_gate_context(
             org_id=org_id,
             pipeline_name=pipeline_name,
             completed_node_outputs=completed_node_outputs,
+            condition_result=condition_result,
         )
     except asyncio.CancelledError:
         raise
@@ -223,7 +323,8 @@ async def _build_context_inner(
     org_id: uuid.UUID,
     pipeline_name: str | None,
     completed_node_outputs: dict[str, Any] | None,
-) -> dict[str, Any] | None:
+    condition_result: dict[str, Any] | None,
+) -> HitlGateContext | None:
     run = await get_run(session, run_id, organisation_id=org_id)
     if run is None:
         return None
@@ -249,18 +350,20 @@ async def _build_context_inner(
     trigger: str | None = None
     config: dict[str, Any] | None = None
     if graph_json is not None:
-        config = _config_from_graph(graph_json, gate_id)
+        config = config_from_graph(graph_json, gate_id)
         if config is not None:
-            trigger = "condition"
+            trigger = TRIGGER_CONDITION
         else:
-            config = _config_from_hitl_nodes(graph_json, gate_id)
+            config = config_from_hitl_nodes(graph_json, gate_id)
             if config is not None:
-                trigger = "node"
+                trigger = TRIGGER_NODE
     if trigger is None:
-        # Config unresolvable (legacy snapshot / graph drift): persist a
-        # minimal bundle so the reviewer still sees the fire-time pipeline
-        # name and source node rather than an empty briefing.
-        trigger = "node" if _snapshot_source_is_hitl_node(graph_json, source_node_id) else "condition"
+        # Config unresolvable (legacy snapshot / graph drift / missing
+        # snapshot): infer the trigger from the snapshot node's type when the
+        # node is visible; a missing snapshot cannot verify the node's type,
+        # so record a neutral "unknown" instead of guessing "condition"
+        # (FAR-688 — the old fallback misclassified node gates).
+        trigger = TRIGGER_NODE if _snapshot_source_is_hitl_node(graph_json, source_node_id) else TRIGGER_UNKNOWN
 
     description: str | None = None
     condition: str | None = None
@@ -272,12 +375,31 @@ async def _build_context_inner(
             # no upstream max — this slice is the capture-side backstop.
             description = raw_description[:_TEXT_FIELD_MAX_CHARS]
         raw_condition = config.get("condition")
-        if trigger == "condition" and isinstance(raw_condition, str) and raw_condition.strip():
+        if trigger == TRIGGER_CONDITION and isinstance(raw_condition, str) and raw_condition.strip():
             condition = raw_condition[:_TEXT_FIELD_MAX_CHARS]
+
+    # FAR-688: PRIMARY evidence — the matched value the gate node evaluated
+    # at fire time, carried in the interrupt payload. Recorded whenever the
+    # payload carries a usable member — including when the snapshot cannot
+    # resolve the gate config (legacy/drift): the payload IS the fire-time
+    # truth. Node gates never stamp the member (the runtime only produces it
+    # from a JMESPath condition), and a non-dict member is tolerated as no
+    # evidence. The payload's expression/value are capture-side redacted +
+    # bounded; the builder re-bounds defensively.
+    condition_evidence: HitlGateConditionResult | None = None
+    if isinstance(condition_result, dict):
+        expression = _bound_text(condition_result.get("expression")) or condition
+        value = _bound_text(condition_result.get("value"))
+        if value is not None:
+            condition_evidence = {
+                "expression": expression or "",
+                "value": value,
+                "evaluated_at_node": source_node_id,
+            }
 
     artifacts: list[dict[str, str]] = []
     reason: str | None = None
-    if trigger == "node":
+    if trigger == TRIGGER_NODE:
         node_output = (completed_node_outputs or {}).get(source_node_id or "")
         if node_output is not None:
             reason = _output_reason(node_output)[:_TEXT_FIELD_MAX_CHARS]
@@ -291,15 +413,17 @@ async def _build_context_inner(
             if output is not None:
                 artifacts.append(_artifact_entry(node_id, output))
 
+    label = _snapshot_node_label(graph_json, source_node_id)
     return {
         "description": description,
         "condition": condition,
+        "condition_result": condition_evidence,
         "trigger": trigger,
         "source_node_id": source_node_id,
-        "source_node_label": _snapshot_node_label(graph_json, source_node_id),
+        "source_node_label": label[:_NAME_FIELD_MAX_CHARS] if label else None,
         "artifacts": _bound_artifacts(artifacts),
         "reason": reason,
-        "pipeline_name": pipeline_name,
+        "pipeline_name": pipeline_name[:_NAME_FIELD_MAX_CHARS] if pipeline_name else None,
     }
 
 
@@ -329,6 +453,12 @@ def _snapshot_node_label(graph_json: dict[str, Any] | None, node_id: str | None)
 __all__ = (
     "ARTIFACTS_BUDGET_CHARS",
     "REASON_ABSENT",
+    "TRIGGER_CONDITION",
+    "TRIGGER_NODE",
+    "TRIGGER_UNKNOWN",
+    "TRUNCATION_MARKER",
+    "HitlGateConditionResult",
+    "HitlGateContext",
     "build_hitl_gate_context",
     "extract_condition_node_ids",
 )

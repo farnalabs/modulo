@@ -31,7 +31,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jwt import ExpiredSignatureError
 from jwt import InvalidTokenError as JWTError
@@ -48,6 +48,9 @@ from modulo.db.crud.run import unpark_parked_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, HITL_CLAIMABLE_RUN_STATUSES, Run
 from modulo.db.models.team_membership import TeamMembership
+
+if TYPE_CHECKING:
+    from modulo.core.pipeline_engine.hitl_context import HitlGateContext
 
 _log = logging.getLogger(__name__)
 
@@ -204,14 +207,16 @@ class HITLManager:
         pipeline_id: uuid.UUID,
         org_id: uuid.UUID,
         required_team_id: uuid.UUID | None = None,
-        context_json: dict[str, Any] | None = None,
+        context_json: HitlGateContext | dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Insert a new unclaimed gate row. Idempotent if called again for same key.
 
         ``context_json`` (FAR-613) is the fire-time decision briefing captured
         by the executor's interrupt handler — the resolved gate description,
         condition, trigger kind, source node, bounded artifact excerpts, and
-        the raising output's reason. Persisted on the claim row so the
+        the raising output's reason. Typed by
+        ``hitl_context.HitlGateContext`` (FAR-688); open dicts are accepted
+        for legacy/foreign callers. Persisted on the claim row so the
         reviewer's briefing reflects the graph state at FIRE time. An
         idempotent re-entry (existing row) leaves the original context
         untouched — a replay must never overwrite the first fire's briefing.

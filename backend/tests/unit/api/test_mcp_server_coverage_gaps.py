@@ -2664,6 +2664,30 @@ class TestResourceGaps(_AuthContext):
         assert "Required team name: platform" in result
         assert "Claim expires:" in result
 
+    async def test_resource_hitl_gate_truncates_the_fire_context_with_a_marker(self) -> None:
+        """FAR-688: the fire-context dump is a fixed slice, marked when
+        truncated so the agent can tell a partial dump from a complete one."""
+        gate = MagicMock()
+        gate.pipeline_id = uuid.uuid4()
+        gate.decision = None
+        gate.account_id = None
+        gate.required_team_id = None
+        gate.expires_at = None
+        gate.context_json = {"description": "Gate briefing", "blob": "x" * 10_000}
+        run = MagicMock()
+        run.owner_team_id = None
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=gate)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+            patch.object(ms, "get_run", new=AsyncMock(return_value=run)),
+        ):
+            result = await resource_hitl_gate(str(uuid.uuid4()), "gate")
+        fire_context_line = next(line for line in result.splitlines() if line.startswith("Fire context: "))
+        assert fire_context_line.endswith("…(truncated)")
+        assert len(fire_context_line) < 2048 + 60
+
     async def test_hitl_required_team_name_unknown_team(self) -> None:
         gate = MagicMock()
         gate.required_team_id = uuid.uuid4()

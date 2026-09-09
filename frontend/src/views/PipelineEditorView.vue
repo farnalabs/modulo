@@ -302,6 +302,36 @@
             </button>
           </div>
         </div>
+        <!-- FAR-688: legacy HITL gates whose descriptions predate the
+             minimum (reads never hard-fail on them) — surface WHICH gates
+             need descriptions so the user can find and fix them. -->
+        <div
+          v-if="showLegacyHitlBanner && legacyHitlIssues.length > 0"
+          class="border-b bg-warning/10 px-3 py-2 text-xs text-warning"
+          role="alert"
+          data-testid="pipeline-editor-legacy-hitl-banner"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="font-medium">{{ $t('views.PipelineEditorView.legacy_hitl_description_title') }}</p>
+              <p class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.legacy_hitl_description_hint') }}</p>
+              <ul class="mt-1 list-inside list-disc space-y-0.5">
+                <li v-for="issue in legacyHitlIssues" :key="issue.key" class="max-w-full truncate" :title="issue.label">
+                  {{ $t(issue.kind === 'node' ? 'views.PipelineEditorView.legacy_hitl_item_node' : 'views.PipelineEditorView.legacy_hitl_item_edge', { label: issue.label }) }}
+                </li>
+              </ul>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 hover:bg-warning/20"
+              :aria-label="$t('common.close')"
+              data-testid="pipeline-editor-legacy-hitl-banner-dismiss"
+              @click="showLegacyHitlBanner = false"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
         <div class="relative min-h-0 flex-1">
         <!-- Empty-state overlay on top of the canvas -->
         <div v-if="flowNodes.length === 0" class="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 pointer-events-none">
@@ -941,7 +971,7 @@
               v-model="edgeForm.description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               :placeholder="$t('views.PipelineEditorView.hitl_description_placeholder')"
-              :aria-invalid="edgeForm.hitl_enabled && edgeForm.description.trim().length < 20 ? 'true' : undefined"
+              :aria-invalid="hitlDescriptionTooShort ? 'true' : undefined"
               rows="2"
             />
             <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.PipelineEditorView.hitl_description_hint') }}</p>
@@ -1646,6 +1676,86 @@ const defaultEdgeForm = {
 
 const edgeForm = reactive({ ...defaultEdgeForm })
 
+// FAR-613/FAR-688: a HITL gate must carry a human description of at least
+// this many trimmed characters — ONE constant for the template's
+// aria-invalid hint and the save guard (previously the literal 20 in two
+// places). Counted as CODE POINTS ([...str].length) to match the backend's
+// Python len() — a description padded with astral-plane characters (emoji)
+// must not be miscounted by UTF-16 units.
+const HITL_DESCRIPTION_MIN_LENGTH = 20
+
+function codePointLength(value: string): number {
+  return [...value].length
+}
+
+const hitlDescriptionTooShort = computed(
+  () => edgeForm.hitl_enabled && codePointLength(edgeForm.description.trim()) < HITL_DESCRIPTION_MIN_LENGTH,
+)
+
+// ---------------------------------------------------------------------------
+// FAR-688: legacy HITL description violations.
+//
+// Graph READS never hard-fail on gate descriptions below the minimum (the
+// forcing function applies to the next SAVE — legacy pipelines stay
+// readable/editable), and the read response's ``validation_issues`` is
+// always empty for reads. So the editor scans the loaded graph CLIENT-SIDE
+// for gates whose description would fail the save-time check and surfaces
+// them in a dismissible banner, listing the offending edges/nodes so the
+// user can find legacy gates without hunting the graph.
+// ---------------------------------------------------------------------------
+
+interface LegacyHitlIssue {
+  /** Stable list key (kind + id). */
+  key: string
+  /** 'edge' gates report the edge; 'node' gates the FAR-402 HITL node. */
+  kind: 'edge' | 'node'
+  /** Human label for the list (node label or shortId pair). */
+  label: string
+}
+
+function hitlConfigDescriptionTooShort(config: unknown): boolean {
+  // Mirrors GraphValidator._hitl_description_issue: a config without a
+  // usable description string of >= HITL_DESCRIPTION_MIN_LENGTH trimmed
+  // code points violates the rule.
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return true
+  const description = (config as Record<string, unknown>).description
+  if (typeof description !== 'string') return true
+  return codePointLength(description.trim()) < HITL_DESCRIPTION_MIN_LENGTH
+}
+
+function findLegacyHitlDescriptionIssues(nodes: any[], edges: any[]): LegacyHitlIssue[] {
+  const issues: LegacyHitlIssue[] = []
+  const hitlNodeIds = new Set<string>()
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object' || !node.id) continue
+    if (node.node_type !== 'hitl') continue
+    hitlNodeIds.add(String(node.id))
+    if (hitlConfigDescriptionTooShort(node.hitl_config)) {
+      const label = (typeof node.label === 'string' && node.label.trim()) || shortId(String(node.id))
+      issues.push({ key: `node:${node.id}`, kind: 'node', label })
+    }
+  }
+  for (const edge of edges) {
+    if (!edge || typeof edge !== 'object') continue
+    const config = edge.hitl_gate_config
+    if (!config || typeof config !== 'object') continue
+    // A node-level gate's config is injected onto its outgoing edges at
+    // compile time; the persisted definition carries it on the NODE, and
+    // the node pass already reported it — never double-list one gate.
+    if (edge.source_node_id != null && hitlNodeIds.has(String(edge.source_node_id))) continue
+    if (!hitlConfigDescriptionTooShort(config)) continue
+    const source = shortId(String(edge.source_node_id ?? edge.source ?? '?'))
+    const target = shortId(String(edge.target_node_id ?? edge.target ?? '?'))
+    issues.push({ key: `edge:${edge.id ?? `${source}->${target}`}`, kind: 'edge', label: `${source} → ${target}` })
+  }
+  return issues
+}
+
+// Reactive over the loaded graph — a save that fixed the last violation
+// clears the banner; a reverted graph brings it back.
+const legacyHitlIssues = computed(() => findLegacyHitlDescriptionIssues(rawNodes.value, rawEdges.value))
+const showLegacyHitlBanner = ref(true)
+
 const selectedAgent = computed(() => agents.value.find(a => a.id === pickerAgentId.value) || null)
 
 const eligibleConnectors = computed(() => {
@@ -2083,8 +2193,9 @@ async function saveEdgeConfig() {
   if (!selectedEdgeData.value) return
   // FAR-613: a HITL gate must explain WHY it exists — the backend rejects
   // saves whose gate config carries no usable description (min 20 trimmed
-  // chars), so block client-side first with a clear, localised message.
-  if (edgeForm.hitl_enabled && edgeForm.description.trim().length < 20) {
+  // chars, counted as code points to match Python's len()), so block
+  // client-side first with a clear, localised message (FAR-688 single const).
+  if (hitlDescriptionTooShort.value) {
     edgeSaveError.value = t('views.PipelineEditorView.hitl_description_required')
     return
   }

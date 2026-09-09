@@ -103,7 +103,7 @@ from modulo.core.pipeline_engine.evidence import (
     run_evidence_probe,
 )
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
-from modulo.core.pipeline_engine.hitl_context import build_hitl_gate_context
+from modulo.core.pipeline_engine.hitl_context import HitlGateContext, build_hitl_gate_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
@@ -1593,6 +1593,19 @@ def _interrupt_required_team_id(gate_payload: dict[str, Any]) -> uuid.UUID | Non
     """Parse the interrupt payload's ``required_team_id`` (absent -> ``None``)."""
     required_team_id_str = gate_payload.get("required_team_id")
     return uuid.UUID(required_team_id_str) if required_team_id_str else None
+
+
+def _interrupt_condition_result(gate_payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The interrupt payload's ``condition_result`` member (FAR-688), or None.
+
+    The gate node evaluates the JMESPath condition at fire time and stamps the
+    MATCHED value ({"expression", "value"}, redacted + bounded) into the
+    payload; the briefing capture stores it as PRIMARY evidence. None for
+    gates without a condition and for legacy payloads — the briefing then
+    falls back to the supplementary regex-extracted artifacts unchanged.
+    """
+    result = gate_payload.get("condition_result")
+    return result if isinstance(result, dict) else None
 
 
 class PipelineExecutor:
@@ -5202,6 +5215,7 @@ class PipelineExecutor:
         pipeline_id: uuid.UUID,
         required_team_id: uuid.UUID | None,
         completed_node_outputs: dict[str, Any] | None = None,
+        condition_result: dict[str, Any] | None = None,
     ) -> tuple[str | None, bool]:
         """Create the HITL gate row (or reuse a coalescing open gate).
 
@@ -5221,6 +5235,12 @@ class PipelineExecutor:
         and fail the whole interrupt. A savepoint-scoped failure rolls back
         only the savepoint; the briefing degrades (name/context -> None) but
         the interrupt always proceeds.
+
+        FAR-688: the interrupt payload's matched ``condition_result`` (the
+        gate node's JMESPath evaluation) is threaded into the briefing capture
+        so the bundle records the matched value as PRIMARY evidence. The
+        FAR-604 coalescing hash is over ``Run.input_hash`` — never this
+        payload — so the extra member cannot change reuse/supersede outcomes.
 
         Returns ``(pipeline_name, coalesce_reused)`` — the name is ``None``
         when the gate was reused or the lookup failed (logged, best-effort).
@@ -5263,7 +5283,7 @@ class PipelineExecutor:
                 # interrupt (build_hitl_gate_context never raises; context is
                 # None on capture failure). The savepoint is what keeps a
                 # DB-level capture error from poisoning the shared transaction.
-                gate_context: dict[str, Any] | None = None
+                gate_context: HitlGateContext | None = None
                 try:
                     async with session.begin_nested():
                         gate_context = await build_hitl_gate_context(
@@ -5273,6 +5293,7 @@ class PipelineExecutor:
                             org_id=org_id,
                             pipeline_name=pipeline_name,
                             completed_node_outputs=completed_node_outputs,
+                            condition_result=condition_result,
                         )
                 except asyncio.CancelledError:
                     raise
@@ -5313,6 +5334,7 @@ class PipelineExecutor:
         gate_payload = _interrupt_gate_payload(interrupts)
         gate_id = gate_payload.get("gate_id", "")
         required_team_id = _interrupt_required_team_id(gate_payload)
+        condition_result = _interrupt_condition_result(gate_payload)
         node_token_usage = state.node_token_usage
         broker = ctx.broker
         run_id = ctx.run_id
@@ -5346,6 +5368,7 @@ class PipelineExecutor:
                 pipeline_id=pipeline_id,
                 required_team_id=required_team_id,
                 completed_node_outputs=ctx.completed_node_outputs,
+                condition_result=condition_result,
             )
             if coalesce_reused:
                 detail = (

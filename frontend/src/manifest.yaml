@@ -2313,6 +2313,12 @@ elements:
       - testid: pipeline-editor-save-edge
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-legacy-hitl-banner
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-legacy-hitl-banner-dismiss
+        type: button
+        dynamic_testid: false
       - testid: pipeline-editor-agent-select
         type: select
         dynamic_testid: false

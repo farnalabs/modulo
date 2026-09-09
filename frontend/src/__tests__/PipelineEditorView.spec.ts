@@ -1500,6 +1500,68 @@ describe('PipelineEditorView — edge properties panel', () => {
     expect(wrapper.findAll('aside').find((a) => a.text().includes('Edge Properties'))).toBeUndefined()
     wrapper.unmount()
   })
+
+  it('surfaces legacy HITL gates missing descriptions in a dismissible banner (FAR-688)', async () => {
+    const wrapper = await mountWithEdge(edgeFixture({
+      hitl_gate_config: { label: 'Legacy gate', description: 'too short' },
+    }))
+    const banner = wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('HITL gates are missing descriptions')
+    expect(banner.text()).toContain('Gate on edge')
+
+    // A FAR-402 HITL node with an empty description is listed as a node issue.
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'node-9', node_type: 'hitl', hitl_config: {}, label: 'Escalation' }]
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]').text()).toContain('HITL node Escalation')
+
+    // Dismissible — the operator can hide it without leaving the editor.
+    await wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner-dismiss"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('never double-lists a node-level gate whose config is injected onto its outgoing edges', async () => {
+    const wrapper = await mountWithEdge(edgeFixture({ id: 'edge-hitl', source_node_id: 'node-9', target_node_id: 'node-2' }))
+    const vm = wrapper.vm as any
+    vm.rawNodes = [{ id: 'node-9', node_type: 'hitl', hitl_config: { label: 'Gate' }, label: 'Escalation' }]
+    vm.rawEdges = [
+      { id: 'edge-hitl', source_node_id: 'node-9', target_node_id: 'node-2', hitl_gate_config: { label: 'Gate' } },
+    ]
+    await nextTick()
+    const banner = wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('HITL node Escalation')
+    expect(banner.text()).not.toContain('Gate on edge')
+    wrapper.unmount()
+  })
+
+  it('hides the legacy banner when every gate description meets the minimum', async () => {
+    const wrapper = await mountWithEdge(edgeFixture({
+      hitl_gate_config: { label: 'Review gate', description: 'Approve the deploy only after a human reviews the plan.' },
+    }))
+    expect(wrapper.find('[data-testid="pipeline-editor-legacy-hitl-banner"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('accepts a description padded to 20 code points with emoji (code-point length matches the backend)', async () => {
+    // 20 emoji are 40 UTF-16 units — a .length check would reject what the
+    // backend's Python len() (code points) accepts. FAR-688 unifies the
+    // counting on code points.
+    const description = '🚀'.repeat(20)
+    const wrapper = await mountWithEdge(edgeFixture({
+      hitl_gate_config: { label: 'Review gate', description },
+    }))
+    ;(api.PATCH as ReturnType<typeof vi.fn>).mockClear()
+    await wrapper.find('[data-testid="pipeline-editor-save-edge"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).not.toContain('HITL gate requires a description')
+    expect(vi.mocked(api.PATCH).mock.calls.length).toBe(1)
+    wrapper.unmount()
+  })
 })
 
 describe('PipelineEditorView — dialogs', () => {

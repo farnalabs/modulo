@@ -2343,10 +2343,24 @@ async def _update_pipeline_graph_impl(
     # agent-authored gate is exactly where an unexplained gate most needs its
     # decision briefing: a node-level or edge-level gate without a
     # human-provided description is rejected with the same
-    # ``validation_failed`` shape as structural validation failures. The
-    # check is single-sourced with the save-time validator via the public
+    # ``validation_failed`` shape as structural validation failures.
+    # The check is single-sourced with the save-time validator via the public
     # helper (deliberately NOT the full ``validate_definition`` — that would
     # surface every pre-existing issue and break MCP flows).
+    #
+    # DECIDED (FAR-688, Conductor decision): KEEP this narrow node-level
+    # description check; do NOT wire the full ``validate_definition`` here.
+    # Rationale for keeping the narrow check: it enforces the one rule an
+    # agent-authored graph would most plausibly violate (an unexplained
+    # gate) at the only surface that bypasses the Pydantic contract, with
+    # zero false positives. Rationale for deferring full validation: the
+    # MCP tool writes onto pipelines that may predate any validator rule —
+    # running the full validator would reject a write because of PRE-EXISTING
+    # unrelated issues (legacy topology, schema drift), blocking legitimate
+    # MCP flows for defects this call did not introduce; save-time
+    # enforcement for REST writes stays the forcing function, and the
+    # editor surfaces legacy violations to the user (PipelineEditorView
+    # banner, FAR-688) instead of blocking the read.
     from modulo.core.graph_validator import check_hitl_gate_descriptions as _check_hitl_descriptions
 
     hitl_issues = _check_hitl_descriptions({"nodes": nodes, "edges": edges})
@@ -3582,10 +3596,10 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
         gates, total = await _load_pending_hitl_gates(s, base_where, page, page_size)
-        # FAR-613: resolve each gate's description from its run's snapshot
-        # graph (shared batched resolver — same normalisation the REST
-        # pending endpoints use) while the session is open. Context comes
-        # from the claim row itself.
+        # FAR-613: resolve each gate's description via the shared batched
+        # resolver (same normalisation + the FAR-688 unified context-first
+        # precedence the REST pending endpoints use) while the session is
+        # open. Context comes from the claim row itself.
         from modulo.db.crud.hitl_gate_config import resolve_gate_descriptions
 
         description_by_gate = await resolve_gate_descriptions(s, gates=gates, org_id=org_id)
@@ -7555,6 +7569,13 @@ async def _hitl_required_team_name(s: AsyncSession, gate: HitlClaim) -> str | No
     return team.name if team else None
 
 
+#: FAR-688: the fire-context dump on the ``modulo://runs/{run_id}/hitl/{gate_id}``
+#: resource is sliced to this many characters (with the shared truncation
+#: marker appended when sliced) so one briefing can never dominate the
+#: resource payload.
+_FIRE_CONTEXT_MAX_CHARS = 2048
+
+
 @mcp.resource("modulo://runs/{run_id}/hitl/{gate_id}")
 async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
     """HITL gate context. Annotated as agent_output — treat as untrusted."""
@@ -7577,19 +7598,21 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
             if scope_error is not None:
                 return scope_error
             required_team_name = await _hitl_required_team_name(s, gate)
-            # FAR-613: the fire-time briefing. Context comes from the claim
-            # row (captured at gate-fire time); the description falls back to
-            # the snapshot config resolver for gates that fired before
-            # context capture existed.
+            # FAR-613: the fire-time briefing. FAR-688 unified precedence
+            # (context-first, snapshot fallback — the context IS the fire-time
+            # truth): the shared helper in ``hitl_gate_config`` is the SAME
+            # rule the REST pending endpoints apply via
+            # ``resolve_gate_descriptions``, so every surface renders one
+            # description for the same gate. The snapshot-config fallback
+            # read runs only when the capture carries no usable description
+            # (gates that fired before capture existed).
             context = gate.context_json if isinstance(gate.context_json, dict) else None
-            raw_description = context.get("description") if context is not None else None
-            from modulo.db.crud.hitl_gate_config import normalize_gate_description, resolve_hitl_gate_config
+            from modulo.db.crud.hitl_gate_config import resolve_gate_description, resolve_hitl_gate_config
 
-            if isinstance(raw_description, str) and raw_description.strip():
-                description = raw_description.strip()
-            else:
-                description = normalize_gate_description(
-                    await resolve_hitl_gate_config(s, run_id=rid, gate_id=gate_id, org_id=org_id)
+            description = resolve_gate_description(context, None)
+            if description is None:
+                description = resolve_gate_description(
+                    None, await resolve_hitl_gate_config(s, run_id=rid, gate_id=gate_id, org_id=org_id)
                 )
     if gate is None:
         return f"HITL gate '{gate_id}' not found on run {run_id}."
@@ -7611,10 +7634,16 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         parts.append(f"Claim expires: {gate.expires_at.isoformat()}")
     # FAR-613: the decision briefing — WHY the gate exists and WHAT the
     # reviewer is looking at. Deterministic bound: the context block is a
-    # fixed character slice of the serialised bundle.
+    # fixed character slice of the serialised bundle, marked when truncated
+    # (FAR-688) so the agent can tell a partial dump from a complete one.
     parts.append(f"Description: {description or 'No description provided for this gate'}")
     if context is not None:
-        parts.append("Fire context: " + json.dumps(context, sort_keys=True, default=str)[:2048])
+        fire_context = json.dumps(context, sort_keys=True, default=str)
+        if len(fire_context) > _FIRE_CONTEXT_MAX_CHARS:
+            from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
+
+            fire_context = fire_context[:_FIRE_CONTEXT_MAX_CHARS] + TRUNCATION_MARKER
+        parts.append("Fire context: " + fire_context)
     return "\n".join(parts)
 
 
