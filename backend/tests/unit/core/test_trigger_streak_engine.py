@@ -307,9 +307,9 @@ class TestMigrationBackfillGrace:
         assert "ix_runs_unclassified_terminal" in source
         heads = ScriptDirectory(str(versions_dir.parent)).get_heads()
         # 0195_hitl_claim_gate_config_json (FAR-634, from main) chains off
-        # 0202 and this PR's 0203_runner_probe_cache chains off 0195, so the
-        # single linear head of the chain is 0203_runner_probe_cache.
-        assert heads == ["0203_runner_probe_cache"], f"expected a single head, got {heads}"
+        # 0202 and this PR's 0204_runner_probe_cache chains off 0195, so the
+        # single linear head of the chain is 0204_runner_probe_cache.
+        assert heads == ["0204_runner_probe_cache"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
