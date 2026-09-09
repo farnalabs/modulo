@@ -1000,18 +1000,7 @@ async def list_org_gates(
     mirrors the repo's standard list convention (items/total/page/page_size,
     as the runs list uses) with the existing ``GateResponse`` items.
     """
-    if status_filter == "all":
-        decision_filters: list[Any] = []
-    elif status_filter == "undecided":
-        decision_filters = [HitlClaim.decision.is_(None)]
-    elif status_filter == "pending":
-        decision_filters = [HitlClaim.decision.is_(None), HitlClaim.account_id.is_(None)]
-    elif status_filter == "claimed":
-        decision_filters = [HitlClaim.decision.is_(None), HitlClaim.account_id.is_not(None)]
-    elif status_filter == "approved":
-        decision_filters = [HitlClaim.decision == "approved"]
-    else:  # "rejected" — Literal narrows everything else away
-        decision_filters = [HitlClaim.decision == "rejected"]
+    decision_filters = _gate_decision_filters(status_filter)
 
     # Pending-work fence (FAR-612/FAR-604): the undecided family must match
     # HITLManager.list_pending — joined to runs and restricted to runs still
@@ -1031,49 +1020,16 @@ async def list_org_gates(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            # Count and page derive from the SAME composed filters; the runs
-            # join is part of both so the count matches the fenced page.
-            count_stmt = select(func.count()).select_from(HitlClaim)
-            if fenced_to_actionable_runs:
-                count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
-            count_stmt = count_stmt.where(*decision_filters)
-            total = (await session.execute(count_stmt)).scalar_one()
-
-            gates: list[HitlClaim] = []
-            if total:
-                gates_stmt = select(HitlClaim)
-                if fenced_to_actionable_runs:
-                    gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
-                gates_stmt = (
-                    gates_stmt.where(*decision_filters)
-                    .order_by(
-                        nullslast(HitlClaim.decision_at.desc()),
-                        nullslast(HitlClaim.claimed_at.desc()),
-                        HitlClaim.id.desc(),
-                    )
-                    .offset((page - 1) * effective_page_size)
-                    .limit(effective_page_size)
-                )
-                gates = list((await session.execute(gates_stmt)).scalars())
-
-            pipeline_ids = list({g.pipeline_id for g in gates})
-            pipeline_map: dict[uuid.UUID, str] = {}
-            if pipeline_ids:
-                pipeline_rows = await session.execute(
-                    select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
-                )
-                pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
-
-            # Decided gates carry the same briefing enrichment as pending ones:
-            # descriptions (FAR-613), human labels (FAR-686 — resolved for
-            # decided gates too, keyed by (run_id, gate_id)) and claimant
-            # display names + the caller-owns-claim stamp (FAR-691), all in
-            # batched passes inside the same transaction/RLS context.
-            description_by_gate = await resolve_gate_descriptions(
-                session, gates=gates, org_id=principal.organisation_id
+            total, gates = await _fetch_gate_page(
+                session,
+                decision_filters=decision_filters,
+                fenced_to_actionable_runs=fenced_to_actionable_runs,
+                page=page,
+                effective_page_size=effective_page_size,
             )
-            gate_label_map = await _load_gate_label_map(session, gates)
-            claimant_names = await _load_claimant_name_map(session, gates)
+            pipeline_map, description_by_gate, gate_label_map, claimant_names = await _load_gate_page_enrichment(
+                session, gates=gates, organisation_id=principal.organisation_id
+            )
     except ProgrammingError as exc:
         logger.exception("hitl.list_org_gates")
         raise HTTPException(
@@ -1116,6 +1072,97 @@ async def list_org_gates(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _gate_decision_filters(status_filter: GateStatusFilter) -> list[Any]:
+    """Decision-column WHERE filters for each ``/hitl/gates`` status filter (FAR-692).
+
+    ``undecided`` keeps claimed + unclaimed; ``pending`` narrows to unclaimed;
+    ``claimed`` to claimed; ``approved``/``rejected`` surface the decided
+    history; ``all`` applies no decision filter at all.
+    """
+    if status_filter == "all":
+        return []
+    if status_filter == "undecided":
+        return [HitlClaim.decision.is_(None)]
+    if status_filter == "pending":
+        return [HitlClaim.decision.is_(None), HitlClaim.account_id.is_(None)]
+    if status_filter == "claimed":
+        return [HitlClaim.decision.is_(None), HitlClaim.account_id.is_not(None)]
+    if status_filter == "approved":
+        return [HitlClaim.decision == "approved"]
+    # "rejected" — Literal narrows everything else away
+    return [HitlClaim.decision == "rejected"]
+
+
+async def _fetch_gate_page(
+    session: AsyncSession,
+    *,
+    decision_filters: list[Any],
+    fenced_to_actionable_runs: bool,
+    page: int,
+    effective_page_size: int,
+) -> tuple[int, list[HitlClaim]]:
+    """Run the count + page queries for ``/hitl/gates`` in the caller's transaction.
+
+    Count and page derive from the SAME composed filters; the runs join is
+    part of both so the count matches the fenced page. The page query is
+    skipped entirely when the count is zero.
+    """
+    count_stmt = select(func.count()).select_from(HitlClaim)
+    if fenced_to_actionable_runs:
+        count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
+    count_stmt = count_stmt.where(*decision_filters)
+    total = (await session.execute(count_stmt)).scalar_one()
+
+    gates: list[HitlClaim] = []
+    if total:
+        gates_stmt = select(HitlClaim)
+        if fenced_to_actionable_runs:
+            gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
+        gates_stmt = (
+            gates_stmt.where(*decision_filters)
+            .order_by(
+                nullslast(HitlClaim.decision_at.desc()),
+                nullslast(HitlClaim.claimed_at.desc()),
+                HitlClaim.id.desc(),
+            )
+            .offset((page - 1) * effective_page_size)
+            .limit(effective_page_size)
+        )
+        gates = list((await session.execute(gates_stmt)).scalars())
+    return total, gates
+
+
+async def _load_gate_page_enrichment(
+    session: AsyncSession,
+    *,
+    gates: list[HitlClaim],
+    organisation_id: uuid.UUID,
+) -> tuple[
+    dict[uuid.UUID, str],
+    dict[tuple[uuid.UUID, str], str | None],
+    dict[tuple[uuid.UUID, str], str],
+    dict[uuid.UUID, str],
+]:
+    """Batched briefing enrichment for the ``/hitl/gates`` page (FAR-692).
+
+    Decided gates carry the same enrichment as pending ones: pipeline names,
+    descriptions (FAR-613), human labels (FAR-686 — resolved for decided
+    gates too, keyed by (run_id, gate_id)) and claimant display names +
+    the caller-owns-claim stamp (FAR-691), all in batched passes inside the
+    caller's transaction/RLS context.
+    """
+    pipeline_ids = list({g.pipeline_id for g in gates})
+    pipeline_map: dict[uuid.UUID, str] = {}
+    if pipeline_ids:
+        pipeline_rows = await session.execute(select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids)))
+        pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
+
+    description_by_gate = await resolve_gate_descriptions(session, gates=gates, org_id=organisation_id)
+    gate_label_map = await _load_gate_label_map(session, gates)
+    claimant_names = await _load_claimant_name_map(session, gates)
+    return pipeline_map, description_by_gate, gate_label_map, claimant_names
 
 
 async def _load_gate_label_map(session: AsyncSession, gates: list[HitlClaim]) -> dict[tuple[uuid.UUID, str], str]:

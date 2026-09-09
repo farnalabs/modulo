@@ -26,9 +26,8 @@ def test_non_numeric_and_bool_rejected() -> None:
     assert _extract_reported_cost({"model_cost_usd": False}) is None
 
 
-def test_negative_zero_nan_inf_rejected() -> None:
+def test_negative_nan_inf_rejected() -> None:
     assert _extract_reported_cost({"model_cost_usd": -1.0}) is None
-    assert _extract_reported_cost({"model_cost_usd": 0.0}) is None
     assert _extract_reported_cost({"model_cost_usd": float("nan")}) is None
     assert _extract_reported_cost({"model_cost_usd": float("inf")}) is None
     assert _extract_reported_cost({"model_cost_usd": float("-inf")}) is None
@@ -37,6 +36,76 @@ def test_negative_zero_nan_inf_rejected() -> None:
 def test_sub_floor_is_not_a_report() -> None:
     tiny = float(MAX_REPORTABLE_USD_MIN) / 10
     assert _extract_reported_cost({"model_cost_usd": tiny}) is None
+
+
+def test_sub_floor_nonzero_stays_rejected_even_with_proven_zero_tokens() -> None:
+    """FAR-653: the proven-zero rule covers EXACTLY zero — a sub-floor non-zero
+    value stays rejected even when the token proof is present."""
+    tiny = float(MAX_REPORTABLE_USD_MIN) / 10
+    proven_zero_tokens = {"token_usage": {"input": 0, "output": 0, "total": 0}}
+    assert _extract_reported_cost({"model_cost_usd": tiny, **proven_zero_tokens}) is None
+
+
+_PROVEN_ZERO_TOKENS = {"token_usage": {"input": 0, "output": 0, "total": 0}}
+
+
+def test_genuine_zero_with_proven_token_usage_is_a_report() -> None:
+    """FAR-653: model_cost_usd == 0 + all-zero token_usage = a REAL report."""
+    result = _extract_reported_cost({"model_cost_usd": 0.0, **_PROVEN_ZERO_TOKENS})
+    assert result is not None
+    raw, clamped, was_clamped, out_of_band = result
+    assert raw == 0.0
+    assert clamped == 0.0
+    assert was_clamped is False
+    assert out_of_band is False
+
+
+def test_genuine_zero_with_zero_cache_keys_is_a_report() -> None:
+    usage = {"token_usage": {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0}}
+    assert _extract_reported_cost({"model_cost_usd": 0.0, **usage}) == (0.0, 0.0, False, False)
+
+
+def test_genuine_zero_reads_raw_field_and_tolerates_integral_float_tokens() -> None:
+    output = {
+        "model_cost_raw_usd": 0.0,
+        "model_cost_usd": 0.0,
+        "token_usage": {"input": 0.0, "output": 0.0, "total": 0.0},
+    }
+    assert _extract_reported_cost(output) == (0.0, 0.0, False, False)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        {"model_cost_usd": 0.0},  # no token_usage at all
+        {"model_cost_usd": 0.0, "token_usage": "not-a-dict"},
+        {"model_cost_usd": 0.0, "token_usage": {}},
+        {"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": 0}},  # total absent
+        {"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": 0, "total": 5}},
+        {"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": "many", "total": 0}},  # invalid mandatory
+        {"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": 0, "total": 0, "cache_read": 3}},
+        {"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": 0, "total": 0, "cache_write": "x"}},
+        {"model_cost_raw_usd": 0.0, "model_cost_usd": 0.0, "token_usage": {"input": 1, "output": 0, "total": 1}},
+    ],
+    ids=[
+        "no-token-usage-key",
+        "token-usage-not-a-dict",
+        "token-usage-empty",
+        "mandatory-total-absent",
+        "non-zero-total",
+        "invalid-mandatory-value",
+        "non-zero-cache-read",
+        "invalid-cache-write-value",
+        "raw-field-with-non-zero-tokens",
+    ],
+)
+def test_unproven_zero_is_not_a_report(output: dict) -> None:
+    """FAR-653: a zero WITHOUT the zero-token proof is unproven — no report."""
+    assert _extract_reported_cost(output) is None
+
+
+def test_genuine_zero_with_schema_drift_still_rejected() -> None:
+    assert _extract_reported_cost({"schema_drift": True, "model_cost_usd": 0.0, **_PROVEN_ZERO_TOKENS}) is None
 
 
 def test_band_clamp_at_boundary() -> None:
@@ -109,6 +178,21 @@ def test_build_fields_false_flags_written_explicitly() -> None:
     fields = _build_model_cost_fields({"model_cost_usd": 0.04})
     assert fields["model_cost_clamped"] is False
     assert fields["model_cost_out_of_band_high"] is False
+
+
+def test_build_fields_genuine_zero_is_written() -> None:
+    """FAR-653: a PROVEN genuine zero IS a report — the full field set is
+    written with 0.0 values and explicit False flags."""
+    fields = _build_model_cost_fields({"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": 0, "total": 0}})
+    assert fields["model_cost_usd"] == 0.0
+    assert fields["model_cost_raw_usd"] == 0.0
+    assert fields["model_cost_display_usd"] == 0.0
+    assert fields["model_cost_clamped"] is False
+    assert fields["model_cost_out_of_band_high"] is False
+
+
+def test_build_fields_unproven_zero_absent() -> None:
+    assert not _build_model_cost_fields({"model_cost_usd": 0.0})
 
 
 def test_display_clamp_bounds_raw() -> None:

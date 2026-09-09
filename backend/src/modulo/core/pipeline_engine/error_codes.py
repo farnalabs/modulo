@@ -740,8 +740,9 @@ def known_error_codes() -> set[str]:
 
 # Hard cap BEFORE any regex runs — bounds the ReDoS surface (an attacker who can
 # reach error_detail must not be able to feed an unbounded string into the
-# pattern engine). ``runs.error_detail`` is String(5000), so this also mirrors
-# the column bound.
+# pattern engine). ``runs.error_detail`` is ``Text`` (widened from String(5000)
+# by migration 0199), so error-detail writes pass ``limit=None``; this default
+# still caps every other sanitizer caller (stack traces, context JSON, ...).
 _ERROR_DETAIL_HARD_LIMIT = 5000
 
 # Redaction patterns — char-class-only, NO alternations with nested quantifiers
@@ -796,19 +797,21 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
-def sanitize_error_text(text: Any) -> str:
+def sanitize_error_text(text: Any, limit: int | None = _ERROR_DETAIL_HARD_LIMIT) -> str:
     """Control-char strip + secret-pattern redaction for error detail.
 
     Idempotent and a NO-OP for clean strings (the redacted replacement never
-    matches a secret pattern). Input is capped at :data:`_ERROR_DETAIL_HARD_LIMIT`
-    code points BEFORE any regex runs (ReDoS defense). Non-str input is coerced
-    via ``str()`` — never raises.
+    matches a secret pattern). Input is capped at *limit* code points (default
+    :data:`_ERROR_DETAIL_HARD_LIMIT`) BEFORE any regex runs — a ReDoS defense
+    that bounds the pattern-engine input. Pass ``limit=None`` to skip the cap
+    (used for the ``runs.error_detail`` column, which was widened to ``Text`` by
+    migration 0199). Non-str input is coerced via ``str()`` — never raises.
     """
     if text is None:
         return ""
     if not isinstance(text, str):
         text = str(text)
-    capped = text[:_ERROR_DETAIL_HARD_LIMIT]
+    capped = text if limit is None else text[:limit]
     sanitized = _CONTROL_CHARS.sub("", capped)
     for pattern in _SECRET_PATTERNS:
         sanitized = pattern.sub("<redacted>", sanitized)
