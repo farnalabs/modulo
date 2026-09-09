@@ -1112,12 +1112,11 @@ async def test_sweep_acquires_marker_lock_in_explicit_transaction(
     ``except Exception`` every tick, so NO tick ever held the lock and concurrent
     ticks re-processed the same zombie markers. This test models that exact
     ``autobegin=False`` double: ``connection()`` raises unless a ``begin()``
-    transaction is currently open. The OLD code (calling ``connection()`` before
-    ``begin()``) hits the raise -> ``marker_sweep_lock_failed`` -> ``acquired``
-    stays False -> the sweep returns the ``skipped_locked`` early zero result
-    (cleared == 0). The FIXED code enters ``begin()`` first, so ``connection()``
-    resolves, the lock is acquired and the sweep proceeds to clear the stale
-    marker.
+    transaction is currently open. The FIXED code enters ``begin()`` first, so
+    ``connection()`` resolves, the SESSION-scoped advisory lock is acquired (via
+    the blocking ``pg_advisory_lock``) and the sweep proceeds to clear the stale
+    marker. Two contending sweeps serialise on that lock instead of one skipping
+    the tick, so the clear always happens.
     """
     _patch_gate(monkeypatch, flag_on=False)
 

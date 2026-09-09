@@ -926,14 +926,25 @@ async def reconcile_runner_dispatch_markers(
             # block) or ``session.close()``.
             async with lock_session.begin():
                 lock_conn = await lock_session.connection()
-                acquired = bool(
-                    (
-                        await lock_conn.execute(
-                            text("SELECT pg_try_advisory_lock(:k1, :k2)"),
-                            {"k1": k1, "k2": k2},
-                        )
-                    ).scalar_one()
+                # Block on the SESSION-scoped dedup lock until it is free. The
+                # cron cadence and the 60s dispatcher_reconcile path can
+                # overlap, so two contending sweeps must SERIALISE rather than
+                # one bailing out: a skipped sweep silently drops every stale
+                # marker clear and capacity violation for that tick — the exact
+                # regression this lock was introduced to prevent, and the cause
+                # of the flaky sweep integration tests (which run many sweeps
+                # "concurrently" under pytest-xdist's default ``--dist load``,
+                # where ``xdist_group`` does NOT co-locate them).
+                # ``pg_advisory_lock`` waits instead of returning False, so the
+                # contending sweep runs once the first releases it (the finally
+                # block releases the lock on a fresh transaction). The lock is
+                # session-scoped and is released automatically if the holder's
+                # connection dies.
+                await lock_conn.execute(
+                    text("SELECT pg_advisory_lock(:k1, :k2)"),
+                    {"k1": k1, "k2": k2},
                 )
+                acquired = True
         except asyncio.CancelledError:
             raise
         except Exception:
