@@ -206,21 +206,15 @@ class Run(OrgScoped):
             "created_at",
             postgresql_include=["pipeline_id"],
         ),
-        # Error-code analytics (migration 0202) — ad-hoc error lookups on
-        # runs and the analytics builder's error_code dimension filter.
+        # Error-code analytics (migration 0202) — error_tracking.py:345-349
+        # filters on (organisation_id, error_code IN capacity markers) and the
+        # RLS-scoped failure-reason breakdown (crud/run.py:3168-3180) filters
+        # error_code IS NOT NULL and groups by it.
         Index(
             "ix_runs_org_error_code",
             "organisation_id",
             "error_code",
             postgresql_where=text("error_code IS NOT NULL"),
-        ),
-        # Claimed-by lookup (migration 0202) — HITL claim operations set
-        # claimed_by; subsequent queries filter by (org, claimed_by).
-        Index(
-            "ix_runs_org_claimed_by",
-            "organisation_id",
-            "claimed_by",
-            postgresql_where=text("claimed_by IS NOT NULL"),
         ),
     )
 
