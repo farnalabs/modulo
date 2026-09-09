@@ -1,15 +1,15 @@
 """Add library_collection primitive type and collection authoring fields (FAR-760).
 
-Revision ID: 0204_library_collection_type
-Revises: 0203_triggers_add_name
+ Revision ID: 0205_library_collection_type
+Revises: 0204_runner_probe_cache
 Create Date: 2026-09-09
 """
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0204_library_collection_type"
-down_revision = "0203_triggers_add_name"
+revision = "0205_library_collection_type"
+down_revision = "0204_runner_probe_cache"
 branch_labels = None
 depends_on = None
 

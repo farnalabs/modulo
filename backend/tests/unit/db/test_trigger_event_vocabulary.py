@@ -70,8 +70,8 @@ _MIGRATION_PATH = (
 # (from main) chained onto 0200, 0202_runs_error_code_claimed_by_indexes (from main)
 # chained onto 0201, 0195_hitl_claim_gate_config_json (FAR-634, from main) chained onto 0202,
 # 0203_triggers_add_name (FAR-681, from main) chained onto 0195, and FAR-760's
-# 0204_library_collection_type chained onto 0203_triggers_add_name as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0204_library_collection_type"
+# 0205_library_collection_type chained onto 0204_runner_probe_cache as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0205_library_collection_type"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
