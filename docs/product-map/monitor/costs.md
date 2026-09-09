@@ -69,8 +69,11 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 - [x] Pipeline cost circuit breaker (§8.10): a pipeline crossing its monthly spend
       threshold trips the breaker and permanently pauses triggers until an admin
       re-enables it via `POST /circuit-breaker/{pipeline_id}/reset`
-- [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team|pipeline|model`
-      streams a CSV attachment with a `costs-export-{period}.csv` disposition
+- [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team`
+      streams a CSV attachment with a `costs-export-{period}.csv` disposition;
+      the exposed `pipeline`/`model` granularities are refused with an explicit
+      422 (the per-model / per-pipeline export surface is not implemented) so a
+      caller never receives mislabelled team rows or an internal error
 - [x] Scheduled cost reports: `POST/GET/DELETE /reports` manage org-owned
       daily/weekly/monthly, team/org, csv/json, one-time/recurring reports with
       `recipients` (email) required (min 1)
@@ -89,9 +92,13 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 
 ## Known Gaps
 
-- **Export grouping is a façade for `pipeline` / `model`** — the export handler maps
-  any `group_by != "team"` to the team report, so pipeline- and model-level export
-  granularity is not independently implemented.
+- **Pipeline- and model-level export granularity is not implemented** — the
+  endpoint's `group_by` enum still advertises `pipeline`/`model` (for forward
+  compatibility), but the CSV export is team-ledger only: those values now fail
+  with an explicit 422 instead of silently returning the team report (`model`)
+  or 500ing via `get_cost_report`'s `ValueError` (`pipeline`). Independent
+  pipeline/model grouping needs a runs-table/cost-component aggregation that is
+  not yet shipped.
 - **No BDD for the ceiling / scheduled-report / anomaly / cost-component surfaces** —
   `cost_controls.feature` covers only token budget, org/team spend limits and the
   circuit breaker; the rest are unit-only.
@@ -109,3 +116,8 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   (`uq_spend_anomalies_org_date`, migration 0201_spend_anomaly_unique_org_date), so every returned anomaly has a
   stable id that `POST /anomalies/dismiss/{id}` can target and dismissal state
   survives repeat detection. Endpoint + CRUD unit suites updated.
+- 2026-09-09: **improve-architecture (product-map walk)** — closed the export
+  façade gap: `GET /export` no longer silently maps `model` -> team nor crashes
+  (`500`) on `pipeline`; unimplemented granularities now fail with an explicit
+  422 naming `team` as the supported export grouping. `api/routes/costs.py` +
+  `test_costs.py` / `test_costs_routes_coverage.py` updated.
