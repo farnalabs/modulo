@@ -306,6 +306,17 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Journey cards and journey detail on the Lifecycle Map view (attribution display)",
         tier="community",
     ),
+    # ── Community tier — webhook notification delivery log (default OFF, FAR-656) ──
+    # Registered in ``DEFAULT_OFF_FLAGS`` (the ``mobile_sidebar_rail``
+    # two-mechanism precedent): the webhook delivery-log UI ships default-OFF
+    # on every tier until an org ``feature_overrides`` entry enables it. The
+    # manifest route /admin/notification-delivery declares this flag so the
+    # router guard redirects while it is off and the sidebar item stays hidden.
+    FeatureFlag(
+        name="webhook_notification_log",
+        description="Webhook notification delivery log (admin delivery-log UI)",
+        tier="community",
+    ),
 ]
 
 
@@ -325,6 +336,7 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "saved_views",
         "user_scoped_mcp_keys",
         "lifecycle_map_journeys",
+        "webhook_notification_log",
     }
 )
 
