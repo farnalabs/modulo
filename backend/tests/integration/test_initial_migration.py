@@ -81,9 +81,6 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     "eval_suites": frozenset({"eval_definition_ids"}),
     "feature_flag_catalog": frozenset({"depends_on"}),
     "feedback_records": frozenset({"rejected_output", "correction_state"}),
-    # hitl_claims.context_json (main's 0190, FAR-613): jsonb in the migration;
-    # generic JSON in the ORM for SQLite/MariaDB parity — the same pattern as
-    # decision_payload below.
     # hitl_claims.context_json (main's 0190, FAR-613) and gate_config_json
     # (0195, FAR-634): jsonb in the migration; generic JSON in the ORM for
     # SQLite/MariaDB parity — the same pattern as decision_payload below.
