@@ -85,20 +85,72 @@
           </div>
         </div>
 
+        <!-- FAR-742: work-items toggle + filters. The whole band only exists
+             when the lifecycle_map_journeys flag is on; the checkbox itself
+             defaults OFF so a visit starts with the clean map and no
+             journeys fetch. -->
+        <div
+          v-if="journeysEnabled"
+          class="mb-4 flex flex-wrap items-center gap-4"
+          data-testid="lifecycle-map-journeys-controls"
+        >
+          <label class="flex items-center gap-2 text-sm text-foreground" for="lifecycle-map-show-work-items">
+            <input
+              id="lifecycle-map-show-work-items"
+              v-model="showWorkItems"
+              type="checkbox"
+              class="h-4 w-4 rounded border-input accent-primary"
+              data-testid="lifecycle-map-show-work-items"
+            />
+            {{ $t('views.LifecycleMapView.show_work_items') }}
+          </label>
+          <div v-if="showWorkItems" class="flex flex-wrap items-center gap-3">
+            <div class="flex items-center gap-2">
+              <label for="lifecycle-map-journeys-period" class="text-sm text-muted-foreground">
+                {{ $t('views.LifecycleMapView.journey.filter_period_label') }}
+              </label>
+              <Select
+                v-model="store.journeysFilters.period"
+                input-id="lifecycle-map-journeys-period"
+                :options="periodOptions"
+                option-label="label"
+                option-value="value"
+                :aria-label="$t('views.LifecycleMapView.journey.filter_period_label')"
+                data-testid="lifecycle-map-journeys-period"
+              />
+            </div>
+            <div class="flex items-center gap-2">
+              <label for="lifecycle-map-journeys-status" class="text-sm text-muted-foreground">
+                {{ $t('views.LifecycleMapView.journey.filter_status_label') }}
+              </label>
+              <Select
+                v-model="store.journeysFilters.status"
+                input-id="lifecycle-map-journeys-status"
+                :options="statusOptions"
+                option-label="label"
+                option-value="value"
+                :aria-label="$t('views.LifecycleMapView.journey.filter_status_label')"
+                data-testid="lifecycle-map-journeys-status"
+              />
+            </div>
+          </div>
+        </div>
+
         <div class="rounded-xl border border-border bg-card overflow-hidden" style="height: 600px">
           <LifecycleMapRenderer
             :map-data="mapData"
-            :journeys="journeysEnabled ? store.journeys : []"
+            :journeys="journeysVisible ? store.journeys : []"
             :on-modulo-stage-click="handleModuloStageClick"
             :on-external-stage-click="handleExternalStageClick"
             @journey-open="openJourneyDetail"
           />
         </div>
 
-        <!-- FAR-654: all journey UI is gated behind the default-OFF
-             lifecycle_map_journeys flag. The map (stages/edges) renders
-             normally either way. -->
-        <template v-if="journeysEnabled">
+        <!-- FAR-654 gated all journey UI behind the default-OFF
+             lifecycle_map_journeys flag; FAR-742 adds the per-visit
+             "Show work items" checkbox (also default OFF) on top of it. The
+             clean map (stages/edges) renders normally either way. -->
+        <template v-if="journeysVisible">
           <section
             v-if="unattributedJourneys.length"
             class="mt-4 rounded-xl border border-dashed border-border bg-card p-4"
@@ -289,8 +341,26 @@ const { t } = useI18n()
 // FAR-654: the journeys display (journey cards on stage nodes, the
 // Unattributed journeys section, load-more pagination, and the journey
 // detail panel) is gated behind the default-OFF `lifecycle_map_journeys`
-// feature flag. The map itself (stages/edges) renders normally either way.
+// feature flag. FAR-742 adds a second, per-visit gate: the "Show work items"
+// checkbox (default OFF). Both must be on for any journeys fetch or render.
 const journeysEnabled = computed(() => planStore.featureEnabled('lifecycle_map_journeys'))
+const showWorkItems = ref(false)
+const journeysVisible = computed(() => journeysEnabled.value && showWorkItems.value)
+
+// FAR-742: period/status filter options. Changing a filter refetches (the
+// fetch replaces the list + cursor, which resets pagination).
+const periodOptions = computed(() => [
+  { value: '24h' as const, label: t('views.LifecycleMapView.journey.filter_period_24h') },
+  { value: '3d' as const, label: t('views.LifecycleMapView.journey.filter_period_3d') },
+  { value: '7d' as const, label: t('views.LifecycleMapView.journey.filter_period_7d') },
+  { value: '30d' as const, label: t('views.LifecycleMapView.journey.filter_period_30d') },
+  { value: 'all' as const, label: t('views.LifecycleMapView.journey.filter_period_all') },
+])
+const statusOptions = computed(() => [
+  { value: 'all' as const, label: t('views.LifecycleMapView.journey.filter_status_all') },
+  { value: 'complete' as const, label: t('views.LifecycleMapView.journey.status.complete') },
+  { value: 'failed' as const, label: t('views.LifecycleMapView.journey.status.failed') },
+])
 
 const mapId = computed(() => route.params.id as string)
 const selectedVersion = ref<number | null>(null)
@@ -495,17 +565,37 @@ onMounted(async () => {
   if (!planStore.loaded) {
     await planStore.fetchPlan()
   }
-  if (journeysEnabled.value) {
+  if (journeysVisible.value) {
     loadJourneys()
   }
 })
 
 // If the flag flips ON while the view is open (e.g. an admin org override
 // followed by a plan re-sync), load the journeys the mount-time decision
-// skipped. fetchJourneys is idempotent and guards against concurrency.
+// skipped — but only when "Show work items" is also checked. fetchJourneys
+// is idempotent and guards against concurrency.
 watch(journeysEnabled, (enabled) => {
-  if (enabled && mapId.value) {
+  if (enabled && showWorkItems.value && mapId.value) {
     loadJourneys()
   }
 })
+
+// Checking the box triggers the first journeys fetch (with the active
+// filters); unchecking only hides the UI, it never refetches.
+watch(showWorkItems, (checked) => {
+  if (checked && journeysEnabled.value && mapId.value) {
+    loadJourneys()
+  }
+})
+
+// FAR-742: a filter change refetches. fetchJourneys replaces the journeys
+// list and the pagination cursor, so the reset is inherent in the fetch.
+watch(
+  () => [store.journeysFilters.period, store.journeysFilters.status] as const,
+  () => {
+    if (journeysVisible.value && mapId.value) {
+      loadJourneys()
+    }
+  },
+)
 </script>

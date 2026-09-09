@@ -5328,7 +5328,7 @@ export interface paths {
         };
         /**
          * List Journeys Endpoint
-         * @description Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref.
+         * @description Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref, status, and last-move time.
          */
         get: operations["list_journeys_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys_get"];
         put?: never;
@@ -29914,6 +29914,10 @@ export interface operations {
             query?: {
                 kind?: string | null;
                 ref?: string | null;
+                /** @description Filter on the journey's latest status. */
+                status?: string | null;
+                /** @description Only journeys whose updated_at (last move) is at or after this ISO-8601 instant. */
+                updated_since?: string | null;
                 cursor?: string | null;
                 limit?: number;
                 _fresh?: boolean;

@@ -94,6 +94,33 @@ export interface LifecycleEdge {
 
 const JOURNEY_PAGE_SIZE = 50
 
+/** Period vocabulary for the journeys filter (matches the dashboard's). */
+export type JourneyPeriod = '24h' | '3d' | '7d' | '30d' | 'all'
+
+/** Status filter for the journeys list ('all' sends no status param). */
+export type JourneyStatusFilter = 'all' | 'complete' | 'failed'
+
+export interface JourneysFilters {
+  period: JourneyPeriod
+  status: JourneyStatusFilter
+}
+
+export const JOURNEYS_DEFAULT_FILTERS: JourneysFilters = { period: '7d', status: 'all' }
+
+const JOURNEY_PERIOD_HOURS: Record<Exclude<JourneyPeriod, 'all'>, number> = {
+  '24h': 24,
+  '3d': 72,
+  '7d': 24 * 7,
+  '30d': 24 * 30,
+}
+
+/** ISO-8601 lower bound for the period filter; undefined for 'all'. */
+export function updatedSinceForPeriod(period: JourneyPeriod, now: number = Date.now()): string | undefined {
+  const hours: number | undefined = period === 'all' ? undefined : JOURNEY_PERIOD_HOURS[period]
+  if (!hours) return undefined
+  return new Date(now - hours * 3600000).toISOString()
+}
+
 const LAYOUT_SPACING_X = 300
 const LAYOUT_SPACING_Y = 180
 const LAYOUT_MARGIN_X = 80
@@ -273,6 +300,10 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
 
   const journeys = ref<JourneySummary[]>([])
   const journeysCursor = ref<string | null>(null)
+  // updated_since computed at page-1 fetch time and reused across load-more
+  // pages so one pagination session queries a single consistent window.
+  const journeysUpdatedSince = ref<string | null>(null)
+  const journeysFilters = ref<JourneysFilters>({ ...JOURNEYS_DEFAULT_FILTERS })
   const isLoadingJourneys = ref(false)
   const isLoadingMoreJourneys = ref(false)
   const journeysError = ref<string | null>(null)
@@ -298,12 +329,31 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
 
   const hasMoreJourneys = computed(() => journeysCursor.value != null)
 
+  /** Query string for the journeys list: page size + active filters + optional cursor. */
+  function journeysQueryString(cursor?: string | null): string {
+    const params = new URLSearchParams({ limit: String(JOURNEY_PAGE_SIZE) })
+    const since = journeysUpdatedSince.value ?? updatedSinceForPeriod(journeysFilters.value.period)
+    if (since) params.set('updated_since', since)
+    if (journeysFilters.value.status !== 'all') params.set('status', journeysFilters.value.status)
+    if (cursor) params.set('cursor', cursor)
+    return params.toString()
+  }
+
+  /** Update the journeys filters. Callers refetch afterwards; fetchJourneys
+   * replaces the list and cursor, which resets pagination. */
+  function setJourneysFilters(filters: Partial<JourneysFilters>): void {
+    journeysFilters.value = { ...journeysFilters.value, ...filters }
+  }
+
   async function fetchJourneys(mapId: string): Promise<void> {
     if (isLoadingJourneys.value) return
     isLoadingJourneys.value = true
     journeysError.value = null
+    // Pin the period window for this pagination session; the next fetch
+    // (e.g. after a filter change) recomputes it.
+    journeysUpdatedSince.value = updatedSinceForPeriod(journeysFilters.value.period) ?? null
     try {
-      const data = await get<JourneyListResponse>(`/api/v1/lifecycle-maps/${mapId}/journeys?limit=${JOURNEY_PAGE_SIZE}`)
+      const data = await get<JourneyListResponse>(`/api/v1/lifecycle-maps/${mapId}/journeys?${journeysQueryString()}`)
       journeys.value = data?.items ?? []
       journeysCursor.value = data?.next_cursor ?? null
     } catch (e: unknown) {
@@ -320,9 +370,8 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     isLoadingMoreJourneys.value = true
     journeysError.value = null
     try {
-      const cursor = encodeURIComponent(journeysCursor.value)
       const data = await get<JourneyListResponse>(
-        `/api/v1/lifecycle-maps/${mapId}/journeys?limit=${JOURNEY_PAGE_SIZE}&cursor=${cursor}`
+        `/api/v1/lifecycle-maps/${mapId}/journeys?${journeysQueryString(journeysCursor.value)}`
       )
       journeys.value.push(...(data?.items ?? []))
       journeysCursor.value = data?.next_cursor ?? null
@@ -513,6 +562,8 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     pipelines,
     journeys,
     journeysCursor,
+    journeysFilters,
+    setJourneysFilters,
     isLoadingJourneys,
     isLoadingMoreJourneys,
     hasMoreJourneys,

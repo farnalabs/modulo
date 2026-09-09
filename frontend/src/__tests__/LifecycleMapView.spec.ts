@@ -21,6 +21,7 @@ vi.mock('../lib/api/formatError', () => ({
 
 import LifecycleMapView from '../views/lifecycle-map/LifecycleMapView.vue'
 import LifecycleMapRenderer from '../components/lifecycle-map/LifecycleMapRenderer.vue'
+import Select from 'primevue/select'
 import { usePlanStore } from '../stores/planStore'
 import { useLifecycleMapsStore } from '../stores/lifecycleMaps'
 
@@ -81,6 +82,45 @@ const i18n = createI18n({
           import_invalid_json: 'The pasted content is not valid JSON.',
           importing: 'Importing...',
           cancel: 'Cancel',
+          show_work_items: 'Show work items',
+          journey: {
+            detail_title: 'Journey: {journey}',
+            close: 'Close',
+            loading: 'Loading journey...',
+            loading_more: 'Loading more...',
+            load_more: 'Load more',
+            no_runs: 'No runs yet',
+            run_count: '{count} run | {count} runs',
+            open: 'Open {label} journey details',
+            unattributed: 'Unattributed',
+            unattributed_hint: '{count} unattributed run | {count} unattributed runs',
+            unattributed_desc: 'Unattributed description',
+            more_on_node: '+{count} more',
+            more_on_node_title: '{count} older work items hidden',
+            filter_period_label: 'Period',
+            filter_status_label: 'Status',
+            filter_period_24h: 'Last 24h',
+            filter_period_3d: 'Last 3 days',
+            filter_period_7d: 'Last 7 days',
+            filter_period_30d: 'Last 30 days',
+            filter_period_all: 'All time',
+            filter_status_all: 'All',
+            provenance: {
+              derived: 'Derived',
+              reported: 'Reported',
+            },
+            status: {
+              complete: 'Completed',
+              failed: 'Failed',
+              stalled: 'Stalled',
+              running: 'Running',
+              pending: 'Pending',
+              awaiting_human: 'Awaiting Human',
+              cancelled: 'Cancelled',
+              eval_failed: 'Eval Failed',
+              claimed: 'Claimed',
+            },
+          },
         },
       },
     },
@@ -100,6 +140,12 @@ function seedPlan(flags: Record<string, boolean> = {}) {
 
 function journeysEndpointCalled(): boolean {
   return fetchMock.mock.calls.some((call) => String(call[0]).includes('/journeys'))
+}
+
+function journeysFetchUrls(): URL[] {
+  return fetchMock.mock.calls
+    .filter((call) => String(call[0]).includes('/journeys'))
+    .map((call) => new URL(String(call[0]), 'http://localhost'))
 }
 
 beforeEach(() => {
@@ -326,11 +372,14 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
     expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(false)
   })
 
-  it('flag on: fetches journeys and renders the unattributed section and pagination', async () => {
+  it('flag on + checkbox checked: fetches journeys and renders the unattributed section and pagination', async () => {
     seedPlan({ lifecycle_map_journeys: true })
     journeysResponse = { items: [journeyItem], next_cursor: 'cursor-2' }
 
     const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
     await flushPromises()
 
     expect(journeysEndpointCalled()).toBe(true)
@@ -343,9 +392,11 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
     expect(wrapper.find('[data-testid="lifecycle-map-journeys-pagination"]').exists()).toBe(true)
   })
 
-  it('flag on: renders the journey detail panel when a journey is selected', async () => {
+  it('flag on + checkbox checked: renders the journey detail panel when a journey is selected', async () => {
     seedPlan({ lifecycle_map_journeys: true })
     const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
     await flushPromises()
 
     const store = useLifecycleMapsStore()
@@ -355,14 +406,130 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
     expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(true)
   })
 
-  it('flag flipping on after mount triggers the journeys fetch', async () => {
-    mountView()
+  it('flag flipping on after mount alone does not fetch; the checkbox completes the gate', async () => {
+    const wrapper = mountView()
     await flushPromises()
     expect(journeysEndpointCalled()).toBe(false)
 
     seedPlan({ lifecycle_map_journeys: true })
     await flushPromises()
 
+    // FAR-742: the flag alone no longer triggers a fetch — the checkbox is
+    // the second, per-visit half of the gate.
+    expect(journeysEndpointCalled()).toBe(false)
+
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
+    await flushPromises()
+
     expect(journeysEndpointCalled()).toBe(true)
+  })
+})
+
+describe('LifecycleMapView work-items toggle and filters (FAR-742)', () => {
+  async function mountFlagOn() {
+    seedPlan({ lifecycle_map_journeys: true })
+    const wrapper = mountView()
+    await flushPromises()
+    return wrapper
+  }
+
+  function findSelectByTestId(wrapper: ReturnType<typeof mountView>, testId: string) {
+    return wrapper.findAllComponents(Select).find((s) => s.attributes('data-testid') === testId)
+  }
+
+  it('flag on, checkbox unchecked (default): no journeys fetch, no journey UI', async () => {
+    const wrapper = await mountFlagOn()
+
+    expect(journeysEndpointCalled()).toBe(false)
+    const renderer = wrapper.findComponent(LifecycleMapRenderer)
+    expect(renderer.props('journeys')).toEqual([])
+    expect(wrapper.find('[aria-label="Unattributed journeys"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="lifecycle-map-journeys-pagination"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(false)
+  })
+
+  it('flag off: the work-items band is not rendered at all', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="lifecycle-map-journeys-controls"]').exists()).toBe(false)
+  })
+
+  it('checking the box fetches journeys with the default last-7-days window and shows the filters', async () => {
+    journeysResponse = { items: [journeyItem], next_cursor: 'cursor-2' }
+    const wrapper = await mountFlagOn()
+
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
+    await flushPromises()
+
+    const urls = journeysFetchUrls()
+    expect(urls).toHaveLength(1)
+    expect(urls[0].searchParams.get('limit')).toBe('50')
+    expect(urls[0].searchParams.get('updated_since')).toBeTruthy()
+    expect(urls[0].searchParams.get('status')).toBeNull()
+
+    expect(wrapper.findComponent(LifecycleMapRenderer).props('journeys')).toHaveLength(1)
+    expect(wrapper.find('[aria-label="Unattributed journeys"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="lifecycle-map-journeys-pagination"]').exists()).toBe(true)
+
+    // Filter controls are visible only while the checkbox is on.
+    expect(findSelectByTestId(wrapper, 'lifecycle-map-journeys-period')).toBeTruthy()
+    expect(findSelectByTestId(wrapper, 'lifecycle-map-journeys-status')).toBeTruthy()
+  })
+
+  it('changing the period refetches with the new window and resets pagination', async () => {
+    journeysResponse = { items: [journeyItem], next_cursor: 'cursor-2' }
+    const wrapper = await mountFlagOn()
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
+    await flushPromises()
+
+    const periodSelect = findSelectByTestId(wrapper, 'lifecycle-map-journeys-period')
+    expect(periodSelect).toBeTruthy()
+    await periodSelect!.vm.$emit('update:modelValue', 'all')
+    await flushPromises()
+
+    const urls = journeysFetchUrls()
+    expect(urls).toHaveLength(2)
+    // 'All time' drops the updated_since window entirely.
+    expect(urls[1].searchParams.get('updated_since')).toBeNull()
+    // Pagination reset: the refetch is a fresh page-1 request, no cursor.
+    expect(urls[1].searchParams.get('cursor')).toBeNull()
+  })
+
+  it('changing the status refetches with the status filter applied', async () => {
+    journeysResponse = { items: [journeyItem], next_cursor: 'cursor-2' }
+    const wrapper = await mountFlagOn()
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
+    await flushPromises()
+
+    const statusSelect = findSelectByTestId(wrapper, 'lifecycle-map-journeys-status')
+    expect(statusSelect).toBeTruthy()
+    await statusSelect!.vm.$emit('update:modelValue', 'failed')
+    await flushPromises()
+
+    const urls = journeysFetchUrls()
+    expect(urls).toHaveLength(2)
+    expect(urls[1].searchParams.get('status')).toBe('failed')
+    expect(urls[1].searchParams.get('updated_since')).toBeTruthy()
+    expect(urls[1].searchParams.get('cursor')).toBeNull()
+  })
+
+  it('unchecking the box hides the journey UI without fetching again', async () => {
+    journeysResponse = { items: [journeyItem], next_cursor: null }
+    const wrapper = await mountFlagOn()
+    const checkbox = wrapper.find('[data-testid="lifecycle-map-show-work-items"]')
+    await checkbox.setValue(true)
+    await flushPromises()
+    expect(journeysEndpointCalled()).toBe(true)
+    fetchMock.mockClear()
+
+    await checkbox.setValue(false)
+    await flushPromises()
+
+    expect(journeysEndpointCalled()).toBe(false)
+    expect(wrapper.findComponent(LifecycleMapRenderer).props('journeys')).toEqual([])
+    expect(wrapper.find('[aria-label="Unattributed journeys"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="lifecycle-map-journeys-pagination"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(false)
   })
 })
