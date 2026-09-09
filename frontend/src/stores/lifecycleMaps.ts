@@ -119,7 +119,9 @@ export function updatedSinceForPeriod(period: JourneyPeriod, now: number = Date.
   const hours: number | undefined = period === 'all' ? undefined : JOURNEY_PERIOD_HOURS[period]
   if (!hours) return undefined
   const date = new Date(now - hours * 3600000)
-  if (isNaN(date.getTime())) return undefined
+  if (isNaN(date.getTime())) {
+    return undefined
+  }
   return date.toISOString()
 }
 
