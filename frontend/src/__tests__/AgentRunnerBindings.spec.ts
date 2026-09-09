@@ -1,15 +1,22 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
-import { nextTick } from 'vue'
-import { api } from '../lib/api/client'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick as vueNextTick } from 'vue'
+
+async function nextTick() {
+  await vueNextTick()
+  await flushPromises()
+}
+
+const { mockGet, mockPut } = vi.hoisted(() => ({
+  mockGet: vi.fn(),
+  mockPut: vi.fn(),
+}))
 
 vi.mock('../lib/api/client', () => ({
   api: {
-    GET: vi.fn(),
-    PUT: vi.fn(),
-    POST: vi.fn(),
+    GET: mockGet,
+    PUT: mockPut,
   },
-  getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
 
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
@@ -20,160 +27,164 @@ interface BindingRow {
   source_field: string
 }
 
-interface RunnerBindingsVm {
-  bindings: BindingRow[]
-  newBackendId: string | null
-  newTargetVar: string
-  error: string
-  addRow: () => void
-  save: () => Promise<void>
+let backends: Array<{ id: string; name: string; provider: string }> = []
+let bindingsByAgent: Record<string, BindingRow[]> = {}
+
+function backend(id: string, name: string) {
+  return { id, name, provider: 'anthropic' }
 }
 
-const MB_ITEMS = [
-  { id: 'mb-1', name: 'OpenAI', provider: 'openai' },
-  { id: 'mb-2', name: 'Anthropic', provider: 'anthropic' },
-]
-
-function mockGet(overrides: Partial<Record<string, unknown>> = {}) {
-  ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
-    if (path === '/api/v1/model-backends') {
-      return Promise.resolve({ data: { items: MB_ITEMS }, error: undefined })
-    }
-    if (path.startsWith('/api/v1/agents/') && path.endsWith('/bindings')) {
-      return Promise.resolve({ data: { items: [] }, error: undefined })
-    }
-    return Promise.resolve({ data: null, error: undefined })
-  })
-  Object.assign((api.GET as ReturnType<typeof vi.fn>).getMockImplementation() ?? {}, overrides)
+function row(targetEnvVar: string, backendId: string): BindingRow {
+  return { model_backend_id: backendId, target_env_var: targetEnvVar, source_field: 'api_key' }
 }
 
-describe('AgentRunnerBindings (FAR-592 F5)', () => {
+function mountBindings(agentId: string | null) {
+  return mount(AgentRunnerBindings, { props: { agentId } })
+}
+
+async function selectBackend(wrapper: Awaited<ReturnType<typeof mountBindings>>, id: string) {
+  const select = wrapper
+    .find('[data-testid="pipeline-editor-runner-binding-backend"]')
+    .findComponent({ name: 'Select' })
+  await (select.vm as unknown as { $emit: (event: string, value: unknown) => void }).$emit(
+    'update:modelValue',
+    id,
+  )
+  await nextTick()
+}
+
+describe('AgentRunnerBindings', () => {
   beforeEach(() => {
-    ;(api.GET as ReturnType<typeof vi.fn>).mockReset()
-    ;(api.PUT as ReturnType<typeof vi.fn>).mockReset()
-    ;(api.POST as ReturnType<typeof vi.fn>).mockReset()
-  })
-  afterEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('loads model backends + bindings on mount for the given agent', async () => {
-    mockGet()
-    const wrapper = mount(AgentRunnerBindings, {
-      props: { agentId: 'agent-1' },
-    })
-    await flushPromises()
-
-    expect(api.GET).toHaveBeenCalledWith('/api/v1/model-backends')
-    expect(api.GET).toHaveBeenCalledWith('/api/v1/agents/{agent_id}/bindings', {
-      params: { path: { agent_id: 'agent-1' } },
-    })
-    expect((wrapper.vm as unknown as RunnerBindingsVm).bindings).toEqual([])
-  })
-
-  it('does not load when agentId is absent', async () => {
-    mockGet()
-    mount(AgentRunnerBindings, { props: { agentId: null } })
-    await flushPromises()
-    expect(api.GET).not.toHaveBeenCalled()
-  })
-
-  it('resets prior agent state and reloads when agentId changes (watch)', async () => {
-    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((path: string, opts?: { params?: { path?: { agent_id?: string } } }) => {
+    backends = [backend('backend-1', 'Anthropic'), backend('backend-2', 'OpenAI')]
+    bindingsByAgent = {}
+    mockGet.mockImplementation((path: unknown, init?: unknown) => {
       if (path === '/api/v1/model-backends') {
-        return Promise.resolve({ data: { items: MB_ITEMS }, error: undefined })
+        return Promise.resolve({ data: { items: backends }, error: undefined })
       }
-      if (path.startsWith('/api/v1/agents/')) {
-        // Return a populated binding for the first agent so stale state exists.
-        const items =
-          opts?.params?.path?.agent_id === 'agent-1'
-            ? [{ model_backend_id: 'mb-1', target_env_var: 'OLD_KEY', source_field: 'api_key' }]
-            : []
-        return Promise.resolve({ data: { items }, error: undefined })
+      if (path === '/api/v1/agents/{agent_id}/bindings') {
+        const agentId =
+          (init as { params?: { path?: { agent_id?: string } } } | undefined)?.params?.path?.agent_id ?? ''
+        return Promise.resolve({ data: { items: bindingsByAgent[agentId] ?? [] }, error: undefined })
       }
-      return Promise.resolve({ data: null, error: undefined })
+      return Promise.resolve({ data: undefined, error: undefined })
     })
-
-    const wrapper = mount(AgentRunnerBindings, {
-      props: { agentId: 'agent-1' },
-    })
-    const vm = wrapper.vm as unknown as RunnerBindingsVm
-    await flushPromises()
-    expect(vm.bindings).toHaveLength(1)
-
-    await wrapper.setProps({ agentId: 'agent-2' })
-    await flushPromises()
-
-    // Outgoing agent's rows are cleared before the reload.
-    expect(vm.bindings).toEqual([])
-    expect(api.GET).toHaveBeenLastCalledWith('/api/v1/agents/{agent_id}/bindings', {
-      params: { path: { agent_id: 'agent-2' } },
-    })
+    mockPut.mockResolvedValue({ data: { items: [] }, error: undefined })
   })
 
-  it('adds a row only when valid and rejects case-insensitive duplicates client-side', async () => {
-    mockGet()
-    const wrapper = mount(AgentRunnerBindings, {
-      props: { agentId: 'agent-1' },
-    })
-    const vm = wrapper.vm as unknown as RunnerBindingsVm
-    await flushPromises()
-
-    vm.newBackendId = 'mb-1'
-    vm.newTargetVar = 'API_KEY'
-    vm.addRow()
+  it('resetting on agentId switch: scraps the previous agent rows, inputs and reloads (cross-wiring regression)', async () => {
+    bindingsByAgent = {
+      'agent-a': [row('ALPHA_VAR', 'backend-1')],
+      'agent-b': [row('BETA_VAR', 'backend-2')],
+    }
+    const wrapper = mountBindings('agent-a')
     await nextTick()
-    expect(vm.bindings).toHaveLength(1)
+    expect(wrapper.text()).toContain('ALPHA_VAR')
 
-    // A differently-cased duplicate is caught client-side before reaching the server.
-    vm.newBackendId = 'mb-2'
-    vm.newTargetVar = 'api_key'
-    vm.addRow()
+    // Dirty the in-memory add-row state the way a half-finished edit does.
+    await selectBackend(wrapper, 'backend-1')
+    await wrapper
+      .find('[data-testid="pipeline-editor-runner-binding-target-input"]')
+      .setValue('STALE_DIRTY')
     await nextTick()
-    expect(vm.bindings).toHaveLength(1)
-    expect(vm.error).toContain('API_KEY')
+
+    await wrapper.setProps({ agentId: 'agent-b' })
+    await nextTick()
+
+    // The outgoing agent's rows and inputs are scrapped BEFORE the reload.
+    expect(wrapper.text()).not.toContain('ALPHA_VAR')
+    expect(wrapper.text()).toContain('BETA_VAR')
+    expect(
+      (wrapper.find('[data-testid="pipeline-editor-runner-binding-target-input"]').element as HTMLInputElement)
+        .value,
+    ).toBe('')
+    // The reload targets the NEW agent.
+    const bindingsCalls = mockGet.mock.calls.filter((call) => call[0] === '/api/v1/agents/{agent_id}/bindings')
+    const lastCallInit = bindingsCalls[bindingsCalls.length - 1]?.[1] as
+      | { params?: { path?: { agent_id?: string } } }
+      | undefined
+    expect(lastCallInit?.params?.path?.agent_id).toBe('agent-b')
+
+    // And a save right after the switch sends ONLY the new agent's rows —
+    // the previous agent's row must never be cross-wired into its save.
+    await wrapper.find('[data-testid="pipeline-editor-runner-binding-save"]').trigger('click')
+    await nextTick()
+    const putCall = mockPut.mock.calls[0]
+    expect(putCall[0]).toBe('/api/v1/agents/{agent_id}/bindings')
+    const putInit = putCall[1] as { params: { path: { agent_id: string } }; body: { bindings: BindingRow[] } }
+    expect(putInit.params.path.agent_id).toBe('agent-b')
+    expect(putInit.body.bindings).toEqual([row('BETA_VAR', 'backend-2')])
   })
 
-  it('surfaces the server error detail on a failed save instead of swallowing it', async () => {
-    mockGet()
-    ;(api.PUT as ReturnType<typeof vi.fn>).mockResolvedValue({
+  it('switching to a null agentId clears the rows without a reload', async () => {
+    bindingsByAgent = { 'agent-a': [row('ALPHA_VAR', 'backend-1')] }
+    const wrapper = mountBindings('agent-a')
+    await nextTick()
+    expect(wrapper.text()).toContain('ALPHA_VAR')
+
+    await wrapper.setProps({ agentId: null })
+    await nextTick()
+
+    expect(wrapper.text()).not.toContain('ALPHA_VAR')
+    const bindingsCalls = mockGet.mock.calls.filter((call) => call[0] === '/api/v1/agents/{agent_id}/bindings')
+    expect(bindingsCalls).toHaveLength(1) // only the agent-a mount load
+  })
+
+  it('blocks a case-insensitive duplicate target_env_var client-side with the duplicate banner', async () => {
+    bindingsByAgent = { 'agent-a': [row('API_KEY', 'backend-1')] }
+    const wrapper = mountBindings('agent-a')
+    await nextTick()
+    const rows = () => wrapper.findAll('[data-testid="pipeline-editor-runner-bindings-rows"] li')
+    expect(rows()).toHaveLength(1)
+
+    // The server canonicalises target_env_var to UPPERCASE — the lowercase
+    // variant is a duplicate and must be caught BEFORE the confusing 409.
+    await selectBackend(wrapper, 'backend-2')
+    await wrapper
+      .find('[data-testid="pipeline-editor-runner-binding-target-input"]')
+      .setValue('api_key')
+    await wrapper.find('[data-testid="pipeline-editor-runner-binding-add"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain("The target env var 'API_KEY' is already bound on this agent.")
+    expect(rows()).toHaveLength(1) // nothing added
+    expect(mockPut).not.toHaveBeenCalled()
+
+    // A genuinely-new var still adds a row and clears the banner.
+    await wrapper
+      .find('[data-testid="pipeline-editor-runner-binding-target-input"]')
+      .setValue('OTHER_VAR')
+    await wrapper.find('[data-testid="pipeline-editor-runner-binding-add"]').trigger('click')
+    await nextTick()
+    expect(wrapper.text()).not.toContain('is already bound on this agent')
+    expect(rows()).toHaveLength(2)
+  })
+
+  it('surfaces the server error detail in the save-failure banner', async () => {
+    bindingsByAgent = { 'agent-a': [row('API_KEY', 'backend-1')] }
+    mockPut.mockResolvedValue({
       data: null,
-      error: { detail: 'bindings accept org-visible backends only' },
+      error: { detail: 'target_env_var MODULO_RESERVED is not allowed' },
     })
-    const wrapper = mount(AgentRunnerBindings, {
-      props: { agentId: 'agent-1' },
-    })
-    const vm = wrapper.vm as unknown as RunnerBindingsVm
-    await flushPromises()
+    const wrapper = mountBindings('agent-a')
+    await nextTick()
 
-    await vm.save()
-    await flushPromises()
-    expect(vm.error).toBe('bindings accept org-visible backends only')
+    await wrapper.find('[data-testid="pipeline-editor-runner-binding-save"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('target_env_var MODULO_RESERVED is not allowed')
   })
 
-  it('updates bindings from the server payload on a successful save', async () => {
-    mockGet()
-    ;(api.PUT as ReturnType<typeof vi.fn>).mockResolvedValue({
-      data: { items: [{ model_backend_id: 'mb-1', target_env_var: 'API_KEY', source_field: 'api_key' }] },
-      error: undefined,
-    })
-    const wrapper = mount(AgentRunnerBindings, {
-      props: { agentId: 'agent-1' },
-    })
-    const vm = wrapper.vm as unknown as RunnerBindingsVm
-    await flushPromises()
-
-    vm.newBackendId = 'mb-1'
-    vm.newTargetVar = 'API_KEY'
-    vm.addRow()
+  it('falls back to the generic save-failed copy when the server error carries no detail', async () => {
+    bindingsByAgent = { 'agent-a': [row('API_KEY', 'backend-1')] }
+    mockPut.mockResolvedValue({ data: null, error: {} })
+    const wrapper = mountBindings('agent-a')
     await nextTick()
-    await vm.save()
-    await flushPromises()
-    expect(vm.bindings).toHaveLength(1)
-    expect(vm.error).toBe('')
-    expect(api.PUT).toHaveBeenCalledWith('/api/v1/agents/{agent_id}/bindings', {
-      params: { path: { agent_id: 'agent-1' } },
-      body: { bindings: [{ model_backend_id: 'mb-1', target_env_var: 'API_KEY', source_field: 'api_key' }] },
-    })
+
+    await wrapper.find('[data-testid="pipeline-editor-runner-binding-save"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Saving bindings failed')
+    expect(wrapper.text()).not.toContain('undefined')
   })
 })

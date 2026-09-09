@@ -507,7 +507,7 @@ async def resume_run(
     resume_data: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """SAQ ``resume_run`` job — claim (awaiting_human/claimed or stale-running) + resume.
+    """SAQ ``resume_run`` job — claim (awaiting_human/claimed/hitl_parked or stale-running) + resume.
 
     The ``claim_token`` kwarg is the stale token stamped into this job's kwargs
     by a previous attempt (PR #1003). SAQ retries re-invoke this function with

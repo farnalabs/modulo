@@ -345,7 +345,7 @@ Sandbox-agent dispatches (every `sandbox_mode`, every provider tier) reserve a
 runner slot through ONE atomic transaction —
 `runner_capacity.acquire_runner_dispatch_slot` — replacing the pre-D8 racy
 check-then-act count. Transaction shape: `SET LOCAL lock_timeout`
-(`MODULO_RUNNER_CAPACITY_LOCK_TIMEOUT_MS`, default 2s) → **own-row
+(`RUNNER_CAPACITY_LOCK_TIMEOUT_MS`, default 2s) → **own-row
 claim-token-fenced lock FIRST** → per-org advisory lock (the RESERVED
 `modulo:runner-capacity:org-v1` namespace, per-org derived; never the shared
 `_uuid_to_lock_keys` keyspace) → lock-free count → decide → the fenced
@@ -377,7 +377,7 @@ hiccup must never become a dispatch outage.
   (`runner_docker` | `e2b` | `local`) + `"written_at"`. Legacy tier-less
   markers count as Docker-tier (fail-safe) and age out via the sweep.
 - **Tier-scoped default:** with the rollout flag
-  (`MODULO_RUNNER_CAPACITY_GATE_ENABLED`) ON and the org key ABSENT, the
+  (`RUNNER_CAPACITY_GATE_ENABLED`) ON and the org key ABSENT, the
   Docker-tier default 4 gates Docker+Local dispatches only (e2b carries its
   own platform-side quota and is neither counted into that bucket nor denied
   by it); an explicit value gates ALL runner dispatches; an explicit `null` is
@@ -397,7 +397,7 @@ hiccup must never become a dispatch outage.
 - **State-aware reconciliation sweep** (wired into `dispatcher_reconcile`
   every 60s and a dedicated 5-min `runner_marker_sweep` cron): clears non-fence
   markers on genuinely terminal runs and markers stale beyond 25h
-  (`MODULO_RUNNER_MARKER_STALE_SECONDS`; marker `written_at`, legacy tier-less
+  (`RUNNER_MARKER_STALE_SECONDS`; marker `written_at`, legacy tier-less
   fall back to `runs.updated_at`); a stale clear on a non-terminal RUNNING run
   also terminalises the run (`worker_lost` — the slot is reclaimed by killing
   the zombie, so no running-without-marker-without-workspace state can be
