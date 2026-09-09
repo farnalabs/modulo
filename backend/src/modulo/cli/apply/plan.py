@@ -95,16 +95,17 @@ def _trigger_current_view(current: dict[str, Any], desired_view: dict[str, Any])
     declared keys and never deletes foreign keys, so undeclared stored keys
     are unmanaged) with secret-shaped entries stripped symmetrically with the
     desired side (the API masks server-stored secrets on read).
-    daily_spend_limit is canonicalised to float on both sides (the column is
-    Numeric; the API serialises it as float).
+    daily_spend_limit is canonicalised to the column's 4dp scale on both
+    sides (the column is Numeric(12, 4); the API serialises it as float) so a
+    higher-precision declaration cannot produce permanent false drift.
     """
-    from modulo.cli.apply.models import strip_secret_shaped_config
+    from modulo.cli.apply.models import quantize_daily_spend_limit, strip_secret_shaped_config
 
     view: dict[str, Any] = {}
     for key, desired_value in desired_view.items():
         current_value = current.get(key)
         if key == "daily_spend_limit":
-            current_value = float(current_value) if current_value is not None else None
+            current_value = quantize_daily_spend_limit(current_value)
         elif key == "config_json" and isinstance(desired_value, dict):
             current_config = current_value if isinstance(current_value, dict) else {}
             restricted = {k: current_config[k] for k in desired_value if k in current_config}

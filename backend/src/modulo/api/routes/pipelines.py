@@ -1926,9 +1926,7 @@ async def _apply_graph_update(
     updates: dict[str, Any],
 ) -> None:
     """Apply a graph replacement shipped inside a PATCH update payload."""
-    node_data = [node.model_dump(mode="json") for node in graph_json.nodes]
-    edge_data = [_edge_to_data(edge) for edge in graph_json.edges]
-    graph_bindings = extract_connector_bindings(node_data)
+    node_data, edge_data, validator_graph, graph_bindings = _prepare_graph_write(graph_json)
     existing = await get_pipeline(session, pipeline_id)
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
@@ -1939,7 +1937,7 @@ async def _apply_graph_update(
         effective_owner_team_id,
         graph_bindings,
     )
-    await _resolve_graph_references(
+    _schema_pins, model_backend_pins = await _resolve_graph_references(
         session,
         graph_json.nodes,
         org_id,
@@ -1961,6 +1959,20 @@ async def _apply_graph_update(
     # FAR-488a: same Agent-row sync as the PATCH /graph endpoint — a graph
     # replacement shipped inside a PATCH update payload must also run.
     await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
+    # FAR-681 QA gate parity: the dedicated graph endpoint runs
+    # _validate_graph_save after the write, rejecting GUARDRAIL_CAP_EXCEEDED,
+    # REDACT_CORRECT_BLOCKED and HITL_GATE_DESCRIPTION_REQUIRED with 422 (the
+    # rejection rolls the write back). The apply path (graph_json inside a
+    # PATCH update payload) must enforce the IDENTICAL gates — without this
+    # call a declarative apply could save a graph the authoring UI rejects.
+    await _validate_graph_save(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        validator_graph=validator_graph,
+        connector_bindings=graph_bindings,
+        model_backend_pins=model_backend_pins,
+    )
 
 
 def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:

@@ -456,6 +456,12 @@ def require_team_membership_or_admin_any_credential(resource_team_id_provider: T
     dependency, so this variant only widens WHO can present a credential —
     the gate body is single-sourced (the deny_break_glass_mint_dependency
     parameterization precedent).
+
+    FAR-681 team boundary: a team-scoped key (principal ``team_id`` set) is
+    additionally restricted to resources owned by its OWN team — the key
+    OWNER's memberships are irrelevant. This mirrors the MCP boundary
+    (``mcp_server._team_scoped_key_mismatch``): a team-A-scoped key whose
+    owner is also in team B must not mutate team-B resources.
     """
     return _team_membership_or_admin_dep(resource_team_id_provider, get_current_tenant_user_or_api_key)
 
@@ -478,6 +484,13 @@ def _team_membership_or_admin_dep(
     ) -> TenantPrincipal:
         if principal.org_role == "admin":
             return principal
+        # FAR-681: a team-scoped org API key carries a HARD team boundary —
+        # the key OWNER's memberships are irrelevant (the MCP boundary,
+        # mcp_server._team_scoped_key_mismatch). Org-wide keys and JWTs carry
+        # team_id=None and keep the owner-membership matrix below. A
+        # team-scoped key can never hold the admin role (mint/update guard in
+        # auth.api_key), so the admin early-return above never bypasses this.
+        key_team_id: uuid.UUID | None = getattr(principal, "team_id", None)
         try:
             # ONE transaction: RLS context (set_config ... is_local) is scoped
             # to the transaction and reverts on COMMIT, so the provider read
@@ -489,11 +502,14 @@ def _team_membership_or_admin_dep(
                 await set_rls_user_context(session, principal.account_id, principal.org_role)
                 row = await resource_team_id_provider(request, session)
                 if row is not None and row.visibility not in ("org", None) and row.owner_team_id is not None:
-                    is_member = await team_membership_exists(
-                        session,
-                        account_id=principal.account_id,
-                        team_id=row.owner_team_id,
-                    )
+                    if key_team_id is not None:
+                        is_member = row.owner_team_id == key_team_id
+                    else:
+                        is_member = await team_membership_exists(
+                            session,
+                            account_id=principal.account_id,
+                            team_id=row.owner_team_id,
+                        )
                 else:
                     is_member = True
         except SQLAlchemyError:
@@ -516,6 +532,15 @@ def _team_membership_or_admin_dep(
                     "owner_team_id": str(row.owner_team_id),
                 },
             )
+            if key_team_id is not None:
+                # Team-scoped key denied on the BOUNDARY (not membership).
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        f"This API key is scoped to team {key_team_id} and cannot access "
+                        f"resources owned by team {row.owner_team_id}"
+                    ),
+                )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not a member of the team that owns this resource",

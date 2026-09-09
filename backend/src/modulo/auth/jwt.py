@@ -41,6 +41,15 @@ class AuthenticatedPrincipal:
     #: this marker is the only reliable credential-kind signal — the API-key
     #: resolution path (``get_current_tenant_user_or_api_key``) sets it True.
     via_api_key: bool = False
+    #: FAR-681: team boundary of a team-scoped org API key
+    #: (``OrgApiKey.team_id``). None for browser JWTs and org-wide (team-less)
+    #: keys; the mk_ resolution path threads ``key.team_id`` through. The
+    #: team-gate dependency (``require_team_membership_or_admin_any_credential``)
+    #: enforces it: a team-scoped key can only touch resources owned by its own
+    #: team — mirroring the MCP boundary (``mcp_server._team_scoped_key_mismatch``).
+    #: (Declared on the base so the inherited frozen-dataclass ``__init__``
+    #: accepts it; JWT paths never set it.)
+    team_id: uuid.UUID | None = None
 
     @property
     def user_id(self) -> uuid.UUID:
@@ -48,7 +57,13 @@ class AuthenticatedPrincipal:
 
 
 class TenantPrincipal(AuthenticatedPrincipal):
-    """Authenticated principal with validated tenant-scoped claims."""
+    """Authenticated principal with validated tenant-scoped claims.
+
+    Not a ``@dataclass`` itself: it narrows the base's optional tenant claims
+    (annotated, resolved by the auth dependencies) and inherits the base's
+    frozen ``__init__``. ``team_id`` (team-scoped API-key boundary) is
+    declared on the base.
+    """
 
     organisation_id: uuid.UUID
     org_role: str

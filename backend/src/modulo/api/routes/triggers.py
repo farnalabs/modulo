@@ -916,6 +916,26 @@ async def create_trigger(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-681: (pipeline, name) is the declarative-apply identity, so a
+            # live duplicate name is a 409 CONFLICT (the 0201 partial unique
+            # index enforces the same rule at the DB level; this check gives a
+            # clear error before the insert instead of a raw IntegrityError).
+            if req.name is not None:
+                duplicate = await session.execute(
+                    select(Trigger.id).where(
+                        Trigger.pipeline_id == pipeline_id,
+                        Trigger.name == req.name,
+                        Trigger.deleted_at.is_(None),
+                    )
+                )
+                if duplicate.first() is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            f"duplicate trigger name {req.name!r} for this pipeline - a live trigger "
+                            "with this (pipeline, name) identity already exists"
+                        ),
+                    )
             next_fire_at = _resolve_cron_next_fire(req.trigger_type, req.cron_expression, req.cron_timezone)
             if req.trigger_type == "ongoing":
                 # FAR-158 ongoing guard: validated BEFORE creating (the shared

@@ -19,7 +19,7 @@ from modulo.api.constants import (
     MSG_RESOURCE_ALREADY_EXISTS,
 )
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.line_diff import iter_line_diffs
@@ -293,7 +293,13 @@ async def list_agents_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_AGENT_LIST),
+    # FAR-681 QA: any-credential so declarative apply can resolve agent
+    # name-refs with an mk_ org API key (the other five apply-moved list
+    # endpoints share this pattern). Credential semantic change vs the former
+    # JWT-only gate: an mk_ bearer that used to get 401 (token rejected) now
+    # PASSES authentication and gets 403 only when its clamped org role is
+    # below the agent.list floor.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_AGENT_LIST),
 ) -> AgentListResponse:
     try:
         async with session.begin():

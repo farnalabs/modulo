@@ -85,6 +85,28 @@ class TestPlanDecisionTable:
         decision = plan_entity("trigger", "report/nightly", view, current)
         assert decision.status == "unchanged"
 
+    def test_trigger_high_precision_spend_limit_converges(self) -> None:
+        """A declaration with more than 4dp quantizes to the column's Numeric
+        (12, 4) scale, so the stored 4dp value compares equal instead of
+        drifting as a permanent 'updated'."""
+        from modulo.cli.apply.models import TriggerEntity
+
+        entity = TriggerEntity.model_validate(
+            {"pipeline": "p", "name": "hook", "trigger_type": "ongoing", "daily_spend_limit": 10.55555}
+        )
+        current = {
+            "trigger_type": "ongoing",
+            "active": True,
+            "max_concurrent_runs": 1,
+            # the stored 4dp value
+            "daily_spend_limit": 10.5556,
+            "cron_expression": None,
+            "cron_timezone": None,
+            "config_json": {},
+        }
+        decision = plan_entity("trigger", "p/hook", entity.managed_view(), current)
+        assert decision.status == "unchanged"
+
     def test_trigger_secret_shaped_entries_excluded_both_sides(self) -> None:
         """hmac_secret (server Fernet-encrypted + read-masked) is excluded: the
         real desired value never drifts against the read mask."""

@@ -100,11 +100,38 @@ def build_desired_views(
 ) -> tuple[dict[str, list[tuple[str, dict[str, Any]]]], list[tuple[str, str, str]]]:
     """Plan-phase resolution for pipeline entities (agent refs + shape).
 
-    Failures are per-entity blocked entries; later entities still plan.
+    Failures are per-entity blocked entries; later entities still plan. An
+    AMBIGUOUS name (duplicate rows in the fetched org list — pipelines or
+    agents) blocks the affected entity: name-based upsert cannot pick a row.
     """
     agents = current_entities.get("agents") or {}
+    ambiguous_pipelines = current_entities.get("ambiguous_pipeline_names") or {}
+    ambiguous_agents = current_entities.get("ambiguous_agent_names") or {}
     for entity in entity_set.pipelines:
         if (KIND_PIPELINE, entity.name) in blocked_keys:
+            continue
+        pipeline_matches = ambiguous_pipelines.get(entity.name)
+        if pipeline_matches is not None:
+            blocked.append(
+                (KIND_PIPELINE, entity.name, f"pipeline {entity.name!r}: ambiguous name, {pipeline_matches} matches")
+            )
+            continue
+        agent_conflict = next(
+            (
+                node.agent
+                for node in (entity.graph.nodes if entity.graph is not None else [])
+                if node.agent is not None and node.agent in ambiguous_agents
+            ),
+            None,
+        )
+        if agent_conflict is not None:
+            blocked.append(
+                (
+                    KIND_PIPELINE,
+                    entity.name,
+                    f"agent {agent_conflict!r}: ambiguous name, {ambiguous_agents[agent_conflict]} matches",
+                )
+            )
             continue
         try:
             graph = resolve_graph(entity, agents) if entity.graph is not None else None
@@ -133,7 +160,10 @@ def apply_pipelines(
     pipeline, so an unchanged graph must not churn snapshots).
 
     Returns the pipeline name -> id map (current + created), consumed by the
-    trigger phase to resolve (pipeline, name) identities.
+    trigger phase to resolve (pipeline, name) identities. When a JUST-CREATED
+    pipeline's apply fails (POST or the graph PATCH), the name is dropped
+    from the map so dependent triggers fail with "pipeline apply failed
+    upstream" instead of applying against a graph-less half-created row.
     """
     agents = current_entities.get("agents") or {}
     current_pipelines = current_entities.get(KIND_PIPELINE) or {}
@@ -184,6 +214,11 @@ def apply_pipelines(
                 _log.warning("apply pipeline failed: %s: %s", displayed_name, message)
                 report[status].remove(entry)
                 report["failed"].append({"kind": KIND_PIPELINE, "name": entry["name"], "error": message})
+                # A JUST-CREATED pipeline whose apply failed must not hand
+                # dependent triggers an id that points at a graph-less
+                # half-created row.
+                if status == "created" and entity is not None:
+                    pipeline_ids.pop(entity.name, None)
     return pipeline_ids
 
 

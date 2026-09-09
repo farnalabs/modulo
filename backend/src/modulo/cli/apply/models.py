@@ -9,12 +9,30 @@ from __future__ import annotations
 
 import re
 import uuid
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 API_VERSION_PREFIX = "modulo.dev/v"
 API_VERSION_SUPPORTED_MAJOR = 1
+
+# The (pipeline, name) composite key separator: '/' is forbidden in pipeline
+# and trigger names so the display key is always unambiguous.
+COMPOSITE_KEY_SEPARATOR = "/"
+
+# daily_spend_limit is a Numeric(12, 4) column; the desired value is quantized
+# to the same scale before hashing so a higher-precision declaration cannot
+# produce permanent false drift against the stored 4dp value.
+_SPEND_QUANTUM = Decimal("0.0001")
+
+
+def quantize_daily_spend_limit(value: float | None) -> float | None:
+    """Quantize a daily_spend_limit to the column's 4dp scale (None passthrough)."""
+    if value is None:
+        return None
+    return float(Decimal(str(value)).quantize(_SPEND_QUANTUM, rounding=ROUND_HALF_UP))
+
 
 # \Z (not $) so a trailing-newline variant ("${env:VAR}\n") fails to match.
 ENV_REF_PATTERN = re.compile(r"\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}\Z")
@@ -361,6 +379,11 @@ class PipelineEntity(BaseModel):
     max_concurrent_runs: int = Field(default=5, ge=1)
     graph: ApplyGraph | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _name_must_not_contain_separator(cls, value: str) -> str:
+        return _reject_composite_separator("pipeline name", value)
+
     def managed_view(self, *, graph: dict[str, Any] | None = None) -> dict[str, Any]:
         """Canonical managed-field view used for hashing.
 
@@ -383,16 +406,20 @@ class TriggerEntity(BaseModel):
     Identity is (pipeline, name): ``pipeline`` cross-references a pipeline by
     NAME (declared earlier in the same document or already present in the
     target org). ``name`` is the declarative identity handle created by the
-    0200 migration.
+    0201 migration (and enforced unique per (org, pipeline) among live rows
+    by the same migration's partial unique index).
 
     config_json secret policy (same refs-only policy as backend api_key):
-    non-empty string values under sensitive keys (or values the server would
-    mask as secret-shaped) MUST be ``${env:VAR}`` or ``secretref://<key>``
-    references — inline secret literals are forbidden. ``secretref://`` values
-    parse but are BLOCKED at plan time (no server-side resolution yet).
-    ``hmac_secret``/``signing_secret`` are Fernet-encrypted server-side on
-    write and masked on read, so those keys are excluded from drift hashing
-    entirely (apply never verifies an existing secret's value).
+    non-empty string values under sensitive keys — at ANY nesting depth (the
+    LEAF key of each walked path is what the sensitive-key predicate tests) —
+    or values the server would mask as secret-shaped MUST be ``${env:VAR}``
+    or ``secretref://<key>`` references — inline secret literals are forbidden.
+    ``secretref://`` values parse but are BLOCKED at plan time (no
+    server-side resolution yet). ``hmac_secret``/``signing_secret`` are
+    Fernet-encrypted server-side on write and masked on read, so those keys
+    are excluded from drift hashing entirely (apply never verifies an
+    existing secret's value; secret-only rotation is invisible to the hash —
+    use the CLI's ``--refresh-secrets`` to re-send such configs).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -407,10 +434,18 @@ class TriggerEntity(BaseModel):
     cron_timezone: str | None = Field(default=None, max_length=50)
     config_json: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("pipeline", "name")
+    @classmethod
+    def _identity_must_not_contain_separator(cls, value: str) -> str:
+        return _reject_composite_separator("trigger identity", value)
+
     @model_validator(mode="after")
     def _config_secrets_must_be_refs(self) -> TriggerEntity:
         for path, value in _walk_config_strings(self.config_json):
-            if not _is_secret_shaped(path[0], value):
+            # The sensitive-KEY predicate tests the LEAF key of every walked
+            # path (matching is_sensitive_key semantics): smtp.password is a
+            # secret even though the top-level key is not.
+            if not _is_secret_shaped(path[-1], value):
                 continue
             if not ENV_REF_PATTERN.fullmatch(value) and not SECRET_REF_PATTERN.fullmatch(value):
                 msg = (
@@ -421,19 +456,30 @@ class TriggerEntity(BaseModel):
                 raise ApplyConfigError(msg)
         return self
 
+    def with_resolved_config(self, resolved_config_json: dict[str, Any]) -> TriggerEntity:
+        """Return a copy whose config_json is the RESOLVED mapping.
+
+        Hashing (``managed_view``) must run on resolved literals so a
+        ``${env:VAR}`` desired view compares equal to the server's stored
+        resolved value (raw refs vs stored literals would be permanent false
+        drift). Call this BEFORE ``managed_view`` for every planned trigger.
+        """
+        return self.model_copy(update={"config_json": resolved_config_json})
+
     def managed_view(self) -> dict[str, Any]:
         """Canonical managed-field view used for hashing.
 
         config_json secret-shaped entries (sensitive keys, secret-pattern
         values) are excluded — the server masks them on read, so comparing
-        them would be permanent false drift. Applies after env resolution,
-        so pass the resolved config via :meth:`with_resolved_config`.
+        them would be permanent false drift. Hash the RESOLVED config: pass
+        the resolved mapping through :meth:`with_resolved_config` first.
+        daily_spend_limit is quantized to the column's 4dp scale.
         """
         return {
             "trigger_type": self.trigger_type,
             "active": self.active,
             "max_concurrent_runs": self.max_concurrent_runs,
-            "daily_spend_limit": self.daily_spend_limit,
+            "daily_spend_limit": quantize_daily_spend_limit(self.daily_spend_limit),
             "cron_expression": self.cron_expression,
             "cron_timezone": self.cron_timezone,
             "config_json": strip_secret_shaped_config(self.config_json),
@@ -590,6 +636,33 @@ def _value_is_secret_pattern(value: str) -> bool:
     from modulo.core.secret_patterns import mask_secret_values_in_text
 
     return bool(value) and mask_secret_values_in_text(value) != value
+
+
+def config_declares_secrets(config: dict[str, Any]) -> bool:
+    """True when the (RESOLVED) config declares any secret-shaped entry.
+
+    Called on the env-RESOLVED mapping: an entry the drift hash strips
+    (sensitive LEAF key, or a resolved value the server would mask) cannot be
+    compared against the stored state, so its rotation is invisible to the
+    plan — the executor's ``--refresh-secrets`` flag re-sends such configs.
+    """
+    return any(_is_secret_shaped(path[-1], value) for path, value in _walk_config_strings(config))
+
+
+def _reject_composite_separator(label: str, value: str) -> str:
+    """Forbid the (pipeline, name) composite-key separator in identity names.
+
+    A '/' inside a pipeline or trigger name would make the ``pipeline/name``
+    display key ambiguous (plan reports and trigger identity maps key on it),
+    so it is a load-time error.
+    """
+    if COMPOSITE_KEY_SEPARATOR in value:
+        msg = (
+            f"{label} {value!r} must not contain {COMPOSITE_KEY_SEPARATOR!r} — it is the "
+            "(pipeline, name) composite-key separator"
+        )
+        raise ValueError(msg)
+    return value
 
 
 class EntitySet(BaseModel):

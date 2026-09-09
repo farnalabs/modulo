@@ -9,11 +9,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,6 +46,18 @@ class Trigger(SoftDeleteMixin, OrgScoped):
         # FAR-377 run-kind discriminator: 'run' (the existing behaviour, fires a
         # pipeline Run) or 'suite_run' (fires a SuiteRun execution instead).
         CheckConstraint("run_kind IN ('run', 'suite_run')", name="ck_triggers_run_kind"),
+        # FAR-681 slice 2: (organisation, pipeline, name) is the declarative-
+        # apply trigger identity — unique among LIVE rows (soft-deleted rows
+        # release their name, the 0127 pattern). Matches migration 0201.
+        Index(
+            "uq_triggers_org_pipeline_name",
+            "organisation_id",
+            "pipeline_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND name IS NOT NULL"),
+            sqlite_where=text("deleted_at IS NULL AND name IS NOT NULL"),
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(

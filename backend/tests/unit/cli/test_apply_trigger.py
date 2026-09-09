@@ -43,6 +43,37 @@ entities:
         note: plain value
 """
 
+_CONFIG_WITH_ENV_REF = """
+api_version: modulo.dev/v1
+entities:
+  triggers:
+    - pipeline: nightly-report
+      name: hook
+      trigger_type: webhook
+      config_json:
+        url: ${env:URL}
+        note: plain value
+"""
+
+_UPSTREAM_BLOCKED_PIPELINE_TEXT = """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: nightly-report
+      graph:
+        nodes:
+          - id: 00000000-0000-0000-0000-0000000000a1
+            node_type: agent
+            agent: missing-agent
+            position: {x: 0, y: 0}
+        edges: []
+  triggers:
+    - pipeline: nightly-report
+      name: nightly
+      trigger_type: cron
+      cron_expression: "0 3 * * *"
+"""
+
 
 def _pipeline_row(name: str, pipeline_id: str) -> dict:
     return {
@@ -254,6 +285,127 @@ entities:
         assert not report["updated"]
         assert not report["created"]
 
+    @respx.mock
+    def test_env_ref_config_converges_on_second_apply(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-681 QA (env-ref false drift): the desired view is hashed on the
+        RESOLVED config, so a ${env:VAR} under a non-sensitive key compares
+        equal to the server's stored resolved literal -> unchanged on rerun
+        (previously the raw ref vs the stored literal drifted as 'updated'
+        every run, sending a pointless PUT each time)."""
+        monkeypatch.setenv("URL", "https://resolved.example")
+        existing = _trigger_row(
+            pipeline_id="00000000-0000-0000-0000-0000000000aa",
+            name="hook",
+            trigger_type="webhook",
+            cron_expression=None,
+            config_json={"url": "https://resolved.example", "note": "plain value"},
+        )
+        _apply_trigger_routes([_pipeline_row("nightly-report", "00000000-0000-0000-0000-0000000000aa")], [existing])
+        config = parse_apply_documents(_CONFIG_WITH_ENV_REF)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            first = executor.run(config, dry_run=True)
+        unchanged = [e["name"] for e in first["unchanged"] if e["kind"] == "trigger"]
+        assert unchanged == ["nightly-report/hook"]
+        assert not first["updated"]
+        # Second apply (fresh executor, same current state) is still unchanged.
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            second = executor.run(config, dry_run=True)
+        assert second["unchanged"] == first["unchanged"]
+        assert not second["updated"]
+
+    @respx.mock
+    def test_pipeline_blocked_upstream_blocks_trigger(self) -> None:
+        """FAR-681 QA (dry-run honesty): a trigger whose pipeline was BLOCKED
+        in the pipeline build phase is blocked with the upstream reason — it
+        must not be planned as creatable against a pipeline that will never
+        apply."""
+        _apply_trigger_routes([], [])
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(parse_apply_documents(_UPSTREAM_BLOCKED_PIPELINE_TEXT), dry_run=True)
+        blocked = {e["name"]: e["reason"] for e in report["blocked"]}
+        assert "nightly-report" in blocked
+        assert "agent 'missing-agent' not found" in blocked["nightly-report"]
+        assert "nightly-report/nightly" in blocked
+        assert "pipeline 'nightly-report' blocked upstream" in blocked["nightly-report/nightly"]
+        assert blocked["nightly-report/nightly"] == (
+            "pipeline 'nightly-report' blocked upstream: agent 'missing-agent' not found in target org - "
+            "declare the agent in this config or create it first; apply never auto-creates agents"
+        )
+        assert not report["created"]
+
+    @respx.mock
+    def test_duplicate_live_trigger_name_blocks(self) -> None:
+        """FAR-681 QA (identity uniqueness): two LIVE rows sharing the
+        (pipeline, name) identity make name-based upsert ambiguous — the
+        entity is blocked for manual resolution instead of last-wins."""
+        pipeline_id = "00000000-0000-0000-0000-0000000000aa"
+        first = _trigger_row(pipeline_id=pipeline_id, name="nightly", trigger_id="00000000-0000-0000-0000-0000000000cc")
+        second = _trigger_row(
+            pipeline_id=pipeline_id, name="nightly", trigger_id="00000000-0000-0000-0000-0000000000dd"
+        )
+        _apply_trigger_routes([_pipeline_row("nightly-report", pipeline_id)], [first, second])
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(parse_apply_documents(CRON_TRIGGER_TEXT), dry_run=True)
+        blocked = [e for e in report["blocked"] if e["name"] == "nightly-report/nightly"]
+        assert len(blocked) == 1
+        assert blocked[0]["reason"] == "duplicate live trigger name - resolve manually"
+        assert not report["created"]
+        assert not report["updated"]
+        assert not report["unchanged"]
+
+
+class TestRefreshSecrets:
+    """FAR-681 QA (secret-only rotation): the server masks stored secrets on
+    read, so the drift hash cannot see a rotated ${env:SECRET} value. Default
+    behaviour stays 'unchanged' (documented); --refresh-secrets re-sends the
+    config for entities declaring secret-shaped entries."""
+
+    @respx.mock
+    def test_refresh_secrets_re_sends_masked_secret_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HS", "rotated-secret-value")
+        existing = _trigger_row(
+            pipeline_id="00000000-0000-0000-0000-0000000000aa",
+            name="hook",
+            trigger_type="webhook",
+            cron_expression=None,
+            config_json={"hmac_secret": "••••••", "note": "plain value"},
+        )
+        routes = _apply_trigger_routes(
+            [_pipeline_row("nightly-report", "00000000-0000-0000-0000-0000000000aa")], [existing]
+        )
+        config = parse_apply_documents(_CONFIG_WITH_SECRET)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, refresh_secrets=True)
+        updated = [e["name"] for e in report["updated"] if e["kind"] == "trigger"]
+        assert updated == ["nightly-report/hook"]
+        payload = json.loads(routes["trigger_put"].calls.last.request.content)
+        TriggerUpdate.model_validate(payload)
+        # The ROTATED resolved secret reached the server.
+        assert payload["config_json"]["hmac_secret"] == "rotated-secret-value"
+        assert payload["config_json"]["note"] == "plain value"
+
+    @respx.mock
+    def test_refresh_secrets_leaves_secret_free_triggers_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("URL", "https://resolved.example")
+        existing = _trigger_row(
+            pipeline_id="00000000-0000-0000-0000-0000000000aa",
+            name="hook",
+            trigger_type="webhook",
+            cron_expression=None,
+            config_json={"url": "https://resolved.example", "note": "plain value"},
+        )
+        _apply_trigger_routes([_pipeline_row("nightly-report", "00000000-0000-0000-0000-0000000000aa")], [existing])
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(parse_apply_documents(_CONFIG_WITH_ENV_REF), dry_run=True, refresh_secrets=True)
+        assert [e["name"] for e in report["unchanged"] if e["kind"] == "trigger"] == ["nightly-report/hook"]
+        assert not report["updated"]
+
 
 class TestExecution:
     @respx.mock
@@ -318,7 +470,10 @@ entities:
         failed_kinds = {e["kind"] for e in report["failed"]}
         assert failed_kinds == {"pipeline", "trigger"}
         trigger_failures = [e for e in report["failed"] if e["kind"] == "trigger"]
-        assert "not found" in trigger_failures[0]["error"]
+        # FAR-681 QA: the pipeline IS declared here — its apply failed upstream,
+        # so the reason says so instead of the misleading "not found" text.
+        assert "apply failed upstream" in trigger_failures[0]["error"]
+        assert "not found" not in trigger_failures[0]["error"]
 
 
 class TestFailureIsolation:

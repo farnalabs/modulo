@@ -213,6 +213,123 @@ class TestPlanDecisions:
         assert not graph_gets
 
     @respx.mock
+    def test_agent_free_config_never_fetches_agents(self) -> None:
+        """FAR-681 QA (lazy /agents fetch): a declared pipeline WITHOUT an
+        agent-ref node never calls GET /agents (an API-key principal avoids
+        the list call entirely)."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines([existing])
+        config = parse_apply_documents(GRAPHLESS_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            executor.run(config, dry_run=True)
+        agent_gets = [c for c in respx.calls if c.request.url.path.endswith("/agents")]
+        assert not agent_gets
+
+    @respx.mock
+    def test_agent_ref_config_fetches_agents(self) -> None:
+        """A declared pipeline WITH an agent-ref node fetches GET /agents."""
+        _mock_current_with_pipelines([])
+        config = parse_apply_documents(CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=True)
+        assert not report["failed"]
+        agent_gets = [c for c in respx.calls if c.request.url.path.endswith("/agents")]
+        assert agent_gets
+
+    @respx.mock
+    def test_unreadable_current_graph_blocks_only_that_pipeline(self) -> None:
+        """FAR-681 QA (containment): a stored graph the models reject (legacy
+        data, version skew) demotes THAT pipeline to blocked â€” the rest of the
+        config still plans and applies."""
+        broken = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        plain = dict(_pipeline_item("plain", "00000000-0000-0000-0000-0000000000ab", description="Plain"))
+        routes = _mock_current_with_pipelines([broken, plain])
+        routes["graph_get_broken"] = respx.get(
+            "https://api.test/api/v1/pipelines/00000000-0000-0000-0000-0000000000aa/graph"
+        ).respond(status_code=500, json={"detail": "corrupt graph"})
+        config = parse_apply_documents(
+            """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: plain
+      description: Plain
+      max_concurrent_runs: 3
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+      graph:
+        nodes:
+          - id: 00000000-0000-0000-0000-0000000000a1
+            node_type: agent
+            agent: worker
+            position: {x: 0, y: 0}
+        edges: []
+"""
+        )
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=True)
+        blocked = {e["name"]: e["reason"] for e in report["blocked"]}
+        assert "sample" in blocked
+        assert "current graph unreadable" in blocked["sample"]
+        assert "corrupt graph" in blocked["sample"]
+        # The graph-free sibling pipeline still plans.
+        unchanged = [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"]
+        assert unchanged == ["plain"]
+        assert not report["failed"]
+
+    @respx.mock
+    def test_duplicate_pipeline_names_block_the_entity(self) -> None:
+        """FAR-681 QA (ambiguity): two fetched rows sharing a name make
+        name-based upsert ambiguous â€” the entity is blocked with match count
+        instead of silently last-wins."""
+        first = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        second = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000ab"))
+        _mock_current_with_pipelines([first, second])
+        config = parse_apply_documents(GRAPHLESS_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=True)
+        blocked = [e for e in report["blocked"] if e["name"] == "sample"]
+        assert len(blocked) == 1
+        assert blocked[0]["reason"] == "pipeline 'sample': ambiguous name, 2 matches"
+        assert not report["created"]
+        assert not report["updated"]
+        assert not report["unchanged"]
+
+    @respx.mock
+    def test_duplicate_agent_names_block_the_pipeline(self) -> None:
+        """Two fetched agents sharing the referenced name block the pipeline
+        that references it (the executor cannot pick an id)."""
+        first = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        _mock_current_with_pipelines([first])
+        respx.get("https://api.test/api/v1/pipelines/00000000-0000-0000-0000-0000000000aa/graph").respond(
+            json=_graph_payload("00000000-0000-0000-0000-0000000000f1", "00000000-0000-0000-0000-0000000000a1")
+        )
+        respx.get("https://api.test/api/v1/agents", params=_AGENT_LIST_PARAMS).respond(
+            json={
+                "items": [
+                    {"id": "00000000-0000-0000-0000-0000000000f1", "name": "worker"},
+                    {"id": "00000000-0000-0000-0000-0000000000f2", "name": "worker"},
+                ],
+                "total": 2,
+                "page": 1,
+                "page_size": 100,
+            }
+        )
+        config = parse_apply_documents(CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=True)
+        blocked = [e for e in report["blocked"] if e["name"] == "sample"]
+        assert len(blocked) == 1
+        assert blocked[0]["reason"] == "agent 'worker': ambiguous name, 2 matches"
+        assert not report["created"]
+
+    @respx.mock
     def test_invalid_sandbox_node_blocked_client_side(self) -> None:
         """Missing sandbox template_id is caught by the cheap client-side
         normalisation through the real API node model (never a silent save)."""
@@ -278,6 +395,47 @@ class TestExecution:
         assert not report["failed"]
         assert routes["pipelines_post"].call_count == 1
         assert routes["pipeline_patch"].call_count == 0
+
+    @respx.mock
+    def test_graph_patch_failure_blocks_dependent_trigger(self) -> None:
+        """FAR-681 QA: when the graph PATCH fails for a JUST-CREATED pipeline,
+        the name is dropped from the pipeline-ids map so the dependent trigger
+        fails with 'pipeline apply failed upstream' instead of applying
+        against a graph-less half-created pipeline."""
+        routes = _mock_current_with_pipelines([])
+        routes["pipeline_patch"].mock(return_value=httpx.Response(500, json={"detail": "graph boom"}))
+        config = parse_apply_documents(
+            """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+      graph:
+        nodes:
+          - id: 00000000-0000-0000-0000-0000000000a1
+            node_type: agent
+            agent: worker
+            position: {x: 0, y: 0}
+        edges: []
+  triggers:
+    - pipeline: sample
+      name: nightly
+      trigger_type: cron
+      cron_expression: "0 3 * * *"
+"""
+        )
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        failed_names = [e["name"] for e in report["failed"]]
+        assert failed_names == ["sample", "sample/nightly"]
+        trigger_failures = [e for e in report["failed"] if e["kind"] == "trigger"]
+        assert "apply failed upstream" in trigger_failures[0]["error"]
+        # The trigger was never created against the broken pipeline.
+        trigger_posts = [c for c in respx.calls if "/triggers" in str(c.request.url) and c.request.method == "POST"]
+        assert not trigger_posts
 
     @respx.mock
     def test_update_patches_top_fields_and_unchanged_graph_is_omitted(self) -> None:

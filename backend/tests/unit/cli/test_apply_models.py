@@ -220,6 +220,65 @@ class TestTriggerEntityContracts:
         # The validator's own message must not echo the secret value.
         assert "sk-super-secret-literal" not in str(exc_info.value.errors()[0]["msg"])
 
+    def test_nested_sensitive_key_inline_secret_rejected(self) -> None:
+        """FAR-681 QA (fail-open validator): the sensitive-key predicate tests
+        the LEAF key of every walked path — smtp.password is a secret even
+        though the top-level key is not."""
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {
+                        "pipeline": "p",
+                        "name": "hook",
+                        "trigger_type": "webhook",
+                        "config_json": {"smtp": {"password": "hunter2-literal"}},
+                    }
+                ]
+            },
+        }
+        with pytest.raises(ValidationError, match="must be a reference") as exc_info:
+            _config(tx)
+        assert "smtp.password" in str(exc_info.value.errors()[0]["msg"])
+        assert "hunter2-literal" not in str(exc_info.value.errors()[0]["msg"])
+
+    def test_nested_sensitive_key_accepts_refs(self) -> None:
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {
+                        "pipeline": "p",
+                        "name": "hook",
+                        "trigger_type": "webhook",
+                        "config_json": {"smtp": {"password": "${env:SMTP_PASSWORD}", "host": "smtp.example"}},
+                    }
+                ]
+            },
+        }
+        config = _config(tx)
+        nested = config.entities.triggers[0].config_json["smtp"]
+        assert nested["password"] == "${env:SMTP_PASSWORD}"
+
+    def test_nested_non_sensitive_literal_allowed(self) -> None:
+        """A literal under a non-sensitive LEAF key inside a nested dict is
+        not a secret (leaf-key rule, matching the server mask)."""
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "triggers": [
+                    {
+                        "pipeline": "p",
+                        "name": "hook",
+                        "trigger_type": "webhook",
+                        "config_json": {"email": {"host": "smtp.example", "from": "bot@example"}},
+                    }
+                ]
+            },
+        }
+        config = _config(tx)
+        assert config.entities.triggers[0].config_json["email"]["host"] == "smtp.example"
+
     def test_secret_value_patterns_rejected_under_any_key(self) -> None:
         tx = {
             "api_version": "modulo.dev/v1",
@@ -320,6 +379,56 @@ class TestTriggerEntityContracts:
         payload = entity.update_payload({})
         assert "daily_spend_limit" in payload
         assert payload["daily_spend_limit"] is None
+
+    def test_with_resolved_config_hashes_resolved_literals(self) -> None:
+        """FAR-681 QA (env-ref drift): the desired view must hash the RESOLVED
+        config, not the raw ${env:VAR} strings."""
+        entity = TriggerEntity.model_validate(
+            {"pipeline": "p", "name": "hook", "trigger_type": "webhook", "config_json": {"url": "${env:URL}"}}
+        )
+        resolved = entity.with_resolved_config({"url": "https://resolved.example"})
+        current = {
+            "trigger_type": "webhook",
+            "active": True,
+            "max_concurrent_runs": 1,
+            "daily_spend_limit": None,
+            "cron_expression": None,
+            "cron_timezone": None,
+            "config_json": {"url": "https://resolved.example"},
+        }
+        from modulo.cli.apply.plan import plan_entity
+
+        decision = plan_entity("trigger", "p/hook", resolved.managed_view(), current)
+        assert decision.status == "unchanged"
+
+    def test_managed_view_quantizes_spend_limit_to_4dp(self) -> None:
+        entity = TriggerEntity.model_validate(
+            {"pipeline": "p", "name": "hook", "trigger_type": "cron", "daily_spend_limit": 10.55555}
+        )
+        assert entity.managed_view()["daily_spend_limit"] == 10.5556
+
+    def test_config_declares_secrets(self) -> None:
+        """The helper runs on the RESOLVED mapping: sensitive LEAF keys always
+        declare secrets; mask-pattern resolved values declare secrets; plain
+        resolved values do not."""
+        from modulo.cli.apply.models import config_declares_secrets
+
+        assert config_declares_secrets({"hmac_secret": "${env:HS}", "note": "x"})
+        assert config_declares_secrets({"smtp": {"password": "${env:PW}"}})
+        assert config_declares_secrets({"token": "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+        assert not config_declares_secrets({"url": "https://resolved.example", "note": "plain"})
+
+    def test_slash_in_pipeline_name_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="composite-key separator"):
+            PipelineEntity.model_validate({"name": "team/sample"})
+
+    def test_slash_in_trigger_name_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="composite-key separator"):
+            TriggerEntity.model_validate({"pipeline": "p", "name": "a/b", "trigger_type": "cron"})
+
+    def test_slash_in_trigger_pipeline_ref_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="composite-key separator"):
+            TriggerEntity.model_validate({"pipeline": "team/p", "name": "hook", "trigger_type": "cron"})
 
 
 class TestPipelineEntityContracts:
