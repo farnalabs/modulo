@@ -663,6 +663,20 @@ router.beforeEach(async (to) => {
       }
     }
 
+    // Manifest-declared route flags (FAR-656): a route whose manifest entry
+    // carries feature_flag is reachable only while that flag resolves true —
+    // a disabled flag redirects to the dashboard. navigation.ts filters the
+    // sidebar item on the same flag so nav and route stay consistent.
+    if (to.meta?.featureFlag) {
+      const planStore = usePlanStore()
+      if (!planStore.loaded) {
+        await planStore.fetchPlan()
+      }
+      if (!planStore.featureEnabled(to.meta.featureFlag)) {
+        return { name: 'dashboard' }
+      }
+    }
+
     // Generalised variant comparison workflow (FAR-332): when the
     // `variant_batch_compare` feature flag is ON, the legacy model-only
     // AB Test Models view is HARD-REPLACED by the batch-scoped compare flow.

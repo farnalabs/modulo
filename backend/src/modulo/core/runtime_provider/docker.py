@@ -52,6 +52,37 @@ _DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
 _DEPLOYMENT_IDENTITY_LABEL = "modulo.machine.id"
 
 
+def _route_by_channel(channel: Any, data: Any) -> tuple[bytes, bytes]:
+    """Route a (channel, data) pair: channel 1 -> stdout, anything else -> stderr."""
+    if channel == 1:
+        return (bytes(data or b""), b"")
+    return (b"", bytes(data or b""))
+
+
+def _split_two_element_frame(frame: Any) -> tuple[bytes, bytes]:
+    """Split a 2-element tuple/list exec frame into (stdout, stderr) byte payloads."""
+    first, second = frame
+    if isinstance(first, int) and not isinstance(first, bool):
+        # aiodocker Message / (fileno, data) shape.
+        return _route_by_channel(first, second)
+    # Test-double shape (stdout_bytes, stderr_bytes).
+    return (first or b"", second or b"")
+
+
+def _message_frame_channel_and_data(frame: Any) -> tuple[Any, Any]:
+    """Extract ``(channel, data)`` from an aiodocker ``Message``-shaped frame.
+
+    Older shapes carried ``channel``; aiodocker 0.27 uses ``stream``.
+    """
+    channel: Any = getattr(frame, "stream", None)
+    if channel is None:
+        channel = getattr(frame, "channel", None)
+    data: Any = getattr(frame, "data", None)
+    if data is None and isinstance(frame, (bytes, bytearray)):
+        data = bytes(frame)
+    return channel, data
+
+
 def _split_exec_frame(frame: Any) -> tuple[bytes, bytes]:
     """Split one Docker exec stream frame into (stdout, stderr) byte payloads.
 
@@ -61,28 +92,12 @@ def _split_exec_frame(frame: Any) -> tuple[bytes, bytes]:
     - the test-double shape ``(stdout_bytes, stderr_bytes)`` — a 2-tuple of
       byte-ish values (or None).
     """
-    channel: Any
-    data: Any
     if isinstance(frame, (tuple, list)) and len(frame) == 2:
-        first, second = frame
-        if isinstance(first, int) and not isinstance(first, bool):
-            # aiodocker Message / (fileno, data) shape.
-            channel, data = first, second
-        else:
-            return (first or b"", second or b"")
-    else:
-        # Older shapes carried ``channel``; aiodocker 0.27 uses ``stream``.
-        channel = getattr(frame, "stream", None)
-        if channel is None:
-            channel = getattr(frame, "channel", None)
-        data = getattr(frame, "data", None)
-    if data is None and isinstance(frame, (bytes, bytearray)):
-        data = bytes(frame)
+        return _split_two_element_frame(frame)
+    channel, data = _message_frame_channel_and_data(frame)
     # Unknown channel/shape is treated as stderr so diagnostic output is
     # never silently dropped.
-    if channel == 1:
-        return (bytes(data or b""), b"")
-    return (b"", bytes(data or b""))
+    return _route_by_channel(channel, data)
 
 
 async def _open_exec_stream(exec_instance: Any) -> Any:
@@ -98,6 +113,11 @@ async def _open_exec_stream(exec_instance: Any) -> Any:
     if inspect.isawaitable(started):
         return await started
     return started
+
+
+def _stream_error_message(exc: Exception) -> str:
+    """Format an engine/proxy stream failure for ``ExecProcess.error`` (D4)."""
+    return f"{type(exc).__name__}: {str(exc)[:200]}"
 
 
 class DockerRuntimeProvider(RuntimeProvider):
@@ -154,63 +174,68 @@ class DockerRuntimeProvider(RuntimeProvider):
     # RuntimeProvider interface
     # ------------------------------------------------------------------
 
-    async def create_workspace(self, spec: WorkspaceSpec) -> str:
-        """Create a hardened Docker container as the workspace.
-
-        The container runs ``sleep infinity`` so it stays alive for
-        subsequent ``exec_command`` calls. Auto-removal is enabled.
-
-        Hardening defaults (FAR-590 D4 / ADR 029 — applied at provision):
-        non-root user (runner uid 1001 on modulo-runner images), read-only
-        rootfs + tmpfs workdir/tmp with adequate sizing, dropped caps +
-        no-new-privileges, 1.0 CPU / 1 GiB resources, dedicated workspace
-        bridge network (``none`` opt-in per profile), structured labels from
-        ``spec.workspace_metadata`` + the machine deployment-identity label.
-        """
-        client = await self._get_client()
-        image = spec.image_ref.strip() if spec.image_ref else self._default_image
-        ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
-        raw_memory = spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB)
+    @staticmethod
+    def _resolve_memory_mb(raw_memory: Any) -> int:
+        """Parse and clamp the spec's ``memory_mb`` limit (D4: 4 MiB floor, 128 GiB ceiling)."""
         try:
             memory_mb = int(raw_memory)
         except (ValueError, TypeError):
             memory_mb = _DEFAULT_MEMORY_MB
-        memory_mb = max(4, min(memory_mb, 131072))
-        container_name = f"{_WORKSPACE_PREFIX}{ref}"
+        return max(4, min(memory_mb, 131072))
 
-        # spec.labels maps to container Env (env-var injection). Docker is the
-        # ONLY provider consuming spec.labels (FAR-595 contract): E2B/Local
-        # ignore it — clone inputs ride the first-class spec.repo_url /
-        # spec.repo_ref fields, which this provider does not act on (the
-        # bundled runner image handles code sync).
+    @staticmethod
+    def _build_container_env(labels: dict[str, str] | None) -> list[str]:
+        """Map ``spec.labels`` to container Env entries (env-var injection).
+
+        Docker is the ONLY provider consuming spec.labels (FAR-595 contract):
+        E2B/Local ignore it — clone inputs ride the first-class
+        spec.repo_url / spec.repo_ref fields, which this provider does not
+        act on (the bundled runner image handles code sync).
+        """
         env = []
-        for k, v in (spec.labels or {}).items():
+        for k, v in (labels or {}).items():
             entry = f"{k}={v}"
             if any(c in entry for c in ("\n", "\r", "\0")):
                 _log.warning("Skipping env entry with control characters: %s", k)
             else:
                 env.append(entry)
+        return env
 
-        # Provider-neutral workspace metadata maps to container Labels
-        # (deployment-identity / org / run correlation, ADR 029). This is
-        # separate from ``spec.labels`` (Env injection) and from
-        # ``repo_url``/``repo_ref`` (clone semantics, unused here).
+    def _build_workspace_labels(self, spec: WorkspaceSpec) -> dict[str, str]:
+        """Map provider-neutral workspace metadata to container Labels.
+
+        (deployment-identity / org / run correlation, ADR 029). This is
+        separate from ``spec.labels`` (Env injection) and from
+        ``repo_url``/``repo_ref`` (clone semantics, unused here).
+        """
         workspace_labels = dict(spec.workspace_metadata or {})
         # Deployment-identity label: machine-scoped reconciler filters ride
         # on it (two deployments sharing one engine never destroy each
         # other's workspaces). The creation marker drives reconciler ages.
         workspace_labels.setdefault(_DEPLOYMENT_IDENTITY_LABEL, self._deployment_identity())
         workspace_labels.setdefault("modulo.created_at", str(int(time.time())))
+        return workspace_labels
 
-        # Network policy: `none` opt-in per profile; the default (outbound
-        # permitted — the tier's purpose) attaches the dedicated workspace
-        # bridge, never the compose/backend network that hosts the
-        # Docker endpoint.
+    def _resolve_network_mode(self, spec: WorkspaceSpec) -> str:
+        """Resolve the container network mode from the spec's egress policy.
+
+        ``none`` is opt-in per profile; the default (outbound permitted —
+        the tier's purpose) attaches the dedicated workspace bridge, never
+        the compose/backend network that hosts the Docker endpoint.
+        """
         if (spec.egress_policy or "").strip().lower() == "none":
-            network_mode = "none"
-        else:
-            network_mode = spec.workspace_network or self._workspace_network
+            return "none"
+        return spec.workspace_network or self._workspace_network
 
+    @staticmethod
+    def _build_container_config(
+        image: str,
+        memory_mb: int,
+        env: list[str],
+        network_mode: str,
+        workspace_labels: dict[str, str],
+    ) -> dict[str, Any]:
+        """Build the container create config (D4 hardening defaults, ADR 029)."""
         host_config: dict[str, Any] = {
             "AutoRemove": True,
             "Memory": memory_mb * 1024 * 1024,
@@ -237,28 +262,67 @@ class DockerRuntimeProvider(RuntimeProvider):
         # images (generic base images carry no runner user).
         if any(marker in image.lower() for marker in _IMAGES_WITH_RUNNER_USER):
             config["User"] = _RUNNER_USER
+        return config
+
+    async def _pull_image_best_effort(self, client: aiodocker.Docker, image: str) -> None:
+        """Best-effort provision pull: ensure the image exists before create.
+
+        POST /images/create is in the allowlist; a pull failure surfaces on
+        container create for unreachable refs.
+        """
+        try:
+            pull = client.images.pull(image)
+            if asyncio.iscoroutine(pull):
+                await pull
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info("workspace image pull skipped/failed (best-effort): %s", image, exc_info=True)
+
+    async def _create_and_start_container(
+        self,
+        client: aiodocker.Docker,
+        config: dict[str, Any],
+        container_name: str,
+    ) -> Any:
+        """Create the workspace container and start it (bounded waits)."""
+        container = await asyncio.wait_for(
+            client.containers.create(
+                config=config,
+                name=container_name,
+            ),
+            timeout=self._create_timeout,
+        )
+        await asyncio.wait_for(container.start(), timeout=self._start_timeout)
+        return container
+
+    async def create_workspace(self, spec: WorkspaceSpec) -> str:
+        """Create a hardened Docker container as the workspace.
+
+        The container runs ``sleep infinity`` so it stays alive for
+        subsequent ``exec_command`` calls. Auto-removal is enabled.
+
+        Hardening defaults (FAR-590 D4 / ADR 029 — applied at provision):
+        non-root user (runner uid 1001 on modulo-runner images), read-only
+        rootfs + tmpfs workdir/tmp with adequate sizing, dropped caps +
+        no-new-privileges, 1.0 CPU / 1 GiB resources, dedicated workspace
+        bridge network (``none`` opt-in per profile), structured labels from
+        ``spec.workspace_metadata`` + the machine deployment-identity label.
+        """
+        client = await self._get_client()
+        image = spec.image_ref.strip() if spec.image_ref else self._default_image
+        ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
+        memory_mb = self._resolve_memory_mb(spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB))
+        container_name = f"{_WORKSPACE_PREFIX}{ref}"
+
+        env = self._build_container_env(spec.labels)
+        workspace_labels = self._build_workspace_labels(spec)
+        network_mode = self._resolve_network_mode(spec)
+        config = self._build_container_config(image, memory_mb, env, network_mode, workspace_labels)
 
         try:
-            # Provision pulls: ensure the image exists before create
-            # (POST /images/create is in the allowlist; best-effort — a pull
-            # failure surfaces on container create for unreachable refs).
-            try:
-                pull = client.images.pull(image)
-                if asyncio.iscoroutine(pull):
-                    await pull
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.info("workspace image pull skipped/failed (best-effort): %s", image, exc_info=True)
-
-            container = await asyncio.wait_for(
-                client.containers.create(
-                    config=config,
-                    name=container_name,
-                ),
-                timeout=self._create_timeout,
-            )
-            await asyncio.wait_for(container.start(), timeout=self._start_timeout)
+            await self._pull_image_best_effort(client, image)
+            container = await self._create_and_start_container(client, config, container_name)
         except asyncio.CancelledError:
             raise
         except OSError as exc:
@@ -344,6 +408,75 @@ class DockerRuntimeProvider(RuntimeProvider):
         exit_code = int(raw_exit) if raw_exit is not None else -1
         return b"".join(stdout_chunks), b"".join(stderr_chunks), exit_code
 
+    @staticmethod
+    def _decoded_frame_chunks(frame: Any) -> list[tuple[str, str]]:
+        """Decode one exec frame into ("stdout"|"stderr", text) chunks."""
+        out, err = _split_exec_frame(frame)
+        chunks: list[tuple[str, str]] = []
+        if out:
+            chunks.append(("stdout", out.decode("utf-8", errors="replace")))
+        if err:
+            chunks.append(("stderr", err.decode("utf-8", errors="replace")))
+        return chunks
+
+    async def _read_stream_frames(
+        self,
+        stream: Any,
+        process: ExecProcess,
+    ) -> AsyncIterator[tuple[str, str]]:
+        """Read exec frames until the stream ends, yielding decoded chunks.
+
+        An engine/proxy death mid-exec sets ``process.error`` (a stream
+        ERROR, never a silent end with a fabricated success code) and ends
+        the stream.
+        """
+        while True:
+            try:
+                frame = await stream.read_out()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                process.error = _stream_error_message(exc)
+                return
+            if frame is None:
+                return
+            for chunk in self._decoded_frame_chunks(frame):
+                yield chunk
+
+    async def _inspect_exit_code(self, exec_instance: Any, process: ExecProcess) -> int | None:
+        """Inspect the exec after a healthy stream end and extract its exit code.
+
+        The engine/proxy can also die between the stream end and the inspect
+        (e.g. an engine kill right at completion) — the same stream-ERROR
+        contract applies. A container/engine kill mid-exec can report
+        ExitCode=None — the exec has NO inspectable exit code, which the
+        dispatch layer classifies as retryable (never a fabricated success).
+        """
+        try:
+            info = await exec_instance.inspect()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            process.error = _stream_error_message(exc)
+            return None
+        raw_exit = info.get("ExitCode")
+        return int(raw_exit) if raw_exit is not None else None
+
+    async def _close_stream(self, stream: Any) -> None:
+        """Close the exec output stream best-effort.
+
+        aiodocker 0.27's Stream.close() is sync; older shapes may return an
+        awaitable — accept both.
+        """
+        try:
+            closed = stream.close()
+            if inspect.isawaitable(closed):
+                await closed
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.info("workspace exec stream close failed (best-effort)", exc_info=True)
+
     async def exec_command_stream(
         self,
         provider_ref: str,
@@ -373,38 +506,12 @@ class DockerRuntimeProvider(RuntimeProvider):
         async def _chunks() -> AsyncIterator[ExecStreamChunk]:
             exit_code: int | None = None
             try:
-                while True:
-                    try:
-                        frame = await stream.read_out()
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        # Engine/proxy death mid-exec: a stream ERROR, never
-                        # a silent end with a fabricated success code.
-                        process.error = f"{type(exc).__name__}: {str(exc)[:200]}"
-                        return
-                    if frame is None:
-                        break
-                    out, err = _split_exec_frame(frame)
-                    if out:
-                        yield ExecStreamChunk(stream="stdout", data=out.decode("utf-8", errors="replace"))
-                    if err:
-                        yield ExecStreamChunk(stream="stderr", data=err.decode("utf-8", errors="replace"))
-                try:
-                    info = await exec_instance.inspect()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    # The engine/proxy can also die between the stream end and
-                    # the inspect (e.g. an engine kill right at completion) —
-                    # the same stream-ERROR contract applies.
-                    process.error = f"{type(exc).__name__}: {str(exc)[:200]}"
-                    return
-                raw_exit = info.get("ExitCode")
-                # A container/engine kill mid-exec can report ExitCode=None —
-                # the exec has NO inspectable exit code, which the dispatch
-                # layer classifies as retryable (never a fabricated success).
-                exit_code = int(raw_exit) if raw_exit is not None else None
+                async for stream_name, data in self._read_stream_frames(stream, process):
+                    yield ExecStreamChunk(stream=stream_name, data=data)
+                # Only a healthy stream end inspects the exec; a stream
+                # ERROR must never be followed by an exit-code fabrication.
+                if process.error is None:
+                    exit_code = await self._inspect_exit_code(exec_instance, process)
             finally:
                 process.exit_code = exit_code
                 process.done.set()
@@ -412,16 +519,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         process.chunks = _chunks()
 
         async def _kill() -> None:
-            try:
-                # aiodocker 0.27's Stream.close() is sync; older shapes may
-                # return an awaitable — accept both.
-                closed = stream.close()
-                if inspect.isawaitable(closed):
-                    await closed
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.info("workspace exec stream close failed (best-effort)", exc_info=True)
+            await self._close_stream(stream)
 
         process._kill = _kill
         return process

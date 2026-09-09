@@ -788,6 +788,48 @@ async def prompt_diffs(
     return diffs
 
 
+async def _load_batch_compare_tx(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    batch_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Load a batch's runs by batch_id plus its per-pipeline eval-coverage flag.
+
+    Loads purely by ``batch_id`` — never by a live variant group, so
+    soft-deleting the group does not break comparison. Org-scoped (RLS +
+    explicit organisation_id predicate).
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        entries = await get_batch_compare(session, org_id=principal.organisation_id, batch_id=batch_id)
+        has_evals = False
+        if entries:
+            # Eval-coverage signal is per-pipeline: derive from the batch's
+            # first run's pipeline (all runs in one batch share it).
+            first_run = await get_run(session, entries[0]["run_id"], organisation_id=principal.organisation_id)
+            has_evals = first_run is not None and await has_pipeline_default_evals(session, first_run.pipeline_id)
+        return entries, has_evals
+
+
+def _mask_batch_compare_entry(entry: dict[str, Any]) -> None:
+    """Mask sensitive override material on one batch-compare entry (FAR-332 3i).
+
+    Frozen run_context_overrides may hold secrets; never surface them in
+    plaintext on the compare surface. Use the same RECURSIVE util as the runs
+    response (merged_payload) so a secret nested under a non-sensitive key is
+    masked at any depth — a shallow top-level-key match would leak it verbatim.
+    """
+    entry["run_context_overrides"] = _mask_output_value(entry.get("run_context_overrides", {}))
+    diff = entry.get("override_diff", {})
+    if isinstance(diff, dict):
+        # ``removed`` carries the base run's frozen override values — which
+        # may hold secrets — so it must be masked like added/changed.
+        for part in ("added", "changed", "removed"):
+            raw = diff.get(part, {})
+            if isinstance(raw, dict):
+                diff[part] = _mask_output_value(raw)
+
+
 @router.get("/batches/{batch_id}/compare", response_model=BatchCompareResponse)
 @handle_db_errors(_CODE_VARIANTS_BATCH_COMPARE)
 async def batch_compare(
@@ -804,15 +846,7 @@ async def batch_compare(
     frozen snapshot/override diff captured at fire time.
     """
     try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            entries = await get_batch_compare(session, org_id=principal.organisation_id, batch_id=batch_id)
-            has_evals = False
-            if entries:
-                # Eval-coverage signal is per-pipeline: derive from the batch's
-                # first run's pipeline (all runs in one batch share it).
-                first_run = await get_run(session, entries[0]["run_id"], organisation_id=principal.organisation_id)
-                has_evals = first_run is not None and await has_pipeline_default_evals(session, first_run.pipeline_id)
+        entries, has_evals = await _load_batch_compare_tx(session, principal, batch_id)
     except IntegrityError:
         _log.exception(_CODE_VARIANTS_BATCH_COMPARE)
         raise HTTPException(
@@ -846,20 +880,7 @@ async def batch_compare(
             detail="Batch not found",
         )
 
-    # Sensitive masking (FAR-332 3i): frozen run_context_overrides may hold
-    # secrets; never surface them in plaintext on the compare surface. Use the
-    # same RECURSIVE util as the runs response (merged_payload) so a secret
-    # nested under a non-sensitive key is masked at any depth — a shallow
-    # top-level-key match would leak it verbatim.
     for entry in entries:
-        entry["run_context_overrides"] = _mask_output_value(entry.get("run_context_overrides", {}))
-        diff = entry.get("override_diff", {})
-        if isinstance(diff, dict):
-            # ``removed`` carries the base run's frozen override values — which
-            # may hold secrets — so it must be masked like added/changed.
-            for part in ("added", "changed", "removed"):
-                raw = diff.get(part, {})
-                if isinstance(raw, dict):
-                    diff[part] = _mask_output_value(raw)
+        _mask_batch_compare_entry(entry)
 
     return {"batch_id": batch_id, "has_evals": has_evals, "runs": entries}

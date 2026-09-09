@@ -460,13 +460,21 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
     )
 
 
-async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
+_SAML_MD_NS = "urn:oasis:names:tc:SAML:2.0:metadata"
+
+
+async def _fetch_saml_metadata(provider: Any) -> tuple[str, SsoProviderTestResult | None]:
+    """Resolve SAML metadata XML from metadata_xml or metadata_url.
+
+    Returns ``(metadata_xml, None)`` on success, or ``("", failure_result)``
+    when the URL is rejected or the fetch fails.
+    """
     metadata_xml = provider.metadata_xml
     if not metadata_xml and provider.metadata_url:
         try:
             await validate_outbound_url_async(provider.metadata_url)
         except ValueError as exc:
-            return SsoProviderTestResult(success=False, message=f"Rejected: {exc}")
+            return "", SsoProviderTestResult(success=False, message=f"Rejected: {exc}")
         try:
             async with await pinned_async_client(provider.metadata_url) as client:
                 resp = await client.get(provider.metadata_url, timeout=httpx.Timeout(10.0, connect=5.0))
@@ -474,10 +482,89 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
                 metadata_xml = resp.text
         except Exception:
             _log.warning("admin_sso._test_saml_connection", exc_info=True)
-            return SsoProviderTestResult(
+            return "", SsoProviderTestResult(
                 success=False,
                 message="Failed to fetch metadata",
             )
+    return metadata_xml, None
+
+
+def _extract_saml_cert_entry(md_ns: str, key_desc: Any) -> dict[str, str] | None:
+    """Extract one masked X509 certificate entry from a KeyDescriptor, or None."""
+    key_info = key_desc.find(f"{{{md_ns}}}KeyInfo")
+    x509 = key_info.find(f"{{{md_ns}}}X509Data") if key_info is not None else None
+    cert = x509.find(f"{{{md_ns}}}X509Certificate") if x509 is not None else None
+    if cert is None or not cert.text:
+        return None
+    raw = cert.text.replace(" ", "")
+    return {
+        "use": key_desc.get("use", "signing"),
+        "certificate": f"{raw[:40]}...{raw[-20:]}",
+    }
+
+
+def _extract_saml_certs(md_ns: str, sso_descriptor: Any) -> list[dict[str, str]]:
+    """Extract the masked X509 certificate entries from an IDP SSO descriptor."""
+    cert_info: list[dict[str, str]] = []
+    for key_desc in sso_descriptor.findall(f"{{{md_ns}}}KeyDescriptor"):
+        entry = _extract_saml_cert_entry(md_ns, key_desc)
+        if entry is not None:
+            cert_info.append(entry)
+    return cert_info
+
+
+def _parse_saml_metadata(
+    metadata_xml: str,
+) -> tuple[str, str, list[dict[str, str]], SsoProviderTestResult | None]:
+    """Parse SAML metadata XML into (entity_id, sso_url, certs, failure).
+
+    Returns a non-None failure result when the XML is unparseable or lacks an
+    IDPSSODescriptor; on success the failure element is None.
+    """
+    try:
+        root = ElementTree.fromstring(metadata_xml)
+    except Exception as exc:
+        _log.warning("admin_sso._test_saml_connection", exc_info=True)
+        return (
+            "",
+            "",
+            [],
+            SsoProviderTestResult(
+                success=False,
+                message=f"Failed to parse metadata XML: {exc}",
+            ),
+        )
+    entity_id = root.get("entityID", "")
+
+    sso_descriptor = root.find(f"{{{_SAML_MD_NS}}}IDPSSODescriptor")
+    if sso_descriptor is None:
+        return (
+            "",
+            "",
+            [],
+            SsoProviderTestResult(
+                success=False,
+                message="No IDPSSODescriptor found in metadata XML",
+            ),
+        )
+
+    sso_service = sso_descriptor.find(
+        f"{{{_SAML_MD_NS}}}SingleSignOnService[@Binding='urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect']"
+    )
+    if sso_service is None:
+        sso_service = sso_descriptor.find(f"{{{_SAML_MD_NS}}}SingleSignOnService")
+    sso_url = ""
+    if sso_service is not None:
+        sso_url = sso_service.get("Location", "")
+
+    cert_info = _extract_saml_certs(_SAML_MD_NS, sso_descriptor)
+    return entity_id, sso_url, cert_info, None
+
+
+async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
+    metadata_xml, fetch_failure = await _fetch_saml_metadata(provider)
+    if fetch_failure is not None:
+        return fetch_failure
 
     if not metadata_xml:
         return SsoProviderTestResult(
@@ -485,48 +572,9 @@ async def _test_saml_connection(provider: Any) -> SsoProviderTestResult:
             message="Metadata URL or Metadata XML is required for SAML providers",
         )
 
-    try:
-        root = ElementTree.fromstring(metadata_xml)
-    except Exception as exc:
-        _log.warning("admin_sso._test_saml_connection", exc_info=True)
-        return SsoProviderTestResult(
-            success=False,
-            message=f"Failed to parse metadata XML: {exc}",
-        )
-    md_ns = "urn:oasis:names:tc:SAML:2.0:metadata"
-    entity_id = root.get("entityID", "")
-
-    sso_descriptor = root.find(f"{{{md_ns}}}IDPSSODescriptor")
-    if sso_descriptor is None:
-        return SsoProviderTestResult(
-            success=False,
-            message="No IDPSSODescriptor found in metadata XML",
-        )
-
-    sso_service = sso_descriptor.find(
-        f"{{{md_ns}}}SingleSignOnService[@Binding='urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect']"
-    )
-    if sso_service is None:
-        sso_service = sso_descriptor.find(f"{{{md_ns}}}SingleSignOnService")
-    sso_url = ""
-    cert_info = []
-    if sso_service is not None:
-        sso_url = sso_service.get("Location", "")
-
-    for key_desc in sso_descriptor.findall(f"{{{md_ns}}}KeyDescriptor"):
-        key_info = key_desc.find(f"{{{md_ns}}}KeyInfo")
-        if key_info is not None:
-            x509 = key_info.find(f"{{{md_ns}}}X509Data")
-            if x509 is not None:
-                cert = x509.find(f"{{{md_ns}}}X509Certificate")
-                if cert is not None and cert.text:
-                    raw = cert.text.replace(" ", "")
-                    cert_info.append(
-                        {
-                            "use": key_desc.get("use", "signing"),
-                            "certificate": f"{raw[:40]}...{raw[-20:]}",
-                        }
-                    )
+    entity_id, sso_url, cert_info, parse_failure = _parse_saml_metadata(metadata_xml)
+    if parse_failure is not None:
+        return parse_failure
 
     provider_info = {
         "entity_id": entity_id,

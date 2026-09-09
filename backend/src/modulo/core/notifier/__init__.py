@@ -265,6 +265,96 @@ class Notifier:
                 subscribed.append(ep)
         return subscribed
 
+    async def _load_endpoint_owners(
+        self,
+        owner_ids: set[uuid.UUID],
+        endpoint_count: int,
+    ) -> dict[uuid.UUID, Account] | None:
+        """Load the endpoints' owning accounts in ONE batched query.
+
+        Returns ``None`` when the owner read fails — the caller treats that
+        as fail-closed (every endpoint skipped): a DB blip must not fail-open
+        a break-glass endpoint (review #657 obs 1).
+        """
+        try:
+            async with self._session_factory() as session:
+                result = await session.execute(select(Account).where(Account.id.in_(owner_ids)))
+                return {account.id: account for account in result.scalars()}
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _record_owner_read_failure()
+            _log.exception(
+                "notifier.break_glass_owner_read_failed",
+                extra={"endpoint_count": endpoint_count},
+            )
+            return None
+
+    @staticmethod
+    def _owner_is_break_glass(owner: Account, now: datetime) -> bool:
+        """Whether the owner is under an active break-glass deny or live grant.
+
+        Review #657 obs 2: the shared builders already gate on
+        ``is_break_glass``, so the outer ``owner.is_break_glass is True and
+        (...`` guard is redundant — the deny decision is single-sourced via
+        ``db.crud.break_glass_deny`` (never duplicated here).
+        """
+        return is_break_glass_denied(
+            is_break_glass=owner.is_break_glass,
+            break_glass_expires_at=owner.break_glass_expires_at,
+            break_glass_deactivated_at=owner.break_glass_deactivated_at,
+            active=owner.active,
+            now=now,
+        ) or is_break_glass_live(
+            is_break_glass=owner.is_break_glass,
+            break_glass_expires_at=owner.break_glass_expires_at,
+            break_glass_deactivated_at=owner.break_glass_deactivated_at,
+            active=owner.active,
+            now=now,
+        )
+
+    def _handle_unresolved_owner(
+        self,
+        ep: NotificationEndpoint,
+        kept: list[NotificationEndpoint],
+    ) -> None:
+        """Warn (or keep) an endpoint whose owner could not be resolved.
+
+        An endpoint with no owner (``account_id IS NULL``) has nothing to
+        deny and is kept; an owner reference that is not a ``uuid.UUID``
+        cannot reference an ``accounts`` row and therefore cannot be a
+        break-glass account.
+        """
+        if isinstance(ep.account_id, uuid.UUID):
+            _log.warning(
+                "notifier.break_glass_owner_missing",
+                extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
+            )
+        else:
+            kept.append(ep)
+
+    def _filter_break_glass_endpoints(
+        self,
+        endpoints: list[NotificationEndpoint],
+        owners: dict[uuid.UUID, Account],
+    ) -> list[NotificationEndpoint]:
+        """Keep endpoints whose owning account is NOT under a break-glass deny."""
+        now = datetime.now(UTC)
+        kept: list[NotificationEndpoint] = []
+        for ep in endpoints:
+            owner = owners.get(ep.account_id) if isinstance(ep.account_id, uuid.UUID) else None
+            if owner is None:
+                self._handle_unresolved_owner(ep, kept)
+                continue
+            if self._owner_is_break_glass(owner, now):
+                _log.warning(
+                    "notifier.break_glass_webhook_skipped",
+                    extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
+                )
+                continue
+            kept.append(ep)
+        return kept
+
     async def _reject_break_glass_owned(self, endpoints: list[NotificationEndpoint]) -> list[NotificationEndpoint]:
         """Return endpoints whose owning account is NOT a break-glass account.
 
@@ -289,56 +379,10 @@ class Notifier:
         owner_ids = {ep.account_id for ep in endpoints if isinstance(ep.account_id, uuid.UUID)}
         if not owner_ids:
             return list(endpoints)
-        try:
-            async with self._session_factory() as session:
-                result = await session.execute(select(Account).where(Account.id.in_(owner_ids)))
-                owners = {account.id: account for account in result.scalars()}
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _record_owner_read_failure()
-            _log.exception(
-                "notifier.break_glass_owner_read_failed",
-                extra={"endpoint_count": len(endpoints)},
-            )
+        owners = await self._load_endpoint_owners(owner_ids, len(endpoints))
+        if owners is None:
             return []
-
-        now = datetime.now(UTC)
-        kept: list[NotificationEndpoint] = []
-        for ep in endpoints:
-            owner = owners.get(ep.account_id) if isinstance(ep.account_id, uuid.UUID) else None
-            if owner is None:
-                if isinstance(ep.account_id, uuid.UUID):
-                    _log.warning(
-                        "notifier.break_glass_owner_missing",
-                        extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
-                    )
-                else:
-                    kept.append(ep)
-                continue
-            # Review #657 obs 2: the shared builders already gate on
-            # ``is_break_glass``, so the outer ``owner.is_break_glass is True and
-            # (...`` guard is redundant — the deny decision is single-sourced.
-            if is_break_glass_denied(
-                is_break_glass=owner.is_break_glass,
-                break_glass_expires_at=owner.break_glass_expires_at,
-                break_glass_deactivated_at=owner.break_glass_deactivated_at,
-                active=owner.active,
-                now=now,
-            ) or is_break_glass_live(
-                is_break_glass=owner.is_break_glass,
-                break_glass_expires_at=owner.break_glass_expires_at,
-                break_glass_deactivated_at=owner.break_glass_deactivated_at,
-                active=owner.active,
-                now=now,
-            ):
-                _log.warning(
-                    "notifier.break_glass_webhook_skipped",
-                    extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
-                )
-                continue
-            kept.append(ep)
-        return kept
+        return self._filter_break_glass_endpoints(endpoints, owners)
 
     async def _dispatch_inline(
         self,
@@ -453,22 +497,44 @@ class Notifier:
         finally:
             await client.aclose()
 
-    async def _dispatch_to_endpoint(
+    @staticmethod
+    def _retry_delay(attempt: int, response_code: int | None, resp: httpx.Response | None) -> float:
+        """Compute the backoff delay before the next delivery attempt.
+
+        Honours a 429 ``Retry-After`` header (capped at 60s); any unparsable
+        or absent header falls back to the fixed exponential backoff table.
+        """
+        if response_code == 429 and resp is not None:
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after is not None:
+                try:
+                    return min(float(retry_after), 60.0)
+                except (ValueError, TypeError):
+                    pass
+        return RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
+
+    async def _deliver_with_retries(
         self,
         client: httpx.AsyncClient,
         endpoint: NotificationEndpoint,
-        event_type: str,
+        signature: str,
         body: bytes,
-        run_id: uuid.UUID | None,
-        retain_payload: bool,
-    ) -> DispatchResult:
-        """Send a single notification to one endpoint with retry logic."""
-        signature = await self._sign_payload(body, endpoint)
+    ) -> tuple[bool, int, int | None, str | None]:
+        """POST one notification with retry/backoff.
 
-        last_error: str | None = None
-        response_code: int | None = None
+        Returns ``(succeeded, attempt_count, response_code, last_error)``.
+        Delivery semantics: up to MAX_ATTEMPTS attempts; success on any 2xx;
+        sleep between attempts (Retry-After-aware on 429) and never after
+        the final attempt.
+        """
         succeeded = False
         attempt_count = 0
+        response_code: int | None = None
+        last_error: str | None = None
+        # Pre-initialised so the 429 check below can never hit an unbound
+        # name on a first-attempt RequestError (mirrors the original
+        # short-circuit semantics exactly).
+        resp: httpx.Response | None = None
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             attempt_count = attempt
@@ -502,29 +568,46 @@ class Notifier:
                         "last_error": last_error,
                     },
                 )
-                if response_code == 429 and resp is not None:
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after is not None:
-                        try:
-                            delay = min(float(retry_after), 60.0)
-                        except (ValueError, TypeError):
-                            delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
-                    else:
-                        delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
-                else:
-                    delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
-                await asyncio.sleep(delay)
+                await asyncio.sleep(self._retry_delay(attempt, response_code, resp))
+
+        return succeeded, attempt_count, response_code, last_error
+
+    def _encrypt_payload(
+        self,
+        body: bytes,
+        endpoint: NotificationEndpoint,
+        retain_payload: bool,
+    ) -> bytes | None:
+        """Encrypt the request body for delivery-log retention (opt-in)."""
+        if not retain_payload:
+            return None
+        try:
+            return self._fernet.encrypt(body)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("notifier.encrypt_failed", extra={"endpoint_id": str(endpoint.id)})
+            return None
+
+    async def _dispatch_to_endpoint(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: NotificationEndpoint,
+        event_type: str,
+        body: bytes,
+        run_id: uuid.UUID | None,
+        retain_payload: bool,
+    ) -> DispatchResult:
+        """Send a single notification to one endpoint with retry logic."""
+        signature = await self._sign_payload(body, endpoint)
+
+        succeeded, attempt_count, response_code, last_error = await self._deliver_with_retries(
+            client, endpoint, signature, body
+        )
 
         status = "delivered" if succeeded else "dead_lettered"
 
-        payload_ciphertext: bytes | None = None
-        if retain_payload:
-            try:
-                payload_ciphertext = self._fernet.encrypt(body)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("notifier.encrypt_failed", extra={"endpoint_id": str(endpoint.id)})
+        payload_ciphertext = self._encrypt_payload(body, endpoint, retain_payload)
 
         await self._record_delivery(
             endpoint,
