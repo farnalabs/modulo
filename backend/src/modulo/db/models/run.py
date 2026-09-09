@@ -18,6 +18,7 @@ from sqlalchemy import (
     Uuid,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import expression
@@ -241,12 +242,12 @@ class Run(OrgScoped):
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     # Cost breakdown — list of component snapshots (amounts as strings).
     # NULL for pre-migration runs. Migration 0066.
-    cost_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    cost_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
     # Ledger guards (migration 0066) — terminal-only spend recording (PR A2).
     ledger_written: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     ledger_refused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    error_detail: Mapped[str | None] = mapped_column(String(5000))
+    node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    error_detail: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(255))
     langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)

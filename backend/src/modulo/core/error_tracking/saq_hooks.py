@@ -180,9 +180,10 @@ async def _mark_run_failed(
     grammar before being inlined — it is a code-owned constant, never user
     input.
 
-    *error_detail* is sanitized (secret-pattern redaction) and truncated to
-    5000 code points BEFORE the UPDATE — ``runs.error_detail`` is String(5000);
-    an untruncated detail raises DataError, which the generic except in
+    *error_detail* is sanitized (secret-pattern redaction) BEFORE the UPDATE —
+    ``runs.error_detail`` is ``Text`` (widened from ``String(5000)`` by
+    migration 0199), so untruncated details no longer raise DataError; the
+    generic except in
     :func:`after_process` would swallow and the run would NEVER be marked
     failed (the exact failure this fix exists to prevent). ``None`` is written
     when the detail is falsy — never ``""`` (an empty-string detail flips the
@@ -234,7 +235,7 @@ async def _mark_run_failed(
     from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 
     if error_detail:
-        params["detail"] = sanitize_error_text(error_detail)[:5000]
+        params["detail"] = sanitize_error_text(error_detail, limit=None)
     else:
         params["detail"] = None
 

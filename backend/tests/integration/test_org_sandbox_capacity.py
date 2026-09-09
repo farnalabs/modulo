@@ -751,6 +751,51 @@ async def test_sweep_still_fails_capacity_timeout_eligible_run(
     assert code == "capacity_timeout"
 
 
+async def test_sweep_capacity_timeout_fires_on_refreshed_never_claimed_row(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    patched_redispatch: AsyncMock,
+):
+    """A never-claimed capacity-marked row past the TTL terminal-fails via
+    capacity_timeout EVEN THOUGH the stranded-refresh loop restamped its
+    heartbeat inside the TTL window (claim_count 0 — the model default).
+
+    The refresh UPDATE keeps a never-claimed row's heartbeat_at fresh while
+    created_at is inside the TTL, so past the crossing a heartbeat-age test
+    alone would wait a further full TTL (~2x the documented TTL). The
+    ``claim_count = 0`` disjunct fires at the crossing regardless of that
+    refreshed heartbeat — this pins the never-claimed-at-TTL semantics
+    against the refresh loop."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+
+    org_id, user_id = await _seed_org_account(db_engine, "RefreshNeverOrg", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeRefreshNever", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+
+    now = datetime.now(UTC)
+    refreshed = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="pending",
+        error_code="org_capacity_limited",
+        created_at=now - timedelta(minutes=CAPACITY_TIMEOUT_TTL_MINUTES + 30),
+        heartbeat_at=now - timedelta(minutes=10),
+    )
+
+    result = await stale_run_recovery_sweep(db_engine)
+    assert result.get("error") is None, f"sweep failed: {result}"
+    assert result["stranded_capacity_redispatched"] == 0, result
+    assert result["capacity_timeout_swept"] == 1, result
+    patched_redispatch.assert_not_awaited()
+
+    status, code = await _run_state(db_engine, org_id, refreshed)
+    assert status == "failed"
+    assert code == "capacity_timeout"
+
+
 # ---------------------------------------------------------------------------
 # Org run-concurrency admission at dispatch time (dispatch_run)
 # ---------------------------------------------------------------------------

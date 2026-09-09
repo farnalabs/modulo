@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import ParamSpec, TypeVar
+from typing import NoReturn, ParamSpec, TypeVar
 
 import pydantic
 from fastapi import HTTPException, status
@@ -15,6 +15,62 @@ from modulo.db.capacity import StorageExhaustedError
 _log = logging.getLogger(__name__)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+
+def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
+    """Map one exception escaped from the endpoint body to its HTTP response.
+
+    The except-class -> status mapping and its order are the contract this
+    module exists to enforce (IntegrityError->409, ProgrammingError->501,
+    SQLAlchemyError->503, pydantic.ValidationError->422; passthrough
+    re-raises for CancelledError / StorageExhaustedError / HTTPException;
+    Exception->500). The chain below preserves the original except order —
+    never reorder it (MRO: specific classes before their bases).
+    """
+    try:
+        raise exc
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        _log.exception("%s.integrity_error", log_prefix)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resource conflict. The operation could not be completed.",
+        ) from None
+    except ProgrammingError:
+        _log.exception("%s.programming_error", log_prefix)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError as exc:
+        _log.exception("%s.db_error", log_prefix)
+        log_service_unavailable(
+            "db_transient",
+            exc,
+            route=log_prefix,
+            detail="transient database error (handle_db_errors backstop)",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from None
+    except pydantic.ValidationError:
+        _log.exception("%s.validation_error", log_prefix)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Data validation failed.",
+        ) from None
+    except StorageExhaustedError:
+        raise
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("%s.unexpected_error", log_prefix)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
 
 
 def handle_db_errors(
@@ -34,48 +90,8 @@ def handle_db_errors(
         async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             try:
                 return await func(*args, **kwargs)
-            except asyncio.CancelledError:
-                raise
-            except IntegrityError:
-                _log.exception("%s.integrity_error", log_prefix)
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Resource conflict. The operation could not be completed.",
-                ) from None
-            except ProgrammingError:
-                _log.exception("%s.programming_error", log_prefix)
-                raise HTTPException(
-                    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                    detail="Feature is not available. Run database migrations to enable it.",
-                ) from None
-            except SQLAlchemyError as exc:
-                _log.exception("%s.db_error", log_prefix)
-                log_service_unavailable(
-                    "db_transient",
-                    exc,
-                    route=log_prefix,
-                    detail="transient database error (handle_db_errors backstop)",
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Database temporarily unavailable.",
-                ) from None
-            except pydantic.ValidationError:
-                _log.exception("%s.validation_error", log_prefix)
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="Data validation failed.",
-                ) from None
-            except StorageExhaustedError:
-                raise
-            except HTTPException:
-                raise
-            except Exception:
-                _log.exception("%s.unexpected_error", log_prefix)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=MSG_UNEXPECTED_ERROR,
-                ) from None
+            except Exception as exc:
+                _translate_wrapped_exception(exc, log_prefix)
 
         return wrapper
 
