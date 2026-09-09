@@ -138,9 +138,19 @@ const hasDetails = computed(
           <dd class="break-all text-right font-mono text-xs">{{ condition }}</dd>
         </div>
         <!-- FAR-688: PRIMARY evidence — the value the condition matched at fire
-             time, above the supplementary artifact excerpts. -->
+             time, above the supplementary artifact excerpts. When the snapshot
+             condition row is absent (unresolvable config), the payload's own
+             expression is still shown — the builder guarantees it carries the
+             best-known expression. -->
         <div v-if="conditionResult" class="rounded bg-background p-2" data-testid="hitl-briefing-condition-result">
           <dt class="text-muted-foreground">{{ $t('components.HitlBriefing.condition_evaluated') }}</dt>
+          <dd
+            v-if="!condition"
+            data-testid="hitl-briefing-condition-result-expression"
+            class="break-all font-mono text-xs text-muted-foreground"
+          >
+            {{ conditionResult.expression }}
+          </dd>
           <dd class="mt-1 break-all font-mono text-xs text-foreground">
             {{ conditionResult.value }}
           </dd>

@@ -3482,12 +3482,15 @@ async def _hitl_gate_resume_result(
     return (True, _hitl_gate_approve_reject_result(gate_id, decision, is_rejected))
 
 
-#: Deterministic cap for the serialised ``condition_result.value`` carried in
-#: the interrupt payload (FAR-688). The value is derived from run STATE (node
-#: outputs), so it is redacted then bounded before it can reach persistence
-#: (the checkpointer persists interrupt payloads) or the briefing. A sliced
-#: value carries the shared truncation marker (WITHIN the cap).
-_CONDITION_RESULT_VALUE_MAX_CHARS = 2000
+#: Deterministic cap for each serialised ``condition_result`` member carried
+#: in the interrupt payload (FAR-688). The matched value is derived from run
+#: STATE (node outputs — redacted, then bounded); the expression is
+#: user-authored but can exceed the REST save contract's 500-char cap on an
+#: MCP-authored graph (which bypasses the Pydantic contract), so BOTH members
+#: are bounded before they can reach persistence (the checkpointer persists
+#: interrupt payloads) or the briefing. A sliced member carries the shared
+#: truncation marker (WITHIN the cap).
+_CONDITION_RESULT_FIELD_MAX_CHARS = 2000
 
 
 def _serialize_condition_value(value: Any) -> str:
@@ -3505,9 +3508,21 @@ def _serialize_condition_value(value: Any) -> str:
     except Exception:  # pragma: no cover - defensive: default=str makes this near-impossible
         serialized = repr(value)
     serialized = sanitize_error_text(serialized)
-    if len(serialized) > _CONDITION_RESULT_VALUE_MAX_CHARS:
-        serialized = serialized[: _CONDITION_RESULT_VALUE_MAX_CHARS - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+    if len(serialized) > _CONDITION_RESULT_FIELD_MAX_CHARS:
+        serialized = serialized[: _CONDITION_RESULT_FIELD_MAX_CHARS - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
     return serialized
+
+
+def _bound_condition_expression(expression: str) -> str:
+    """The payload's ``condition_result.expression``, bounded with the marker.
+
+    User-authored (save-time) text, so redaction does not apply — but the cap
+    does: an MCP-authored graph bypasses the REST 500-char condition cap and
+    the expression rides into checkpointer-persisted payloads.
+    """
+    if len(expression) <= _CONDITION_RESULT_FIELD_MAX_CHARS:
+        return expression
+    return expression[: _CONDITION_RESULT_FIELD_MAX_CHARS - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
 
 
 def _hitl_gate_condition_evaluate(
@@ -3544,7 +3559,10 @@ def _hitl_gate_condition_evaluate(
             _build_hitl_gate_artifact(gate_id, "condition_skipped", condition=condition_expr, condition_result=result),
             None,
         )
-    return None, {"expression": condition_expr, "value": _serialize_condition_value(result)}
+    return None, {
+        "expression": _bound_condition_expression(condition_expr),
+        "value": _serialize_condition_value(result),
+    }
 
 
 def _resolve_llm_judge_callable(eval_def: Any) -> Any:

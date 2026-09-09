@@ -83,6 +83,23 @@ describe('HitlBriefing', () => {
     expect(matched.exists()).toBe(true)
     expect(matched.text()).toContain('Condition evaluated to')
     expect(matched.text()).toContain('{"comment":"ship it"}')
+    // The snapshot condition row already shows the expression — no duplicate.
+    expect(wrapper.find('[data-testid="hitl-briefing-condition-result-expression"]').exists()).toBe(false)
+  })
+
+  it('renders the payload expression when the snapshot condition is unresolvable (FAR-688)', async () => {
+    // Graph drift / legacy snapshot: the condition row is absent but the
+    // payload carries the fire-time expression — it must still be shown.
+    const wrapper = mount(HitlBriefing, {
+      props: {
+        description: 'Why this gate exists.',
+        context: { ...fullContext, condition: null, trigger: 'unknown' },
+      },
+    })
+    await wrapper.find('[data-testid="hitl-briefing-toggle"]').trigger('click')
+    const expression = wrapper.find('[data-testid="hitl-briefing-condition-result-expression"]')
+    expect(expression.exists()).toBe(true)
+    expect(expression.text()).toContain("node_id=='550e8400-e29b-41d4-a716-446655440000'")
   })
 
   it('hides the matched-value block for a legacy payload without condition_result', async () => {

@@ -9,6 +9,7 @@ import pytest
 from langgraph.errors import GraphInterrupt
 
 from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalType
+from modulo.core.pipeline_engine.hitl_context import TRUNCATION_MARKER
 from modulo.core.pipeline_engine.node_runner import (
     _build_hitl_gate_artifact,
     _evaluate_eval_condition,
@@ -1456,6 +1457,17 @@ class TestHitlGateConditionEvaluate:
         assert "ghp_" not in result["value"]
         assert "<redacted>" in result["value"]
         assert len(result["value"]) <= 2000
+
+    def test_expression_is_bounded_in_the_payload(self) -> None:
+        """FAR-688: an MCP-authored graph bypasses the REST 500-char condition
+        cap, so the payload's expression member is bounded too (the checkpointer
+        persists interrupt payloads)."""
+        long_expression = "'" + "x" * 3000 + "'"
+        _skip, result = _hitl_gate_condition_evaluate("g1", long_expression, {"config": {}})
+        assert result is not None
+        assert result["expression"].startswith("'xxx")
+        assert result["expression"].endswith(TRUNCATION_MARKER)
+        assert len(result["expression"]) <= 2000
 
     def test_invalid_jmespath_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match=r"Invalid HITL gate condition expression: foo\["):
