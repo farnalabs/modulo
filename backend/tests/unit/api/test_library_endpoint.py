@@ -150,6 +150,9 @@ def _make_primitive(
     p.visibility = "community"
     p.created_at = _NOW
     p.updated_at = _NOW
+    p.status = None
+    p.manifest_pins = None
+    p.trust_header = None
     return p
 
 

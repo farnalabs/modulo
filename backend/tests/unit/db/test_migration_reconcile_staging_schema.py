@@ -35,8 +35,8 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0193_run_node_outputs_sweep_index chaining onto 0192, and 0194_uuid_pk_server_defaults
 # (FAR-718, from main) chains off 0193; improve-database's 0197/0198/0199 chain off it,
 # 0201_spend_anomaly_unique_org_date (from main) chains off 0200, 0202_runs_error_code_claimed_by_indexes
-# (from main) chains off 0201, and this PR's 0195_hitl_claim_gate_config_json (FAR-634) chains off
-# 0202 as the chain head.
+# (from main) chains off 0201, 0195_hitl_claim_gate_config_json (FAR-634, from main) chains off 0202,
+# and this PR's 0203_library_collection_type (FAR-760) chains off 0195 as the chain head.
 _CHAIN_HEAD_MIGRATION = "0203_library_collection_type"
 
 
