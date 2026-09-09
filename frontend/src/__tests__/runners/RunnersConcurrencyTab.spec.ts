@@ -197,5 +197,26 @@ describe('RunnersConcurrencyTab', () => {
     // must refetch the limit endpoint too, or the panel shows the PRE-save
     // cap until the next manual reload.
     expect((api.GET as any).mock.calls.length).toBeGreaterThan(initialGetCalls)
+    expect(wrapper.text()).toContain('Runner concurrency limit updated.')
+  })
+
+  it('shows an error when the save API call fails', async () => {
+    const { api } = await import('../../lib/api/client')
+    ;(api.PUT as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: null,
+      error: { detail: 'boom' },
+    })
+
+    const wrapper = mountTab()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-sandbox-concurrency-save"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Failed to save')
+    expect(wrapper.text()).toContain('boom')
   })
 })
