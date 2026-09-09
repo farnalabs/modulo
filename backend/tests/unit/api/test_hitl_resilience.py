@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,9 +13,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.hitl import HumanOnlyDenied, _emit_human_only_denial_audit
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.hitl_manager import NotTeamMemberError, RunNotAwaitingError
+from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED, MSG_HUMAN_ONLY_DENY, MSG_HUMAN_ONLY_UNRESOLVED
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -584,8 +587,11 @@ class TestListRunPendingGatesLabelResolution:
 # FAR-610: human_only enforcement on the REST decision routes
 # ---------------------------------------------------------------------------
 
-_HUMAN_ONLY_DETAIL = "human_only gate requires browser authentication; API-key clients cannot approve this gate"
-_UNRESOLVABLE_DETAIL = "HITL gate configuration could not be resolved; decision requires browser authentication"
+# FAR-634 review: the denial detail is the shared MSG_HUMAN_ONLY_DENY constant
+# (single-sourced in db.crud.hitl_gate_config) — REST and MCP must deny with
+# the SAME wording.
+_HUMAN_ONLY_DETAIL = MSG_HUMAN_ONLY_DENY
+_UNRESOLVABLE_DETAIL = MSG_HUMAN_ONLY_UNRESOLVED
 _SRC_ID = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _TGT_ID = uuid.UUID("00000000-0000-0000-0000-00000000000b")
 _SNAPSHOT_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
@@ -663,13 +669,14 @@ def _human_only_snapshot(*, human_only: bool = True) -> MagicMock:
     return snapshot
 
 
-def _override_principal(via_api_key: bool) -> None:
+def _override_principal(via_api_key: bool, client_kind: str = "browser") -> None:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="user",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role="admin",
         via_api_key=via_api_key,
+        client_kind=client_kind,
     )
 
 
@@ -677,6 +684,19 @@ class TestHumanOnlyRestEnforcement:
     """FAR-610: human_only gates deny API-key principals on the resume routes
     (approve / approve-with-modification / deliver-manual / submit-manual);
     browser JWTs pass. reject stays allowed for every client."""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_audit_db(self) -> Generator[None, None, None]:
+        """FAR-634: a denial now emits the ``hitl.human_only_denied`` audit
+        event through a FRESH engine/session. In unit tests there is no
+        database — fail the engine lookup immediately so the emit's
+        failure-isolation path runs deterministically (the 403 outcome is
+        never affected; that isolation is itself part of the contract)."""
+        with patch(
+            "modulo.api.routes.hitl.get_or_create_engine",
+            side_effect=RuntimeError("no db in unit tests"),
+        ):
+            yield
 
     @staticmethod
     def _install_session(
@@ -893,3 +913,370 @@ class TestHumanOnlyRestEnforcement:
 
         assert resp.status_code == 200
         reject.assert_awaited_once()
+
+
+class TestHumanOnlyClientKindEnforcement:
+    """FAR-634: the human_only credential gate reads the JWT's ``client_kind``
+    claim, not just the API-key marker. A programmatic-class JWT is denied;
+    a legacy token (no claim -> decoded browser) still passes."""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_audit_db(self) -> Generator[None, None, None]:
+        with patch(
+            "modulo.api.routes.hitl.get_or_create_engine",
+            side_effect=RuntimeError("no db in unit tests"),
+        ):
+            yield
+
+    @staticmethod
+    def _install_session(
+        run: MagicMock,
+        snapshot: object = None,
+        edge: object = None,
+        pipeline_nodes: object = None,
+        claim_row: object = None,
+    ) -> None:
+        mock_session = _hitl_session(
+            run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row
+        )
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+    def test_approve_programmatic_client_kind_jwt_returns_403(self, client: TestClient) -> None:
+        """A programmatic-class JWT (the future API-key/automation mint path)
+        is denied on a human_only gate — the credential class subsumes the
+        API-key marker."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        approve.assert_not_called()
+
+    def test_approve_with_modification_programmatic_client_kind_returns_403(self, client: TestClient) -> None:
+        """Route-matrix completeness: the approve-with-modification decision
+        route denies a programmatic-class JWT exactly like approve."""
+        modify = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.approve_with_modification = modify
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve-with-modification",
+                json={"claim_token": "tok", "modified_output": {"k": "v"}},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        modify.assert_not_called()
+
+    def test_approve_programmatic_jwt_denied_on_claim_stamped_config(self, client: TestClient) -> None:
+        """FAR-634: the resolver returns the claim row's stamped config (O(1))
+        — a programmatic JWT is denied on the stamped human_only config even
+        with no snapshot to walk. (The session double returns the routed
+        scalar directly — the config dict IS the stamp value.)"""
+        approve = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(snapshot_id=None), claim_row={"human_only": True})
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        approve.assert_not_called()
+
+    def test_approve_unknown_client_kind_fails_closed(self, client: TestClient) -> None:
+        """An unknown client_kind value is NOT 'browser' — fail closed."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=False, client_kind="hologram")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        approve.assert_not_called()
+
+    def test_approve_legacy_browser_jwt_still_passes(self, client: TestClient) -> None:
+        """Backward compat: a legacy token (no claim) decodes client_kind=
+        browser and the browser hot path is unchanged."""
+        approve = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.org_sandbox_capacity_free", new=AsyncMock(return_value=True)),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=False, client_kind="browser")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 200
+        approve.assert_awaited_once()
+
+    def test_api_key_principal_still_denied_under_client_kind_rule(self, client: TestClient) -> None:
+        """The via_api_key marker remains part of the denial rule (an API-key
+        principal carries client_kind=programmatic from the dependency, but
+        the OR subsumes doubles that set only the marker)."""
+        approve = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.approve = approve
+            _override_principal(via_api_key=True, client_kind="browser")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        approve.assert_not_called()
+
+    def test_deliver_manual_programmatic_client_kind_returns_403(self, client: TestClient) -> None:
+        deliver = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.deliver_manual = deliver
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/deliver-manual",
+                json={"claim_token": "tok", "output": {"result": "ok"}},
+            )
+
+        assert resp.status_code == 403
+        deliver.assert_not_called()
+
+    def test_reject_programmatic_client_kind_still_allowed(self, client: TestClient) -> None:
+        """reject is the safe direction for every credential class."""
+        reject = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl._build_resume_executor", return_value=_resume_executor()),
+        ):
+            mgr_cls.return_value.reject = reject
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/reject",
+                json={"claim_token": "tok", "reason": "not good"},
+            )
+
+        assert resp.status_code == 200
+        reject.assert_awaited_once()
+
+
+class TestHumanOnlyDenialAudit:
+    """FAR-634: every human_only denial emits a warning log + the
+    ``hitl.human_only_denied`` audit event (fresh session, failure-isolated:
+    an audit failure must never change the denial outcome)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_audit_db(self) -> Generator[None, None, None]:
+        """Default: fail the audit engine lookup (no DB in unit tests). Tests
+        that assert the audit WRITE override this with a mock chain."""
+        with patch(
+            "modulo.api.routes.hitl.get_or_create_engine",
+            side_effect=RuntimeError("no db in unit tests"),
+        ):
+            yield
+
+    @staticmethod
+    def _install_session(
+        run: MagicMock,
+        snapshot: object = None,
+        claim_row: object = None,
+    ) -> None:
+        mock_session = _hitl_session(run, snapshot=snapshot, claim_row=claim_row)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+    def test_denial_emits_audit_event_with_denial_fields(self, client: TestClient) -> None:
+        """The REST denial routes emit the audit through ``_run_hitl_manager``
+        after the decision transaction rolled back, carrying run_id / gate_id /
+        action / principal kind / client kind."""
+        emit = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager"),
+            patch("modulo.api.routes.hitl._emit_human_only_denial_audit", new=emit),
+        ):
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        emit.assert_awaited_once()
+        exc = emit.await_args.args[0]
+        assert exc.run_id == _RUN_ID
+        assert exc.gate_id == _GATE_ID
+        assert exc.action == "approve"
+        assert exc.org_id == _ORG_ID
+        assert exc.principal_kind == "jwt"
+        assert exc.client_kind == "programmatic"
+        assert exc.reason == _HUMAN_ONLY_DETAIL
+
+    def test_submit_manual_denial_carries_submit_manual_action(self, client: TestClient) -> None:
+        """The submit-manual route labels its denial audit with the route's
+        action, not the manager method it shares with approve."""
+        emit = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager"),
+            patch("modulo.api.routes.hitl._emit_human_only_denial_audit", new=emit),
+        ):
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            # run with NO snapshot: the claim stamp is the only config source.
+            self._install_session(_make_hitl_run(snapshot_id=None), claim_row={"human_only": True})
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/manual/{_GATE_ID}/submit",
+                json={"claim_token": "tok", "output": {"o": 1}},
+            )
+
+        assert resp.status_code == 403
+        emit.assert_awaited_once()
+        exc = emit.await_args.args[0]
+        assert exc.action == "submit_manual"
+        assert exc.reason == _HUMAN_ONLY_DETAIL
+
+    def test_audit_failure_never_changes_the_denial_outcome(self, client: TestClient) -> None:
+        """Failure isolation: the audit write raising leaves the byte-identical
+        403 (the denial is already emitted — the write is best-effort)."""
+        engine = MagicMock()
+        session = _audit_session_double()
+        factory = MagicMock(return_value=_audit_session_ctx(session))
+        with (
+            patch("modulo.api.routes.hitl.HITLManager"),
+            patch("modulo.api.routes.hitl.get_or_create_engine", return_value=engine),
+            patch("modulo.api.routes.hitl.get_or_create_session_factory", return_value=factory),
+            patch(
+                "modulo.api.routes.hitl.append_audit_event",
+                new=AsyncMock(side_effect=RuntimeError("audit write boom")),
+            ),
+        ):
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve",
+                json={"claim_token": "tok"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+
+    async def test_emit_writes_audit_event_with_right_fields(self) -> None:
+        """The emit helper appends ``hitl.human_only_denied`` in a fresh RLS
+        org-scoped session with the full denial payload."""
+        engine = MagicMock()
+        session = _audit_session_double()
+        factory = MagicMock(return_value=_audit_session_ctx(session))
+        append = AsyncMock()
+        emit_exc = HumanOnlyDenied(
+            _HUMAN_ONLY_DETAIL,
+            run_id=_RUN_ID,
+            gate_id=_GATE_ID,
+            action="approve",
+            org_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+            principal_kind="jwt",
+            client_kind="programmatic",
+        )
+        with (
+            patch("modulo.api.routes.hitl.get_or_create_engine", return_value=engine),
+            patch("modulo.api.routes.hitl.get_or_create_session_factory", return_value=factory),
+            patch("modulo.api.routes.hitl.append_audit_event", new=append),
+        ):
+            await _emit_human_only_denial_audit(emit_exc)
+
+        append.assert_awaited_once()
+        kwargs = append.await_args.kwargs
+        assert kwargs["event_type"] == EVENT_HUMAN_ONLY_DENIED
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "run"
+        assert kwargs["resource_id"] == _RUN_ID
+        payload = kwargs["payload_json"]
+        assert payload["run_id"] == str(_RUN_ID)
+        assert payload["gate_id"] == _GATE_ID
+        assert payload["action"] == "approve"
+        assert payload["surface"] == "rest"
+        assert payload["principal_kind"] == "jwt"
+        assert payload["client_kind"] == "programmatic"
+        assert payload["reason"] == _HUMAN_ONLY_DETAIL
+
+    async def test_emit_is_failure_isolated_when_audit_raises(self) -> None:
+        """The emit helper swallows an audit failure (logged) — the caller's
+        re-raise of the original 403 is never disturbed."""
+        emit_exc = HumanOnlyDenied(
+            _HUMAN_ONLY_DETAIL,
+            run_id=_RUN_ID,
+            gate_id=_GATE_ID,
+            action="approve",
+            org_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+            principal_kind="jwt",
+            client_kind="programmatic",
+        )
+        # The autouse fixture fails the engine lookup with RuntimeError —
+        # the helper must swallow it and return None (the caller then re-raises
+        # the untouched HumanOnlyDenied).
+        outcome = await _emit_human_only_denial_audit(emit_exc)
+        assert outcome is None
+
+
+def _audit_session_ctx(session: AsyncMock | MagicMock) -> Any:
+    @asynccontextmanager
+    async def _ctx() -> AsyncGenerator[AsyncMock | MagicMock, None]:
+        yield session
+
+    return _ctx()
+
+
+def _audit_session_double() -> MagicMock:
+    """An audit-session double faithful to the real AsyncSession surface.
+
+    The emit's RLS preamble (``_ensure_active_transaction``) calls
+    ``in_transaction()`` and ``get_bind()`` SYNCHRONOUSLY — a bare AsyncMock
+    returns un-awaited coroutines for both and leaks a "coroutine never
+    awaited" warning per call (two per denial). ``execute`` stays async
+    because the set_config queries are genuinely awaited.
+    """
+    bind = MagicMock()
+    bind.dialect.name = "postgresql"
+    session = MagicMock()
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=bind)
+    session.execute = AsyncMock()
+    begin_cm = MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False))
+    session.begin = MagicMock(return_value=begin_cm)
+    return session

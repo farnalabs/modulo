@@ -185,6 +185,7 @@ def _admin_token(org_id: uuid.UUID, account_id: uuid.UUID) -> str:
         account_id=str(account_id),
         org_role="admin",
         is_system_admin=False,
+        client_kind="browser",
     )
 
 

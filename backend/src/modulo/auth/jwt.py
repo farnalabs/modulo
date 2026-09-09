@@ -24,6 +24,23 @@ _ACCESS_TOKEN_MINUTES: int = 15
 _REFRESH_TOKEN_HOURS: int = 168
 _WS_TOKEN_MINUTES: int = 15
 
+#: FAR-634: the credential class stamped on every access/refresh JWT at mint
+#: time. ``browser`` = minted by an interactive login flow (password login,
+#: demo login, SSO callback, refresh rotation of a browser family);
+#: ``programmatic`` = minted for an API-key/automation exchange path. The
+#: human_only HITL enforcement (REST ``_enforce_human_only_gate``) denies
+#: principals whose ``client_kind != "browser"``. Tokens minted BEFORE this
+#: claim existed carry no ``client_kind`` and decode as ``browser`` (backward
+#: compatible default).
+CLIENT_KIND_BROWSER: str = "browser"
+CLIENT_KIND_PROGRAMMATIC: str = "programmatic"
+_CLIENT_KIND_CLAIM: str = "client_kind"
+#: DECODE-SIDE ONLY: the claim default for legacy tokens minted before the
+#: claim existed. Mint-side, ``client_kind`` is a REQUIRED parameter on
+#: ``create_access_token``/``create_refresh_token`` (FAR-634 review) so a
+#: future programmatic mint path cannot silently inherit the browser class.
+_DEFAULT_CLIENT_KIND: str = CLIENT_KIND_BROWSER
+
 
 @dataclass(frozen=True)
 class AuthenticatedPrincipal:
@@ -41,6 +58,14 @@ class AuthenticatedPrincipal:
     #: this marker is the only reliable credential-kind signal — the API-key
     #: resolution path (``get_current_tenant_user_or_api_key``) sets it True.
     via_api_key: bool = False
+    #: FAR-634: the credential class from the token's ``client_kind`` claim
+    #: (``CLIENT_KIND_BROWSER`` default for legacy tokens minted before the
+    #: claim existed). Enforcement denies anything that is not exactly
+    #: ``CLIENT_KIND_BROWSER`` (fail closed for unknown kinds). Kept beside
+    #: ``via_api_key``: an API-key principal carries both (``via_api_key``
+    #: marks the credential TYPE for its consumers; ``client_kind`` is the
+    #: JWT-level class the human_only gate reads).
+    client_kind: str = _DEFAULT_CLIENT_KIND
 
     @property
     def user_id(self) -> uuid.UUID:
@@ -64,8 +89,22 @@ def create_access_token(
     is_system_admin: bool = False,
     user_id: str = "",
     ttl_minutes: int | None = None,
+    client_kind: str,
 ) -> str:
-    """Access token with a configurable TTL (default 15 minutes)."""
+    """Access token with a configurable TTL (default 15 minutes).
+
+    ``client_kind`` (FAR-634) stamps the credential class: ``CLIENT_KIND_BROWSER``
+    for tokens minted by an interactive login flow, ``CLIENT_KIND_PROGRAMMATIC``
+    for tokens minted for API-key/automation exchange paths. REQUIRED (no
+    default) so a future programmatic mint path cannot silently inherit the
+    browser class and pass the human_only HITL gate — every mint site must
+    state the credential class explicitly at issuance. HONEST LIMITATION
+    (defense-in-depth, not absolute): agent sessions in this org hold the
+    admin password and mint through the same login endpoint, so their tokens
+    are indistinguishable from a browser login at issuance — the FAR-611 sweep
+    alarm is the detective control for that residual. Step-up re-auth is a
+    separate (bigger) product decision.
+    """
     resolved_account_id: str = account_id or user_id
     now: datetime = datetime.now(UTC)
     claims: dict[str, object] = {
@@ -74,6 +113,7 @@ def create_access_token(
         "account_id": resolved_account_id,
         "org_role": org_role,
         "is_system_admin": is_system_admin,
+        _CLIENT_KIND_CLAIM: client_kind,
         "iat": now,
         "exp": now + timedelta(minutes=ttl_minutes if ttl_minutes is not None else _ACCESS_TOKEN_MINUTES),
     }
@@ -91,8 +131,17 @@ def create_refresh_token(
     token_family: str,
     token_sequence: int,
     user_id: str = "",
+    client_kind: str,
 ) -> str:
-    """7-day refresh token with family+sequence for rotation detection."""
+    """7-day refresh token with family+sequence for rotation detection.
+
+    ``client_kind`` (FAR-634) rides along so rotation propagates the ORIGINAL
+    credential class: the refresh endpoint re-stamps it onto the rotated
+    access+refresh pair (a browser family never silently becomes a
+    programmatic one and vice versa). REQUIRED (no default) — same fail-closed
+    contract as :func:`create_access_token`: a mint site must state the
+    credential class explicitly, never silently inherit ``browser``.
+    """
     resolved_account_id: str = account_id or user_id
     now: datetime = datetime.now(UTC)
     claims: dict[str, object] = {
@@ -104,6 +153,7 @@ def create_refresh_token(
         "purpose": "refresh",
         "token_family": token_family,
         "token_sequence": token_sequence,
+        _CLIENT_KIND_CLAIM: client_kind,
         "iat": now,
         "exp": now + timedelta(hours=_REFRESH_TOKEN_HOURS),
     }
@@ -120,6 +170,7 @@ def refresh_access_token(refresh_token: str, secret_key: str) -> str:
         account_id=str(principal.account_id),
         org_role=principal.org_role or "",
         is_system_admin=principal.is_system_admin,
+        client_kind=principal.client_kind,
     )
 
 
@@ -131,6 +182,19 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
     account_id: object = payload.get("account_id") or payload.get("user_id")
     org_role: object = payload.get("org_role")
     is_system_admin: object = payload.get("is_system_admin", False)
+    # FAR-634: the credential class. ABSENT claim (tokens minted before the
+    # claim existed) -> the browser default (backward compatible). A present
+    # but non-string value is carried as its string form so enforcement sees
+    # a value that is not exactly CLIENT_KIND_BROWSER (fail closed) rather
+    # than silently re-classifying an unparseable claim as browser.
+    raw_client_kind: object = payload.get(_CLIENT_KIND_CLAIM)
+    if raw_client_kind is None:
+        client_kind: str = _DEFAULT_CLIENT_KIND
+    elif isinstance(raw_client_kind, str):
+        client_kind = raw_client_kind
+    else:
+        _log.warning("jwt.non_string_client_kind", extra={"value": str(raw_client_kind)})
+        client_kind = str(raw_client_kind)
     if not isinstance(sub, str) or not sub:
         raise JWTError("Token missing or invalid 'sub' claim")
     if not isinstance(account_id, str):
@@ -159,6 +223,7 @@ def decode_principal(token: str, secret_key: str, allowed_purposes: list[str] | 
         account_id=parsed_account_id,
         org_role=parsed_org_role,
         is_system_admin=is_system_admin,
+        client_kind=client_kind,
     )
 
 

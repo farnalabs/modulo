@@ -492,6 +492,7 @@ def _refresh_token(org_role: str = "admin") -> str:
         org_role=org_role,
         token_family=str(uuid.uuid4()),
         token_sequence=0,
+        client_kind="browser",
     )
 
 

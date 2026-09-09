@@ -16,6 +16,12 @@ both surfaces agree on which edge a gate id refers to.
 Resolution order (callers already set the RLS org context; the queries here
 add explicit ``organisation_id`` filters as defence in depth):
 
+0. STAMP (FAR-634) — for parseable gate ids (``hitl_gate_<source>_<target>``)
+   the executor stamps the resolved config onto ``hitl_claims.
+   gate_config_json`` at fire time, so a fired gate's config is read in ONE
+   claim-row lookup. Manual-node ids skip the lookup (no claim row exists for
+   them). The walk below remains the fallback for legacy rows (no stamp),
+   gates that never fired, and fire-time stamp failures (NULL config).
 1. PRIMARY — the run's immutable ``PipelineSnapshot``: walk ``graph_json``
    edges, compute ``hitl_gate_{source}_{target}`` for every edge carrying a
    ``hitl_gate_config`` (both ``source``/``target`` and the persisted
@@ -388,7 +394,36 @@ async def resolve_hitl_gate_config(
     an explicit ``organisation_id`` filter as defence in depth. Pass the
     already-loaded ``run`` to skip the redundant run read (the MCP flow loads
     the run for its team-scope boundary check anyway).
+
+    FAR-634 claim-stamped fast path: the executor's interrupt handler stamps
+    the resolved config onto the ``hitl_claims.gate_config_json`` column at
+    fire time, so for gates that FIRED the config is read in ONE claim-row
+    lookup instead of the snapshot/live walk below. The stamp check runs only
+    for parseable gate ids (``hitl_gate_<source>_<target>``) — manual-node ids
+    never have a claim row, so they skip the lookup entirely (submit-manual
+    decisions pay zero extra queries). The snapshot/live walk REMAINS the
+    fallback for legacy rows that fired before the stamp column existed, for
+    gates with no claim row (never fired), and when the stamp is NULL (a
+    fire-time stamp failure is failure-isolated by contract). Unresolvable
+    gates still return None — callers enforce the fail-closed
+    ``hitl_gate_exists_but_unresolved`` semantics unchanged.
     """
+    # FAR-634: claim-stamped config first (O(1) — the row is one indexed
+    # lookup on the unique (run_id, gate_id) pair). The org filter is defence
+    # in depth (callers already set the RLS org context).
+    if parse_hitl_gate_id(gate_id) is not None:
+        stamped = (
+            await session.execute(
+                select(HitlClaim.gate_config_json).where(
+                    HitlClaim.run_id == run_id,
+                    HitlClaim.gate_id == gate_id,
+                    HitlClaim.organisation_id == org_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if isinstance(stamped, dict):
+            return dict(stamped)
+
     if run is None:
         run = await get_run(session, run_id, organisation_id=org_id)
         if run is None:
@@ -460,7 +495,16 @@ async def hitl_gate_exists_but_unresolved(
     return row is not None
 
 
-MSG_HUMAN_ONLY_DENY = "human_only gate requires browser authentication; API-key clients cannot approve this gate"
+#: FAR-634 review: the audit event type emitted on EVERY human_only denial,
+#: hoisted here (the shared cross-surface home, beside ``MSG_HUMAN_ONLY_DENY``)
+#: so a rename cannot fork the audit stream — the REST warning log, the REST
+#: audit append, the MCP warning log, and the MCP audit append all read this
+#: one constant.
+EVENT_HUMAN_ONLY_DENIED = "hitl.human_only_denied"
+MSG_HUMAN_ONLY_DENY = (
+    "human_only gate requires browser authentication; "
+    "non-browser credentials (API keys and programmatic tokens) cannot decide this gate"
+)
 MSG_HUMAN_ONLY_UNRESOLVED = "HITL gate configuration could not be resolved; decision requires browser authentication"
 
 

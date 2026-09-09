@@ -319,6 +319,7 @@ async def test_jwt_principal_still_accepted() -> None:
         organisation_id=str(_ORG_ID),
         account_id=str(_USER_ID),
         org_role="admin",
+        client_kind="browser",
     )
     with patch("modulo.auth.dependencies._verify_identity", new=AsyncMock(return_value=None)):
         principal = await get_current_tenant_user_or_api_key(

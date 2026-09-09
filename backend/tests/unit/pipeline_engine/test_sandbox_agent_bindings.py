@@ -7,13 +7,17 @@ Local-tier refusal raises BEFORE ``AsyncSandbox.create`` — the sandbox is
 NEVER created (pre-claim, re-dispatch safe).
 """
 
+import asyncio
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import modulo.core.pipeline_engine.node_runner as node_runner
 from modulo.core.pipeline_engine.node_runner import (
     SandboxBindingResolutionError,
+    SandboxQueueTimeoutError,
     SandboxTierRefusedError,
     make_sandbox_agent_fn,
 )
@@ -179,3 +183,94 @@ async def test_agent_without_bindings_skips_resolution() -> None:
 
     assert result["output"]["status"] == "completed"
     resolve_mock.assert_not_called()
+
+
+async def test_provisioning_watchdog_fires_on_stuck_dispatching(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-766 prove-the-fix: a sandbox stuck in ``dispatching`` —
+    ``AsyncSandbox.create`` never returning (E2B provider degradation) — fails the
+    node RETRYABLY within the provisioning bound instead of riding to the slow
+    35-min nodeless sweep.
+
+    ``sink`` is a coroutine that only returns after the bound, so the old
+    ``min(sandbox_timeout, 120)`` create await plus a node-level watchdog that
+    stands down on the ``dispatching`` marker would let this ride (no
+    checkpoint, claimed-but-never-dispatched). The fix wraps the create await in
+    a dedicated provisioning watchdog.
+    """
+    fn = make_sandbox_agent_fn(_script_node_def())
+
+    async def _hang_create(**kwargs: object) -> Any:
+        await asyncio.sleep(30)
+        raise AssertionError("create must have been cancelled by the provisioning watchdog")
+
+    monkeypatch.setattr(node_runner, "_sandbox_provisioning_timeout", lambda: 0.2)
+    with (
+        patch("e2b.AsyncSandbox.create", new=_hang_create),
+        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        pytest.raises(SandboxQueueTimeoutError),
+    ):
+        await fn(_run_state())
+
+
+async def test_healthy_provisioning_is_not_falsely_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-766: a HEALTHY (fast) provisioning must NOT be failed by the new
+    provisioning watchdog — the bound applies to the create await only, and a
+    sandbox that returns promptly completes normally."""
+    fn = make_sandbox_agent_fn(_script_node_def())
+    sandbox = _script_sandbox_mock()
+
+    monkeypatch.setattr(node_runner, "_sandbox_provisioning_timeout", lambda: 0.2)
+    monkeypatch.setattr(node_runner, "_sandbox_binding_resolve_timeout", lambda: 0.2)
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+
+
+async def test_binding_resolution_timeout_classifies_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-766: ``resolve_agent_bindings`` is now bounded. A resolution that
+    never returns must classify as the RETRYABLE ``SandboxBindingResolutionError``
+    (never the terminal ``harness.unknown`` path) and the sandbox is NEVER
+    created (pre-claim, re-dispatch safe)."""
+    fn = make_sandbox_agent_fn(_script_node_def())
+
+    async def _hang_resolve(**kwargs: object) -> Any:
+        await asyncio.sleep(30)
+        raise AssertionError("resolve_agent_bindings must have been cancelled")
+
+    monkeypatch.setattr(node_runner, "_sandbox_binding_resolve_timeout", lambda: 0.2)
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=_script_sandbox_mock())) as create_mock,
+        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=_hang_resolve),
+        pytest.raises(SandboxBindingResolutionError),
+    ):
+        await fn(_run_state())
+
+    assert create_mock.call_count == 0
+
+
+async def test_real_e2b_provider_error_surfaced_in_failure_envelope() -> None:
+    """FAR-766: a real provider error from ``AsyncSandbox.create`` (an e2b
+    SandboxException, e.g. the Aug-30 ``400: Timeout cannot be greater than 1
+    hours``) is surfaced in the failure envelope — error_type = the provider
+    exception class and error_message carries the provider detail, not a generic
+    ``Sandbox agent execution failed``."""
+    from e2b.exceptions import SandboxException
+
+    fn = make_sandbox_agent_fn(_script_node_def())
+
+    async def _raise_provider(**kwargs: object) -> Any:
+        raise SandboxException("400: Timeout cannot be greater than 1 hours")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=_raise_provider),
+        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "failed"
+    assert result["output"]["error_type"] == "SandboxException"
+    assert "400: Timeout cannot be greater than 1 hours" in result["output"]["error_message"]

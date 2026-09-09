@@ -101,6 +101,7 @@ def _make_refresh_token(org_id: str | None, sequence: int = 1) -> str:
         org_role="admin",
         token_family=_FAMILY_ID,
         token_sequence=sequence,
+        client_kind="browser",
     )
 
 

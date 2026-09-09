@@ -54,6 +54,7 @@ def _valid_jwt(org_id: str | None = None, user_id: str | None = None) -> str:
         organisation_id=org_id or str(uuid.uuid4()),
         account_id=user_id or str(uuid.uuid4()),
         org_role="admin",
+        client_kind="browser",
     )
 
 

@@ -850,7 +850,11 @@ class _FakeSweepFactory:
 
     def _lock_session(self) -> MagicMock:
         """The DEDUP-lock session — the sweep uses it DIRECTLY (no ``async
-        with``): ``connection()`` + ``close()`` on what ``factory()`` returned."""
+        with``): ``begin()`` + ``connection()`` + ``close()`` on what
+        ``factory()`` returned. ``begin()`` mirrors the fix that acquires the
+        session-scoped advisory lock in an EXPLICIT transaction (an
+        ``autobegin=False`` session cannot resolve ``connection()`` without an
+        active transaction)."""
         conn = MagicMock()
 
         async def _conn_execute(stmt: Any, params: Any = None) -> Any:
@@ -863,6 +867,10 @@ class _FakeSweepFactory:
         session = MagicMock()
         session.connection = AsyncMock(return_value=conn)
         session.close = AsyncMock()
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=session)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
         return session
 
     def _wrap(self, session: MagicMock) -> MagicMock:
@@ -1090,6 +1098,106 @@ async def test_sweep_org_failure_raises_typed_error(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(RunnerMarkerSweepError):
         await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
+
+
+async def test_sweep_acquires_marker_lock_in_explicit_transaction(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-766 (prove-the-fix): the marker sweep acquires the session-scoped
+    advisory lock inside an EXPLICIT transaction.
+
+    The session factory is ``autobegin=False`` (the codebase DI convention), so
+    a bare ``session.connection()`` with no active transaction raises
+    ``Autobegin is disabled``. That exception previously landed in the fail-open
+    ``except Exception`` every tick, so NO tick ever held the lock and concurrent
+    ticks re-processed the same zombie markers. This test models that exact
+    ``autobegin=False`` double: ``connection()`` raises unless a ``begin()``
+    transaction is currently open. The OLD code (calling ``connection()`` before
+    ``begin()``) hits the raise -> ``marker_sweep_lock_failed`` -> ``acquired``
+    stays False -> the sweep returns the ``skipped_locked`` early zero result
+    (cleared == 0). The FIXED code enters ``begin()`` first, so ``connection()``
+    resolves, the lock is acquired and the sweep proceeds to clear the stale
+    marker.
+    """
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    class _AutobeginDisabledLockSession:
+        """Models an ``autobegin=False`` session: ``.connection()`` only works
+        while a ``begin()`` transaction is open."""
+
+        def __init__(self) -> None:
+            self.in_transaction = False
+            self.connection_calls: list[bool] = []
+            conn = MagicMock()
+
+            async def _execute(stmt: Any, params: Any = None) -> Any:
+                result = MagicMock()
+                result.scalar_one.return_value = True
+                return result
+
+            conn.execute = AsyncMock(side_effect=_execute)
+            conn.commit = AsyncMock()
+            self.conn = conn
+
+        async def connection(self) -> Any:
+            self.connection_calls.append(self.in_transaction)
+            if not self.in_transaction:
+                raise RuntimeError("Autobegin is disabled — call begin() first to open a transaction")
+            return self.conn
+
+        async def close(self) -> None:  # test double
+            return None
+
+        def begin(self) -> Any:
+            self.in_transaction = True
+
+            async def _aexit(*_a: Any, **_k: Any) -> bool:
+                self.in_transaction = False
+                return False
+
+            cm = MagicMock()
+            cm.__aenter__ = AsyncMock(return_value=self)
+            cm.__aexit__ = _aexit
+            return cm
+
+    _lock_session = _AutobeginDisabledLockSession()
+    stale_marker = json.dumps(
+        {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
+    )
+    stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
+
+    parent_factory = _FakeSweepFactory([stale_awaiting])
+    calls = {"n": 0}
+
+    def _factory() -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _lock_session
+        return parent_factory._org_session()
+
+    result = await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
+
+    # The lock session was ONLY ever asked for a connection inside a begin()
+    # transaction — the OLD buggy path would have recorded a False (no-txn)
+    # connection attempt before raising.
+    assert _lock_session.connection_calls and all(_lock_session.connection_calls)
+    assert not any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records), (
+        "the advisory lock must be acquired — the lock_failed fail-open path must not fire"
+    )
+    assert result["cleared"] == 1, "with the lock held, the sweep proceeds to clear the stale marker"
+    assert stale_awaiting.id in parent_factory.cleared
 
 
 def test_sweep_sql_sandbox_id_asymmetry() -> None:

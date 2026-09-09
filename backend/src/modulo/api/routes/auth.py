@@ -26,6 +26,7 @@ from modulo.auth.dependencies import (
     resolve_role_from_membership,
 )
 from modulo.auth.jwt import (
+    CLIENT_KIND_BROWSER,
     AuthenticatedPrincipal,
     TenantPrincipal,
     create_access_token,
@@ -154,6 +155,9 @@ class _RefreshClaims(NamedTuple):
     org_id: str
     org_role: object | None
     account_id: str
+    #: FAR-634: the credential class of the ORIGINAL login that created this
+    #: refresh family, propagated onto the rotated access+refresh pair.
+    client_kind: str
 
 
 def get_clock() -> datetime:
@@ -387,6 +391,9 @@ async def _run_login_transaction(
 
 def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse:
     """Build the access+refresh token pair and auth cookies for a login."""
+    # FAR-634: password login is an interactive browser flow — the minted pair
+    # is explicitly stamped ``browser`` so the human_only credential class is
+    # an explicit decision at the mint site, not an implicit default.
     access_token = create_access_token(
         ctx.account.email,
         settings.secret_key,
@@ -395,6 +402,7 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
         org_role=ctx.org_role or "",
         is_system_admin=ctx.account.is_system_admin,
         ttl_minutes=settings.modulo_access_token_minutes,
+        client_kind=CLIENT_KIND_BROWSER,
     )
     refresh_token = create_refresh_token(
         ctx.account.email,
@@ -405,6 +413,7 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
         is_system_admin=ctx.account.is_system_admin,
         token_family=str(ctx.family.family_id),
         token_sequence=0,
+        client_kind=CLIENT_KIND_BROWSER,
     )
     requires_bootstrap = not ctx.memberships and ctx.account.is_system_admin
     content = LoginResponse(
@@ -565,6 +574,8 @@ async def demo_login(
         org_role=org_role,
         is_system_admin=account.is_system_admin,
         ttl_minutes=settings.modulo_demo_token_minutes,
+        # FAR-634: the demo login is a browser flow (cookie-set response).
+        client_kind=CLIENT_KIND_BROWSER,
     )
     content = DemoLoginResponse(access_token=access_token).model_dump()
     response = JSONResponse(content=content)
@@ -859,6 +870,20 @@ def _parse_refresh_token(req: RefreshRequest, settings: Settings) -> _RefreshCla
             detail="Invalid refresh token payload",
         )
 
+    # FAR-634: the credential class of the ORIGINAL login. Legacy refresh
+    # families minted before the claim existed carry none -> the browser
+    # default (backward compatible, matching decode_principal).
+    raw_client_kind = claims.get("client_kind")
+    if raw_client_kind is None:
+        client_kind_val = CLIENT_KIND_BROWSER
+    elif isinstance(raw_client_kind, str):
+        client_kind_val = raw_client_kind
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token claims",
+        )
+
     return _RefreshClaims(
         family_id=family_id_val,
         family_uuid=family_uuid,
@@ -868,6 +893,7 @@ def _parse_refresh_token(req: RefreshRequest, settings: Settings) -> _RefreshCla
         org_id=org_id_val,
         org_role=org_role_val,
         account_id=account_id_claim,
+        client_kind=client_kind_val,
     )
 
 
@@ -958,6 +984,8 @@ def _mint_refresh_response(
     settings: Settings,
 ) -> JSONResponse:
     """Build the rotated access+refresh token pair and auth cookies."""
+    # FAR-634: rotation propagates the ORIGINAL credential class — a browser
+    # family stays browser, a (future) programmatic family stays programmatic.
     new_access = create_access_token(
         claims.sub,
         settings.secret_key,
@@ -965,6 +993,7 @@ def _mint_refresh_response(
         account_id=claims.account_id,
         org_role=str(minted_org_role),
         ttl_minutes=settings.modulo_access_token_minutes,
+        client_kind=claims.client_kind,
     )
     new_refresh = create_refresh_token(
         claims.sub,
@@ -974,6 +1003,7 @@ def _mint_refresh_response(
         org_role=str(minted_org_role),
         token_family=claims.family_id,
         token_sequence=new_sequence,
+        client_kind=claims.client_kind,
     )
     content = RefreshResponse(access_token=new_access, refresh_token=new_refresh).model_dump()
     response = JSONResponse(content=content)

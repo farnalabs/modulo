@@ -26,6 +26,8 @@ from modulo.core.hitl_manager import (
     RunNotAwaitingError,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED
+from modulo.db.crud.hitl_gate_config import MSG_HUMAN_ONLY_DENY as _MSG_HUMAN_ONLY_DENY
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -1064,6 +1066,7 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_approve_blocks_human_only_gate(
         self,
         mock_session: AsyncMock,
@@ -1092,7 +1095,14 @@ class TestReviewHitl(_AuthContext):
         }
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(snapshot)])
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -1104,6 +1114,7 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_approve_blocks_human_only_gate_when_first_edge_unconfigured(
         self,
         mock_session: AsyncMock,
@@ -1136,7 +1147,14 @@ class TestReviewHitl(_AuthContext):
         }
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(snapshot)])
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -1148,6 +1166,7 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_deliver_manual_blocks_human_only_gate(
         self,
         mock_session: AsyncMock,
@@ -1175,7 +1194,14 @@ class TestReviewHitl(_AuthContext):
         }
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(snapshot)])
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -1193,6 +1219,7 @@ class TestReviewHitl(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
     async def test_approve_unresolvable_fired_gate_fails_closed(
         self,
         mock_session: AsyncMock,
@@ -1226,6 +1253,8 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                none_result,
                 none_result,
                 none_result,
                 _make_run_lookup_result(),  # truthy claim row
@@ -1272,6 +1301,8 @@ class TestReviewHitl(_AuthContext):
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                none_result,
                 none_result,
                 none_result,
                 none_result,
@@ -1315,7 +1346,14 @@ class TestReviewHitl(_AuthContext):
         }
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(run), _make_run_lookup_result(snapshot)])
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -1329,6 +1367,115 @@ class TestReviewHitl(_AuthContext):
 
         assert result == {"status": "rejected", "gate_id": gate_id}
         manager.reject.assert_awaited_once()
+
+    @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_human_only_denial_appends_audit_event(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+        mock_append: AsyncMock,
+    ) -> None:
+        """FAR-634: every MCP human_only denial emits a warning log + the
+        ``hitl.human_only_denied`` audit event with the denial fields."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run_id = uuid.uuid4()
+        run = MagicMock()
+        run.id = run_id
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+            ],
+        }
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(run_id), gate_id=gate_id, action="approve", claim_token="tok-123")
+
+        assert result["error"] == "human_only_gate"
+        mock_append.assert_awaited_once()
+        kwargs = mock_append.await_args.kwargs
+        assert kwargs["event_type"] == EVENT_HUMAN_ONLY_DENIED
+        assert kwargs["resource_type"] == "run"
+        assert kwargs["resource_id"] == run_id
+        payload = kwargs["payload_json"]
+        assert payload["run_id"] == str(run_id)
+        assert payload["gate_id"] == gate_id
+        assert payload["action"] == "approve"
+        assert payload["surface"] == "mcp"
+        assert payload["reason"] == _MSG_HUMAN_ONLY_DENY
+
+    @patch(
+        "modulo.core.audit_logger.append_audit_event",
+        new=AsyncMock(side_effect=RuntimeError("audit write boom")),
+    )
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_human_only_denial_survives_audit_failure(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-634 failure isolation: an audit write failure never changes the
+        denial - the error dict still returns."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.approve = AsyncMock()
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+            ],
+        }
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="approve", claim_token="tok-123")
+
+        assert result["error"] == "human_only_gate"
+        manager.approve.assert_not_called()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")

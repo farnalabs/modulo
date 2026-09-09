@@ -418,6 +418,12 @@ class TestExportCosts:
         resp = unauth_client.get("/api/v1/admin/costs/export")
         assert resp.status_code in (401, 403)
 
+    def test_export_unimplemented_group_by_returns_422(self, client: TestClient) -> None:
+        for group_by in ("pipeline", "model"):
+            resp = client.get(f"/api/v1/admin/costs/export?period=this_month&group_by={group_by}&format=csv")
+            assert resp.status_code == 422
+            assert "team" in resp.json()["detail"]
+
     def test_export_invalid_period_returns_422(self, client: TestClient) -> None:
         resp = client.get("/api/v1/admin/costs/export?period=invalid")
         assert resp.status_code == 422

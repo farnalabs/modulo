@@ -401,6 +401,38 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="A connection to the model provider failed.",
     ),
+    # --- model (stdout-scanned provider failure) codes --------------------
+    # FAR-734: model-backend errors detected by scanning the retained agent
+    # stdout for terminal JSONL ``"type":"error"`` signatures.  These are
+    # DISTINCT from the provider.* codes (which map Python exception class
+    # names from the executor's generic catch) — the same underlying failure
+    # (e.g. a timeout) surfaces as provider.unavailable when caught as a
+    # Python exception, but as model.provider_timeout when detected post-hoc
+    # in retained stdout.  Retryability matches the provider.* counterpart.
+    "model.provider_timeout": ErrorCodeSpec(
+        error_class="model",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model backend timed out mid-session (detected from retained stdout).",
+    ),
+    "model_disabled": ErrorCodeSpec(
+        error_class="model",
+        retryable=False,
+        alert_severity="critical",
+        guidance="The model is disabled for the API key (detected from retained stdout).",
+    ),
+    "model.connection": ErrorCodeSpec(
+        error_class="model",
+        retryable=True,
+        alert_severity="warning",
+        guidance="A connection to the model backend failed (detected from retained stdout).",
+    ),
+    "model.rate_limited": ErrorCodeSpec(
+        error_class="model",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model backend rate-limited the request (detected from retained stdout).",
+    ),
     # --- capacity codes --------------------------------------------------
     _CODE_CAPACITY_ORG: ErrorCodeSpec(
         error_class="capacity",
@@ -574,6 +606,14 @@ LEGACY_ALIASES: dict[str, str] = {
     # scope.violation).
     "scope_violation": _CODE_SCOPE_VIOLATION,
     "ScopeViolationError": _CODE_SCOPE_VIOLATION,
+    # FAR-734: model-backend errors detected from retained stdout (snake_case
+    # spellings for backward compat — these are written by the stdout scanner
+    # and must resolve to the dotted registry entries above, never
+    # ``harness.unknown``).  ``model_disabled`` is already a registry key so
+    # no alias entry is needed (map_legacy_code passes it through unchanged).
+    "model_provider_timeout": "model.provider_timeout",
+    "model_connection": "model.connection",
+    "model_rate_limited": "model.rate_limited",
 }
 
 

@@ -371,6 +371,7 @@ def refresh_token_seq0(request: Any, ctx: dict[str, Any]) -> None:
         org_role="admin",
         token_family=family_id,
         token_sequence=0,
+        client_kind="browser",
     )
     ctx["theft_refresh_token"] = token
 

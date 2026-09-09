@@ -248,6 +248,7 @@ def _optional_credentials(role: str = "admin") -> HTTPAuthorizationCredentials:
         organisation_id=str(_ORG_ID),
         account_id=str(_USER_ID),
         org_role=role,
+        client_kind="browser",
     )
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 

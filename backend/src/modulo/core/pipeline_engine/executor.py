@@ -105,6 +105,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
 from modulo.core.pipeline_engine.hitl_context import HitlGateContext, build_hitl_gate_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
+from modulo.core.pipeline_engine.model_backend_errors import classify_provider_error
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
     MODULO_SYNTHETIC_FAILURE_MARKER,
@@ -122,6 +123,7 @@ from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, Runaway
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
@@ -4669,6 +4671,16 @@ class PipelineExecutor:
                 error_detail = _sanitize_detail(
                     "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
                 )
+                # FAR-734: scan the retained stdout (embedded in the
+                # exception message) for terminal provider-error
+                # signatures.  When a signature matches, upgrade the
+                # generic ``node_cancelled`` code to the specific
+                # ``model.*`` code so the Error Dashboard and daily facts
+                # bucket it as a first-class failure dimension.  Fail
+                # open: when no signature matches the generic code stays.
+                _provider_code = classify_provider_error(str(exc))
+                if _provider_code is not None:
+                    error_code = _provider_code
         return error_code, error_detail
 
     async def _read_retry_attempt_state(
@@ -5304,6 +5316,32 @@ class PipelineExecutor:
                         exc_info=True,
                     )
                     gate_context = None
+                # FAR-634: resolve the fired gate's hitl_gate_config and stamp
+                # it on the claim row so the human_only resolver reads it in
+                # ONE claim-row lookup at decision time instead of the
+                # snapshot/live walk. Same failure-isolated savepoint contract
+                # as the briefing capture: a stamp failure must never block
+                # the interrupt — the row carries NULL config and the
+                # resolver's walk fallback covers it (legacy semantics
+                # unchanged).
+                gate_config: dict[str, Any] | None = None
+                try:
+                    async with session.begin_nested():
+                        gate_config = await resolve_hitl_gate_config(
+                            session,
+                            run_id=run_id,
+                            gate_id=gate_id,
+                            org_id=org_id,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "hitl_gate.config_stamp_failed",
+                        extra={"run_id": str(run_id), "gate_id": gate_id, "org_id": str(org_id)},
+                        exc_info=True,
+                    )
+                    gate_config = None
                 await mgr.create_gate(
                     session,
                     run_id=run_id,
@@ -5312,6 +5350,7 @@ class PipelineExecutor:
                     org_id=org_id,
                     required_team_id=required_team_id,
                     context_json=gate_context,
+                    gate_config_json=gate_config,
                 )
         return pipeline_name, coalesce_reused
 
