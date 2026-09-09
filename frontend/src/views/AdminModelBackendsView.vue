@@ -15,7 +15,7 @@
       <template v-else>
         <div v-if="formMode === 'add'" class="card p-6">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
-          <div v-if="presets.length > 0 && !selectedPresetId" class="mb-6">
+          <div v-if="presets.length > 0 && !selectedPresetId && !manualMode" class="mb-6">
             <p class="mb-3 text-sm text-muted-foreground">{{ $t('views.AdminModelBackendsView.preset_picker_description') }}</p>
             <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <button
@@ -36,11 +36,21 @@
                 type="button"
                 class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
                 data-testid="admin-model-backends-manual-entry-toggle"
-                @click="selectedPresetId = '__manual__'"
+                @click="manualMode = true"
               >
                 {{ $t('views.AdminModelBackendsView.preset_manual_entry') }}
               </button>
             </div>
+          </div>
+          <div v-if="manualMode" class="mb-6">
+            <button
+              type="button"
+              class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              data-testid="admin-model-backends-back-to-presets"
+              @click="manualMode = false"
+            >
+              {{ $t('views.AdminModelBackendsView.preset_back_to_presets') }}
+            </button>
           </div>
           <div v-if="selectedPreset" class="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
             <div class="flex items-center justify-between">
@@ -54,7 +64,7 @@
                 data-testid="admin-model-backends-preset-clear"
                 @click="selectedPresetId = null"
               >
-                {{ $t('views.AdminModelBackendsView.cancel') }}
+                {{ $t('views.AdminModelBackendsView.preset_clear') }}
               </button>
             </div>
             <p class="mt-1 text-xs text-muted-foreground">{{ selectedPreset.description }}</p>
@@ -528,12 +538,13 @@ const { data: backendsResp, loading, error, load: loadBackends } = useDataFetch(
 )
 
 const { data: presetsResp } = useDataFetch(
-  () => api.GET('/api/v1/model-backends/presets' as never),
+  () => api.GET('/api/v1/model-backends/presets'),
   { initialValue: { items: [] } as { items: PresetItem[] } }
 )
 
 const presets = computed(() => presetsResp.value?.items ?? [])
 const selectedPresetId = ref<string | null>(null)
+const manualMode = ref(false)
 const selectedPreset = computed(() => {
   if (!selectedPresetId.value) return null
   return presets.value.find(p => p.id === selectedPresetId.value) ?? null
@@ -631,10 +642,12 @@ function openAddForm() {
   deleteConfirmBackendId.value = null
   formError.value = null
   selectedPresetId.value = null
+  manualMode.value = false
 }
 
 function applyPreset(preset: PresetItem) {
   selectedPresetId.value = preset.id
+  manualMode.value = false
   formData.provider = preset.provider
   formData.model_id = preset.default_model_id
 }

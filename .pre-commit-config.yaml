@@ -116,14 +116,13 @@
         entry: uv run --project backend --no-sync python scripts/run_check_utf8_encoding.py
         language: system
         pass_filenames: false
-      # Temporarily disabled: requires Python 3.12+ (sandbox has 3.11)
-      # - id: run-changed-tests
-      #   name: run tests for changed test files
-      #   entry: uv run --project backend --no-sync python scripts/run_changed_tests.py
-      #   language: system
-      #   files: ^backend/tests/.*\.py$
-      #   pass_filenames: false
-      #   stages: [pre-commit]
+      - id: run-changed-tests
+        name: run tests for changed test files
+        entry: uv run --project backend --no-sync python scripts/run_changed_tests.py
+        language: system
+        files: ^backend/tests/.*\.py$
+        pass_filenames: false
+        stages: [pre-commit]
       - id: check-uv-lock
         name: check uv lockfile freshness
         entry: uv run --project backend --no-sync python scripts/run_check_uv_lock.py
