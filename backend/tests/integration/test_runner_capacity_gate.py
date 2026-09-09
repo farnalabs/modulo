@@ -7,8 +7,10 @@ a real Postgres (testcontainers) with runs seeded via raw SQL — the
 """
 
 import asyncio
+import itertools
 import json
 import logging
+import unittest.mock
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -18,6 +20,7 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+import modulo.core.runner_capacity as _rc
 from modulo.core.runner_capacity import (
     RunnerCapacityDeniedError,
     acquire_runner_dispatch_slot,
@@ -548,12 +551,28 @@ async def test_same_run_concurrent_dispatch_and_resume_no_deadlock(
 # ---------------------------------------------------------------------------
 
 
+_SWEEP_LOCK_SEQ = itertools.count()
+
+
 async def _sweep(db_engine: AsyncEngine) -> dict[str, Any]:
     from modulo.settings import get_settings
 
     get_settings.cache_clear()
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    return await reconcile_runner_dispatch_markers(factory)
+    # Hermetic dedup advisory-lock key. The deploy pre-deploy gate runs the full
+    # integration suite with ``-n 2`` against ONE shared testcontainers Postgres.
+    # ``dispatcher_reconcile`` (on the other worker) also calls
+    # ``reconcile_runner_dispatch_markers`` and both callers share the SAME global
+    # dedup key (``runner_marker_sweep_lock_keys``). When the other worker holds it,
+    # ``pg_try_advisory_lock`` returns False and the sweep returns the
+    # ``skipped_locked`` early-zero result -- leaving terminal/fence markers
+    # uncleared and emitting no violation, which fails the assertions below. Give
+    # every test sweep its OWN lock key so it never contends with (and is never
+    # skipped by) a concurrent production-like sweep on the shared DB. Test
+    # hermeticity only -- production still uses the single global dedup key.
+    n = next(_SWEEP_LOCK_SEQ)
+    with unittest.mock.patch.object(_rc, "runner_marker_sweep_lock_keys", return_value=(n, -n)):
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        return await reconcile_runner_dispatch_markers(factory)
 
 
 async def test_sweep_fence_components_survive_staleness(
