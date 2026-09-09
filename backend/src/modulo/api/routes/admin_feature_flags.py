@@ -107,7 +107,7 @@ async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None
             await redis.aclose()
 
 
-async def _read_org_overrides(session: AsyncSession, org_id: str | uuid.UUID) -> dict[str, bool]:
+async def _read_org_overrides(session: AsyncSession, org_id: uuid.UUID) -> dict[str, bool]:
     """Read the org's ``feature_overrides`` map (bool entries only).
 
     Returns ``{}`` when the org or its settings are missing. Callers own the
@@ -125,7 +125,7 @@ async def _read_org_overrides(session: AsyncSession, org_id: str | uuid.UUID) ->
     }
 
 
-async def _write_org_override(session: AsyncSession, org_id: str | uuid.UUID, flag_name: str, enabled: bool) -> None:
+async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_name: str, enabled: bool) -> None:
     """Persist ``feature_overrides[flag_name] = enabled`` in the org's settings.
 
     The single durable write path shared by the toggle (``PUT /{flag_name}``)
