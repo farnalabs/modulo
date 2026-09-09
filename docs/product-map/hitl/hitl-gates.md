@@ -126,13 +126,16 @@ may decide.
   between ticks stays claimed until the next `claim_expiry` sweep
   (`expiry_job.py`).
 - **No executing BDD surface for modify-then-approve, `human_only` refusal, or
-  overdue warnings** — `modify_then_approve.feature`, `human_only_gate.feature`
-  and `overdue_warning.feature` ship under `tests/bdd/features/hitl/` but no
-  step module registers them via `scenarios(...)`, so they never execute and are
-  no longer cited as coverage here. The behaviours themselves are unit-tested
-  (`test_hitl_manager`, `test_node_runner_hitl`, `test_mcp_security`,
+  overdue warnings** — the pre-existing `modify_then_approve.feature`,
+  `human_only_gate.feature` and `overdue_warning.feature` drafts shipped under
+  `tests/bdd/features/hitl/` were removed in the 2026-09-07 product-map walk:
+  they described a removed API surface (`/api/runs/{id}/human-input`, the
+  `waiting_for_human` status, pre-claim-token flows), were never registered via
+  `scenarios(...)`, and therefore never executed. The behaviours themselves are
+  unit-tested (`test_hitl_manager`, `test_node_runner_hitl`, `test_mcp_security`,
   `test_mcp_runtime_tools`, `test_overdue_warning`, `test_claim_expiry_job`);
-  wiring the feature files up needs their missing step definitions written.
+  an executing BDD surface would need the drafts rewritten against the current
+  API before registration.
 
 ## QA History
 
@@ -149,3 +152,12 @@ may decide.
   folded into `bdd:` here: that feature file ships but no step module registers
   it via `scenarios(...)`, so citing it would claim BDD coverage for scenarios
   that never execute. Status: covered.
+- 2026-09-07: **improve-architecture (product-map walk)** — closed the stale-BDD
+  drift: removed the never-executed, superseded feature files
+  (`hitl/approval_gate.feature` marked `@deprecated`, `hitl/human_only_gate.feature`,
+  `hitl/modify_then_approve.feature`, `hitl/overdue_warning.feature`) and the
+  byte-identical duplicate `eval/conditional_hitl.feature` (the registered copy
+  lives at `evals/conditional_hitl.feature`). The covered behaviours are
+  unchanged; the architecture suite now guards against new orphaned `.feature`
+  files (see `backend/tests/architecture/test_product_map_feature_gaps.py`).
+  Status: covered.
