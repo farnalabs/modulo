@@ -69,9 +69,9 @@ _MIGRATION_PATH = (
 # 0193, improve-database's 0197/0198/0199 chain off it, 0201_spend_anomaly_unique_org_date
 # (from main) chained onto 0200, 0202_runs_error_code_claimed_by_indexes (from main)
 # chained onto 0201, 0195_hitl_claim_gate_config_json (FAR-634, from main) chained onto 0202,
-# and this PR's 0203_library_collection_type (FAR-760) chained onto 0195
-# as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0203_library_collection_type"
+# 0203_triggers_add_name (FAR-681, from main) chained onto 0195, and FAR-760's
+# 0204_library_collection_type chained onto 0203_triggers_add_name as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0204_library_collection_type"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

@@ -16722,6 +16722,8 @@ export interface components {
         TriggerCreate: {
             /** Trigger Type */
             trigger_type: string;
+            /** Name */
+            name?: string | null;
             /**
              * Active
              * @default true

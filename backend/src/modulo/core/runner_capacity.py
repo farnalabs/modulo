@@ -912,16 +912,28 @@ async def reconcile_runner_dispatch_markers(
     lock_conn: Any = None
     try:
         try:
-            lock_conn = await lock_session.connection()
-            acquired = bool(
-                (
-                    await lock_conn.execute(
-                        text("SELECT pg_try_advisory_lock(:k1, :k2)"),
-                        {"k1": k1, "k2": k2},
-                    )
-                ).scalar_one()
-            )
-            await lock_conn.commit()
+            # The session factory is ``autobegin=False`` (the codebase DI
+            # convention, see ``_make_session_factory``/``_open_factory``), so a
+            # bare ``session.connection()`` raises ``InvalidRequestError``
+            # ("Autobegin is disabled") — there is no active transaction under
+            # which to resolve a connection. That exception was being caught by
+            # the fail-open ``except Exception`` EVERY tick, so no tick ever
+            # actually held the advisory lock and every concurrent tick
+            # re-processed the same zombie runs. Acquire the session-scoped
+            # advisory lock in an EXPLICIT transaction instead: the lock is
+            # SESSION-scoped (not xact-scoped), so it survives this transaction's
+            # commit and is released only by ``pg_advisory_unlock`` (finally
+            # block) or ``session.close()``.
+            async with lock_session.begin():
+                lock_conn = await lock_session.connection()
+                acquired = bool(
+                    (
+                        await lock_conn.execute(
+                            text("SELECT pg_try_advisory_lock(:k1, :k2)"),
+                            {"k1": k1, "k2": k2},
+                        )
+                    ).scalar_one()
+                )
         except asyncio.CancelledError:
             raise
         except Exception:

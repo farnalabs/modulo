@@ -1,15 +1,15 @@
 """Add library_collection primitive type and collection authoring fields (FAR-760).
 
-Revision ID: 0203_library_collection_type
-Revises: 0195_hitl_claim_gate_config_json
+Revision ID: 0204_library_collection_type
+Revises: 0203_triggers_add_name
 Create Date: 2026-09-09
 """
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0203_library_collection_type"
-down_revision = "0195_hitl_claim_gate_config_json"
+revision = "0204_library_collection_type"
+down_revision = "0203_triggers_add_name"
 branch_labels = None
 depends_on = None
 

@@ -58,8 +58,18 @@ def pin_env_file(path: str | Path) -> None:
     time. Passing ``None`` here would silently restore the CWD ".env" read;
     unpinning is therefore not supported through this function (the process
     would have to restart).
+
+    Sealed (FAR-671 slice 2): once the ``get_settings`` cache is warm a
+    Settings object already exists with the OLD pin (or none) — pinning now
+    would be silently ineffective for the cached instance, so this raises
+    instead. A launcher that pins late is a boot-order bug, not a warning.
     """
     global _pinned_env_file
+    if get_settings.cache_info().currsize > 0:
+        raise RuntimeError(
+            "pin_env_file must be called before the first Settings construction: "
+            "get_settings' cache is already warm, so the pin would be silently ignored"
+        )
     _pinned_env_file = path
 
 
@@ -377,6 +387,26 @@ class Settings(BaseSettings):
     # legitimate node timeout.
     saq_node_default_timeout_seconds: int = Field(
         default=1200, alias="SAQ_NODE_DEFAULT_TIMEOUT_SECONDS", ge=30, le=7200
+    )
+    # FAR-766: sandbox_agent PROVISIONING watchdog bound. A run that has written
+    # the "dispatching" dispatch marker but never reaches "script_executing"
+    # (``AsyncSandbox.create`` never returns — observed E2B provider degradation
+    # 06:05-13:58) currently rides to the slow 35-min ``dispatcher_reconcile``
+    # nodeless sweep. Bound the provisioning phase tightly so the node fails
+    # RETRYABLY within this window instead. MUST stay small relative to the node
+    # timeout (the provisioned sandbox's own lifetime still uses the node
+    # timeout; this is the pre-sandbox create bound). Never larger than the
+    # smallest legitimate create window.
+    sandbox_provisioning_timeout_seconds: int = Field(
+        default=90, alias="SANDBOX_PROVISIONING_TIMEOUT_SECONDS", ge=15, le=600
+    )
+    # FAR-766: bound for ``resolve_agent_bindings`` at provision time. The
+    # secrets-backend / DB read was previously unbounded, so a hard secrets-backend
+    # stall also rode to the node timeout. Tight, retryable bound; a timeout is
+    # classified as a retryable binding resolution failure (never the terminal
+    # ``harness.unknown`` path).
+    sandbox_binding_resolve_timeout_seconds: int = Field(
+        default=30, alias="SANDBOX_BINDING_RESOLVE_TIMEOUT_SECONDS", ge=5, le=120
     )
     # dispatcher_reconcile secondary net: a SAQ run still 'running' with a FRESH
     # heartbeat but ZERO LangGraph checkpoints for its thread after this many

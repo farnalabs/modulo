@@ -105,6 +105,7 @@ from modulo.core.pipeline_engine.evidence import (
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile, struct_hash_with_eval_defs
 from modulo.core.pipeline_engine.hitl_context import HitlGateContext, build_hitl_gate_context
 from modulo.core.pipeline_engine.idempotency import read_before_write_suppression
+from modulo.core.pipeline_engine.model_backend_errors import classify_provider_error
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
     MODULO_SYNTHETIC_FAILURE_MARKER,
@@ -439,6 +440,15 @@ def _retry_after_policy(
     unconditional terminal fail. The ``"timeout"`` / ``"stall"`` aliases above
     therefore cover both the in-execute outcome spellings AND the raw watchdog
     codes (both resolve through ``map_legacy_code``).
+
+    Nodeless zombie deaths also consult this matcher (FAR-733): the
+    dispatcher_reconcile cron path's ``_should_redispatch_nodeless`` calls
+    this function with ``final_status="stalled"`` and
+    ``error_code="executor_stalled"`` so that a stall-covered policy
+    re-dispatches nodeless zombies on the SAME cycle the watchdog would allow.
+    The attempt budget uses ``max(0, claim_count - 1)`` (the watchdog path's
+    ``max(node_attempt_count, claim_count - 1)`` where ``node_attempt_count``
+    is 0 for nodeless runs).
 
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
@@ -4670,6 +4680,16 @@ class PipelineExecutor:
                 error_detail = _sanitize_detail(
                     "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
                 )
+                # FAR-734: scan the retained stdout (embedded in the
+                # exception message) for terminal provider-error
+                # signatures.  When a signature matches, upgrade the
+                # generic ``node_cancelled`` code to the specific
+                # ``model.*`` code so the Error Dashboard and daily facts
+                # bucket it as a first-class failure dimension.  Fail
+                # open: when no signature matches the generic code stays.
+                _provider_code = classify_provider_error(str(exc))
+                if _provider_code is not None:
+                    error_code = _provider_code
         return error_code, error_detail
 
     async def _read_retry_attempt_state(

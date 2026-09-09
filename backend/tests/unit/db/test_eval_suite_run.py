@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0203_library_collection_type."""
+    """Exactly one migration chains off each predecessor, and the head is 0204_library_collection_type."""
     import re
 
     revisions = {}
@@ -828,12 +828,15 @@ def test_single_migration_head() -> None:
     # 0195_hitl_claim_gate_config_json (FAR-634) chains off 0202.
     chaining_off_0202 = [p for p in revisions if parents[p] == "0202_runs_error_code_claimed_by_indexes"]
     assert [_basename(p) for p in chaining_off_0202] == ["0195_hitl_claim_gate_config_json.py"]
-    # 0203_library_collection_type (FAR-760) chains off 0195 and is the single head.
+    # 0203_triggers_add_name (FAR-681 slice 2, from main) chains off 0195.
     chaining_off_0195 = [p for p in revisions if parents[p] == "0195_hitl_claim_gate_config_json"]
-    assert [_basename(p) for p in chaining_off_0195] == ["0203_library_collection_type.py"]
-    # Nothing chains off 0203 -> it is the single head.
-    chaining_off_0203 = [p for p in revisions if parents[p] == "0203_library_collection_type"]
-    assert not chaining_off_0203
+    assert [_basename(p) for p in chaining_off_0195] == ["0203_triggers_add_name.py"]
+    # 0204_library_collection_type (FAR-760) chains off 0203_triggers_add_name.
+    chaining_off_0203 = [p for p in revisions if parents[p] == "0203_triggers_add_name"]
+    assert [_basename(p) for p in chaining_off_0203] == ["0204_library_collection_type.py"]
+    # Nothing chains off 0204 -> it is the single head.
+    chaining_off_0204 = [p for p in revisions if parents[p] == "0204_library_collection_type"]
+    assert not chaining_off_0204
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

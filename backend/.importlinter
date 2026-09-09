@@ -19,6 +19,14 @@ ignore_imports =
     modulo.api.routes.triggers -> modulo.core.cron_helpers
     modulo.api.routes.triggers -> modulo.core.trigger_engine
     modulo.api.mcp_server -> modulo.core.cron_helpers
+    # FAR-733: cron_helpers now imports pipeline_engine.executor (for the shared
+    # _retry_after_policy matcher used by _should_redispatch_nodeless). executor
+    # pulls langgraph, so every API seam that reaches cron_helpers (health,
+    # triggers, mcp_server, mcp_server->trigger_streak) would otherwise transit
+    # langgraph. cron_helpers is a sanctioned core seam the API already whitelists
+    # above, so whitelist the single contaminated edge at the cron_helpers boundary
+    # rather than every API entry path.
+    modulo.core.cron_helpers -> modulo.core.pipeline_engine.executor
     modulo.api.mcp_server -> modulo.core.dispatch
     modulo.api.routes.pipelines -> modulo.core.reports.quality_report
     # Admin fernet-rotation is a cross-org system operation: it must run on the
