@@ -86,6 +86,31 @@ routes:
         <<: *community
         deprecated: false
 
+    /library/collections/new:
+        name: library-collection-create
+        breadcrumb: New Collection
+        parent: /library
+        product_map: [feat-library]
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+
+    /library/collections/:id:
+        name: library-collection-detail
+        breadcrumb: Collection
+        parent: /library
+        product_map: [feat-library]
+        sidebar_group:
+        sidebar_order:
+        type: page
+        pattern: /library/collections/:id
+        dynamic_params:
+          - id
+        <<: *community
+        deprecated: false
+
     /notifications:
         name: notifications
         breadcrumb: Notifications
