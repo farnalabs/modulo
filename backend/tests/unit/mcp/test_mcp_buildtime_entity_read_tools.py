@@ -20,13 +20,18 @@ from modulo.api.mcp_server import (
     get_agent,
     get_connector,
     get_model_backend,
+    get_parameter_schema,
+    get_parameter_schema_references,
+    get_parameter_set,
     list_agents,
     list_connector_types,
     list_connectors,
     list_environment_profiles,
     list_model_backends,
     list_parameter_schemas,
+    list_parameter_sets,
     mcp,
+    validate_parameter_schema,
 )
 from modulo.db.crud.base import PageResult
 from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
@@ -761,3 +766,331 @@ class TestListParameterSchemas(AuthContext):
         mock_session.return_value = make_session_context(AsyncMock())
         result = await list_parameter_schemas()
         assert result["error"] == "internal_error"
+
+
+# ---------------------------------------------------------------------------
+# get_parameter_schema
+# ---------------------------------------------------------------------------
+
+
+class TestGetParameterSchema(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
+        result = await get_parameter_schema(schema_id="not-a-uuid")
+        assert result["error"] == "invalid_id"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_not_found(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        mock_get.return_value = None
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_parameter_schema(schema_id=str(uuid.uuid4()))
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_cross_org_row_reads_as_not_found(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        schema = MagicMock()
+        schema.id = uuid.uuid4()
+        schema.organisation_id = uuid.uuid4()
+        mock_get.return_value = schema
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_parameter_schema(schema_id=str(schema.id))
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_returns_full_definition(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        schema = MagicMock()
+        schema.id = uuid.uuid4()
+        schema.organisation_id = ORG_ID
+        schema.name = "deploy-params"
+        schema.description = "Deployment parameters"
+        schema.version = 3
+        schema.parameters = [{"name": "region", "type": "string", "required": True}]
+        schema.created_at = NOW
+        schema.updated_at = NOW
+        mock_get.return_value = schema
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_parameter_schema(schema_id=str(schema.id))
+        assert result["data"]["id"] == str(schema.id)
+        assert result["data"]["version"] == 3
+        assert result["data"]["parameters"] == [{"name": "region", "type": "string", "required": True}]
+
+
+# ---------------------------------------------------------------------------
+# get_parameter_schema_references
+# ---------------------------------------------------------------------------
+
+
+class TestGetParameterSchemaReferences(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
+        result = await get_parameter_schema_references(schema_id="not-a-uuid")
+        assert result["error"] == "invalid_id"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_not_found(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        mock_get.return_value = None
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_parameter_schema_references(schema_id=str(uuid.uuid4()))
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("modulo.db.crud.parameter_schema.get_schema_references")
+    async def test_returns_references(
+        self,
+        mock_refs: AsyncMock,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        schema = MagicMock()
+        schema.id = uuid.uuid4()
+        schema.organisation_id = ORG_ID
+        mock_get.return_value = schema
+        mock_refs.return_value = {"agents": [uuid.uuid4()], "sets": [uuid.uuid4()]}
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_parameter_schema_references(schema_id=str(schema.id))
+        assert "data" in result
+        assert len(result["data"]["agents"]) == 1
+        assert len(result["data"]["sets"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# validate_parameter_schema
+# ---------------------------------------------------------------------------
+
+
+class TestValidateParameterSchema(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
+        result = await validate_parameter_schema(schema_id="not-a-uuid", values={})
+        assert result["error"] == "invalid_id"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_not_found(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        mock_get.return_value = None
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await validate_parameter_schema(schema_id=str(uuid.uuid4()), values={})
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_valid_values_return_valid(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        schema = MagicMock()
+        schema.id = uuid.uuid4()
+        schema.organisation_id = ORG_ID
+        schema.parameters = [{"name": "region", "type": "string", "required": True}]
+        mock_get.return_value = schema
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await validate_parameter_schema(schema_id=str(schema.id), values={"region": "us-east-1"})
+        assert result["data"]["valid"] is True
+        assert not result["data"]["errors"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_required_field_missing_returns_error(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        schema = MagicMock()
+        schema.id = uuid.uuid4()
+        schema.organisation_id = ORG_ID
+        schema.parameters = [{"name": "region", "type": "string", "required": True}]
+        mock_get.return_value = schema
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await validate_parameter_schema(schema_id=str(schema.id), values={})
+        assert result["data"]["valid"] is False
+        assert len(result["data"]["errors"]) == 1
+        assert result["data"]["errors"][0]["field"] == "region"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_type_mismatch_returns_error(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        schema = MagicMock()
+        schema.id = uuid.uuid4()
+        schema.organisation_id = ORG_ID
+        schema.parameters = [{"name": "count", "type": "number"}]
+        mock_get.return_value = schema
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await validate_parameter_schema(schema_id=str(schema.id), values={"count": "not-a-number"})
+        assert result["data"]["valid"] is False
+        assert "Expected a numeric value" in result["data"]["errors"][0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# list_parameter_sets
+# ---------------------------------------------------------------------------
+
+
+class TestListParameterSets(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
+        result = await list_parameter_sets(schema_id="not-a-uuid")
+        assert result["error"] == "invalid_id"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_schema_not_found(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        mock_get.return_value = None
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await list_parameter_sets(schema_id=str(uuid.uuid4()))
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    @patch("modulo.db.crud.parameter_set.list_sets")
+    async def test_returns_sets(
+        self,
+        mock_list: AsyncMock,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        schema = MagicMock()
+        schema.id = uuid.uuid4()
+        schema.organisation_id = ORG_ID
+        mock_get.return_value = schema
+        ps = MagicMock()
+        ps.id = uuid.uuid4()
+        ps.parameter_schema_id = schema.id
+        ps.name = "production"
+        ps.description = "Production values"
+        ps.version = 1
+        ps.schema_version = 3
+        ps.values = {"region": "us-east-1"}
+        ps.created_at = NOW
+        ps.updated_at = NOW
+        mock_list.return_value = [ps]
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await list_parameter_sets(schema_id=str(schema.id))
+        assert len(result["data"]) == 1
+        assert result["data"][0]["name"] == "production"
+
+
+# ---------------------------------------------------------------------------
+# get_parameter_set
+# ---------------------------------------------------------------------------
+
+
+class TestGetParameterSet(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_invalid_uuid_returns_invalid_id(self, mock_validate: AsyncMock) -> None:
+        result = await get_parameter_set(schema_id="not-a-uuid", set_id="also-not-a-uuid")
+        assert result["error"] == "invalid_id"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_set.get_set")
+    async def test_not_found(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        mock_get.return_value = None
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_parameter_set(schema_id=str(uuid.uuid4()), set_id=str(uuid.uuid4()))
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_set.get_set")
+    async def test_wrong_schema_returns_not_found(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        ps = MagicMock()
+        ps.id = uuid.uuid4()
+        ps.parameter_schema_id = uuid.uuid4()  # different from requested schema_id
+        ps.organisation_id = ORG_ID
+        mock_get.return_value = ps
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_parameter_set(schema_id=str(uuid.uuid4()), set_id=str(ps.id))
+        assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_set.get_set")
+    async def test_returns_set(
+        self,
+        mock_get: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        schema_id = uuid.uuid4()
+        ps = MagicMock()
+        ps.id = uuid.uuid4()
+        ps.parameter_schema_id = schema_id
+        ps.organisation_id = ORG_ID
+        ps.name = "staging"
+        ps.description = "Staging values"
+        ps.version = 2
+        ps.schema_version = 3
+        ps.values = {"region": "eu-west-1"}
+        ps.created_at = NOW
+        ps.updated_at = NOW
+        mock_get.return_value = ps
+        mock_session.return_value = make_session_context(AsyncMock())
+        result = await get_parameter_set(schema_id=str(schema_id), set_id=str(ps.id))
+        assert result["data"]["name"] == "staging"
+        assert result["data"]["version"] == 2

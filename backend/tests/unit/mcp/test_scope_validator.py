@@ -437,6 +437,19 @@ class TestConstants:
             "get_model_backend",
             "list_environment_profiles",
             "list_parameter_schemas",
+            "create_parameter_schema",
+            "get_parameter_schema",
+            "update_parameter_schema",
+            "delete_parameter_schema",
+            "restore_parameter_schema",
+            "get_parameter_schema_references",
+            "validate_parameter_schema",
+            "list_parameter_sets",
+            "create_parameter_set",
+            "get_parameter_set",
+            "update_parameter_set",
+            "delete_parameter_set",
+            "restore_parameter_set",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
