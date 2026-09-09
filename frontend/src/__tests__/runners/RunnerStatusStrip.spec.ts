@@ -138,7 +138,7 @@ describe('RunnerStatusStrip', () => {
           state: 'stale',
           engine_reachable: true,
           images_present: true,
-          probed_at: new Date(Date.now() - 600_000).toISOString(),
+          probed_at: new Date(Date.now() - 600_000).toISOString(), // nosemgrep: new-date-without-guard
           age_seconds: 600,
           engine_info: {},
           image_checks: {},
