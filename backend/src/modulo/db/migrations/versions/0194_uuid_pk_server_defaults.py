@@ -37,7 +37,6 @@ from __future__ import annotations
 
 from alembic import op
 from sqlalchemy import text
-from sqlalchemy.exc import ProgrammingError
 
 revision: str = "0194_uuid_pk_server_defaults"
 down_revision: str | None = "0193_run_node_outputs_sweep_index"
@@ -222,24 +221,33 @@ _DOWNGRADE_STATEMENTS: tuple[str, ...] = (
 )
 
 
+def _existing_tables(bind: object) -> set[str]:
+    # Tables created by LATER migrations (e.g. ``runner_probe_cache`` at 0202,
+    # which also supplies its uuid-PK server default at CREATE time) do not exist
+    # yet when this frozen enum runs on a fresh DB. Issuing an ``ALTER`` against a
+    # missing table raises 42P01, which ABORTS the Postgres transaction and breaks
+    # every subsequent statement (25P02 InFailedSqlTransaction). Guard by skipping
+    # tables that are not present *now* rather than catching the error after the
+    # transaction is already dead.
+    rows = bind.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")).fetchall()
+    return {row[0] for row in rows}
+
+
 def upgrade() -> None:
     bind = op.get_bind()
+    existing = _existing_tables(bind)
     for stmt in _UPGRADE_STATEMENTS:
-        # ``runner_probe_cache`` is created by a LATER migration (0202) that also
-        # supplies its uuid-PK server default at CREATE time; guard against the
-        # table not yet existing when this frozen enum runs (post-0194 tables).
-        try:
-            bind.execute(text(stmt))
-        except ProgrammingError as exc:
-            if getattr(exc.orig, "sqlstate", "") != "42P01":  # undefined_table
-                raise
+        table = stmt.split()[2]  # "ALTER TABLE <table> ALTER COLUMN ..."
+        if table not in existing:
+            continue
+        bind.execute(text(stmt))
 
 
 def downgrade() -> None:
     bind = op.get_bind()
+    existing = _existing_tables(bind)
     for stmt in _DOWNGRADE_STATEMENTS:
-        try:
-            bind.execute(text(stmt))
-        except ProgrammingError as exc:
-            if getattr(exc.orig, "sqlstate", "") != "42P01":  # undefined_table
-                raise
+        table = stmt.split()[2]  # "ALTER TABLE <table> ALTER COLUMN ..."
+        if table not in existing:
+            continue
+        bind.execute(text(stmt))
