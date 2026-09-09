@@ -206,6 +206,22 @@ class Run(OrgScoped):
             "created_at",
             postgresql_include=["pipeline_id"],
         ),
+        # Error-code analytics (migration 0202) — ad-hoc error lookups on
+        # runs and the analytics builder's error_code dimension filter.
+        Index(
+            "ix_runs_org_error_code",
+            "organisation_id",
+            "error_code",
+            postgresql_where=text("error_code IS NOT NULL"),
+        ),
+        # Claimed-by lookup (migration 0202) — HITL claim operations set
+        # claimed_by; subsequent queries filter by (org, claimed_by).
+        Index(
+            "ix_runs_org_claimed_by",
+            "organisation_id",
+            "claimed_by",
+            postgresql_where=text("claimed_by IS NOT NULL"),
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
