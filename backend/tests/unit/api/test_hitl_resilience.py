@@ -962,6 +962,23 @@ class TestHumanOnlyClientKindEnforcement:
         assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
         approve.assert_not_called()
 
+    def test_approve_with_modification_programmatic_client_kind_returns_403(self, client: TestClient) -> None:
+        """Route-matrix completeness: the approve-with-modification decision
+        route denies a programmatic-class JWT exactly like approve."""
+        modify = AsyncMock()
+        with patch("modulo.api.routes.hitl.HITLManager") as mgr_cls:
+            mgr_cls.return_value.approve_with_modification = modify
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/approve-with-modification",
+                json={"claim_token": "tok", "modified_output": {"k": "v"}},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        modify.assert_not_called()
+
     def test_approve_programmatic_jwt_denied_on_claim_stamped_config(self, client: TestClient) -> None:
         """FAR-634: the resolver returns the claim row's stamped config (O(1))
         — a programmatic JWT is denied on the stamped human_only config even
