@@ -64,35 +64,33 @@ jobs:
           # main is frozen and the merge queue must not merge anything.
           # Manual escape: delete the 'release-freeze' tag. Do NOT use Release ->
           # release as an escape - that promotes GA prematurely.
-          # Retry the freeze-tag query so a transient gh/API blip (e.g. 503s or
-          # snapshot-lock contention during a pipeline burst) cannot masquerade
-          # as a freeze and silently stall every approved PR in the queue. We
-          # still FAIL CLOSED, but only after the call persists in failing across
-          # retries - a genuine release freeze (tag present) is detected on the
-          # very first successful response, so release safety is unchanged.
-          COUNT=""
-          for attempt in 1 2 3 4 5; do
-            COUNT=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/release-freeze" --jq 'length' 2>/dev/null || true)
-            if [ -n "$COUNT" ]; then
-              break
-            fi
-            echo "::warning::release-freeze query returned no data (attempt ${attempt}/5) - retrying"
-            sleep $((attempt * 5))
-          done
-          if [ -z "$COUNT" ]; then
-            # Fail CLOSED: a *persistent* API error must never be read as "not
-            # frozen", or a gh failure would silently lift the freeze mid-release.
-            # Skipping this 15-min tick costs nothing; a wrongly-open gate costs the RC.
-            echo "::error::gh api failed querying release-freeze tag after 5 attempts - failing CLOSED, skipping this merge-queue tick."
-            echo "frozen=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$COUNT" -gt 0 ]; then
-            echo "frozen=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Release freeze ACTIVE ('release-freeze' tag present) - merge queue paused."
-          else
-            echo "frozen=false" >> "$GITHUB_OUTPUT"
-          fi
+          # The retry/backoff/fail-closed policy lives in the shared helper
+          # (.github/scripts/release-freeze-check.py) so it cannot diverge from
+          # the pre-merge TOCTOU re-verify step below. A transient gh/API blip
+          # (e.g. 503s or snapshot-lock contention during a pipeline burst)
+          # cannot masquerade as a freeze; we still FAIL CLOSED, but only after
+          # the call persists in failing across retries. A genuine release freeze
+          # (tag present) is detected on the very first successful response.
+          OUT=$(python3 .github/scripts/release-freeze-check.py)
+          VERDICT="${OUT%%|*}"
+          MSG="${OUT#*|}"
+          case "$VERDICT" in
+            frozen)
+              echo "frozen=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::Release freeze ACTIVE ('release-freeze' tag present) - merge queue paused." ;;
+            open)
+              echo "frozen=false" >> "$GITHUB_OUTPUT" ;;
+            fail-closed)
+              # Fail CLOSED: a *persistent* API error must never be read as "not
+              # frozen", or a gh failure would silently lift the freeze mid-release.
+              # Skipping this 15-min tick costs nothing; a wrongly-open gate costs the RC.
+              echo "frozen=true" >> "$GITHUB_OUTPUT"
+              echo "::error::$MSG - failing CLOSED, skipping this merge-queue tick." ;;
+            *)
+              # Helper produced no usable verdict (e.g. python3 missing) -> fail CLOSED.
+              echo "frozen=true" >> "$GITHUB_OUTPUT"
+              echo "::error::release-freeze helper produced no verdict ($OUT) - failing CLOSED, skipping this merge-queue tick." ;;
+          esac
 
   event-gate:
     name: Event relevance gate (FAR-492)
@@ -721,18 +719,28 @@ jobs:
         run: |
           # A queue tick can pass freeze-gate minutes before the RC is cut;
           # re-check here so a just-started freeze stops this tick from merging.
-          COUNT=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/release-freeze" --jq 'length' 2>/dev/null || true)
-          if [ -z "$COUNT" ]; then
-            echo "::error::Could not query release-freeze tag - failing CLOSED, aborting this merge tick."
-            echo "aborted=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$COUNT" -gt 0 ]; then
-            echo "::error::Release freeze became ACTIVE after this tick passed the gate - aborting merge."
-            echo "aborted=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Freeze re-check clean - proceeding to merge."
+          # Same shared helper + fail-closed policy as freeze-gate, so the two
+          # safety-critical checks cannot diverge (a single gh blip mid-tick
+          # must not abort the merge, but a persistent outage must).
+          OUT=$(python3 .github/scripts/release-freeze-check.py)
+          VERDICT="${OUT%%|*}"
+          MSG="${OUT#*|}"
+          case "$VERDICT" in
+            frozen)
+              echo "::error::Release freeze became ACTIVE after this tick passed the gate - aborting merge."
+              echo "aborted=true" >> "$GITHUB_OUTPUT" ;;
+            open)
+              echo "Freeze re-check clean - proceeding to merge." ;;
+            fail-closed)
+              # Fail CLOSED: a *persistent* API error here must abort the merge,
+              # never proceed - a gh failure must not silently open the gate.
+              echo "::error::$MSG - aborting this merge tick (fail CLOSED)."
+              echo "aborted=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              # Helper produced no usable verdict (e.g. python3 missing) -> fail CLOSED.
+              echo "::error::release-freeze helper produced no verdict ($OUT) - aborting this merge tick (fail CLOSED)."
+              echo "aborted=true" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       # If CI passed -- merge source PRs
       - name: Merge source PRs via gh pr merge
