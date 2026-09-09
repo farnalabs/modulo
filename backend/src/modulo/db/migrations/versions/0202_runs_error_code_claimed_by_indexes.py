@@ -21,19 +21,13 @@ def upgrade() -> None:
     #    currently require a sequential scan.  Low cardinality (~20 distinct
     #    values) means the index selectivity is moderate, but it still avoids
     #    a full table scan on the hottest large table.
-    op.execute(
-        "CREATE INDEX ix_runs_org_error_code ON runs (organisation_id, error_code) "
-        "WHERE error_code IS NOT NULL"
-    )
+    op.execute("CREATE INDEX ix_runs_org_error_code ON runs (organisation_id, error_code) WHERE error_code IS NOT NULL")
 
     # 2. Claimed-by index — HITL claim operations set runs.claimed_by and
     #    subsequent queries filter by (organisation_id, claimed_by) to find
     #    claims held by a specific reviewer.  Without this index the lookup
     #    scans the full runs table.
-    op.execute(
-        "CREATE INDEX ix_runs_org_claimed_by ON runs (organisation_id, claimed_by) "
-        "WHERE claimed_by IS NOT NULL"
-    )
+    op.execute("CREATE INDEX ix_runs_org_claimed_by ON runs (organisation_id, claimed_by) WHERE claimed_by IS NOT NULL")
 
 
 def downgrade() -> None:
