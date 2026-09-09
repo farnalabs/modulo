@@ -43,11 +43,12 @@ REQUIRED_PROPERTIES: dict[str, list[str]] = {
     "user-story": ["id", "title", "description", "acceptance-criteria"],
     "pr-review-input": ["number", "repository", "head-ref", "head-sha"],
     "ticket-input": ["id", "title", "type"],
+    "pr-review-decision": ["decision", "summary"],
 }
 
 
-def test_exactly_24_schemas() -> None:
-    assert len(SCHEMAS) == 24
+def test_exactly_25_schemas() -> None:
+    assert len(SCHEMAS) == 25
 
 
 def test_all_schema_names_are_unique() -> None:
@@ -148,6 +149,9 @@ def test_enum_values_are_valid(entry: dict[str, Any]) -> None:
         "issue-ticket": {"type": ["bug", "feature", "enhancement", "chore"]},
         "pull-request": {"status": ["open", "draft", "merged", "closed"]},
         "ticket-input": {"type": ["bug", "feature", "enhancement", "chore"]},
+        "pr-review-decision": {
+            "decision": ["APPROVE", "REQUEST_CHANGES"],
+        },
     }
     expected = expected_by_schema.get(entry["name"], {})
     actual = {
@@ -173,6 +177,7 @@ def test_enum_coverage_is_exhaustive() -> None:
         "issue-ticket",
         "pull-request",
         "ticket-input",
+        "pr-review-decision",
     }
     assert set(enum_bearing_schemas()) == expected
 

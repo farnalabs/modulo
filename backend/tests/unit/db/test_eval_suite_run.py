@@ -818,12 +818,15 @@ def test_single_migration_head() -> None:
     # This PR's 0201_spend_anomaly_unique_org_date chains off 0200_runs_runner_marker_sweep_index.
     chaining_off_0200_runner = [p for p in revisions if parents[p] == "0200_runs_runner_marker_sweep_index"]
     assert [_basename(p) for p in chaining_off_0200_runner] == ["0201_spend_anomaly_unique_org_date.py"]
-    # 0202_runner_probe_cache (this PR's migration) chains off 0201_spend_anomaly_unique_org_date.
+    # 0202_runs_error_code_claimed_by_indexes (from main) chains off 0201.
     chaining_off_0201 = [p for p in revisions if parents[p] == "0201_spend_anomaly_unique_org_date"]
-    assert [_basename(p) for p in chaining_off_0201] == ["0202_runner_probe_cache.py"]
-    # Nothing chains off 0202 -> it is the single head.
-    chaining_off_0202 = [p for p in revisions if parents[p] == "0202_runner_probe_cache"]
-    assert chaining_off_0202 == []
+    assert [_basename(p) for p in chaining_off_0201] == ["0202_runs_error_code_claimed_by_indexes.py"]
+    # This PR's 0203_runner_probe_cache chains off 0202_runs_error_code_claimed_by_indexes.
+    chaining_off_0202 = [p for p in revisions if parents[p] == "0202_runs_error_code_claimed_by_indexes"]
+    assert [_basename(p) for p in chaining_off_0202] == ["0203_runner_probe_cache.py"]
+    # Nothing chains off 0203 -> it is the single head.
+    chaining_off_0203 = [p for p in revisions if parents[p] == "0203_runner_probe_cache"]
+    assert chaining_off_0203 == []
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

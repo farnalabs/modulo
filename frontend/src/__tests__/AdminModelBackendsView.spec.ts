@@ -37,9 +37,10 @@ const backend = (id: string, over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-function mockBackendsGet(items: unknown[]) {
+function mockBackendsGet(items: unknown[], presets?: unknown[]) {
   mockGet.mockImplementation(async (url: string) => {
     if (url === '/api/v1/model-backends') return { data: { items }, error: undefined }
+    if (url === '/api/v1/model-backends/presets') return { data: { items: presets ?? [] }, error: undefined }
     return { data: undefined, error: { detail: `unrouted: ${url}` } }
   })
 }
@@ -256,6 +257,95 @@ describe('AdminModelBackendsView — create', () => {
     await wrapper.find('[data-testid="admin-model-backends-cancel"]').trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="admin-model-backends-name-input"]').exists()).toBe(false)
+  })
+})
+
+describe('AdminModelBackendsView — preset picker', () => {
+  const preset = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    provider: id,
+    display_name: `${id.charAt(0).toUpperCase() + id.slice(1)} Preset`,
+    default_model_id: `${id}-model`,
+    description: `A preset for ${id}`,
+    api_key_docs_url: `https://example.com/${id}/keys`,
+    ...over,
+  })
+
+  async function openAddForm(wrapper: ReturnType<typeof mountView>) {
+    await wrapper.find('[data-testid="admin-model-backends-add"]').trigger('click')
+    await nextTick()
+  }
+
+  it('shows preset picker buttons when presets are available', async () => {
+    mockBackendsGet([backend('mb-1')], [preset('openai'), preset('anthropic')])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    expect(wrapper.find('[data-testid="admin-model-backends-preset-openai"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-model-backends-preset-anthropic"]').exists()).toBe(true)
+  })
+
+  it('pre-fills provider and model_id when a preset is selected', async () => {
+    mockBackendsGet([backend('mb-1')], [preset('openai')])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    await wrapper.find('[data-testid="admin-model-backends-preset-openai"]').trigger('click')
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { formData: { provider: string; model_id: string } }
+    expect(vm.formData.provider).toBe('openai')
+    expect(vm.formData.model_id).toBe('openai-model')
+  })
+
+  it('shows preset description and docs link after selection', async () => {
+    mockBackendsGet([backend('mb-1')], [preset('openai')])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    await wrapper.find('[data-testid="admin-model-backends-preset-openai"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('A preset for openai')
+    const docsLink = wrapper.find('[data-testid="admin-model-backends-preset-docs-link"]')
+    expect(docsLink.exists()).toBe(true)
+    expect(docsLink.attributes('href')).toBe('https://example.com/openai/keys')
+    expect(docsLink.attributes('target')).toBe('_blank')
+    expect(docsLink.attributes('rel')).toBe('noopener noreferrer')
+  })
+
+  it('clears preset selection and shows picker again', async () => {
+    mockBackendsGet([backend('mb-1')], [preset('openai')])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    await wrapper.find('[data-testid="admin-model-backends-preset-openai"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="admin-model-backends-preset-openai"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="admin-model-backends-preset-clear"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="admin-model-backends-preset-openai"]').exists()).toBe(true)
+  })
+
+  it('manual entry hides the preset picker', async () => {
+    mockBackendsGet([backend('mb-1')], [preset('openai')])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    await wrapper.find('[data-testid="admin-model-backends-manual-entry-toggle"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="admin-model-backends-preset-openai"]').exists()).toBe(false)
   })
 })
 

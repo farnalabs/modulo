@@ -420,29 +420,36 @@ class GitLabConnector(ConnectorBase):
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                if _should_retry_status(exc.response.status_code, attempt):
-                    await asyncio.sleep(self._sleep_delay(exc.response, attempt))
+                if await self._retry_status_error(exc, attempt):
                     continue
-                raise ValueError(self._redactor.redact(_http_error_message(exc))) from exc
-            except httpx.TimeoutException as exc:
-                last_exc = exc
-                if _should_retry_attempt(attempt):
-                    await asyncio.sleep(self._jitter(_backoff_delay(attempt)))
-                    continue
-                raise ValueError("GitLab API timeout") from exc
-            except httpx.ConnectError as exc:
-                last_exc = exc
-                if _should_retry_attempt(attempt):
-                    await asyncio.sleep(self._jitter(_backoff_delay(attempt)))
-                    continue
-                raise ValueError("GitLab API connection error") from exc
             except httpx.HTTPError as exc:
                 last_exc = exc
-                if _should_retry_attempt(attempt):
-                    await asyncio.sleep(self._jitter(_backoff_delay(attempt)))
+                if await self._retry_network_error(exc, attempt):
                     continue
-                raise ValueError(self._redactor.redact(f"GitLab API HTTP error: {exc}")) from exc
         raise ValueError("GitLab API request failed after retries") from last_exc
+
+    async def _retry_status_error(self, exc: httpx.HTTPStatusError, attempt: int) -> bool:
+        """Handle an HTTP status error: sleep and return True to retry, or
+        raise ValueError when the status is not retryable."""
+        if _should_retry_status(exc.response.status_code, attempt):
+            await asyncio.sleep(self._sleep_delay(exc.response, attempt))
+            return True
+        raise ValueError(self._redactor.redact(_http_error_message(exc))) from exc
+
+    async def _retry_network_error(self, exc: httpx.HTTPError, attempt: int) -> bool:
+        """Handle a transient network error: sleep and return True to retry,
+        or raise ValueError when retries are exhausted."""
+        if not _should_retry_attempt(attempt):
+            raise ValueError(self._network_error_message(exc)) from exc
+        await asyncio.sleep(self._jitter(_backoff_delay(attempt)))
+        return True
+
+    def _network_error_message(self, exc: httpx.HTTPError) -> str:
+        if isinstance(exc, httpx.TimeoutException):
+            return "GitLab API timeout"
+        if isinstance(exc, httpx.ConnectError):
+            return "GitLab API connection error"
+        return self._redactor.redact(f"GitLab API HTTP error: {exc}")
 
     @staticmethod
     def _retry_delay(response: httpx.Response, attempt: int) -> float:

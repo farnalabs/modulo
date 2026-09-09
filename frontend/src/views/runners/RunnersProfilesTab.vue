@@ -136,9 +136,9 @@
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.image_ref') }}</dt>
               <dd class="font-mono truncate" :title="row.profile.image_ref ?? ''">{{ row.profile.image_ref }}</dd>
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.network_policy') }}</dt>
-              <dd>{{ row.health?.network_policy ?? 'â€”' }}</dd>
+              <dd>{{ row.health?.network_policy ?? '—' }}</dd>
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.persistence_policy') }}</dt>
-              <dd>{{ row.health?.persistence_policy ?? 'â€”' }}</dd>
+              <dd>{{ row.health?.persistence_policy ?? '—' }}</dd>
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.resource_limits') }}</dt>
               <dd>{{ resourceSummary(row) }}</dd>
               <template v-if="row.probeError">

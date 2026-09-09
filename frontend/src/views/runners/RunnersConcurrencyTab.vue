@@ -17,7 +17,6 @@
               </label>
               <InputText
                 id="runner-concurrency-limit"
-                aria-label="Form control"
                 :model-value="limitInput == null ? '' : String(limitInput)"
                 @update:model-value="(v: any) => limitInput = v === '' ? null : Number(v)"
                 type="number"
@@ -134,7 +133,7 @@ const preflightDetail = computed(() => {
   const p = preflight.value
   if (!p) return null
   if (p.engine_cpu_count !== null && p.engine_mem_total_mb !== null) {
-    return `${t('views.RunnersConcurrencyTab.engine_resources', { cpu: p.engine_cpu_count, mem: p.engine_mem_total_mb })}${p.needed_cpu !== null && p.needed_mem_mb !== null ? ' â€” ' + t('views.RunnersConcurrencyTab.needed_resources', { cpu: p.needed_cpu, mem: p.needed_mem_mb }) : ''}`
+    return `${t('views.RunnersConcurrencyTab.engine_resources', { cpu: p.engine_cpu_count, mem: p.engine_mem_total_mb })}${p.needed_cpu !== null && p.needed_mem_mb !== null ? ' — ' + t('views.RunnersConcurrencyTab.needed_resources', { cpu: p.needed_cpu, mem: p.needed_mem_mb }) : ''}`
   }
   return p.detail
 })

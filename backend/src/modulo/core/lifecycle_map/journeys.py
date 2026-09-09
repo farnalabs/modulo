@@ -116,6 +116,8 @@ async def list_map_journeys(
     kind: str | None = None,
     ref: str | None = None,
     owner_team_id: uuid.UUID | None = None,
+    status: str | None = None,
+    updated_since: datetime | None = None,
     cursor: str | None = None,
     limit: int = _DEFAULT_LIMIT,
 ) -> tuple[list[tuple[Journey, bool]], str | None]:
@@ -132,7 +134,10 @@ async def list_map_journeys(
 
     ``kind`` / ``ref`` narrow to a single exact journey (the map renderer's
     one-journey lookup). ``owner_team_id`` is applied by the caller for
-    team-scoped maps.
+    team-scoped maps. ``status`` narrows to a ``latest_status`` value
+    (``complete`` / ``failed``; validated by the route). ``updated_since``
+    keeps only journeys whose ``updated_at`` (when the journey last moved) is
+    at or after the given instant.
     """
     if kind is not None:
         kind = canonicalise_kind(kind)
@@ -161,6 +166,10 @@ async def list_map_journeys(
         query = query.where(Journey.ref == ref)
     if owner_team_id is not None:
         query = query.where(Journey.owner_team_id == owner_team_id)
+    if status is not None:
+        query = query.where(Journey.latest_status == status)
+    if updated_since is not None:
+        query = query.where(Journey.updated_at >= updated_since)
 
     if cursor is not None:
         updated_at, journey_id = decode_cursor(cursor)

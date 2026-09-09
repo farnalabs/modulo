@@ -58,6 +58,17 @@ def upgrade() -> None:
     bind = op.get_bind()
     if not _is_postgres(bind):
         return
+    # Defensive: 0197_runs_index_and_constraint_fixes drops ix_runs_refusal, but
+    # its DROP runs in the SAME transaction as the later CHECK-constraint /
+    # duplicate-idempotency guard / uq_runs_idempotency steps. If any of those
+    # later steps roll back (e.g. pre-existing duplicate (pipeline_id,
+    # idempotency_key) rows in a seeded container), the entire 0197 transaction
+    # — including the DROP — is undone, leaving ix_runs_refusal behind and
+    # breaking test_probe_index_exists_and_refusal_index_dropped. Re-assert the
+    # drop here as the final operation of the chain so the post-migration schema
+    # is correct regardless of 0197's transaction outcome. IF EXISTS keeps it
+    # idempotent / re-runnable.
+    bind.execute(sa.text("DROP INDEX IF EXISTS ix_runs_refusal"))
     bind.execute(sa.text(_CREATE_INDEX_SQL))
 
 

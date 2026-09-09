@@ -660,7 +660,16 @@ export default {
       "refs_page_info": "Page {page} of {total}",
       "previous": "Previous",
       "next": "Next",
-      "retry": "Retry"
+      "retry": "Retry",
+      "preset_picker_title": "Choose a Provider Preset",
+      "preset_picker_description": "Pick a provider to get started quickly. You only need to add your API key.",
+      "preset_manual_entry": "Manual / Advanced Entry",
+      "preset_back_to_presets": "Back to presets",
+      "preset_manual_entry_description": "Configure the provider, model, and settings manually.",
+      "preset_selected": "Preset selected",
+      "preset_clear": "Change provider",
+      "preset_get_api_key": "Get an API key",
+      "preset_selected_description": "Provider and model have been pre-filled. Just add your API key below."
     },
     "AdminAuditView": {
       "target_type": "Target Type",
@@ -3026,6 +3035,7 @@ export default {
       "delete": "Delete",
       "delete_confirm_title": "Delete lifecycle map",
       "delete_confirm_body": "This will delete \"{name}\". Existing runs are unaffected, but the map will no longer be available or listed.",
+      "show_work_items": "Show work items",
       "journey": {
         "detail_title": "Journey: {journey}",
         "close": "Close",
@@ -3038,12 +3048,22 @@ export default {
         "unattributed": "Unattributed",
         "unattributed_hint": "{count} unattributed run | {count} unattributed runs",
         "unattributed_desc": "These runs completed a stage pipeline but did not advance onto this map's journey — no journey step was attributed. They appear here because a map stage pipeline saw the work item, but the journey never advanced into a map stage.",
+        "more_on_node": "+{count} more",
+        "more_on_node_title": "{count} older work items hidden — narrow the period or status filter to see them.",
+        "filter_period_label": "Period",
+        "filter_status_label": "Status",
+        "filter_period_24h": "Last 24h",
+        "filter_period_3d": "Last 3 days",
+        "filter_period_7d": "Last 7 days",
+        "filter_period_30d": "Last 30 days",
+        "filter_period_all": "All time",
+        "filter_status_all": "All",
         "provenance": {
           "derived": "Derived",
           "reported": "Reported"
         },
         "status": {
-          "complete": "Complete",
+          "complete": "Completed",
           "failed": "Failed",
           "stalled": "Stalled",
           "budget_exceeded": "Budget exceeded",

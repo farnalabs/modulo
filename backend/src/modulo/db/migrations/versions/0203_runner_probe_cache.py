@@ -1,7 +1,7 @@
 """runner_probe_cache — cached per-(org, machine) runner health probe (FAR-591 / D5).
 
-Revision ID: 0202_runner_probe_cache
-Revises: 0201_spend_anomaly_unique_org_date
+Revision ID: 0203_runner_probe_cache
+Revises: 0202_runs_error_code_claimed_by_indexes
 Create Date: 2026-09-09
 
 What this migration does:
@@ -28,8 +28,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0202_runner_probe_cache"
-down_revision: str | None = "0201_spend_anomaly_unique_org_date"
+revision: str = "0203_runner_probe_cache"
+down_revision: str | None = "0202_runs_error_code_claimed_by_indexes"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
