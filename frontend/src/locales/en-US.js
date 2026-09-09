@@ -2049,7 +2049,15 @@ export default {
       "remove_license_description": "Are you sure you want to remove the Team license? Your instance will revert to Community tier and all Team features will be disabled.",
       "confirm_remove": "Confirm Remove",
       "valid_license_key": "Valid license key — Tier: {tier}, expires: {expires}",
-      "get_team_license": "Get a Team License"
+      "get_team_license": "Get a Team License",
+      "licensed_to": "Licensed to",
+      "expires": "Expires",
+      "never": "never",
+      "license_key": "License Key",
+      "tier_upgrade_sentence": "You are currently on the {currentTier} tier. Upgrade to {teamTier} to unlock all features.",
+      "restart_note": "Applying a new license key requires a server restart to take full effect.",
+      "failed_to_apply": "Failed to apply:",
+      "failed_to_remove": "Failed to remove:"
     },
     "SchemaEditorView": {
       "schema_name_is_required": "Schema name is required",

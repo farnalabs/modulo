@@ -15,10 +15,10 @@
               <Badge severity="info">{{ $t('common.active') }}</Badge>
             </div>
             <p v-if="licenseInfo.org_id" class="mt-2 text-sm text-muted-foreground">
-              Licensed to <span class="font-medium text-foreground" :title="licenseInfo.org_id"><span class="select-all font-mono">{{ shortId(licenseInfo.org_id) }}</span></span>
+              {{ $t('views.SettingsLicenseView.licensed_to') }} <span class="font-medium text-foreground" :title="licenseInfo.org_id"><span class="select-all font-mono">{{ shortId(licenseInfo.org_id) }}</span></span>
             </p>
             <p v-if="licenseInfo.expires_at" class="mt-1 text-sm text-muted-foreground">
-              Expires <span class="font-medium text-foreground">{{ formatDate(licenseInfo.expires_at) }}</span>
+              {{ $t('views.SettingsLicenseView.expires') }} <span class="font-medium text-foreground">{{ formatDate(licenseInfo.expires_at) }}</span>
             </p>
           </div>
         </div>
@@ -28,7 +28,7 @@
             <Badge severity="secondary" class="border border-border">{{ $t('views.SettingsLicenseView.community') }}</Badge>
           </div>
           <p class="mt-2 text-sm text-muted-foreground">
-            You are currently on the {{ planStore.getTierLabel(licenseInfo.tier) }} tier. Upgrade to {{ planStore.getTierLabel('team') }} to unlock all features.
+            {{ $t('views.SettingsLicenseView.tier_upgrade_sentence', { currentTier: planStore.getTierLabel(licenseInfo.tier), teamTier: planStore.getTierLabel('team') }) }}
           </p>
           <Button as="a" href="https://modulo.run/pricing" target="_blank" rel="noopener noreferrer" class="mt-4 border-primary/30 hover:border-primary/60">
             {{ $t('views.SettingsLicenseView.get_team_license') }}
@@ -39,7 +39,7 @@
 
       <!-- License Key Management -->
       <div class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminFeatureFlagsView.license_key') }}</h2>
+        <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsLicenseView.license_key') }}</h2>
 
         <div v-if="licenseInfo.has_license" class="mb-6 rounded-lg bg-muted/50 p-4">
           <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">{{ $t('views.SettingsLicenseView.current_key') }}</p>
@@ -71,7 +71,7 @@
             </Button>
           </div>
           <p class="text-xs text-muted-foreground">
-            Applying a new license key requires a server restart to take full effect.
+            {{ $t('views.SettingsLicenseView.restart_note') }}
           </p>
         </div>
       </div>
@@ -176,7 +176,7 @@ async function verifyKey() {
         valid: true,
         message: t('views.SettingsLicenseView.valid_license_key', {
           tier: data.tier,
-          expires: data.expires_at ? formatDate(data.expires_at) : 'never',
+          expires: data.expires_at ? formatDate(data.expires_at) : t('views.SettingsLicenseView.never'),
         }),
       }
     }
@@ -200,7 +200,7 @@ async function applyKey() {
       body: { license_key: newLicenseKey.value.trim() },
     })
     if (err) {
-      verifyResult.value = { valid: false, message: `Failed to apply: ${formatApiError(err)}` }
+      verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(err)}` }
     } else {
       applyDialogOpen.value = false
       verifyResult.value = null
@@ -209,7 +209,7 @@ async function applyKey() {
       await loadAll()
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: `Failed to apply: ${formatApiError(e)}` }
+    verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(e)}` }
   } finally {
     applying.value = false
   }
@@ -224,14 +224,14 @@ async function removeLicense() {
   try {
     const { error: err } = await (api as any).DELETE('/api/v1/admin/license')
     if (err) {
-      verifyResult.value = { valid: false, message: `Failed to remove: ${formatApiError(err)}` }
+      verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}` }
     } else {
       removeDialogOpen.value = false
       await planStore.fetchPlan()
       await loadAll()
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: `Failed to remove: ${formatApiError(e)}` }
+    verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(e)}` }
   } finally {
     removing.value = false
   }
