@@ -1075,8 +1075,14 @@ async def reconcile_runner_dispatch_markers(
     finally:
         if acquired and lock_conn is not None:
             try:
-                await lock_conn.execute(text("SELECT pg_advisory_unlock(:k1, :k2)"), {"k1": k1, "k2": k2})
-                await lock_conn.commit()
+                # The factory is ``autobegin=False`` (see the acquisition
+                # block) — an unguarded ``lock_conn.execute`` outside a
+                # transaction raises ``InvalidRequestError`` and the SESSION-
+                # scoped lock leaks back into the pool, so every subsequent
+                # sweep call in the same process fails ``pg_try_advisory_lock``
+                # and skips. Release inside an explicit transaction.
+                async with lock_session.begin():
+                    await lock_conn.execute(text("SELECT pg_advisory_unlock(:k1, :k2)"), {"k1": k1, "k2": k2})
             except asyncio.CancelledError:
                 raise
             except Exception:
