@@ -141,8 +141,10 @@ class TestResolveFromSnapshot:
         )
 
         assert result == config
-        # Snapshot hit → the live-edge fallback is never queried.
-        assert session.execute.await_count == 1
+        # FAR-634: the claim-stamp lookup runs FIRST (claim_row=None here —
+        # a legacy unfired gate), then the snapshot hit — the live-edge
+        # fallback is never queried.
+        assert session.execute.await_count == 2
 
     async def test_matches_persisted_node_key_style(self) -> None:
         config = {"human_only": False}
@@ -203,7 +205,9 @@ class TestResolveFallbacks:
         )
 
         assert result == {"human_only": True}
-        assert session.execute.await_count == 1
+        # FAR-634: claim-stamp lookup first (None — legacy row), then the
+        # live-edge fallback.
+        assert session.execute.await_count == 2
 
     async def test_live_edge_query_filters_by_topology(self) -> None:
         """The fallback queries source AND target, not the pipeline's first edge."""
@@ -248,6 +252,9 @@ class TestResolveFallbacks:
                 else:
                     # No filter → both rows match → the real Result raises.
                     result.scalar_one_or_none.side_effect = MultipleResultsFound
+            elif "hitl_claims" in text:
+                # FAR-634: the claim-stamp lookup (no stamped row here).
+                result.scalar_one_or_none.return_value = None
             elif "pipelines" in text:
                 result.scalar_one_or_none.return_value = None
             else:
@@ -280,6 +287,92 @@ class TestResolveFallbacks:
         )
 
         assert result is None
+
+
+class TestResolveStampedConfigFirst:
+    """FAR-634: the executor stamps the resolved config on the claim row at
+    fire time; the resolver reads it FIRST (one indexed lookup) and keeps the
+    snapshot/live walk as the fallback for legacy rows and never-fired gates."""
+
+    async def test_stamped_config_returned_without_snapshot_walk(self) -> None:
+        """One claim-row lookup replaces the walk entirely — the O(1) path.
+
+        (The ``claim_row`` mock double returns the routed SELECT's scalar —
+        the resolver selects the ``gate_config_json`` COLUMN, so the value is
+        the config dict itself.)"""
+        stamped_config = {"human_only": True, "label": "Sign-off"}
+        session = _make_session(claim_row=stamped_config)
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        )
+
+        assert result == stamped_config
+        # ONLY the claim-stamp lookup ran — no snapshot, no live edges, no
+        # live pipeline nodes.
+        assert session.execute.await_count == 1
+
+    async def test_stamped_config_is_a_copy(self) -> None:
+        """The resolver returns a copy — a caller mutating the dict must not
+        corrupt the persisted stamp."""
+        stamped_config = {"human_only": True}
+        session = _make_session(claim_row=stamped_config)
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        )
+
+        result["human_only"] = False
+        assert stamped_config == {"human_only": True}
+
+    async def test_null_stamp_falls_back_to_snapshot_walk(self) -> None:
+        """Legacy row (fired before the stamp column existed): NULL config —
+        the snapshot walk resolves as before."""
+        config = {"human_only": True}
+        snapshot = _snapshot(edges=[{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_gate_config": config}])
+        session = _make_session(snapshot=snapshot, claim_row=None)
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run()
+        )
+
+        assert result == config
+        assert session.execute.await_count == 2
+
+    async def test_non_gate_id_skips_the_claim_stamp_lookup(self) -> None:
+        """Manual-node ids never have a claim row — the stamp lookup is
+        skipped entirely (submit-manual decisions pay zero extra queries)."""
+        session = _make_session(snapshot=None, edge=None, claim_row=MagicMock())
+
+        async def _forbid_claim_query(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            raise AssertionError("claim-stamp lookup must be skipped for non-gate ids")
+
+        original_execute = session.execute
+
+        async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            if "hitl_claims" in str(stmt):
+                return await _forbid_claim_query(stmt)
+            return await original_execute(stmt, *args, **kwargs)
+
+        session.execute = AsyncMock(side_effect=_execute)
+
+        result = await resolve_hitl_gate_config(
+            session, run_id=_RUN_ID, gate_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None)
+        )
+
+        assert result is None
+
+    async def test_stamp_lookup_filters_run_gate_and_org(self) -> None:
+        """Defence in depth: the stamp lookup filters run + gate + org."""
+        session = _make_session(claim_row=None)
+
+        await resolve_hitl_gate_config(session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run())
+
+        stmt = session.execute.await_args_list[0].args[0]
+        bind_values = [str(value) for value in stmt.compile().params.values()]
+        assert str(_RUN_ID) in bind_values
+        assert _gate_id() in bind_values
+        assert str(_ORG_ID) in bind_values
 
 
 def _hitl_node_snapshot(*, node_type: str = "hitl", source_id: uuid.UUID = _SOURCE_ID) -> MagicMock:
@@ -315,7 +408,9 @@ class TestResolveFromHitlNodes:
         )
 
         assert result == {"human_only": True, "label": "Sign-off"}
-        assert session.execute.await_count == 1
+        # FAR-634: claim-stamp lookup first (None — legacy row), then the
+        # snapshot node walk.
+        assert session.execute.await_count == 2
 
     async def test_ignores_inert_hitl_config_on_non_hitl_node(self) -> None:
         """``hitl_config`` on a non-hitl node is ignored by the compiler —
@@ -355,7 +450,9 @@ class TestResolveFromHitlNodes:
         )
 
         assert result == {"human_only": True}
-        assert session.execute.await_count == 2
+        # FAR-634: claim-stamp lookup first (None — legacy row), then live
+        # edges, then live nodes.
+        assert session.execute.await_count == 3
 
     async def test_live_node_lookup_filters_by_pipeline_and_org(self) -> None:
         session = _make_session(snapshot=None, edge=None, pipeline_nodes=None)
@@ -364,7 +461,7 @@ class TestResolveFromHitlNodes:
             session, run_id=_RUN_ID, gate_id=_gate_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
         )
 
-        stmt = session.execute.await_args_list[1].args[0]
+        stmt = session.execute.await_args_list[2].args[0]
         bind_values = [str(value) for value in stmt.compile().params.values()]
         assert str(_PIPELINE_ID) in bind_values
         assert str(_ORG_ID) in bind_values

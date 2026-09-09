@@ -1802,6 +1802,111 @@ async def test_interrupt_capture_db_error_runs_inside_savepoint_and_never_blocks
     assert mock_finalize.await_args.kwargs["status"] == "awaiting_human"
 
 
+async def test_interrupt_stamps_resolved_gate_config_on_the_claim_row():
+    """FAR-634: the interrupt handler resolves the fired gate's
+    ``hitl_gate_config`` and stamps it on the claim row via
+    ``create_gate(gate_config_json=...)`` so the human_only resolver reads it
+    in one claim-row lookup at decision time."""
+    from langgraph.types import interrupt as langgraph_interrupt
+
+    async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
+        langgraph_interrupt({"gate_id": "native-gate"})
+        return {}
+
+    graph = StateGraph(_InterruptState)
+    graph.add_node("native-gate", interrupting_gate)
+    graph.add_edge(START, "native-gate")
+    graph.add_edge("native-gate", END)
+    compiled = graph.compile()
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="awaiting_human")
+    snapshot = _make_snapshot({"nodes": [{"id": "native-gate", "role": None}], "edges": []})
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.name = "PR Reviewer"
+    stamped_config = {"human_only": True, "label": "Sign-off"}
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch("modulo.core.pipeline_engine.executor.resolve_hitl_gate_config", AsyncMock(return_value=stamped_config)),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    hitl_manager.create_gate.assert_awaited_once()
+    assert hitl_manager.create_gate.await_args.kwargs["gate_config_json"] == stamped_config
+
+
+async def test_interrupt_stamp_failure_still_persists_gate_with_null_config():
+    """FAR-634 failure isolation: a gate-config stamp failure must never block
+    the interrupt — create_gate receives gate_config_json=None and the run
+    still terminalises awaiting_human (the resolver's walk fallback covers
+    the NULL-stamp row at decision time)."""
+    from langgraph.types import interrupt as langgraph_interrupt
+
+    async def interrupting_gate(_state: _InterruptState) -> _InterruptState:
+        langgraph_interrupt({"gate_id": "native-gate"})
+        return {}
+
+    graph = StateGraph(_InterruptState)
+    graph.add_node("native-gate", interrupting_gate)
+    graph.add_edge(START, "native-gate")
+    graph.add_edge("native-gate", END)
+    compiled = graph.compile()
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="awaiting_human")
+    snapshot = _make_snapshot({"nodes": [{"id": "native-gate", "role": None}], "edges": []})
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    hitl_manager = MagicMock()
+    hitl_manager.create_gate = AsyncMock()
+
+    pipeline = MagicMock()
+    pipeline.name = "PR Reviewer"
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch(
+            "modulo.core.pipeline_engine.executor.resolve_hitl_gate_config",
+            AsyncMock(side_effect=RuntimeError("resolver boom")),
+        ),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.HITLManager", return_value=hitl_manager),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    hitl_manager.create_gate.assert_awaited_once()
+    assert hitl_manager.create_gate.await_args.kwargs["gate_config_json"] is None
+    assert mock_finalize.await_args.kwargs["status"] == "awaiting_human"
+
+
 async def test_dispatch_hitl_awaiting_routes_through_notifier():
     notifier = MagicMock()
     notifier.dispatch_event = AsyncMock()

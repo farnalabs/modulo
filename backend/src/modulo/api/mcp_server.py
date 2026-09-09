@@ -3910,11 +3910,81 @@ async def _load_hitl_run(
     return run
 
 
+def _hitl_human_only_denial_payload(
+    *,
+    run_id: uuid.UUID,
+    gate_id: str,
+    action: str,
+    verdict: str,
+) -> dict[str, Any]:
+    """The shared ``hitl.human_only_denied`` audit payload for MCP denials (FAR-634)."""
+    return {
+        "run_id": str(run_id),
+        "gate_id": gate_id,
+        "action": action,
+        "surface": "mcp",
+        "principal_kind": _ctx_auth_type.get(None) or "api_key",
+        "client_kind": None,
+        "reason": verdict,
+    }
+
+
+async def _append_hitl_human_only_denied_audit(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    run_id: uuid.UUID,
+    gate_id: str,
+    action: str,
+    verdict: str,
+) -> None:
+    """Append the ``hitl.human_only_denied`` audit event for an MCP denial (FAR-634).
+
+    Appends on the CURRENT session (no rollback happens on this path — the
+    denial returns an error dict and the ``_session`` context commits on clean
+    exit), so the event commits together with the request. ``append_audit_event``
+    scopes its own savepoint; the wrapper is failure-isolated: an audit failure
+    is logged and NEVER changes the denial outcome (it is already a denial —
+    the error dict below still returns). ``CancelledError`` always propagates.
+    """
+    try:
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.db.crud.hitl_gate_config import EVENT_HUMAN_ONLY_DENIED
+
+        try:
+            actor_user_id = _ctx_user_id_val()
+        except McpAuthContextError:
+            actor_user_id = None
+        await append_audit_event(
+            s,
+            org_id=org_id,
+            event_type=EVENT_HUMAN_ONLY_DENIED,
+            actor_user_id=actor_user_id,
+            resource_type="run",
+            resource_id=run_id,
+            payload_json=_hitl_human_only_denial_payload(
+                run_id=run_id,
+                gate_id=gate_id,
+                action=action,
+                verdict=verdict,
+            ),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "mcp.hitl_human_only_denial_audit_failed",
+            extra={"run_id": str(run_id), "gate_id": gate_id, "action": action},
+            exc_info=True,
+        )
+
+
 async def _check_human_only_gate(
     s: AsyncSession,
     org_id: uuid.UUID,
     run: Any,
     gate_id: str,
+    action: str,
 ) -> dict[str, Any] | None:
     """Return an error dict when the gate is human_only, else ``None``.
 
@@ -3942,8 +4012,18 @@ async def _check_human_only_gate(
     shared pure function ``hitl_gate_config.human_only_denial`` so REST and
     MCP enforce one policy with one wording (FAR-610 review); the claim
     lookup runs only when the config is unresolvable.
+
+    MCP stays deny-BY-DEFAULT regardless of credential class (FAR-634): even
+    a browser-class JWT through the MCP surface is denied — the browser UI is
+    the human path, and agent sessions hold the admin password (a
+    password-minted JWT is indistinguishable from a browser login at
+    issuance), so relaxing the MCP denial would reopen the exact attack path
+    FAR-610 closed. Every denial emits a warning log + the
+    ``hitl.human_only_denied`` audit event (FAR-634) before the error dict is
+    returned.
     """
     from modulo.db.crud.hitl_gate_config import (
+        EVENT_HUMAN_ONLY_DENIED,
         hitl_gate_exists_but_unresolved,
         human_only_denial,
         resolve_hitl_gate_config,
@@ -3956,6 +4036,24 @@ async def _check_human_only_gate(
     # MCP callers authenticate with API keys — always a non-browser credential.
     verdict = human_only_denial(config, non_browser_credential=True, gate_fired=gate_fired)
     if verdict is not None:
+        _log.warning(
+            EVENT_HUMAN_ONLY_DENIED,
+            extra={
+                "run_id": str(run.id),
+                "gate_id": gate_id,
+                "action": action,
+                "surface": "mcp",
+                "principal_kind": _ctx_auth_type.get(None) or "api_key",
+            },
+        )
+        await _append_hitl_human_only_denied_audit(
+            s,
+            org_id,
+            run_id=run.id,
+            gate_id=gate_id,
+            action=action,
+            verdict=verdict,
+        )
         return {"error": "human_only_gate", "detail": verdict}
     return None
 
@@ -4132,7 +4230,7 @@ async def _review_hitl_impl(
             # FAR-610: deliver_manual is a decision exactly like approve — a
             # human_only gate must not be decided by an API-key/MCP client.
             # reject stays allowed (safe direction).
-            human_only_err = await _check_human_only_gate(s, org_id, run, gate_id)
+            human_only_err = await _check_human_only_gate(s, org_id, run, gate_id, action)
             if human_only_err:
                 return human_only_err
 

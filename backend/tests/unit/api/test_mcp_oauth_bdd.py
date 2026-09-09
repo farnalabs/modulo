@@ -1171,6 +1171,7 @@ class TestOAuthMiddlewareInvalidTokens:
             organisation_id=str(_ORG_ID),
             account_id=str(_USER_ID),
             org_role="admin",
+            client_kind="browser",
         )
         saved = self._save_ctx()
         try:

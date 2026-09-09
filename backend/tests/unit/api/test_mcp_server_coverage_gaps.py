@@ -2721,6 +2721,11 @@ class TestResourceGaps(_AuthContext):
         session = _mock_session()
         session.execute.side_effect = [
             _make_execute_result(scalar_one_or_none=gate),
+            # FAR-634: ``resolve_hitl_gate_config`` now probes the claim-stamped
+            # ``gate_config_json`` fast path first (O(1) claim-row lookup). This
+            # legacy capture predates the stamp, so the probe returns None and
+            # the resolver falls through to the snapshot walk below.
+            _make_execute_result(scalar_one_or_none=None),
             _make_execute_result(scalar_one_or_none=snapshot),
         ]
         with (
