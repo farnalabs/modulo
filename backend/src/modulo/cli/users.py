@@ -20,10 +20,31 @@ DATABASE URL resolution (never prompts for stored credentials):
 2. otherwise the standard operator path: ``DATABASE_URL`` via Settings
    (env / pinned config.env).
 
-MODULO_USERS guard: when ``MODULO_USERS`` is set the boot seeder re-applies
-its entries on every boot (silently reverting CLI changes for users listed
-there), so the write commands REFUSE by default with a loud warning; an
-explicit ``--force`` prints the warning and proceeds.
+MODULO_USERS guard: when ``MODULO_USERS`` is set, its entries are
+re-applied on every boot — but ONLY for accounts whose stored hash is
+missing or already non-bcrypt (plaintext); a bcrypt hash written by this
+CLI is NOT reverted, and accounts not listed in MODULO_USERS are never
+touched. The guard still refuses loudly by default (an operator should
+know before any local-account write) with ``--force`` to proceed.
+
+Bcrypt-hash rejection: ``users add`` refuses passwords starting ``$2``
+BEFORE seeding — the seeder stores a ``$2``-prefixed password part
+verbatim as a pre-computed bcrypt hash, which would create an account
+that can never log in.
+
+Break-glass refusal: ``reset-password`` refuses break-glass accounts
+(``accounts.is_break_glass``) exactly like the admin reset route —
+overwriting the hash breaks the break-glass CAS and orphans the
+last-resort recovery credential.
+
+Residual token window (stated in the reset-password help): the reset and
+token-family blacklist kill refresh/rotation immediately, but a stolen
+access JWT stays valid until it expires — same as the admin reset route.
+
+Read-only guarantee: ``users list`` never creates side-effect files —
+it needs state.json + secrets.json to READ the bundled credentials and
+fails loudly (``LauncherConfigError``) when secrets.json is absent,
+instead of ``load_or_create`` which would GENERATE fresh credentials.
 
 IMPORT HYGIENE: module scope is click + stdlib only (the console-script
 import graph loads this module before any command runs — settings/engine
@@ -46,7 +67,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.launcher.state import STATE_FILENAME
 
-ListRow = tuple[str, str, str, str]
+ListRow = tuple[str, str, str, str, str]
 
 
 class UserCliError(Exception):
@@ -58,14 +79,45 @@ class UserCliError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _launcher_url_for(data_dir: Path) -> str:
+def _launcher_inputs_readonly(data_dir: Path) -> tuple[Any, Any]:
+    """Read (state.json, secrets.json) WITHOUT creating anything.
+
+    ``load_or_create`` generates a whole fresh credential set when
+    secrets.json is absent — a write side effect ``users list`` can never
+    make (and, with a freshly-generated password that cannot match the
+    running bundled Postgres, a composed URL that could never connect).
+    """
+    from modulo.launcher.config_source import LauncherConfigError
+    from modulo.launcher.secrets_file import SECRETS_FILENAME, SecretsFileError, _parse
+    from modulo.launcher.state import load_state
+
+    state_path = data_dir / STATE_FILENAME
+    secrets_path = data_dir / SECRETS_FILENAME
+    if not state_path.exists():
+        raise LauncherConfigError(f"no state.json at {state_path} — the data dir is not bootstrapped")
+    if not secrets_path.exists():
+        raise LauncherConfigError(f"no secrets.json at {secrets_path} — the data dir is not bootstrapped")
+    try:
+        secrets = _parse(secrets_path.read_bytes())
+    except (OSError, SecretsFileError) as exc:
+        raise LauncherConfigError(f"secrets file unreadable: {exc}") from exc
+    try:
+        return load_state(state_path, secrets.state_hmac_key), secrets
+    except Exception as exc:  # StateIntegrityError / StateVersionError
+        raise LauncherConfigError(f"launcher state unreadable: {exc}") from exc
+
+
+def _launcher_url_for(data_dir: Path, *, readonly: bool = False) -> str:
     from modulo.launcher.config_source import compose_config, load_launcher_config_inputs
 
     try:
-        state, secrets = load_launcher_config_inputs(data_dir)
-    except Exception as exc:  # LauncherConfigError / HMAC failures
+        if readonly:
+            state, secrets = _launcher_inputs_readonly(data_dir)
+        else:
+            state, secrets = load_launcher_config_inputs(data_dir)
+        url = compose_config(state, secrets)["DATABASE_URL"]
+    except Exception as exc:  # LauncherConfigError / StateIntegrityError / HMAC failures
         raise click.ClickException(f"launcher data dir unreadable: {exc}") from exc
-    url = compose_config(state, secrets)["DATABASE_URL"]
     if not url:
         raise click.ClickException(f"no DATABASE_URL composed from state.json in {data_dir}")
     return url
@@ -83,8 +135,13 @@ def _settings_url() -> str:
     return url
 
 
-def _resolve_database_url(data_dir: Path | None) -> str:
-    """Resolve the DB URL: launcher state.json first, then DATABASE_URL/Settings."""
+def _resolve_database_url(data_dir: Path | None, *, readonly: bool = False) -> str:
+    """Resolve the DB URL: launcher state.json first, then DATABASE_URL/Settings.
+
+    ``readonly=True`` (``users list``) reads the launcher secrets file
+    load-only — a missing secrets.json is a loud refusal, never a
+    credential-generation side effect.
+    """
     if data_dir is not None:
         state_path = data_dir / STATE_FILENAME
         if not state_path.exists():
@@ -92,7 +149,7 @@ def _resolve_database_url(data_dir: Path | None) -> str:
                 f"no state.json at {state_path} — pass a bootstrapped data dir, "
                 "or omit --data-dir and rely on DATABASE_URL"
             )
-        return _launcher_url_for(data_dir)
+        return _launcher_url_for(data_dir, readonly=readonly)
     try:
         from modulo.launcher.entry import default_data_dir
 
@@ -100,7 +157,7 @@ def _resolve_database_url(data_dir: Path | None) -> str:
     except Exception:
         return _settings_url()
     if (bundled / STATE_FILENAME).exists():
-        return _launcher_url_for(bundled)
+        return _launcher_url_for(bundled, readonly=readonly)
     return _settings_url()
 
 
@@ -120,8 +177,9 @@ def _guard_modulo_users(force: bool) -> None:
     if not modulo_users:
         return
     message = (
-        "WARNING: MODULO_USERS is set — the boot seeder re-applies its entries on every boot, "
-        "so CLI changes can be silently reverted at the next restart."
+        "WARNING: MODULO_USERS is set — the boot seeder re-applies its entries on every boot, but ONLY for "
+        "accounts whose stored hash is missing or already non-bcrypt (plaintext). A bcrypt hash written by "
+        "this CLI is NOT reverted, and accounts not listed in MODULO_USERS are never touched."
     )
     if force:
         click.echo(f"{message} Proceeding (--force).", err=True)
@@ -173,7 +231,12 @@ async def _first_org(session: AsyncSession) -> Any:
 
 
 async def _add_user(url: str, email: str, password: str, as_admin: bool) -> str:
-    """Create the user via the promoted boot-seeder path; --admin fixes the role."""
+    """Create the user via the promoted boot-seeder path; --admin fixes the role.
+
+    The role REPORTED is the membership role actually stored after seeding —
+    the seeder special-cases admin/admin@modulo.run to admin even without
+    ``--admin``, so the flag alone must never decide the printed role.
+    """
     from modulo.db.models.account import Account
     from modulo.db.models.org_membership import OrgMembership
     from modulo.db.seed import seed_modulo_user
@@ -186,28 +249,31 @@ async def _add_user(url: str, email: str, password: str, as_admin: bool) -> str:
             if existing is not None:
                 raise UserCliError(f"user {email} already exists — nothing changed")
             await seed_modulo_user(session, org, f"{email}:{password}")
-            role = "runner"
-            if as_admin:
-                account = (await session.execute(select(Account).where(Account.email == email))).scalar_one()
-                membership = (
-                    await session.execute(
-                        select(OrgMembership).where(
-                            OrgMembership.account_id == account.id,
-                            OrgMembership.organisation_id == org.id,
-                        )
+            account = (await session.execute(select(Account).where(Account.email == email))).scalar_one()
+            membership = (
+                await session.execute(
+                    select(OrgMembership).where(
+                        OrgMembership.account_id == account.id,
+                        OrgMembership.organisation_id == org.id,
                     )
-                ).scalar_one_or_none()
-                if membership is None:
-                    raise UserCliError(f"membership for {email} missing after creation")
+                )
+            ).scalar_one_or_none()
+            if membership is None:
+                raise UserCliError(f"membership for {email} missing after creation")
+            if as_admin:
                 membership.role = "admin"
-                role = "admin"
-            return f"Created user {email} ({role})"
+            return f"Created user {email} ({membership.role} in organisation '{org.name}')"
     finally:
         await engine.dispose()
 
 
 async def _reset_password(url: str, email: str, password: str) -> str:
-    """Reset the hash with the auth machinery and sign out active sessions."""
+    """Reset the hash with the auth machinery and sign out active sessions.
+
+    Break-glass accounts are refused (the admin reset route refuses too):
+    overwriting their password_hash breaks the break-glass CAS and silently
+    orphans the last-resort recovery credential.
+    """
     from modulo.auth.passwords import hash_password
     from modulo.db.crud.token_family import blacklist_family, list_families_for_account
     from modulo.db.models.account import Account
@@ -218,6 +284,13 @@ async def _reset_password(url: str, email: str, password: str) -> str:
             account = (await session.execute(select(Account).where(Account.email == email))).scalar_one_or_none()
             if account is None:
                 raise UserCliError(f"no user with email {email} in this database — try 'modulo users list'")
+            # Strict boolean compare (the admin route compares the same way):
+            # a break-glass account must never have its hash overwritten.
+            if account.is_break_glass is True:
+                raise UserCliError(
+                    f"{email} is a break-glass account — password reset refused (the admin route refuses too): "
+                    "overwriting its hash breaks the break-glass CAS and orphans the last-resort recovery credential."
+                )
             account.password_hash = hash_password(password)
             families = await list_families_for_account(session, account.id)
             for family in families:
@@ -228,8 +301,14 @@ async def _reset_password(url: str, email: str, password: str) -> str:
     return f"Password reset for {email}; {signed_out} active session(s) were signed out."
 
 
-async def _list_rows(url: str) -> list[ListRow]:
-    """Email / display-name / admin / last-login rows for the primary org."""
+async def _list_rows(url: str) -> tuple[list[ListRow], str]:
+    """Email / display-name / admin / last-login / org rows for the primary org.
+
+    The role column is relative to the primary org ONLY, so every row names
+    its org (or explicitly annotates that the account has no active
+    membership in it) — on multi-org installs an unannotated "no" would be
+    misleading.
+    """
     from modulo.db.models.account import Account
     from modulo.db.models.org_membership import OrgMembership
 
@@ -249,15 +328,17 @@ async def _list_rows(url: str) -> list[ListRow]:
                     .order_by(Account.email)
                 )
             ).all()
-            return [
+            rows = [
                 (
                     account.email,
                     account.display_name,
                     "yes" if role == "admin" else "no",
                     _format_last_login(account.last_login),
+                    org.name if role is not None else f"no membership in {org.name}",
                 )
                 for account, role in pairs
             ]
+            return rows, org.name
     finally:
         await engine.dispose()
 
@@ -268,11 +349,11 @@ def _format_last_login(value: Any) -> str:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
-def _print_rows(rows: list[ListRow]) -> None:
+def _print_rows(rows: list[ListRow], org_name: str) -> None:
     if not rows:
-        click.echo("no members found in the primary organisation")
+        click.echo(f"no members found in organisation '{org_name}'")
         return
-    headers: tuple[str, ...] = ("email", "display_name", "admin", "last_login")
+    headers: tuple[str, ...] = ("email", "display_name", "admin", "last_login", "org")
     widths = [len(header) for header in headers]
     for row in rows:
         for index, value in enumerate(row):
@@ -314,6 +395,14 @@ def add(email: str, admin: bool, force: bool, password_option: str | None, data_
     _guard_modulo_users(force)
     password = _resolved_password(password_option)
     _validate_password_strength(password)
+    # The seeder stores a "$2"-prefixed password part VERBATIM as a
+    # pre-computed bcrypt hash — an account that could never log in. Refuse
+    # before seeding instead.
+    if password.startswith("$2"):
+        raise click.ClickException(
+            "password must not start with '$2' — the seeder stores that prefix verbatim as a "
+            "pre-computed bcrypt hash, which would create an account that can never log in"
+        )
     url = _resolve_database_url(data_dir)
     click.echo(_run_db_command(_add_user(url, email, password, admin)))
 
@@ -324,7 +413,12 @@ def add(email: str, admin: bool, force: bool, password_option: str | None, data_
 @click.option("--force", is_flag=True, default=False, help="Proceed despite MODULO_USERS being set.")
 @click.option("--data-dir", type=click.Path(file_okay=False, path_type=Path), default=None)
 def reset_password(email: str, force: bool, password_option: str | None, data_dir: Path | None) -> None:
-    """Reset a user's password hash and sign out their active sessions."""
+    """Reset a user's password hash and sign out their active sessions.
+
+    Residual access-token window: the reset and the token-family blacklist
+    kill refresh/rotation immediately, but a stolen access JWT stays valid
+    until it expires — same as the admin reset route.
+    """
     _guard_modulo_users(force)
     password = _resolved_password(password_option)
     _validate_password_strength(password)
@@ -336,11 +430,11 @@ def reset_password(email: str, force: bool, password_option: str | None, data_di
 @click.option("--data-dir", type=click.Path(file_okay=False, path_type=Path), default=None)
 def list_cmd(data_dir: Path | None) -> None:
     """List local users (email, admin flag, last login) — read-only."""
-    url = _resolve_database_url(data_dir)
+    url = _resolve_database_url(data_dir, readonly=True)
     try:
-        rows = asyncio.run(_list_rows(url))
+        rows, org_name = asyncio.run(_list_rows(url))
     except UserCliError as exc:
         raise click.ClickException(str(exc)) from None
     except SQLAlchemyError as exc:
         raise click.ClickException(f"database error: {exc}") from exc
-    _print_rows(rows)
+    _print_rows(rows, org_name)
