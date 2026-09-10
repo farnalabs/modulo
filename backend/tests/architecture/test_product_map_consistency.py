@@ -319,6 +319,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/admin/run-retention": "frontend/src/views/AdminRunRetentionView.vue",
         "/admin/system/config": "frontend/src/views/AdminSystemConfigView.vue",
         "/admin/users": "frontend/src/views/AdminUsersView.vue",
+        "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
         "/pipelines/:id/editor": "frontend/src/views/PipelineEditorView.vue",
         "/runs": "frontend/src/views/RunsListView.vue",
         "/runs/:id": "frontend/src/views/RunDetailView.vue",

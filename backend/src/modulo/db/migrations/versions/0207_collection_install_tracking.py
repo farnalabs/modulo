@@ -37,8 +37,10 @@ types and no ceremony/RLS runs.
 ``ON DELETE RESTRICT`` on ``collection_id`` is INTENTIONAL: a collection that
 has ever been installed leaves provenance history that must survive collection
 deletion (the install row is the audit record). Per-entity provenance is recorded
-in ``collection_install_entity`` (one row per written schema/agent/pipeline), so
-no denormalised ``collection_install_id`` column is added to the entity tables.
+in ``collection_install_entity`` (one row per written schema/agent/pipeline). A
+denormalised ``collection_install_id`` column IS also added to ``schemas`` /
+``agents`` / ``pipelines`` (nullable + indexed) because ``install.py`` /
+``uninstall.py`` stamp and clear that pointer directly on the entity rows.
 """
 
 from __future__ import annotations
@@ -214,9 +216,23 @@ def upgrade() -> None:
         ["entity_type", "entity_id"],
     )
 
-    # Provenance is recorded by collection_install_entity (one row per
-    # schema/agent/pipeline an install wrote), so no denormalised
-    # collection_install_id column is added to the entity tables.
+    # 3. Denormalised provenance pointer on the entity tables. ``install.py``
+    #    stamps ``collection_install_id`` on every schema/agent/pipeline it
+    #    materialises (and ``uninstall.py`` clears it), so the column must exist
+    #    on the live entity rows — not only in ``collection_install_entity``.
+    #    Nullable + indexed (mirrors the model declarations in schema.py /
+    #    agent.py / pipeline.py); no FK (the install row is provenance audit
+    #    history and may outlive the entity per ON DELETE behaviour).
+    for _table in ("schemas", "agents", "pipelines"):
+        op.add_column(
+            _table,
+            sa.Column("collection_install_id", sa.Uuid(), nullable=True),
+        )
+        op.create_index(
+            f"ix_{_table}_collection_install_id",
+            _table,
+            ["collection_install_id"],
+        )
 
     if pg:
         # collection_install is the org-scoped parent; collection_install_entity
@@ -245,3 +261,8 @@ def downgrade() -> None:
 
     op.drop_table(_COLLECTION_INSTALL_ENTITY)
     op.drop_table(_COLLECTION_INSTALL)
+
+    # Drop the denormalised provenance pointer added to the entity tables.
+    for _table in ("pipelines", "agents", "schemas"):
+        op.drop_index(f"ix_{_table}_collection_install_id", table_name=_table)
+        op.drop_column(_table, "collection_install_id")

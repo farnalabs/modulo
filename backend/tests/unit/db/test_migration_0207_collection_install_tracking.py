@@ -47,6 +47,7 @@ class _Recorder:
         self.sql: list[str] = []
         self.tables: list[str] = []
         self.table_columns: dict[str, list[str]] = {}
+        self.columns: dict[str, list[str]] = {}
         self.indexes: list[str] = []
         self.index_columns: dict[str, list[str]] = {}
 
@@ -62,6 +63,14 @@ class _Recorder:
             if hasattr(col, "name"):
                 cols.append(col.name)
         self.table_columns[name] = cols
+
+    def add_column(self, table_name: str, column: object, *_args: object, **_kwargs: object) -> None:
+        self.columns.setdefault(table_name, []).append(getattr(column, "name", str(column)))
+
+    def drop_column(self, table_name: str, column_name: str, *_args: object, **_kwargs: object) -> None:
+        cols = self.columns.get(table_name)
+        if cols and column_name in cols:
+            cols.remove(column_name)
 
     def create_index(self, name: str, _table_name: str, columns: list[str], *_args: object, **_kwargs: object) -> None:
         self.indexes.append(name)
@@ -165,6 +174,45 @@ class TestPostgresCeremony:
             migration.upgrade()
         # Asserted for both created tables (collection_install + entity).
         assert assert_mock.call_count >= 1
+
+
+class TestEntityProvenanceColumns:
+    """The ORM models (schema.py / agent.py / pipeline.py) declare a
+    ``collection_install_id`` pointer that ``install.py`` / ``uninstall.py``
+    stamp and clear on the live entity rows, but the original migration only
+    tracked provenance in ``collection_install_entity``. The migration MUST
+    add the denormalised column to the three entity tables (FAR-765 review
+    blocker — the column was missing and integration tests raised
+    UndefinedColumnError)."""
+
+    def test_adds_collection_install_id_to_entity_tables(self) -> None:
+        migration = _load_migration()
+        for dialect in ("sqlite", "postgresql"):
+            rec = _run_upgrade(migration, dialect, roles_exist=True)
+            for table in ("schemas", "agents", "pipelines"):
+                cols = rec.columns.get(table, [])
+                assert "collection_install_id" in cols, (
+                    f"{dialect}: migration 0207 must add collection_install_id to {table}; got {cols}"
+                )
+                idx = f"ix_{table}_collection_install_id"
+                assert idx in rec.indexes, f"{dialect}: migration 0207 must create index {idx}; got {rec.indexes}"
+
+    def test_downgrade_drops_entity_columns(self) -> None:
+        migration = _load_migration()
+        rec = _Recorder()
+        bind = _make_bind("postgresql")
+        with (
+            patch.object(migration, "op", rec),
+            patch.object(migration, "_role_exists", return_value=True),
+            patch.object(migration, "_assert_owner_is_migrate", return_value=None),
+        ):
+            rec.get_bind = MagicMock(return_value=bind)  # type: ignore[attr-defined]
+            migration.op.get_bind = MagicMock(return_value=bind)  # type: ignore[attr-defined]
+            migration.downgrade()
+        for table in ("schemas", "agents", "pipelines"):
+            assert "collection_install_id" not in rec.columns.get(table, []), (
+                f"downgrade must drop collection_install_id from {table}"
+            )
 
 
 class TestOrmMigrationConformance:
