@@ -148,7 +148,7 @@ class TestNoAddColumnRegression:
                 )
             # 0207 already owns the column, so 0209 must not request op.add_column
             # for it on any dialect (this is the DuplicateColumn regression).
-            assert rec.added_columns == [], f"0209 must not add column {_COLUMN}: {rec.added_columns}"
+            assert not rec.added_columns, f"0209 must not add column {_COLUMN}: {rec.added_columns}"
 
     def test_upgrade_creates_index_if_not_exists_per_table(self) -> None:
         migration = _load_migration()
