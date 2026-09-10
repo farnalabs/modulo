@@ -74,7 +74,8 @@ def test_legacy_backup_group_still_works_standalone() -> None:
 def test_group_help_lists_both_surfaces() -> None:
     result = CliRunner().invoke(cli_main.cli, ["--help"])
     assert result.exit_code == 0
-    for command in ("backup", "restore", "apply", "start", "stop", "status", "version", "env"):
+    commands = ("backup", "restore", "apply", "start", "stop", "status", "version", "env", "service", "clear-degraded")
+    for command in commands:
         assert command in result.output
 
 
@@ -231,23 +232,55 @@ def test_env_redacts_every_real_credential_carrier(monkeypatch: pytest.MonkeyPat
 
 
 def test_start_invokes_run_start_with_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    calls: list[tuple[Path, bool, Path | None]] = []
+    calls: list[tuple[Path, bool, Path | None, bool]] = []
     import modulo.launcher.entry as entry_module
 
-    def fake_run_start(data_dir: Path | None, *, detach: bool = False, bin_dir: Path | None = None) -> int:
-        calls.append((data_dir or Path("unset"), detach, bin_dir))
+    def fake_run_start(
+        data_dir: Path | None,
+        *,
+        detach: bool = False,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+    ) -> int:
+        calls.append((data_dir or Path("unset"), detach, bin_dir, clear_degraded))
         return 0
 
     monkeypatch.setattr(entry_module, "run_start", fake_run_start)
     result = CliRunner().invoke(cli_main.cli, ["start", "--data-dir", str(tmp_path), "--detach"])
     assert result.exit_code == 0
-    assert calls == [(tmp_path, True, None)]
+    assert calls == [(tmp_path, True, None, False)]
+
+
+def test_start_clear_degraded_flag_is_passed_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[bool] = []
+    import modulo.launcher.entry as entry_module
+
+    def fake_run_start(
+        data_dir: Path | None,
+        *,
+        detach: bool = False,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+    ) -> int:
+        calls.append(clear_degraded)
+        return 0
+
+    monkeypatch.setattr(entry_module, "run_start", fake_run_start)
+    result = CliRunner().invoke(cli_main.cli, ["start", "--data-dir", str(tmp_path), "--clear-degraded"])
+    assert result.exit_code == 0
+    assert calls == [True]
 
 
 def test_start_failure_is_rendered_as_click_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import modulo.launcher.entry as entry_module
 
-    def failing_run_start(data_dir: Path | None, *, detach: bool = False, bin_dir: Path | None = None) -> int:
+    def failing_run_start(
+        data_dir: Path | None,
+        *,
+        detach: bool = False,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+    ) -> int:
         raise RuntimeError("boom: cannot boot")
 
     monkeypatch.setattr(entry_module, "run_start", failing_run_start)
@@ -259,7 +292,13 @@ def test_start_failure_is_rendered_as_click_exception(monkeypatch: pytest.Monkey
 def test_start_keyboard_interrupt_exits_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import modulo.launcher.entry as entry_module
 
-    def interrupted_run_start(data_dir: Path | None, *, detach: bool = False, bin_dir: Path | None = None) -> int:
+    def interrupted_run_start(
+        data_dir: Path | None,
+        *,
+        detach: bool = False,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+    ) -> int:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(entry_module, "run_start", interrupted_run_start)
@@ -419,3 +458,93 @@ def test_doctor_command_help_lists_options() -> None:
     assert result.exit_code == 0
     assert "--data-dir" in result.output
     assert "--json" in result.output
+
+
+# ---------------------------------------------------------------------------
+# service group + clear-degraded (FAR-674)
+# ---------------------------------------------------------------------------
+
+
+def test_service_group_help_lists_subcommands() -> None:
+    result = CliRunner().invoke(cli_main.cli, ["service", "--help"])
+    assert result.exit_code == 0
+    for subcommand in ("install", "uninstall", "status"):
+        assert subcommand in result.output
+
+
+def test_service_install_refusal_is_rendered_as_click_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.launcher.service as service_module
+
+    def refusing_install() -> object:
+        raise service_module.ServiceError("systemd was not detected (no /run/systemd/system)")
+
+    monkeypatch.setattr(service_module, "install", refusing_install)
+    result = CliRunner().invoke(cli_main.cli, ["service", "install"])
+    assert result.exit_code == 1
+    assert "systemd was not detected" in result.output
+
+
+def test_service_install_renders_result_and_warnings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.service as service_module
+
+    def fake_install() -> service_module.ServiceInstallResult:
+        return service_module.ServiceInstallResult(
+            unit_path=tmp_path / "modulo.service",
+            executable=tmp_path / "bin" / "modulo",
+            enabled=True,
+            started=True,
+            linger_enabled=False,
+            warnings=["documented fallback: `sudo loginctl enable-linger duncan`"],
+        )
+
+    monkeypatch.setattr(service_module, "install", fake_install)
+    result = CliRunner().invoke(cli_main.cli, ["service", "install"])
+    assert result.exit_code == 0
+    assert "installed" in result.output
+    assert "sudo loginctl enable-linger" in result.output
+
+
+def test_service_status_renders_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.service as service_module
+
+    payload = {
+        "unit": "modulo.service",
+        "unit_path": str(tmp_path / "modulo.service"),
+        "enabled": "enabled",
+        "active": "inactive",
+        "linger": "disabled/unknown",
+        "launcher": {"error": "data dir is not initialized (no secrets file)"},
+    }
+    monkeypatch.setattr(service_module, "status", lambda data_dir: payload)
+    result = CliRunner().invoke(cli_main.cli, ["service", "status", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "enabled: enabled" in result.output
+    assert "active: inactive" in result.output
+    assert "linger: disabled/unknown" in result.output
+
+
+def test_clear_degraded_removes_the_persisted_record(tmp_path: Path) -> None:
+    from modulo.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    degraded_path = data_dir / DEGRADED_FILENAME
+    write_degraded_record(degraded_path, {"schema_version": 1, "degraded_at": 1.0, "reason": "cap"})
+    result = CliRunner().invoke(cli_main.cli, ["clear-degraded", "--data-dir", str(data_dir)])
+    assert result.exit_code == 0
+    assert "cleared" in result.output
+    assert not degraded_path.exists()
+
+
+def test_clear_degraded_without_a_record_is_clean(tmp_path: Path) -> None:
+    result = CliRunner().invoke(cli_main.cli, ["clear-degraded", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "no terminal-degraded state present" in result.output
+
+
+def test_clear_degraded_is_not_shadowed_by_backup_fallback(tmp_path: Path) -> None:
+    """`clear-degraded` must resolve as a command, not fall back to backup."""
+    result = CliRunner().invoke(cli_main.cli, ["clear-degraded", "--data-dir", str(tmp_path), "--help"])
+    assert result.exit_code == 0
+    assert "no terminal-degraded state present" not in result.output
+    assert "Clear a persisted terminal-degraded" in result.output

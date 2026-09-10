@@ -93,6 +93,12 @@ into the Runners page as redirects.)
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — registered the
+  `runner-status-error` testid of the `AdminRunnersView.vue` layout on
+  `/admin/runners/profiles` and added that whole-page view to the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`),
+  so the Runners page's reload-error surface can no longer ship invisible to
+  Remy's docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **improve-architecture (product-map walk)** — reconciled this entry
   and the graph-root registry index with the FAR-591 D5 Runners page: the
   canonical routes are `/admin/runners/profiles{,/new,/:id/edit}` and
