@@ -71,8 +71,9 @@ _MIGRATION_PATH = (
 # chained onto 0201, 0195_hitl_claim_gate_config_json (FAR-634, from main) chained onto 0202,
 # 0203_triggers_add_name (FAR-681 slice 2, from main) chained onto 0195, FAR-681
 # slice 2 (#289/#293) added 0204_runner_probe_cache on top of 0203_triggers_add_name,
-# and FAR-760's 0205_library_collection_type chained onto 0204_runner_probe_cache as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0205_library_collection_type"
+# and FAR-760's 0205_library_collection_type chained onto 0204_runner_probe_cache,
+# and FAR-644's 0206_deleted_defaults_signal_check chained onto 0205 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0206_deleted_defaults_signal_check"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
