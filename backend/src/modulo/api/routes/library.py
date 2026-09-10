@@ -34,10 +34,22 @@ from modulo.core.library_service import (
     list_primitives,
     publish_contribution,
 )
+from modulo.core.library_service.install import (
+    CollectionInstallError,
+    CollectionNotPublishedError,
+    PinResolutionError,
+    install_collection,
+)
 from modulo.core.library_service.primitive_types import (
     COLLECTION_PIN_TYPES,
     MAX_COLLECTION_PINS,
     PRIMITIVE_TYPES,
+)
+from modulo.core.library_service.runnability import compute_runnable
+from modulo.core.library_service.uninstall import (
+    InstallNotFoundError,
+    UninstallError,
+    uninstall_collection,
 )
 from modulo.core.lifecycle_map.import_export import (
     PRIMITIVE_TYPE as LIFECYCLE_MAP_PRIMITIVE_TYPE,
@@ -2047,3 +2059,259 @@ async def publish_collection_endpoint(
         _log.exception("publish_collection_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
     return _collection_response(prim)
+
+
+# ---------------------------------------------------------------------------
+# Collection install / uninstall (FAR-762)
+# ---------------------------------------------------------------------------
+
+
+class CollectionUninstallRequest(BaseModel):
+    install_id: uuid.UUID
+
+
+class CollectionInstallResponse(BaseModel):
+    install_id: uuid.UUID
+    collection_id: uuid.UUID
+    collection_version: str | None
+    organisation_id: uuid.UUID
+    status: str
+    resolved_manifest: dict[str, Any] | None = None
+    connector_checklist: list[dict[str, Any]] | None = None
+    installed_entities: list[dict[str, Any]] | None = None
+    runnable: bool = False
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CollectionInstallListResponse(BaseModel):
+    items: list[CollectionInstallResponse]
+
+
+class CollectionUninstallResponse(BaseModel):
+    install_id: str
+    deleted: list[dict[str, str]]
+    detached: list[dict[str, str]]
+
+
+@router.post(
+    "/collections/{primitive_id}/install",
+    status_code=status.HTTP_201_CREATED,
+)
+@handle_db_errors("library.install_collection_endpoint")
+async def install_collection_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
+) -> CollectionInstallResponse:
+    """Install a published collection into the organisation.
+
+    Requires the AND union of: library.copy + schema.create + agent.create +
+    pipeline.create (all resolve to 'operator' role).
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            install = await install_collection(
+                session,
+                org_id=org_id,
+                created_by=principal.account_id,
+                collection_id=primitive_id,
+            )
+    except CollectionNotPublishedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except PinResolutionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
+    except CollectionInstallError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.install_collection_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.install_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.install_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    # Compute runnability on read
+    runnable = await compute_runnable(session, install.install_id)
+
+    return CollectionInstallResponse(
+        install_id=install.install_id,
+        collection_id=install.collection_id,
+        collection_version=install.collection_version,
+        organisation_id=install.organisation_id,
+        status=install.status,
+        resolved_manifest=install.resolved_manifest,
+        connector_checklist=install.connector_checklist,
+        installed_entities=install.installed_entities,
+        runnable=runnable,
+        created_at=install.created_at,
+    )
+
+
+@router.post(
+    "/collections/{primitive_id}/uninstall",
+    status_code=status.HTTP_200_OK,
+)
+@handle_db_errors("library.uninstall_collection_endpoint")
+async def uninstall_collection_endpoint(
+    primitive_id: uuid.UUID,
+    req: CollectionUninstallRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.manage"),
+) -> CollectionUninstallResponse:
+    """Uninstall a collection, removing or detaching entities as appropriate.
+
+    Modified entities (whose provenance was already cleared by the user) are
+    detached rather than deleted.
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            result = await uninstall_collection(
+                session,
+                org_id=org_id,
+                install_id=req.install_id,
+            )
+    except InstallNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except UninstallError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.uninstall_collection_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.uninstall_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.uninstall_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    return CollectionUninstallResponse(
+        install_id=result["install_id"],
+        deleted=result["deleted"],
+        detached=result["detached"],
+    )
+
+
+@router.get(
+    "/collections/{primitive_id}/installs",
+)
+@handle_db_errors("library.list_collection_installs_endpoint")
+async def list_collection_installs_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.search"),
+) -> CollectionInstallListResponse:
+    """List install records for a collection."""
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            from modulo.db.models.collection_install import CollectionInstall
+
+            stmt = (
+                select(CollectionInstall)
+                .where(
+                    CollectionInstall.collection_id == primitive_id,
+                    CollectionInstall.organisation_id == org_id,
+                )
+                .order_by(CollectionInstall.created_at.desc())
+            )
+            installs = list((await session.execute(stmt)).scalars())
+    except ProgrammingError:
+        _log.exception("library.list_collection_installs_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.list_collection_installs_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    items: list[CollectionInstallResponse] = []
+    for install in installs:
+        runnable = await compute_runnable(session, install.install_id)
+        items.append(
+            CollectionInstallResponse(
+                install_id=install.install_id,
+                collection_id=install.collection_id,
+                collection_version=install.collection_version,
+                organisation_id=install.organisation_id,
+                status=install.status,
+                resolved_manifest=install.resolved_manifest,
+                connector_checklist=install.connector_checklist,
+                installed_entities=install.installed_entities,
+                runnable=runnable,
+                created_at=install.created_at,
+            )
+        )
+
+    return CollectionInstallListResponse(items=items)
+
+
+@router.get(
+    "/collections/{primitive_id}/installs/{install_id}",
+)
+@handle_db_errors("library.get_collection_install_endpoint")
+async def get_collection_install_endpoint(
+    primitive_id: uuid.UUID,
+    install_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.search"),
+) -> CollectionInstallResponse:
+    """Get a single install record for a collection."""
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            from modulo.db.models.collection_install import CollectionInstall
+
+            install = await session.get(CollectionInstall, install_id)
+            if install is None or install.collection_id != primitive_id or install.organisation_id != org_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Install {install_id} not found for collection {primitive_id}",
+                )
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception("library.get_collection_install_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.get_collection_install_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    runnable = await compute_runnable(session, install.install_id)
+
+    return CollectionInstallResponse(
+        install_id=install.install_id,
+        collection_id=install.collection_id,
+        collection_version=install.collection_version,
+        organisation_id=install.organisation_id,
+        status=install.status,
+        resolved_manifest=install.resolved_manifest,
+        connector_checklist=install.connector_checklist,
+        installed_entities=install.installed_entities,
+        runnable=runnable,
+        created_at=install.created_at,
+    )

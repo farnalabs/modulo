@@ -78,6 +78,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     stale_run_timeout_minutes: Mapped[int] = mapped_column(
         Integer, nullable=False, default=30, server_default=text("'30'")
     )
+    collection_install_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
