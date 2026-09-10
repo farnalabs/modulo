@@ -73,8 +73,9 @@ _MIGRATION_PATH = (
 # slice 2 (#289/#293) added 0204_runner_probe_cache on top of 0203_triggers_add_name,
 # and FAR-760's 0205_library_collection_type chained onto 0204_runner_probe_cache,
 # and FAR-644's 0206_deleted_defaults_signal_check chained onto 0205,
-# and FAR-761's 0207_collection_install_tracking chained onto 0206 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0207_collection_install_tracking"
+# and FAR-761's 0207_collection_install_tracking chained onto 0206, and #337's
+# 0208_notification_indexes_and_constraint chained onto 0207 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0208_notification_indexes_and_constraint"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
