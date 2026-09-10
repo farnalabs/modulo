@@ -39,6 +39,8 @@ _PREFILL_CONSTRAINTS: dict[str, object] = {
     "download_count": None,
     "average_rating": None,
     "review_count": None,
+    "owner_team_id": None,
+    "visibility": "org",
 }
 
 
