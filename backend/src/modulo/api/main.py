@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,9 +11,14 @@ from typing import Any, Protocol, cast
 import anyio
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.staticfiles import StaticFiles
 
 from modulo.api import dependencies
 from modulo.api.dependencies import (
@@ -1172,3 +1177,128 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # typ
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(StorageExhaustedError, storage_exhausted_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
+
+
+# ---------------------------------------------------------------------------
+# Single-port serving (FAR-671 slice 3, ADR 031) — flag-gated, DEFAULT OFF
+# ---------------------------------------------------------------------------
+# Parity checklist vs the nginx proxy (deploy/fly/nginx.conf, deploy/nginx/
+# all-in-one.conf) — what the native serve_spa path enforces natively:
+#
+# | nginx behaviour                        | native enforcement                            |
+# |----------------------------------------|-----------------------------------------------|
+# | location / HTML no-cache,must-revalidate| _SpaCacheHeadersMiddleware text/html no-cache |
+# | ~* hashed js/css expires 1y immutable   | /assets/* public,max-age=31536000,immutable   |
+# | /ws Upgrade passthrough                 | Starlette WebSocket routes (native)           |
+# | /api read timeout 125s                  | RequestTimeoutMiddleware default 120s         |
+# | /healthz read 10s                       | RequestTimeoutMiddleware overrides (5/15)     |
+# | /mcp read/send 120s                     | RequestTimeoutMiddleware default 120s         |
+# | client_max_body_size (unset; nginx 1m)  | _UploadLimitMiddleware 50 MiB matching the    |
+# |                                         | library route's _MAX_UPLOAD_SIZE (50 MB)      |
+# | ws idle drop (nginx proxy_read 60s def) | uvicorn ws ping defaults (20s/20s) via the    |
+# |                                         | launcher serve seam — never exceeds 60s idle  |
+#
+# NOTE(P3): uvicorn keep-alive/ws ping are serve-seam settings
+# (launcher.entry._serve_api); the middleware constants here stay in parity
+# with the nginx values above.
+
+_SERVE_SPA_ENV = "MODULO_SERVE_SPA"
+_FRONTEND_DIST_ENV = "MODULO_FRONTEND_DIST"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_ASSETS_PREFIX = "/assets/"
+# Matches modulo.api.routes.library._MAX_UPLOAD_SIZE (50 MB) — the native
+# single-port path must never accept MORE than the Docker path accepts.
+_UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024
+
+
+class _SpaCacheHeadersMiddleware(BaseHTTPMiddleware):
+    """No-cache HTML (index + SPA fallback), immutable hashed assets."""
+
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        response = await call_next(request)
+        if request.url.path.startswith(_ASSETS_PREFIX):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+class _UploadLimitMiddleware(BaseHTTPMiddleware):
+    """413 Content-Length over the limit — parity with the route-level caps."""
+
+    def __init__(self, app: Any, limit_bytes: int) -> None:
+        super().__init__(app)
+        self._limit_bytes = limit_bytes
+
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdigit() and int(content_length) > self._limit_bytes:
+            return PlainTextResponse(
+                "Payload too large (upload limit exceeded)",
+                status_code=413,
+            )
+        return await call_next(request)
+
+
+class _SpaFallbackStaticFiles(StaticFiles):
+    """StaticFiles whose 404s fall back to index.html (SPA deep links)."""
+
+    async def get_response(self, path: str, scope: MutableMapping[str, Any]) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+        return await super().get_response("index.html", scope)
+
+
+def _mount_spa(app: FastAPI, env: Mapping[str, str] | None = None) -> bool:
+    """Flag-gated single-port SPA mount (returns True only when mounted).
+
+    The mount is registered LAST — after every /api router and the /mcp
+    sub-app — so it can never shadow them (locked by the route-collision
+    test). Disabling conditions are loud warnings, never import failures.
+    """
+    source = dict(os.environ if env is None else env)
+    if source.get(_SERVE_SPA_ENV, "").strip().lower() not in _TRUTHY:
+        return False
+    dist_text = source.get(_FRONTEND_DIST_ENV, "")
+    dist = Path(dist_text) if dist_text else None
+    if dist is None or not dist.is_dir():
+        logger.warning(
+            "launcher.serve_spa_refused reason=dist_missing env=%s value=%s (flag set but no frontend dist directory)",
+            _FRONTEND_DIST_ENV,
+            dist_text or "<unset>",
+        )
+        return False
+    from modulo.api.middleware.host_origin import LAN_ORIGINS_ENV, HostOriginMiddleware, split_lan_origins
+    from modulo.launcher.runtime_config import build_runtime_config_payload, render_runtime_config_js
+
+    assets_dir = dist / "assets"
+    if not assets_dir.is_dir():
+        logger.warning("launcher.serve_spa_no_assets dir=%s (serving the SPA root anyway)", assets_dir)
+
+    @app.get("/runtime-config.js", include_in_schema=False)
+    async def runtime_config_endpoint() -> Response:
+        payload = build_runtime_config_payload(os.environ)
+        return Response(
+            content=render_runtime_config_js(payload),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
+
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="spa-assets")
+    # SPA fallback registered LAST (nothing above may be shadowed).
+    app.mount("/", _SpaFallbackStaticFiles(directory=dist, html=True), name="spa")
+    app.add_middleware(_UploadLimitMiddleware, limit_bytes=_UPLOAD_LIMIT_BYTES)
+    app.add_middleware(_SpaCacheHeadersMiddleware)
+    app.add_middleware(HostOriginMiddleware, lan_origins=split_lan_origins(source.get(LAN_ORIGINS_ENV)))
+    logger.info("launcher.serve_spa_enabled dist=%s host_origin=loopback_allowlist", dist)
+    return True
+
+
+# Flag-gated (default OFF — Docker/Fly unchanged). Native `modulo start`
+# sets MODULO_SERVE_SPA=1 + MODULO_FRONTEND_DIST=... to serve the SPA from
+# the API port behind the loopback Host/Origin allowlist.
+_mount_spa(app, os.environ)

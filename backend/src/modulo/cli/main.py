@@ -303,6 +303,27 @@ def version_cmd() -> None:
     _print_version()
 
 
+@cli.command("doctor")
+@click.option(
+    "--data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Data dir override (default: the per-OS launcher root).",
+)
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
+@click.pass_context
+def doctor(ctx: click.Context, data_dir: Path | None, as_json: bool) -> None:
+    """Run the doctor-lite checks (exit 0 healthy, 1 unhealthy)."""
+    _scrub_for_launcher_command()
+    from modulo.launcher.doctor import run_doctor
+
+    try:
+        code = run_doctor(_resolve_data_dir(data_dir), as_json=as_json)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    ctx.exit(code)
+
+
 @cli.command("env")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
 def env_cmd(as_json: bool) -> None:
