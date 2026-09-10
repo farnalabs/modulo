@@ -34,6 +34,15 @@ from modulo.core.library_service import (
     list_primitives,
     publish_contribution,
 )
+from modulo.core.library_service.grant import (
+    AlreadyGrantedError,
+    GrantError,
+    NotCommunitySourcedError,
+    grant_collection_agents,
+)
+from modulo.core.library_service.grant import (
+    InstallNotFoundError as GrantInstallNotFoundError,
+)
 from modulo.core.library_service.install import (
     CollectionInstallError,
     CollectionNotPublishedError,
@@ -2076,6 +2085,8 @@ class CollectionInstallResponse(BaseModel):
     collection_version: str | None
     organisation_id: uuid.UUID
     status: str
+    community_sourced: bool = False
+    agents_granted: bool = False
     resolved_manifest: dict[str, Any] | None = None
     connector_checklist: list[dict[str, Any]] | None = None
     installed_entities: list[dict[str, Any]] | None = None
@@ -2155,6 +2166,8 @@ async def install_collection_endpoint(
         collection_version=install.collection_version,
         organisation_id=install.organisation_id,
         status=install.status,
+        community_sourced=install.community_sourced,
+        agents_granted=install.agents_granted,
         resolved_manifest=install.resolved_manifest,
         connector_checklist=install.connector_checklist,
         installed_entities=install.installed_entities,
@@ -2258,6 +2271,8 @@ async def list_collection_installs_endpoint(
                 collection_version=install.collection_version,
                 organisation_id=install.organisation_id,
                 status=install.status,
+                community_sourced=install.community_sourced,
+                agents_granted=install.agents_granted,
                 resolved_manifest=install.resolved_manifest,
                 connector_checklist=install.connector_checklist,
                 installed_entities=install.installed_entities,
@@ -2266,7 +2281,84 @@ async def list_collection_installs_endpoint(
             )
         )
 
-    return CollectionInstallListResponse(items=items)
+
+# ---------------------------------------------------------------------------
+# Community execution gate — grant access (FAR-764 / ADR 032 D2)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/collections/{primitive_id}/installs/{install_id}/grant",
+    status_code=status.HTTP_200_OK,
+)
+@handle_db_errors("library.grant_collection_agents_endpoint")
+async def grant_collection_agents_endpoint(
+    primitive_id: uuid.UUID,
+    install_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.manage"),
+) -> CollectionInstallResponse:
+    """Grant tool/connector access for community-sourced collection agents.
+
+    Flips ``agents_granted`` on the install record.  Only applies to
+    community-sourced installs; raises 400 for non-community installs.
+    Idempotent: granting an already-granted install returns the record as-is.
+    """
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            install = await grant_collection_agents(
+                session,
+                org_id=org_id,
+                install_id=install_id,
+            )
+    except GrantInstallNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except NotCommunitySourcedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except AlreadyGrantedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except GrantError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.grant_collection_agents_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.grant_collection_agents_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.grant_collection_agents_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    runnable = await compute_runnable(session, install.install_id)
+
+    return CollectionInstallResponse(
+        install_id=install.install_id,
+        collection_id=install.collection_id,
+        collection_version=install.collection_version,
+        organisation_id=install.organisation_id,
+        status=install.status,
+        community_sourced=install.community_sourced,
+        agents_granted=install.agents_granted,
+        resolved_manifest=install.resolved_manifest,
+        connector_checklist=install.connector_checklist,
+        installed_entities=install.installed_entities,
+        runnable=runnable,
+        created_at=install.created_at,
+    )
 
 
 @router.get(
@@ -2309,6 +2401,8 @@ async def get_collection_install_endpoint(
         collection_version=install.collection_version,
         organisation_id=install.organisation_id,
         status=install.status,
+        community_sourced=install.community_sourced,
+        agents_granted=install.agents_granted,
         resolved_manifest=install.resolved_manifest,
         connector_checklist=install.connector_checklist,
         installed_entities=install.installed_entities,

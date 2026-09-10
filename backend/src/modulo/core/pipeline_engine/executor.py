@@ -1690,6 +1690,10 @@ class PipelineExecutor:
         # Agent connector_type_refs grants) and reused by the compensation hub
         # so both run paths apply the same deny-by-default fetch gate.
         self._run_connector_scope: list[str] | None = None
+        # FAR-764: agent IDs whose collection_install is community-sourced and
+        # not-yet-granted.  These agents run under default-deny tool/connector
+        # scope (no connectors, read-only tools) until the operator grants them.
+        self._community_gated_agents: set[str] = set()
         # Cancellation-intent signals wired by run_executor_with_watchdog so the
         # NodeCancelledError retry handler can tell a watchdog stall / supersession
         # from a genuine transient node cancellation and skip the pending-reset.
@@ -2330,6 +2334,10 @@ class PipelineExecutor:
         Agents' ``connector_type_refs`` grants; it is cached on the executor
         (``_run_connector_scope``) and reused by the compensation path (which
         has no graph).
+
+        Also enforces the community execution gate (FAR-764 / ADR 032 D2):
+        agents whose ``collection_install_id`` references a community-sourced,
+        not-yet-granted install get NO connector scope (default-deny).
         """
         if graph_json is None:
             return self._run_connector_scope
@@ -2341,9 +2349,11 @@ class PipelineExecutor:
             compute_run_fetch_scope,
         )
         from modulo.db.models.agent import Agent
+        from modulo.db.models.collection_install import CollectionInstall
 
         agent_ids = _connector_scope_agent_ids(graph_json)
         grants: dict[str, set[str]] = {}
+        community_gated: set[str] = set()
         if agent_ids:
             agent_rows = (
                 (
@@ -2357,8 +2367,36 @@ class PipelineExecutor:
                 .scalars()
                 .all()
             )
+            # Collect collection_install_ids for community gate check.
+            install_ids: set[uuid.UUID] = set()
             for agent in agent_rows:
                 grants[str(agent.id)] = agent_granted_connector_types(agent.connector_type_refs)
+                cid = getattr(agent, "collection_install_id", None)
+                if cid is not None:
+                    install_ids.add(cid)
+            # Batch-query CollectionInstall records for community gate status.
+            if install_ids:
+                install_rows = (
+                    (
+                        await session.execute(
+                            select(CollectionInstall).where(
+                                CollectionInstall.install_id.in_(install_ids),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                gated_installs = {
+                    str(ci.install_id) for ci in install_rows if ci.community_sourced and not ci.agents_granted
+                }
+                for agent in agent_rows:
+                    cid = getattr(agent, "collection_install_id", None)
+                    if cid is not None and str(cid) in gated_installs:
+                        community_gated.add(str(agent.id))
+                        # Zero out grants for community-gated agents.
+                        grants.pop(str(agent.id), None)
+        self._community_gated_agents = community_gated
         allowed_connectors = compute_run_fetch_scope(graph_json, grants)
         self._run_connector_scope = allowed_connectors
         return allowed_connectors
@@ -4331,6 +4369,9 @@ class PipelineExecutor:
                 "_run_id": scope.run_id,
                 "_org_id": scope.org_id,
                 "_claim_lease": self._claim_token,
+                # FAR-764: community-gated agent IDs seeded into state so
+                # node functions can enforce default-deny without DB access.
+                "_community_gated_agents": self._community_gated_agents,
             }
         )
         config: dict[str, Any] = {"configurable": {"thread_id": scope.thread_id}}

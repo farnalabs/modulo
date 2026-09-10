@@ -20,6 +20,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
@@ -59,6 +60,16 @@ class CollectionInstall(Base):
     organisation_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    community_sourced: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    agents_granted: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
     resolved_manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     connector_checklist: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     installed_entities: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

@@ -307,9 +307,15 @@ async def install_collection(
     # 8. Build connector checklist
     connector_checklist = _build_connector_checklist(resolved_pins)
 
-    # 9. Create or update CollectionInstall record
+    # 9. Determine community provenance (ADR 032 D2).
+    # Community-sourced or registry-sourced collections restrict agent tool/
+    # connector access until an operator explicitly grants access.
+    community_sourced = collection.source in ("community", "registry")
+
+    # 10. Create or update CollectionInstall record
     if existing is not None:
         existing.status = "installed"
+        existing.community_sourced = community_sourced
         existing.resolved_manifest = {
             "schemas": result.get("schemas", {}),
             "agents": result.get("agents", {}),
@@ -326,6 +332,7 @@ async def install_collection(
                 collection_version=collection.version,
                 organisation_id=org_id,
                 status="installed",
+                community_sourced=community_sourced,
                 resolved_manifest={
                     "schemas": result.get("schemas", {}),
                     "agents": result.get("agents", {}),

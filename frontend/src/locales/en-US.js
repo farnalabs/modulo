@@ -113,6 +113,18 @@ export default {
       "next_page": "Next",
       "page_of": "Page {page} of {total}",
     },
+    "CollectionDetail": {
+      "installs_title": "Installs",
+      "install_status": "Status: {status}",
+      "community_sourced": "Community",
+      "agents_granted": "Granted",
+      "grant_agents": "Grant Access",
+      "granting": "Granting...",
+      "connector_checklist": "Connector Requirements",
+      "create_connector": "Create",
+      "runnable": "Ready to run",
+      "not_runnable": "Not yet runnable — configure required connectors",
+    },
     "AdminRemyView": {
       "configure_remy_ai_assistant_behaviour_access_and_skills": "Configure Remy AI assistant behaviour, access, and skills",
       "default_model": "Default Model",
