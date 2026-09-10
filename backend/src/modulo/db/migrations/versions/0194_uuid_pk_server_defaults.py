@@ -222,14 +222,33 @@ _DOWNGRADE_STATEMENTS: tuple[str, ...] = (
 
 
 def _existing_tables(bind: object) -> set[str]:
-    # Tables created by LATER migrations (e.g. ``runner_probe_cache`` at 0202,
+    # Tables created by LATER migrations (e.g. ``runner_probe_cache`` at 0204,
     # which also supplies its uuid-PK server default at CREATE time) do not exist
     # yet when this frozen enum runs on a fresh DB. Issuing an ``ALTER`` against a
     # missing table raises 42P01, which ABORTS the Postgres transaction and breaks
     # every subsequent statement (25P02 InFailedSqlTransaction). Guard by skipping
     # tables that are not present *now* rather than catching the error after the
     # transaction is already dead.
-    rows = bind.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")).fetchall()
+    #
+    # Resolve the live table set from ``information_schema.tables`` pinned to the
+    # ``public`` schema (where every modulo table lives) instead of
+    # ``pg_tables WHERE schemaname = current_schema()``. ``current_schema()`` tracks
+    # the session ``search_path``, which a prior migration in the same chain can
+    # leave pointed at a non-``public`` schema (e.g. 0204's downgrade issues
+    # ``SET search_path TO public``). When that happens the downgrade sees the
+    # table and DROPs its default, but the re-upgrade's guard — with a different
+    # ``current_schema()`` — misses it and silently skips the ``SET DEFAULT``,
+    # leaving exactly one uuid-PK default unrestored after the round-trip (the
+    # ``downgrade + re-upgrade`` integration test failure: assert 82 == 83).
+    # Pinning to ``information_schema`` makes the guard view identical to the
+    # test's ``information_schema.columns WHERE table_schema = 'public'`` snapshot,
+    # so the round-trip is idempotent and count-preserving.
+    rows = bind.execute(
+        text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+        )
+    ).fetchall()
     return {row[0] for row in rows}
 
 

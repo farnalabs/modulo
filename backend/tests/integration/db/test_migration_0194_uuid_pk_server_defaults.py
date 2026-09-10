@@ -45,10 +45,19 @@ _HEAD = "0194_uuid_pk_server_defaults"
 _PRE_HEAD = "0193_run_node_outputs_sweep_index"
 
 
-def _uuid_pk_pairs() -> set[tuple[str, str]]:
-    """(table, column) for every uuid primary key that is not a foreign-key parent."""
+def _uuid_pk_pairs(existing: set[str] | None = None) -> set[tuple[str, str]]:
+    """(table, column) for every uuid primary key that is not a foreign-key parent.
+
+    When ``existing`` is supplied, only pairs whose table is present in that set
+    are returned. Migration 0194 is applied against a DB migrated only to its own
+    head, so tables introduced by LATER migrations (e.g. ``runner_probe_cache`` at
+    0204) do not exist yet at that state and must not be asserted against here —
+    those migrations supply their own uuid-PK server default at CREATE time.
+    """
     pairs: set[tuple[str, str]] = set()
     for table in Base.metadata.sorted_tables:
+        if existing is not None and table.name not in existing:
+            continue
         fk_parents = {fk.parent.name for fk in table.foreign_keys}
         for column in table.columns:
             if column.primary_key and isinstance(column.type, (Uuid, POSTGRES_UUID)) and column.name not in fk_parents:
