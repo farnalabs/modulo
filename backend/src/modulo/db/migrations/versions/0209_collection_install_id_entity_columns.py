@@ -95,11 +95,16 @@ def upgrade() -> None:
         if migrate_owns_table:
             op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-        op.add_column(
-            table,
-            sa.Column(_COLUMN, sa.Uuid(), nullable=True),
+        # The denormalised ``collection_install_id`` column is created (idempotently,
+        # via ``ADD COLUMN IF NOT EXISTS``) by 0207_collection_install_tracking — do
+        # NOT re-add it here or the migration crashes with
+        # "column <table>.collection_install_id already exists". This migration only
+        # adds the index the ORM model declares (``index=True``), which 0207 does
+        # not create. Guarding the index with IF NOT EXISTS keeps the step safe to
+        # re-run.
+        op.execute(
+            f"CREATE INDEX IF NOT EXISTS ix_{table}_{_COLUMN} ON {table} ({_COLUMN})"
         )
-        op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
 
         if pg and migrate_owns_table:
             op.execute("RESET ROLE")
@@ -114,5 +119,7 @@ def downgrade() -> None:
         op.execute("SET search_path TO public")
 
     for table in reversed(_ENTITY_TABLES):
+        # Only drop the index owned by this migration. The ``collection_install_id``
+        # column itself is added/dropped by 0207_collection_install_tracking — dropping
+        # it here too would fail with "column does not exist" during downgrade.
         op.drop_index(f"ix_{table}_{_COLUMN}", table_name=table)
-        op.drop_column(table, _COLUMN)
