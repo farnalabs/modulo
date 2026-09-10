@@ -22,7 +22,10 @@ from modulo.db.rls import set_rls_org
 pytestmark = pytest.mark.integration
 
 _PREFILL_CONSTRAINTS: dict[str, object] = {
-    "source": "local",
+    # ``forked_from`` must reference a *registry* primitive (enforced by the
+    # deployed ``enforce_library_fork_provenance`` trigger in migration 0002),
+    # so the source row is seeded as a registry primitive here.
+    "source": "registry",
     "primitive_type": "schema",
     "name": "FK Regression Source",
     "slug": "fk-regression-source",
