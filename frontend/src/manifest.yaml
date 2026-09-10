@@ -2956,6 +2956,12 @@ elements:
       - testid: hitl-review-claim-failure-banner
         type: element
         dynamic_testid: false
+      - testid: hitl-review-fetch-error
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-retry
+        type: button
+        dynamic_testid: false
       - testid: hitl-review-prev-page
         type: button
         dynamic_testid: false
