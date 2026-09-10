@@ -95,11 +95,12 @@ def upgrade() -> None:
         if migrate_owns_table:
             op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-        op.add_column(
-            table,
-            sa.Column(_COLUMN, sa.Uuid(), nullable=True),
-        )
-        op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
+        # Migration 0207 already adds this denormalised column (idempotently). Use
+        # IF NOT EXISTS so this migration is safe to run after 0207 — a plain
+        # ``op.add_column`` would fail with "column already exists" on a DB where
+        # 0207 has already landed.
+        op.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {_COLUMN} UUID")
+        op.execute(f"CREATE INDEX IF NOT EXISTS ix_{table}_{_COLUMN} ON {table} ({_COLUMN})")
 
         if pg and migrate_owns_table:
             op.execute("RESET ROLE")
@@ -114,5 +115,7 @@ def downgrade() -> None:
         op.execute("SET search_path TO public")
 
     for table in reversed(_ENTITY_TABLES):
-        op.drop_index(f"ix_{table}_{_COLUMN}", table_name=table)
-        op.drop_column(table, _COLUMN)
+        op.execute(f"DROP INDEX IF EXISTS ix_{table}_{_COLUMN}")
+        # The denormalised column is owned by migration 0207; drop it only if it
+        # still exists so a full downgrade (0209 -> ... -> 0207) does not error.
+        op.execute(f"ALTER TABLE {table} DROP COLUMN IF EXISTS {_COLUMN}")
