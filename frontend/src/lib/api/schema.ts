@@ -5216,6 +5216,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/libraries/collections/{primitive_id}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Install Collection Endpoint
+         * @description Install a published collection into the organisation.
+         *
+         *     Requires the AND union of: library.copy + schema.create + agent.create +
+         *     pipeline.create (all resolve to 'operator' role).
+         */
+        post: operations["install_collection_endpoint_api_v1_libraries_collections__primitive_id__install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}/uninstall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Uninstall Collection Endpoint
+         * @description Uninstall a collection, removing or detaching entities as appropriate.
+         *
+         *     Modified entities (whose provenance was already cleared by the user) are
+         *     detached rather than deleted.
+         */
+        post: operations["uninstall_collection_endpoint_api_v1_libraries_collections__primitive_id__uninstall_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}/installs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Collection Installs Endpoint
+         * @description List install records for a collection.
+         */
+        get: operations["list_collection_installs_endpoint_api_v1_libraries_collections__primitive_id__installs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}/installs/{install_id}/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant Collection Agents Endpoint
+         * @description Grant tool/connector access for community-sourced collection agents.
+         *
+         *     Flips ``agents_granted`` on the install record.  Only applies to
+         *     community-sourced installs; raises 400 for non-community installs.
+         *     Idempotent: granting an already-granted install returns the record as-is.
+         */
+        post: operations["grant_collection_agents_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}/installs/{install_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Collection Install Endpoint
+         * @description Get a single install record for a collection.
+         */
+        get: operations["get_collection_install_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries/community": {
         parameters: {
             query?: never;
@@ -9660,6 +9770,65 @@ export interface components {
              */
             visibility: string;
         };
+        /** CollectionInstallListResponse */
+        CollectionInstallListResponse: {
+            /** Items */
+            items: components["schemas"]["CollectionInstallResponse"][];
+        };
+        /** CollectionInstallResponse */
+        CollectionInstallResponse: {
+            /**
+             * Install Id
+             * Format: uuid
+             */
+            install_id: string;
+            /**
+             * Collection Id
+             * Format: uuid
+             */
+            collection_id: string;
+            /** Collection Version */
+            collection_version: string | null;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Status */
+            status: string;
+            /**
+             * Community Sourced
+             * @default false
+             */
+            community_sourced: boolean;
+            /**
+             * Agents Granted
+             * @default false
+             */
+            agents_granted: boolean;
+            /** Resolved Manifest */
+            resolved_manifest?: {
+                [key: string]: unknown;
+            } | null;
+            /** Connector Checklist */
+            connector_checklist?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Installed Entities */
+            installed_entities?: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Runnable
+             * @default false
+             */
+            runnable: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** CollectionPin */
         CollectionPin: {
             /** Slug */
@@ -9705,6 +9874,27 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** CollectionUninstallRequest */
+        CollectionUninstallRequest: {
+            /**
+             * Install Id
+             * Format: uuid
+             */
+            install_id: string;
+        };
+        /** CollectionUninstallResponse */
+        CollectionUninstallResponse: {
+            /** Install Id */
+            install_id: string;
+            /** Deleted */
+            deleted: {
+                [key: string]: string;
+            }[];
+            /** Detached */
+            detached: {
+                [key: string]: string;
+            }[];
         };
         /** CollectionUpdateRequest */
         CollectionUpdateRequest: {
@@ -29927,6 +30117,177 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CollectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    install_collection_endpoint_api_v1_libraries_collections__primitive_id__install_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionInstallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    uninstall_collection_endpoint_api_v1_libraries_collections__primitive_id__uninstall_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionUninstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionUninstallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_collection_installs_endpoint_api_v1_libraries_collections__primitive_id__installs_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionInstallListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_collection_agents_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__grant_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+                install_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionInstallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_collection_install_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+                install_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionInstallResponse"];
                 };
             };
             /** @description Validation Error */

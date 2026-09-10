@@ -2281,6 +2281,8 @@ async def list_collection_installs_endpoint(
             )
         )
 
+    return CollectionInstallListResponse(items=items)
+
 
 # ---------------------------------------------------------------------------
 # Community execution gate — grant access (FAR-764 / ADR 032 D2)

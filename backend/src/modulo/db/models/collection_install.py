@@ -71,8 +71,8 @@ class CollectionInstall(Base):
         server_default=text("false"),
     )
     resolved_manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    connector_checklist: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    installed_entities: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    connector_checklist: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    installed_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(

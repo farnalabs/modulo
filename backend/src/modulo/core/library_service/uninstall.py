@@ -24,6 +24,11 @@ from modulo.db.models.collection_install import CollectionInstall, CollectionIns
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.schema import Schema
 
+# Union of the entity types a collection install can track.  Reused across the
+# per-entity-type branches below so ``session.get`` resolves to the correct
+# model rather than being constrained by the first branch's assignment.
+type CollectionEntity = "Schema | Agent | Pipeline"
+
 __all__ = ["uninstall_collection"]
 
 logger = logging.getLogger(__name__)
@@ -71,9 +76,10 @@ async def _check_unmodified(
 ) -> bool:
     """Check if an entity still carries the install's provenance stamp.
 
-    Returns True if the entity is unmodified (collection_install_id still
+        Returns True if the entity is unmodified (collection_install_id still
     matches); False if the user already detached it.
     """
+    entity: CollectionEntity | None = None
     if entity_type == "schema":
         entity = await session.get(Schema, entity_id)
         if entity is None:
@@ -98,6 +104,7 @@ async def _delete_entity(
     entity_id: uuid.UUID,
 ) -> None:
     """Delete an unmodified entity."""
+    entity: CollectionEntity | None = None
     if entity_type == "schema":
         entity = await session.get(Schema, entity_id)
         if entity is not None:
@@ -118,6 +125,7 @@ async def _detach_entity(
     entity_id: uuid.UUID,
 ) -> None:
     """Detach provenance from a modified entity (set collection_install_id = None)."""
+    entity: CollectionEntity | None = None
     if entity_type == "schema":
         entity = await session.get(Schema, entity_id)
         if entity is not None:
