@@ -63,6 +63,32 @@ def test_redaction_map_empty_without_secrets(tmp_path: Path) -> None:
     assert not redaction_map_from_data_dir(tmp_path)
 
 
+def test_redaction_map_scrubs_percent_encoded_values(tmp_path: Path) -> None:
+    """Credentials embedded in URLs are percent-encoded (e.g. ``p@ss`` -> ``p%40ss``);
+    the seed map must also scrub that encoded form so the value never survives."""
+    from urllib.parse import quote
+
+    password = "p@ssword"
+    (tmp_path / "secrets.json").write_text(
+        json.dumps(
+            {
+                "postgres_password": password,
+                "redis_password": "r",
+                "state_hmac_key": HMAC_KEY_HEX,
+            }
+        ),
+        encoding="utf-8",
+    )
+    mapping = redaction_map_from_data_dir(tmp_path)
+    assert password in mapping
+    assert quote(password) in mapping  # percent-encoded variant is also a scrub pattern
+    encoded_url = f"redis://:{quote(password)}@127.0.0.1:6379/0"
+    redacted = redact_text(encoded_url, mapping)
+    assert password not in redacted
+    assert quote(password) not in redacted
+    assert REDACTED in redacted
+
+
 def test_redact_text_masks_seeded_values_and_sensitive_kv() -> None:
     secret_values = {"pw-super-secret": REDACTED}
     text = "\n".join(

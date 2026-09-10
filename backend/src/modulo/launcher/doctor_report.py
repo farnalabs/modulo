@@ -82,7 +82,18 @@ def redaction_map_from_data_dir(data_dir: Path) -> dict[str, str]:
         secrets: LauncherSecrets = _parse(secrets_path.read_bytes())
     except (SecretsFileError, OSError):
         return {}
-    return dict.fromkeys((secrets.postgres_password, secrets.redis_password, secrets.state_hmac_key_hex), REDACTED)
+    values = (secrets.postgres_password, secrets.redis_password, secrets.state_hmac_key_hex)
+    mapping = dict.fromkeys((v for v in values if v), REDACTED)
+    # Also scrub percent-encoded appearances — credentials embedded in URLs
+    # (e.g. ``redis://:p%40ss@host``) would otherwise survive the exact-match
+    # scrub, which only sees the raw value ``p@ss``.
+    from urllib.parse import quote
+
+    for raw in list(mapping):
+        encoded = quote(raw)
+        if encoded and encoded != raw:
+            mapping[encoded] = REDACTED
+    return mapping
 
 
 def redact_text(text: str, secret_values: dict[str, str]) -> str:
@@ -157,10 +168,11 @@ def build_report(
         "doctor-output.txt": redact_text(doctor_output, secret_values),
     }
     log_members: list[str] = []
-    for name in sorted(log_paths(data_dir)):
+    paths = log_paths(data_dir)
+    for name in sorted(paths):
         member = f"logs/{name}.log.tail"
         members[member] = redact_text(
-            read_log_tail(log_paths(data_dir)[name], max_bytes=max_log_bytes),
+            read_log_tail(paths[name], max_bytes=max_log_bytes),
             secret_values,
         )
         log_members.append(member)

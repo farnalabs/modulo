@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -359,15 +361,26 @@ def doctor(
     from modulo.launcher.doctor import run_doctor
 
     resolved = _resolve_data_dir(data_dir)
-    sink: io.StringIO | None = None
+    capture: io.StringIO | None = None
     if report_path is not None:
-        sink = io.StringIO()
+        capture = io.StringIO()
+
+        def _tee(text: str) -> None:
+            # Capture for the report archive AND echo to the operator so the
+            # check table is still visible on the terminal (it would otherwise
+            # vanish into the report sink).
+            capture.write(text)
+            sys.stdout.write(text)
+
+        sink: Callable[[str], Any] | None = _tee
+    else:
+        sink = None
     try:
-        code = run_doctor(resolved, as_json=as_json, fix=fix, sink=sink.write if sink is not None else None)
+        code = run_doctor(resolved, as_json=as_json, fix=fix, sink=sink)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
-    if sink is not None and report_path is not None:
-        _build_doctor_report(resolved, report_path, sink.getvalue())
+    if capture is not None and report_path is not None:
+        _build_doctor_report(resolved, report_path, capture.getvalue())
     ctx.exit(code)
 
 
@@ -444,26 +457,27 @@ def logs(
         if component != "app":
             click.echo("rotation applies to the app log only")
         else:
+            # rotate_log is only safe when no process holds the log open for
+            # appending; an attached launcher redirects post-rename writes into
+            # the rotated-away inode. Refuse rather than silently corrupt the log.
             from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
 
-            # rotate_log's docstring requires that no process holds the file open
-            # for appending; a live launcher redirects its writes into the
-            # rotated-away inode. Refuse (with a non-zero exit) while the
-            # launcher is attached to this data dir.
-            holder = _read_lock_holder(resolved.parent / (resolved.name + LOCK_SUFFIX))
+            lock_path = resolved.parent / (resolved.name + LOCK_SUFFIX)
+            holder = _read_lock_holder(lock_path)
             if holder is not None and _pid_alive(holder.pid):
                 click.echo(
-                    f"refusing to rotate: the launcher is running (pid {holder.pid}) — rotating "
-                    "launcher.log under a live launcher redirects its writes into the rotated-away "
-                    "file. Stop the launcher first (`modulo stop`), then rotate.",
+                    "refused: the launcher is still running — rotating launcher.log while the "
+                    "launcher holds it open for appending would redirect writes into the "
+                    "rotated-away inode. Stop the launcher (`modulo stop`) first, then re-run "
+                    "`modulo logs --rotate`.",
                     err=True,
                 )
-                raise SystemExit(2)
-            rotated = rotate_log(path)
-            if rotated:
-                click.echo(f"rotated: {path} -> {path.with_suffix(path.suffix + '.1')}")
-            else:
-                click.echo("no rotation (absent or below the size threshold)")
+                raise SystemExit(1)
+        rotated = rotate_log(path)
+        if rotated:
+            click.echo(f"rotated: {path} -> {path.with_suffix(path.suffix + '.1')}")
+        else:
+            click.echo("no rotation (absent or below the size threshold)")
         return
     if not path.is_file():
         click.echo(
