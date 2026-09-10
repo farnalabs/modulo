@@ -13,7 +13,7 @@ paths are asserted directly rather than against external services.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from modulo.launcher import doctor as doctor_module
@@ -421,7 +421,7 @@ def test_privileges_owner_mismatch(tmp_path: Path):
 def test_version_tuple():
     assert doctor_module._version_tuple("16.4") == (16, 4)
     assert doctor_module._version_tuple("16") == (16,)
-    assert doctor_module._version_tuple("abc") == ()
+    assert not doctor_module._version_tuple("abc")
     assert doctor_module._version_tuple("16.4.2") == (16, 4, 2)
 
 
@@ -436,7 +436,7 @@ def test_host_port_from_database_url():
 
 def test_password_from_url():
     assert doctor_module._password_from_url("redis://:secret@h:1") == "secret"
-    assert doctor_module._password_from_url("redis://h:1") == ""
+    assert not doctor_module._password_from_url("redis://h:1")
 
 
 def test_decode_proc_address():
@@ -455,7 +455,7 @@ def test_port_owner_descriptions_no_foreign():
     from modulo.launcher.doctor import _port_owner_descriptions
 
     # No foreign listeners in the sandbox -> empty list, but the scan runs.
-    assert _port_owner_descriptions(15432) == []
+    assert not _port_owner_descriptions(15432)
 
 
 def test_exit_code_for():
@@ -555,7 +555,7 @@ def test_default_probes_real(tmp_path: Path):
         postgres_port=15432,
         redis_port=16379,
         api_port=18000,
-        last_backup_at=(datetime.now() - timedelta(days=1)).isoformat(),
+        last_backup_at=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
     )
     save_state(state_with_backup, tmp_path / "state.json", bytes(range(32)))
     probes2 = default_probes(tmp_path, state_with_backup)

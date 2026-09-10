@@ -68,7 +68,7 @@ def test_read_log_tail(tmp_path: Path):
     log.write_text("line1\nline2\nline3\n", encoding="utf-8")
     assert read_log_tail(log).endswith("line3\n")
     # Missing file -> empty string (no crash).
-    assert read_log_tail(tmp_path / "absent.log") == ""
+    assert not read_log_tail(tmp_path / "absent.log")
 
 
 def test_rotate_log_below_threshold(tmp_path: Path):
@@ -117,7 +117,7 @@ def test_runtime_manifest_roundtrip(tmp_path: Path):
 
     # Corrupt manifest -> no children, no reason.
     path.write_text("{not json", encoding="utf-8")
-    assert read_runtime_manifest(path) == {}
+    assert not read_runtime_manifest(path)
     assert read_degraded_reason(path) is None
 
 
