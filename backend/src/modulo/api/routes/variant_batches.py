@@ -17,6 +17,7 @@ from modulo.core.node_output_split import node_return
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw
 from modulo.db.crud.variant_group import (
+    get_all_state_batch_ids,
     get_batch_runs,
     get_batch_state,
     get_variant_group,
@@ -315,11 +316,13 @@ async def list_batches(
         # Phase 1: known batches from the state table.
         states_items, states_total = await list_batch_states(_session, org_id=org_id, page=page, page_size=page_size)
 
-        # Collect batch_ids from state rows for batch-loading runs.
-        known_ids: list[uuid.UUID] = [st.batch_id for st in states_items]
-        known_ids_set: set[uuid.UUID] = set(known_ids)
+        # Collect batch_ids from ALL state rows (org-wide) for legacy exclusion.
+        # Using only the current page's IDs would double-count state batches
+        # on pages 2+ in the legacy scan (FAR-775).
+        all_state_ids = await get_all_state_batch_ids(_session, org_id=org_id)
 
-        # Batch-load runs for all state-row batch_ids in ONE query (M7).
+        # Batch-load runs for the current page's state-row batch_ids (M7).
+        known_ids: list[uuid.UUID] = [st.batch_id for st in states_items]
         all_runs_by_batch = await list_batch_runs_for_batch_ids(_session, org_id=org_id, batch_ids=known_ids)
 
         # Build summaries from state rows.
@@ -351,11 +354,13 @@ async def list_batches(
         from modulo.db.models.run import Run as RunModel
 
         # Count legacy batches for the true total.
+        # Exclude ALL state-table batch_ids (org-wide), not just the current
+        # page's — page 2+ state rows would otherwise be double-counted.
         legacy_count_result = await _session.execute(
             select(func.count(func.distinct(RunModel.batch_id))).where(
                 RunModel.organisation_id == org_id,
                 RunModel.batch_id.isnot(None),
-                RunModel.batch_id.notin_(known_ids_set) if known_ids_set else RunModel.batch_id.isnot(None),
+                RunModel.batch_id.notin_(all_state_ids) if all_state_ids else RunModel.batch_id.isnot(None),
             )
         )
         legacy_total_count = legacy_count_result.scalar_one() or 0
@@ -365,7 +370,7 @@ async def list_batches(
             .where(
                 RunModel.organisation_id == org_id,
                 RunModel.batch_id.isnot(None),
-                RunModel.batch_id.notin_(known_ids_set) if known_ids_set else RunModel.batch_id.isnot(None),
+                RunModel.batch_id.notin_(all_state_ids) if all_state_ids else RunModel.batch_id.isnot(None),
             )
             .group_by(RunModel.batch_id)
             .order_by(func.min(RunModel.created_at).desc())
@@ -377,7 +382,7 @@ async def list_batches(
         legacy_runs_by_batch = await list_batch_runs_for_batch_ids(_session, org_id=org_id, batch_ids=legacy_batch_ids)
 
         for bid in legacy_batch_ids:
-            if bid in known_ids_set:
+            if bid in all_state_ids:
                 continue
             legacy_runs = legacy_runs_by_batch.get(bid, [])
             run_statuses = [r.status for r in legacy_runs]

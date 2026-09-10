@@ -11,6 +11,12 @@ from modulo.api.routes.variant_batches import (
     _compute_batch_status,
     _run_to_variant_run,
 )
+
+# Re-export for type-checked mocks in list_batches tests
+from modulo.db.crud.variant_group import (  # noqa: F401
+    get_all_state_batch_ids,
+    list_batch_states,
+)
 from tests.unit.api.mock_session import configure_mock_session
 
 
@@ -220,3 +226,91 @@ class TestCrossTenantIsolation:
             with pytest.raises(HTTPException) as exc:
                 await re_fire_batch(uuid.uuid4(), mock_session, principal)
             assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+class TestListBatchesTotalCount:
+    """FAR-775: total must not double-count state batches on pages 2+."""
+
+    async def test_legacy_total_excludes_all_state_ids(self) -> None:
+        """states_total=50, page shows 20 state IDs, 10 legacy batches.
+
+        Without the fix: legacy scan excluded only the page's 20 IDs,
+        so 30 state-row batches leaked into the legacy count → total 90.
+        With the fix: legacy scan excludes all 50 state IDs → total 60.
+        """
+        from modulo.api.routes.variant_batches import list_batches
+
+        org_id = uuid.uuid4()
+        principal = make_mock_principal(org_id=org_id)
+        mock_session = make_session_mock()
+
+        # Build 50 state batch_ids (only 20 will appear on the page).
+        all_state_batch_ids = [uuid.uuid4() for _ in range(50)]
+        page_batch_ids = all_state_batch_ids[:20]
+
+        # State row mock objects (only the page's 20).
+        state_items = []
+        for bid in page_batch_ids:
+            st = MagicMock()
+            st.batch_id = bid
+            st.name = f"batch-{bid}"
+            st.pipeline_id = uuid.uuid4()
+            st.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+            state_items.append(st)
+
+        # 10 real legacy batches.
+        legacy_batch_ids = [uuid.uuid4() for _ in range(10)]
+
+        # --- mock session.execute dispatch ---
+        # The execute calls in order are:
+        #   1. legacy count query → scalar_one()
+        #   2. legacy batch listing query → [(bid, count), ...]
+        legacy_count_result = MagicMock()
+        legacy_count_result.scalar_one.return_value = 10
+
+        legacy_list_result = MagicMock()
+        legacy_list_result.all.return_value = [(bid, 3) for bid in legacy_batch_ids]
+
+        execute_calls = [legacy_count_result, legacy_list_result]
+        call_idx = 0
+
+        async def dispatch_execute(stmt: Any) -> MagicMock:
+            nonlocal call_idx
+            idx = call_idx
+            call_idx += 1
+            return execute_calls[idx]
+
+        mock_session.execute = AsyncMock(side_effect=dispatch_execute)
+
+        with (
+            patch(
+                "modulo.api.routes.variant_batches.set_rls_org",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.api.routes.variant_batches.set_rls_user_context",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.api.routes.variant_batches.list_batch_states",
+                new_callable=AsyncMock,
+                return_value=(state_items, 50),
+            ),
+            patch(
+                "modulo.api.routes.variant_batches.get_all_state_batch_ids",
+                new_callable=AsyncMock,
+                return_value=set(all_state_batch_ids),
+            ),
+            patch(
+                "modulo.api.routes.variant_batches.list_batch_runs_for_batch_ids",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+        ):
+            result = await list_batches(page=1, page_size=20, _session=mock_session, _principal=principal)
+
+        # total = states_total(50) + legacy_total_count(10) = 60
+        assert result["total"] == 60
+        # Items are the 20 state rows + up to 10 legacy = 30 items max.
+        assert len(result["items"]) <= 30

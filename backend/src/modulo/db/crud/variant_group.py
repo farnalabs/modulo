@@ -958,6 +958,25 @@ async def soft_delete_batch_state(
     return True
 
 
+async def get_all_state_batch_ids(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+) -> set[uuid.UUID]:
+    """Return the full set of non-deleted batch_ids in variant_batch_state for an org.
+
+    Used by ``list_batches`` to exclude ALL state-table rows from the legacy
+    scan — not just the current page's rows, which would inflate the total.
+    """
+    result = await session.execute(
+        select(VariantBatchState.batch_id).where(
+            VariantBatchState.organisation_id == org_id,
+            VariantBatchState.deleted_at.is_(None),
+        )
+    )
+    return {uuid.UUID(str(row[0])) for row in result.all()}
+
+
 async def list_batch_states(
     session: AsyncSession,
     *,
