@@ -63,6 +63,9 @@ class _Recorder:
                 cols.append(col.name)
         self.table_columns[name] = cols
 
+    def add_column(self, table_name: str, column: object, *_args: object, **_kwargs: object) -> None:
+        self.table_columns.setdefault(table_name, []).append(getattr(column, "name", str(column)))
+
     def create_index(self, name: str, _table_name: str, columns: list[str], *_args: object, **_kwargs: object) -> None:
         self.indexes.append(name)
         self.index_columns[name] = list(columns)
