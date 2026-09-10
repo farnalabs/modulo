@@ -136,6 +136,7 @@ class TestFunctionsWiring:
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
+        assert "connector_health_checks" in names
 
     def test_system_cron_knobs_explicit(self) -> None:
         # _system_cron_jobs derives the library_sync cadence from settings, so
@@ -163,6 +164,7 @@ class TestFunctionsWiring:
             "check_missed_fire_alerts_cron",
             "library_sync",
             "metrics_dump",
+            "connector_health_checks",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]
@@ -266,6 +268,16 @@ class TestFunctionsWiring:
         assert md.retries == 1
         assert md.ttl == 900
         assert md.unique is True
+
+        # connector_health_checks: every 15 min (FAR-699), unique so
+        # overlapping ticks cannot double-probe, fail-open (retries=1).
+        ch = jobs["connector_health_checks"]
+        assert ch.cron == "*/15 * * * *"
+        assert ch.timeout == 600
+        assert ch.heartbeat == 30
+        assert ch.retries == 1
+        assert ch.ttl == 900
+        assert ch.unique is True
 
     def test_sync_interval_to_cron_maps_seconds_to_5_field_cron(self) -> None:
         assert sw._sync_interval_to_cron(300) == "*/5 * * * *"
