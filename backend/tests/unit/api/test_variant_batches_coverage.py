@@ -175,7 +175,7 @@ class TestBuildStateSummaries:
         assert summaries[0]["name"] == "b"
 
     def test_empty(self) -> None:
-        assert _build_state_summaries([], {}) == []
+        assert not _build_state_summaries([], {})
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ class TestLoadRunBlobs:
 
 class TestBatchLoadEvalResults:
     async def test_empty_run_ids(self) -> None:
-        assert await vb._batch_load_eval_results(make_session_mock(), []) == {}
+        assert not await vb._batch_load_eval_results(make_session_mock(), [])
 
     async def test_loads_results(self) -> None:
         er = MagicMock()
@@ -242,7 +242,7 @@ class TestBatchLoadEvalResults:
 
 class TestBatchLoadEvalStats:
     async def test_empty_run_ids(self) -> None:
-        assert await vb._batch_load_eval_stats(make_session_mock(), []) == {}
+        assert not await vb._batch_load_eval_stats(make_session_mock(), [])
 
     async def test_loads_stats(self) -> None:
         rid = uuid.uuid4()
