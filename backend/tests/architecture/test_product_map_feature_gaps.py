@@ -188,6 +188,28 @@ def test_graph_root_registry_index_enumerates_every_manifest_feature():
     )
 
 
+def test_every_manifest_feature_has_a_behaviour_tracker():
+    """Every manifest-registered feature resolves to a ``docs/product-map/`` entry.
+
+    The graph root (``docs/product-map/README.md``) closes its "Known graph gaps"
+    section by promising that "All registered manifest features now have a
+    ``docs/product-map/`` behaviour-tracker entry. No untracked features remain."
+    A registered feature without a tracker is an untracked node: its behaviours,
+    coverage and known gaps have no home in the human-readable graph even though
+    its routes advertise it. ``feat-apply`` (registered by FAR-681 with four
+    ``product_map`` route references) had no entry until the 2026-09-10
+    product-map walk — this guard keeps the graph root's promise true.
+    """
+    tracked = _product_map_entry_ids()
+    missing = sorted(_manifest_features() - tracked)
+    assert not missing, (
+        "manifest-registered features with no docs/product-map/ behaviour-tracker "
+        "entry (the graph root claims every registered feature is tracked; add an "
+        "entry under docs/product-map/ keyed by the feature id, or drop the feature "
+        "from the manifest registry):\n" + "\n".join(f"  {feature}" for feature in missing)
+    )
+
+
 def test_graph_entry_feature_ids_are_unique():
     """Product-map entries key on unique ``id`` frontmatter values."""
     seen: dict[str, Path] = {}
