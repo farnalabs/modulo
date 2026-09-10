@@ -465,7 +465,7 @@ def test_export_costs_assert_error_matrix(client: tuple[TestClient, AsyncMock]) 
         method="get",
         url="/api/v1/admin/costs/export",
         json_body=None,
-        patch_target="get_cost_report",
+        patch_target="get_cost_export_rows",
         expected={(_PROG, 501), (_SQL, 503), (_RUNTIME, 500)},
     )
 
@@ -476,7 +476,7 @@ def test_export_costs_streams_csv(client: tuple[TestClient, AsyncMock]) -> None:
         {"entity_id": str(_TEAM_ID), "entity_name": "Team A", "total_spend_usd": 4.2, "total_runs": 9},
     ]
     with ExitStack() as stack:
-        stack.enter_context(patch(f"{_PREFIX}get_cost_report", new=AsyncMock(return_value=rows)))
+        stack.enter_context(patch(f"{_PREFIX}get_cost_export_rows", new=AsyncMock(return_value=rows)))
         stack.enter_context(_rls_cm())
         resp = http.get("/api/v1/admin/costs/export", params={"period": "30d", "group_by": "team"})
 
@@ -484,6 +484,28 @@ def test_export_costs_streams_csv(client: tuple[TestClient, AsyncMock]) -> None:
     assert resp.headers["content-type"].startswith("text/csv")
     assert "Team A" in resp.text
     assert "4.2" in resp.text
+
+
+def test_export_pipeline_and_model_granularities_no_longer_422(client: tuple[TestClient, AsyncMock]) -> None:
+    """``pipeline`` / ``model`` export granularities now stream real rows."""
+    http, _session = client
+    for group_by in ("pipeline", "model"):
+        rows = [
+            {
+                "entity_id": f"entity-{group_by}",
+                "entity_name": f"{group_by} spend",
+                "total_spend_usd": 1.5,
+                "total_runs": 2,
+            }
+        ]
+        with ExitStack() as stack:
+            stack.enter_context(patch(f"{_PREFIX}get_cost_export_rows", new=AsyncMock(return_value=rows)))
+            stack.enter_context(_rls_cm())
+            resp = http.get("/api/v1/admin/costs/export", params={"period": "7d", "group_by": group_by})
+
+        assert resp.status_code == 200, f"group_by={group_by}: {resp.text}"
+        assert f"{group_by} spend" in resp.text
+        assert "1.5" in resp.text
 
 
 # ---------------------------------------------------------------------------

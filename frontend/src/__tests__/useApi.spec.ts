@@ -6,6 +6,7 @@ vi.mock('../lib/api/auth', () => ({
   attemptTokenRefresh: vi.fn(async () => true),
   clearAccessToken: vi.fn(),
   redirectToLogin: vi.fn(),
+  exitToLogin: vi.fn(),
 }))
 
 import {
@@ -13,6 +14,7 @@ import {
   attemptTokenRefresh,
   clearAccessToken,
   redirectToLogin,
+  exitToLogin,
 } from '../lib/api/auth'
 import { useApi } from '../composables/useApi'
 
@@ -20,6 +22,7 @@ const mockedGetAuthHeaders = getAuthHeaders as Mock
 const mockedAttemptTokenRefresh = attemptTokenRefresh as Mock
 const mockedClearAccessToken = clearAccessToken as Mock
 const mockedRedirectToLogin = redirectToLogin as Mock
+const mockedExitToLogin = exitToLogin as Mock
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -38,6 +41,7 @@ beforeEach(() => {
   mockedAttemptTokenRefresh.mockResolvedValue(true)
   mockedClearAccessToken.mockClear()
   mockedRedirectToLogin.mockClear()
+  mockedExitToLogin.mockClear()
   fetchMock = vi.fn(async () => jsonResponse(200, { id: 1 }))
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -165,7 +169,7 @@ describe('useApi 401 refresh flow', () => {
     expect(data).toEqual({ id: 7 })
   })
 
-  it('clears the session and redirects to login when the refresh fails', async () => {
+  it('clears the session and calls exitToLogin when the refresh fails', async () => {
     fetchMock.mockResolvedValue(jsonResponse(401, { detail: 'token expired' }))
     mockedAttemptTokenRefresh.mockResolvedValue(false)
 
@@ -175,7 +179,8 @@ describe('useApi 401 refresh flow', () => {
     )
 
     expect(mockedClearAccessToken).toHaveBeenCalledTimes(1)
-    expect(mockedRedirectToLogin).toHaveBeenCalledTimes(1)
+    expect(mockedExitToLogin).toHaveBeenCalledTimes(1)
+    expect(mockedRedirectToLogin).not.toHaveBeenCalled()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(mockedAttemptTokenRefresh).toHaveBeenCalledTimes(1)
   })
@@ -192,7 +197,7 @@ describe('useApi 401 refresh flow', () => {
     expect(mockedAttemptTokenRefresh).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(mockedClearAccessToken).toHaveBeenCalledTimes(1)
-    expect(mockedRedirectToLogin).toHaveBeenCalledTimes(1)
+    expect(mockedExitToLogin).toHaveBeenCalledTimes(1)
   })
 
   it('does not attempt a refresh on non-401 errors', async () => {
@@ -203,6 +208,21 @@ describe('useApi 401 refresh flow', () => {
 
     expect(mockedAttemptTokenRefresh).not.toHaveBeenCalled()
     expect(mockedClearAccessToken).not.toHaveBeenCalled()
+  })
+
+  it('calls exitToLogin (not redirectToLogin) when refresh fails with auto-login config set', async () => {
+    window.__MODULO_CONFIG__ = { autoLogin: { username: 'demo', password: 'demo' } }
+    fetchMock.mockResolvedValue(jsonResponse(401, { detail: 'token expired' }))
+    mockedAttemptTokenRefresh.mockResolvedValue(false)
+
+    const api = useApi()
+    await expect(api.get('/api/v1/widgets')).rejects.toThrow(
+      'Session expired. Please log in again.',
+    )
+
+    expect(mockedClearAccessToken).toHaveBeenCalledTimes(1)
+    expect(mockedExitToLogin).toHaveBeenCalledTimes(1)
+    expect(mockedRedirectToLogin).not.toHaveBeenCalled()
   })
 })
 

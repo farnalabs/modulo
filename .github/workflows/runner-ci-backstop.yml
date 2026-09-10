@@ -1,0 +1,23 @@
+# Weekly Bundled Runner drift backstop (FAR-773).
+#
+# Previously the weekly cron was a `schedule:` trigger on ci.yml itself,
+# which fired the ENTIRE fast-validation suite (~8 jobs) every Monday just
+# to reach the one harness job. The schedule was removed there; this tiny
+# standalone workflow runs ONLY the shared reusable harness job
+# (runner-ci-harness.yml) with force=true, so the path filter is skipped and
+# drift in the compose rig / proxy image / runner topology is caught weekly
+# even when no path-filtered change triggers it.
+name: "CI: Bundled Runner backstop"
+
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  runner-ci-harness:
+    name: Bundled Runner harness (weekly drift backstop)
+    uses: ./.github/workflows/runner-ci-harness.yml
+    with:
+      force: true
+    secrets: inherit

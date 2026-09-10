@@ -314,9 +314,9 @@ class TestMigrationBackfillGrace:
         # chains on top of 0204_runner_probe_cache, and FAR-644's
         # 0206_deleted_defaults_signal_check chains on top of 0205, and FAR-761's
         # 0207_collection_install_tracking chains on top of 0206, and FAR-764's
-        # 0208_community_gate chains on top of 0207, so it is now the
+        # 0209_community_gate chains on top of 0207, so it is now the
         # single linear head of the chain.
-        assert heads == ["0208_community_gate"], f"expected a single head, got {heads}"
+        assert heads == ["0209_community_gate"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
