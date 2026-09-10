@@ -869,7 +869,7 @@ def test_record_runtime_persists_installed_bundle_pg_version(tmp_path: Path) -> 
     import json
 
     manifest = json.loads(written)
-    assert manifest["children"] == {}
+    assert not manifest["children"]
     assert manifest["extra"]["installed_bundle_pg_version"] == "16.4"
 
 
