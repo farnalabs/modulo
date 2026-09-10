@@ -3148,10 +3148,8 @@ async def _create_eval_definition_impl(
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("create_eval_definition")
 
-    from modulo.api.routes.evals import (
-        _MSG_PIPELINE_NOT_FOUND,
-        _eval_def_to_dict,
-    )
+    from modulo.api.constants import MSG_PIPELINE_NOT_FOUND
+    from modulo.api.routes.evals import _eval_def_to_dict
 
     if (err := _assert_create_eval_definition_params(name, eval_type, failure_behaviour, pass_threshold)) is not None:
         return err
@@ -3184,7 +3182,7 @@ async def _create_eval_definition_impl(
             )
         ).scalar_one_or_none()
         if pipeline is None:
-            return {"error": "pipeline_not_found", "detail": _MSG_PIPELINE_NOT_FOUND}
+            return {"error": "pipeline_not_found", "detail": MSG_PIPELINE_NOT_FOUND}
 
         eval_def = EvalDefinition(
             organisation_id=org_id,
