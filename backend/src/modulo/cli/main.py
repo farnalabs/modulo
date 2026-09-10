@@ -308,6 +308,12 @@ def status(data_dir: Path | None, as_json: bool) -> None:
             f"{name:<12} {pid if pid is not None else '-'!s:>8} "
             f"{port if port is not None else '-'!s:>8} {str(bool(component.get('alive'))).lower()}"
         )
+        remediation = component.get("remediation")
+        if remediation:
+            click.echo(f"  hint ({name}): {remediation}")
+    degraded = payload.get("degraded")
+    if isinstance(degraded, dict):
+        click.echo(f"DEGRADED: {degraded.get('reason')}")
 
 
 @cli.command("version")
@@ -324,22 +330,62 @@ def version_cmd() -> None:
     help="Data dir override (default: the per-OS launcher root).",
 )
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
+@click.option(
+    "--report",
+    "report_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    metavar="SHOP.zip",
+    help="Write a REDACTED diagnostic zip (versions, OS info, doctor output, data-dir log tails).",
+)
+@click.option(
+    "--fix",
+    is_flag=True,
+    default=False,
+    help="Apply orphan cleanup (safe sweeps only; a live postgres is never raced), then re-run the checks.",
+)
 @click.pass_context
-def doctor(ctx: click.Context, data_dir: Path | None, as_json: bool) -> None:
-    """Run the doctor-lite checks (exit 0 healthy, 1 unhealthy)."""
+def doctor(
+    ctx: click.Context,
+    data_dir: Path | None,
+    as_json: bool,
+    report_path: Path | None,
+    fix: bool,
+) -> None:
+    """Doctor: exit 0 healthy, 1 unhealthy, 2 degraded (warnings), 3 uninitialized."""
     _scrub_for_launcher_command()
+    import io
+
     from modulo.launcher.doctor import run_doctor
 
+    resolved = _resolve_data_dir(data_dir)
+    sink: io.StringIO | None = None
+    if report_path is not None:
+        sink = io.StringIO()
     try:
-        code = run_doctor(_resolve_data_dir(data_dir), as_json=as_json)
+        code = run_doctor(resolved, as_json=as_json, fix=fix, sink=sink.write if sink is not None else None)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
+    if sink is not None and report_path is not None:
+        _build_doctor_report(resolved, report_path, sink.getvalue())
     ctx.exit(code)
+
+
+def _build_doctor_report(data_dir: Path, report_path: Path, doctor_output: str) -> None:
+    from modulo.launcher.doctor_report import build_report
+
+    click.echo(f"diagnostic report written: {build_report(data_dir, report_path, doctor_output=doctor_output)}")
 
 
 @cli.command("env")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
-def env_cmd(as_json: bool) -> None:
+@click.option(
+    "--raw",
+    is_flag=True,
+    default=False,
+    help="Escape hatch: print the effective Settings WITHOUT the redaction filter.",
+)
+def env_cmd(as_json: bool, raw: bool) -> None:
     """Print the effective Settings with every credential redacted."""
     _scrub_for_launcher_command()
     from modulo.settings import get_settings
@@ -348,9 +394,85 @@ def env_cmd(as_json: bool) -> None:
         settings = get_settings()
     except Exception as exc:
         raise click.ClickException(f"settings unavailable: {exc}") from exc
-    dump = _redacted_settings_dump(settings)
+    if raw:
+        dump = {name: str(getattr(settings, name)) for name in type(settings).model_fields}
+        if not as_json:
+            click.echo(
+                "WARNING: --raw prints the effective settings WITH every credential — never paste this output.",
+                err=True,
+            )
+    else:
+        dump = _redacted_settings_dump(settings)
     if as_json:
         click.echo(json.dumps(dump, indent=2, sort_keys=True))
         return
     for key in sorted(dump):
         click.echo(f"{key}={dump[key]}")
+
+
+@cli.command("logs")
+@click.option(
+    "--data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Data dir override (default: the per-OS launcher root).",
+)
+@click.option("-f", "--follow", is_flag=True, default=False, help="Follow the log (tail -f equivalent).")
+@click.option(
+    "--rotate",
+    is_flag=True,
+    default=False,
+    help="Rotate the app log by size (N generations retained) INSTEAD of reading it (app only).",
+)
+@click.argument("component", required=False, default="app", type=click.Choice(["app", "postgres", "redis"]))
+def logs(
+    data_dir: Path | None,
+    follow: bool,
+    rotate: bool,
+    component: str,
+) -> None:
+    """Show a data-dir log: app (launcher/supervisor) or bundled postgres/redis child logs."""
+    _scrub_for_launcher_command()
+    import time
+
+    from modulo.launcher.supervisor import log_paths, rotate_log
+
+    resolved = _resolve_data_dir(data_dir)
+    path = log_paths(resolved)[component]
+    click.echo(f"# modulo {_package_version()} — {component} log: {path}")
+    if rotate:
+        if component != "app":
+            click.echo("rotation applies to the app log only")
+        rotated = rotate_log(path)
+        if rotated:
+            click.echo(f"rotated: {path} -> {path.with_suffix(path.suffix + '.1')}")
+        else:
+            click.echo("no rotation (absent or below the size threshold)")
+        return
+    if not path.is_file():
+        click.echo(
+            f"no {component} log file in the data dir — an attached (foreground) launcher writes its "
+            "log to the terminal, not to a file; bundled children land logs in data-dir/logs/*."
+        )
+        raise SystemExit(1)
+    contents = path.read_text(encoding="utf-8", errors="replace")
+    if contents:
+        click.echo(contents, nl=False)
+    if follow:
+        click.echo("— following (Ctrl-C to stop) —")
+        offset = path.stat().st_size
+        try:
+            while True:
+                time.sleep(0.5)
+                size = path.stat().st_size
+                if size > offset:
+                    click.echo(
+                        path.read_bytes()[offset:].decode("utf-8", errors="replace"),
+                        nl=False,
+                    )
+                    offset = size
+        except KeyboardInterrupt:
+            return
+        except OSError as exc:
+            click.echo(f"log write/read failed: {exc}")
+            raise SystemExit(1) from exc
