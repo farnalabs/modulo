@@ -210,7 +210,7 @@ _ORM_CHECK_DIVERGENCE: frozenset[tuple[str, str]] = frozenset(
     }
 )
 # The ``deleted_defaults`` signal guard (FAR-644) is NO LONGER listed here:
-# migration 0205 creates it at the DB level, so the ORM declaration and the
+# migration 0206 creates it at the DB level, so the ORM declaration and the
 # migrated schema now agree — the entry was removed with the drift it tracked.
 
 # ORM-declared FKs to nodes.id were REMOVED from the models (FAR-644): the
@@ -359,7 +359,7 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
     ``deleted_defaults`` CHECK, both ``# tracked: FAR-583 follow-up``) were
     closed with the drift itself in FAR-644: the ORM FKs were stripped (the
     deprecated ``nodes`` table never holds JSON-graph node ids) and migration
-    0205 creates the CHECK. Anything NOT listed fails the test.
+    0206 creates the CHECK. Anything NOT listed fails the test.
     """
     async with db_engine.connect() as connection:
         differences = await connection.run_sync(
@@ -534,7 +534,7 @@ class TestParityIgnoreListClassify:
         # nodes.id FKs were stripped from the ORM, so any add_fk is real drift.
         assert not _is_benign_migration_managed(("add_fk", self._fk("pipeline_edges", "source_node_id", "nodes.id")))
         # Strict-twin divergence: ORM CHECK add side (run_node_outputs only —
-        # deleted_defaults is now created by migration 0205, so its former
+        # deleted_defaults is now created by migration 0206, so its former
         # wheel must fail like the others).
         assert _is_benign_migration_managed(
             ("add_constraint", self._check("run_node_outputs", "ck_run_node_outputs_meta_present"))
