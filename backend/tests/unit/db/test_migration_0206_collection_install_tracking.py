@@ -148,7 +148,8 @@ class TestPostgresCeremony:
         assert "ENABLE ROW LEVEL SECURITY" in joined
         assert "FORCE ROW LEVEL SECURITY" in joined
         assert "CREATE POLICY rls_org_isolation" in joined
-        assert "GRANT " in joined and "modulo_app" in joined
+        assert "GRANT " in joined
+        assert "modulo_app" in joined
         assert "modulo_system" in joined
 
     def test_ownership_assertion_invoked(self) -> None:
