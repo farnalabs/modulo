@@ -10,6 +10,8 @@ def test_initial_schema_contains_required_tables() -> None:
         "audit_events",
         "chat_messages",
         "chat_sessions",
+        "collection_install",
+        "collection_install_entity",
         "composite_templates",
         "connector_instances",
         "connector_profiles",
@@ -106,6 +108,10 @@ def test_all_resource_tables_are_organisation_scoped() -> None:
             "tier_catalog",
             "feature_flag_catalog",
             "library_sync_state",
+            # collection_install_entity is the per-entity child of the org-scoped
+            # collection_install table; access is always via the parent's
+            # install_id, so it deliberately carries no organisation_id of its own.
+            "collection_install_entity",
         ):
             assert "organisation_id" in table.c, f"{name} is missing organisation_id"
 
