@@ -25,8 +25,20 @@ FLY_PROCESS_GROUP="${FLY_PROCESS_GROUP:-app}"
 # Sliding window crash guard: track crash timestamps in a temp file so a
 # worker that periodically dies does not cycle forever without triggering the
 # limit. Reset the window on a successful run (clean exit or ran >= 300s).
-SLIDING_WINDOW_S=300
-SLIDING_CRASH_LIMIT=5
+#
+# The guard constants (window/limit/restart-sleep) are SINGLE-SOURCED from
+# the shared supervision policy (modulo.launcher.policy — shipped in the
+# wheel; the all-in-one image installs the project, so `python3 -m
+# modulo.launcher.policy` works with PYTHONPATH=/app/src). Behaviour is
+# identical to the former inline values (300s window, 5 crashes, 1s sleep);
+# a broken generator is FATAL (silent default-drift is forbidden).
+POLICY_ENV_FILE="/tmp/modulo-supervision-policy.env"
+if ! python3 -m modulo.launcher.policy > "$POLICY_ENV_FILE" 2>/dev/null || [[ ! -s "$POLICY_ENV_FILE" ]]; then
+    echo "FATAL: could not generate supervision policy constants (python3 -m modulo.launcher.policy)." >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+source "$POLICY_ENV_FILE"
 
 _log_crash() {
     local exit_code=$1
@@ -234,7 +246,7 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
                 # Successful run (ran long enough or clean exit) — reset crash log
                 rm -f "$RUNS_CRASH_LOG"
             fi
-            sleep 1
+            sleep "${SLIDING_RESTART_SLEEP_S}"
         done
     }
     start_saq_runs &
@@ -278,7 +290,7 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
                 # Successful run (ran long enough or clean exit) — reset crash log
                 rm -f "$SYSTEM_CRASH_LOG"
             fi
-            sleep 1
+            sleep "${SLIDING_RESTART_SLEEP_S}"
         done
     }
     start_saq_system &
