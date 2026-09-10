@@ -95,11 +95,12 @@ def upgrade() -> None:
         if migrate_owns_table:
             op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-        op.add_column(
-            table,
-            sa.Column(_COLUMN, sa.Uuid(), nullable=True),
-        )
-        op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
+        # ``0207_collection_install_tracking`` already adds this denormalised
+        # column to the entity tables (idempotently), so this migration must use
+        # ``IF NOT EXISTS`` to avoid a ``DuplicateColumn`` when the column is
+        # already present. The index is added here (it is not created by 0207).
+        op.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {_COLUMN} UUID")
+        op.execute(f"CREATE INDEX IF NOT EXISTS ix_{table}_{_COLUMN} ON {table} ({_COLUMN})")
 
         if pg and migrate_owns_table:
             op.execute("RESET ROLE")
