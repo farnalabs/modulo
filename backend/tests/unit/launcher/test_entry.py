@@ -738,7 +738,12 @@ def test_detach_forks_twice_and_setsid(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setattr(entry_module, "_redirect_stdio", lambda log: redirected.append(log))
 
     def fake_run_foreground(
-        data_dir: Path, *, bin_dir: Path | None = None, serve=None, ready_fd: int | None = None
+        data_dir: Path,
+        *,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+        serve=None,
+        ready_fd: int | None = None,
     ) -> int:
         return 7
 
@@ -765,7 +770,12 @@ def test_detach_failure_is_signalled_through_the_handshake(
     monkeypatch.setattr(entry_module, "_redirect_stdio", lambda log: None)
 
     def failing_run_foreground(
-        data_dir: Path, *, bin_dir: Path | None = None, serve=None, ready_fd: int | None = None
+        data_dir: Path,
+        *,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+        serve=None,
+        ready_fd: int | None = None,
     ) -> int:
         raise BootError("bundled binaries not found at /nowhere - pass --bin-dir")
 
