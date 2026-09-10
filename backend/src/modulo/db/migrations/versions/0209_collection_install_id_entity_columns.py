@@ -102,9 +102,7 @@ def upgrade() -> None:
         # adds the index the ORM model declares (``index=True``), which 0207 does
         # not create. Guarding the index with IF NOT EXISTS keeps the step safe to
         # re-run.
-        op.execute(
-            f"CREATE INDEX IF NOT EXISTS ix_{table}_{_COLUMN} ON {table} ({_COLUMN})"
-        )
+        op.execute(f"CREATE INDEX IF NOT EXISTS ix_{table}_{_COLUMN} ON {table} ({_COLUMN})")
 
         if pg and migrate_owns_table:
             op.execute("RESET ROLE")

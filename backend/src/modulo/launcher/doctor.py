@@ -628,7 +628,12 @@ def check_bundle_versions(_data_dir: Path, state: Any, probes: DoctorProbes) -> 
         )
     data_tuple = _version_tuple(data_version)
     bundle_tuple = _version_tuple(bundle_version)
-    if data_tuple != bundle_tuple:
+    # `initdb` writes PG_VERSION as MAJOR-ONLY ("16"), while the bundled binary
+    # reports "16.4". Compare on the shared prefix so a healthy install
+    # (data "16" vs bundle "16.4") is not flagged as drift; a true major or
+    # minor mismatch still fails.
+    common = min(len(data_tuple), len(bundle_tuple))
+    if data_tuple[:common] != bundle_tuple[:common]:
         return CheckResult(
             "bundle-version",
             False,

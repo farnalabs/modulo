@@ -549,6 +549,16 @@ def test_bundle_version_pass_match() -> None:
     assert check_bundle_versions(Path(), None, _probes()).ok is True
 
 
+def test_bundle_version_pass_major_only_pg_version() -> None:
+    # initdb writes PG_VERSION as MAJOR-ONLY ("16"); the bundled binary reports
+    # "16.4". A healthy install must not be flagged as drift (regression: the
+    # data-dir probe feeds the REAL PG_VERSION content, not an injected "16.4").
+    result = check_bundle_versions(
+        Path(), None, _probes(data_dir_pg_version=lambda: "16", bundle_pg_version=lambda: "16.4")
+    )
+    assert result.ok is True
+
+
 def test_bundle_version_skip_uninitialized() -> None:
     result = check_bundle_versions(Path(), None, _probes(data_dir_pg_version=lambda: None))
     assert result.ok is True
