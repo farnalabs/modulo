@@ -26,7 +26,7 @@
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
-        <transition name="page">
+        <transition name="page" mode="out-in">
           <component :is="Component" :key="route.fullPath" />
         </transition>
       </router-view>

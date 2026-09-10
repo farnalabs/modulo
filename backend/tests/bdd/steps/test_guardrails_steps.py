@@ -42,6 +42,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.models.team import Team
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -238,6 +239,7 @@ _TABLES: list[Table] = cast(
         AuditEvent.__table__,
         AuditChainHead.__table__,
         EnvironmentProfile.__table__,
+        RunNodeOutput.__table__,
     ],
 )
 
@@ -397,8 +399,11 @@ def bdd_terminal_blocked(ctx: dict[str, Any]) -> None:
 def bdd_no_node_executed(ctx: dict[str, Any]) -> None:
     run: Run = ctx["run"]
     assert run.started_at is None, "blocked run must never dispatch (started_at must be NULL)"
-    assert run.outputs_json is None, "blocked run must have no node output"
-    assert run.node_telemetry_json is None, "blocked run must have no node telemetry"
+    # FAR-583 B1: the per-node store is the single blob surface — the blocked
+    # run has NO store rows (the legacy runs blob columns are unmapped and
+    # never written post-B1).
+    store_rows = _bdd_run_node_output_rows(run.id)
+    assert not store_rows, "blocked run must have no per-node store rows"
     assert run.claim_count == 0, "blocked run must have no SAQ claim"
     assert run.node_attempt_count == 0, "blocked run must have no node attempt"
 
@@ -427,6 +432,21 @@ def _bdd_eval_rows(run_id: uuid.UUID) -> list[dict[str, Any]]:
         out = [{"observed": r.observed, "passed": r.passed} for r in rows]
         await _bdd_close_session(session)
         return out
+
+    import asyncio
+
+    return asyncio.run(_read())
+
+
+def _bdd_run_node_output_rows(run_id: uuid.UUID) -> list[Any]:
+    """The run's per-node store rows (FAR-583 B1: the single blob surface)."""
+    from modulo.db.models.run_node_outputs import RunNodeOutput
+
+    async def _read() -> list[Any]:
+        session = await _bdd_open_session()
+        rows = (await session.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run_id))).scalars().all()
+        await _bdd_close_session(session)
+        return rows
 
     import asyncio
 

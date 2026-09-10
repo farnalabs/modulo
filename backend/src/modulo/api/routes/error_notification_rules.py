@@ -12,6 +12,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import (
+    MSG_ERROR_TRACKING_NOT_AVAILABLE,
+    MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+    MSG_NO_ORGANISATION,
+    MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, get_plan_context, require_permission
 from modulo.api.models.error_notification_rule import (
@@ -26,10 +32,6 @@ from modulo.core.feature_flags import PlanContext
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 from modulo.db.rls import set_rls_org
 
-_MSG_NO_ORGANISATION = "No organisation"
-_MSG_ERROR_TRACKING_NOT_AVAILABLE = "Error tracking is not available. Run database migrations to enable it."
-_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE = "Error tracking is temporarily unavailable. Please try again."
-_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE = "An unexpected error occurred while processing your request."
 _CODE_ERROR_NOTIFICATION_MANAGE = "error_notification.manage"
 
 
@@ -67,7 +69,7 @@ async def list_notification_rules(
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -92,20 +94,20 @@ async def list_notification_rules(
         _log.exception("error_notification_rules.list_notification_rules")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_notification_rules.list_notification_rules")
         _log.warning("error_tracking.list_rules_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.list_rules_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {
@@ -130,7 +132,7 @@ async def create_notification_rule(
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     is_team = plan.feature_enabled("error_tracking")
     max_rules = _MAX_RULES_PER_ORG if is_team else _MAX_RULES_COMMUNITY
@@ -183,20 +185,20 @@ async def create_notification_rule(
         _log.exception("error_notification_rules.create_notification_rule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_notification_rules.create_notification_rule")
         _log.warning("error_tracking.create_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.create_rule_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return _serialize_rule(rule)
@@ -235,19 +237,19 @@ def _translate_update_db_error(exc: Exception) -> HTTPException:
         _log.exception("error_notification_rules.update_notification_rule")
         return HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         )
     if isinstance(exc, SQLAlchemyError):
         _log.exception("error_notification_rules.update_notification_rule")
         _log.warning("error_tracking.update_rule_db_error")
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         )
     _log.exception("error_tracking.update_rule_error")
     return HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+        detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
     )
 
 
@@ -265,7 +267,7 @@ async def update_notification_rule(
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     is_team = plan.feature_enabled("error_tracking")
     _validate_webhook_tier_for_update(req, is_team)
@@ -304,7 +306,7 @@ async def delete_notification_rule(
 ) -> None:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -328,18 +330,18 @@ async def delete_notification_rule(
         _log.exception("error_notification_rules.delete_notification_rule")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("error_notification_rules.delete_notification_rule")
         _log.warning("error_tracking.delete_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.delete_rule_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc

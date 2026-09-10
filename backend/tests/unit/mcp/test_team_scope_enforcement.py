@@ -865,10 +865,12 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
         mock_manager_cls.return_value.claim.assert_not_called()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._check_human_only_gate", new_callable=AsyncMock, return_value=None)
     @patch("modulo.api.mcp_server.HITLManager")
     async def test_claim_allowed_for_own_team_run(
         self,
         mock_manager_cls: MagicMock,
+        mock_check_human_only: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         _ctx_team_id.set(_TEAM_A)
@@ -886,6 +888,10 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
             mock_manager_cls.return_value.claim = AsyncMock(return_value=claimed)
             result = await review_hitl(run_id=str(run_id), gate_id="gate-1", action="claim")
 
+        # This class isolates team-scope enforcement; the human_only gate is
+        # patched out so the test does not depend on the snapshot-graph resolver
+        # (which needs a configured session). Own-team claim must proceed.
+        mock_check_human_only.assert_awaited_once()
         assert result["status"] == "claimed"
         mock_manager_cls.return_value.claim.assert_awaited_once()
 

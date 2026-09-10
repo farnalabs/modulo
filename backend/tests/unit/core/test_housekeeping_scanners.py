@@ -597,6 +597,30 @@ class TestUnusedEnvironmentProfiles:
         # "deleted" is a live row with no snapshot — both flagged.
         assert _candidate_names(candidates) == ["deleted", "unused"]
 
+    async def test_exempts_seeded_template_profile(self, session: AsyncSession) -> None:
+        """The seeded Bundled Runner profile (provider_type='runner_docker')
+        must not appear in unused-profile candidates even with zero usage."""
+        bundled = EnvironmentProfile(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="Bundled Runner (Docker)",
+            account_id=_ACCOUNT,
+            provider_type="runner_docker",
+        )
+        user_created = EnvironmentProfile(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="user-local",
+            account_id=_ACCOUNT,
+            provider_type="local_docker",
+        )
+        session.add_all([bundled, user_created])
+        await session.commit()
+
+        candidates = await _scan_unused_environment_profiles(session, _ORG_A)
+
+        assert _candidate_names(candidates) == ["user-local"]
+
 
 class TestStalePipelines:
     async def test_flags_pipeline_whose_last_run_is_over_four_weeks_old(self, session: AsyncSession) -> None:

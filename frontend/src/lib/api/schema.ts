@@ -2743,6 +2743,12 @@ export interface paths {
          * Claim Gate
          * @description Atomically claim a HITL gate. Returns a claim_token for approve/reject.
          *
+         *     FAR-609: claim is human_only too — a non-browser credential (API key /
+         *     non-browser JWT) cannot CLAIM nor decide a human_only gate, so the same
+         *     fail-closed policy as the decision routes applies here (no non-browser
+         *     principal can claim OR decide any HITL gate). The check runs inside the
+         *     claim transaction before ``claim``, so a denial has no side effects.
+         *
          *     The post-claim run-status flip to ``claimed`` is fenced to runs still in
          *     ``awaiting_human`` (``transition_run`` with ``allowed_from``): if the run
          *     goes terminal between the claim's status pre-check and the flip, the fenced
@@ -11929,7 +11935,10 @@ export interface components {
             correction_target?: string | null;
             /** Claim Expiry Minutes */
             claim_expiry_minutes: number;
-            /** Human Only */
+            /**
+             * Human Only
+             * @default true
+             */
             human_only: boolean;
             /** Required Team Id */
             required_team_id?: string | null;

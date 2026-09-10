@@ -203,12 +203,28 @@ def _reassembled_bytes_expr(node_side: Any, legacy_side: Any, empty_flag: Any) -
     the node-row aggregation, else the LEGACY column (the EMPTY fallback for
     pre-sweep stragglers — this term MUST be dropped at B2b when the legacy
     columns are dropped, or the fact backfill breaks on the missing column).
+
+    The legacy side is a ``literal_column`` referencing the OUTER ``runs``
+    table (FAR-583 B1: the ORM mapping is cut and the raw Core legacy table
+    is a separate Table object — a separate Table would render a SECOND
+    ``runs`` FROM entry and Postgres rejects "table name runs specified more
+    than once"; a literal column binds to the statement's existing runs
+    alias instead). Constant identifier text — never user input.
+
+    CONSTRAINT of this literal_column technique (qa iteration 1 rider): the host
+    statement must have exactly ONE, UNALIASED ``runs`` FROM entry — the
+    literal column text has no alias awareness and will bind to whatever
+    runs reference the compiled statement exposes. This module is
+    Postgres-only (AT TIME ZONE date math, jsonb operators), which keeps the
+    compilation surface predictable; never reuse the expression in a
+    statement that joins a second/aliased ``runs`` FROM.
     """
     agg = _side_agg_subq(node_side)
     return sa.case(
         (empty_flag.is_(True), sa.func.length(sa.cast(sa.literal("{}"), sa.Text))),
         (agg.is_not(None), sa.func.length(sa.cast(agg, sa.Text))),
-        else_=sa.func.length(sa.cast(legacy_side, sa.Text)),
+        # literal_column → the OUTER unaliased runs FROM (see docstring above).
+        else_=sa.func.length(sa.cast(sa.literal_column(legacy_side), sa.Text)),
     )
 
 
@@ -323,12 +339,13 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.run_number.label("run_number"),
             # FAR-583: bytes are computed from the reassembled run_node_outputs
             # rows (see _reassembled_bytes_expr — both byte formulas documented
-            # there), falling back to the legacy runs column until B2b.
+            # there), falling back to the legacy runs column (raw Core legacy
+            # table since B1's ORM cut) until B2b.
             _reassembled_bytes_expr(
-                RunNodeOutput.outputs_json, Run.outputs_json, _meta_flag_subq("empty_outputs")
+                RunNodeOutput.outputs_json, "runs.outputs_json", _meta_flag_subq("empty_outputs")
             ).label("output_bytes"),
             _reassembled_bytes_expr(
-                RunNodeOutput.node_telemetry_json, Run.node_telemetry_json, _meta_flag_subq("empty_telemetry")
+                RunNodeOutput.node_telemetry_json, "runs.node_telemetry_json", _meta_flag_subq("empty_telemetry")
             ).label("telemetry_bytes"),
             Run.rate_limit_key.is_not(None).label("rate_limited"),
             # FAR-134 concurrency columns — absolute run-lifecycle instants +

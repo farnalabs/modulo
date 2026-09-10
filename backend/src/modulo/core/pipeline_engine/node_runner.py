@@ -27,6 +27,7 @@ Autonomy integration:
                                     no interrupt is raised.
   - ``fully_autonomous``:           gate is silently skipped.
   - ``human_only`` on gate config:  overrides autonomy —  always interrupts.
+    Defaults to True (FAR-609) when the config omits the field.
 
 Conditional gating ((Section 8.17):
   - ``condition`` on ``hitl_gate_config``:  JMESPath expression evaluated
@@ -113,6 +114,7 @@ from modulo.core.run_context.autonomy import (
     should_skip_hitl_gate,
 )
 from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
+from modulo.db.crud.hitl_gate_config import human_only_effective
 from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.sqlstates import MARKER_TXN_ABORTING_SQLSTATES
@@ -1290,10 +1292,10 @@ async def _persist_raw_output_marker(
 # transaction rolls back), so the "legacy survives, sweep heals" claim is
 # false — the failure logs ``legacy_marker_also_lost``.
 #
-# qa iteration 2 (Major 2): hoisted to the shared leaf
-# :mod:`modulo.db.sqlstates` (alongside ``crud.run``'s retryable set); the
-# name below keeps the module-local read sites unchanged.
-_MARKER_TXN_ABORTING_SQLSTATES = MARKER_TXN_ABORTING_SQLSTATES
+# B1 (FAR-583): the vocabulary lives ONLY in the shared leaf
+# :mod:`modulo.db.sqlstates` — every read site below consumes the imported
+# constant directly (the B1 note in that file said this is where all
+# SQLSTATE vocabularies consolidate).
 
 
 async def _write_raw_output_marker(
@@ -1317,7 +1319,11 @@ async def _write_raw_output_marker(
     """
     from sqlalchemy import select as _sql_select
 
-    from modulo.db.crud.run_node_outputs import write_run_markers
+    from modulo.db.crud.run_node_outputs import (
+        read_legacy_raw_output_markers,
+        write_legacy_raw_output_markers,
+        write_run_markers,
+    )
     from modulo.db.models.run import Run as _RunModel
 
     try:
@@ -1344,7 +1350,14 @@ async def _write_raw_output_marker(
                     },
                 )
                 return
-            markers = dict(run.raw_output_markers) if isinstance(run.raw_output_markers, dict) else {}
+            # FAR-583 B1: the legacy blob columns' ORM mapping is cut — the
+            # legacy read-merge-write runs through the repo's raw parameterised
+            # SQL helpers instead of the ``run.raw_output_markers`` attribute
+            # (the run row is still locked FOR UPDATE, so the read-merge-write
+            # serialises exactly like the former ORM leg).
+            markers = dict(
+                (await read_legacy_raw_output_markers(session, run_id=run.id, organisation_id=org_uuid)) or {}
+            )
             key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
             # FAR-438 read-before-write: stamp the derived per-node idempotency key
             # (from the run's PERSISTED run-level key) so a re-run that reuses the
@@ -1375,8 +1388,7 @@ async def _write_raw_output_marker(
                 preserve_delivery_done=preserve_delivery_done,
             )
             markers[key] = persisted_marker
-            run.raw_output_markers = markers
-            await session.flush()
+            await write_legacy_raw_output_markers(session, run_id=run.id, markers=markers)
             # FAR-583: post-merge marker row into run_node_outputs inside a
             # SAVEPOINT. The MERGED dict is stored (prior pr_url preserved,
             # delivery_done monotone) — one row per attempt key, delete-absent.
@@ -1434,7 +1446,7 @@ async def _write_raw_output_marker(
                     # __aexit__ of an already-aborted savepoint) does NOT mask
                     # the ORIGINAL transaction-aborting state (40P01 etc.).
                     sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                    if sqlstate in _MARKER_TXN_ABORTING_SQLSTATES:
+                    if sqlstate in MARKER_TXN_ABORTING_SQLSTATES:
                         # qa rider f: a transaction-aborting failure (deadlock,
                         # admin shutdown, connection loss) poisons the WHOLE
                         # transaction — the legacy marker write above is rolled
@@ -3797,7 +3809,10 @@ def make_hitl_gate_fn(
     It then returns artifacts reflecting the human's decision.
     """
     gate_id: str = hitl_gate_config.get("gate_id", "gate")
-    human_only: bool = hitl_gate_config.get("human_only", False)
+    # FAR-609: the human_only default lives in the shared resolver module — a
+    # gate config that omits the flag is human-only (every HITL gate defaults
+    # to human_only: true; opting out requires an explicit false).
+    human_only: bool = human_only_effective(hitl_gate_config)
     condition_expr: str | None = hitl_gate_config.get("condition")
     eval_condition_raw: dict[str, Any] | None = hitl_gate_config.get("eval_condition")
     required_team_id: str | None = _normalize_required_team_id(gate_id, hitl_gate_config.get("required_team_id"))

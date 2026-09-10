@@ -11,7 +11,13 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.constants import (
+    MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_RESOURCE_ALREADY_EXISTS,
+    MSG_TEAM_NAME_ALREADY_EXISTS,
+    MSG_TEAM_NOT_FOUND,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
@@ -47,9 +53,6 @@ from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _CODE_TEAM_LIST = "team.list"
-_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable. Please try again."
-_MSG_TEAM_NAME_ALREADY_EXISTS = "A team with this name already exists in your organisation"
-_MSG_TEAM_NOT_FOUND = "Team not found"
 _MSG_MEMBERSHIP_NOT_FOUND = "Membership not found"
 
 
@@ -138,23 +141,23 @@ async def _apply_team_update(
     if "name" in updates:
         existing = await get_team_by_name(session, org_id, updates["name"])
         if existing is not None and existing.id != team_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_MSG_TEAM_NAME_ALREADY_EXISTS)
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MSG_TEAM_NAME_ALREADY_EXISTS)
 
     if expected_updated_at is not None:
         outcome, team = await update_team_if_unchanged(session, team_id, updates, expected_updated_at)
         if outcome is TeamUpdateOutcome.NOT_FOUND:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
         if outcome is TeamUpdateOutcome.STALE:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=("Team was modified by another request. Refresh and try again (optimistic lock mismatch)."),
             )
         if team is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
         return team
     team = await update_team(session, team_id, updates)
     if team is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
     return team
 
 
@@ -393,7 +396,7 @@ async def my_teams_endpoint(
         _log.exception("my_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -444,7 +447,7 @@ async def list_teams_endpoint(
         _log.exception("list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except Exception:
         _log.exception("list_teams unexpected error", extra={"org_id": str(current_user.organisation_id)})
@@ -486,7 +489,7 @@ async def create_team_endpoint(
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
+                    detail=MSG_TEAM_NAME_ALREADY_EXISTS,
                 )
             team = await create_team(
                 session,
@@ -499,7 +502,7 @@ async def create_team_endpoint(
         _log.exception("teams.create_team_endpoint")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
+            detail=MSG_TEAM_NAME_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         _log.exception("teams.create_team_endpoint")
@@ -511,7 +514,7 @@ async def create_team_endpoint(
         _log.exception("create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -584,7 +587,7 @@ async def get_team_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -598,7 +601,7 @@ async def get_team_endpoint(
         ) from None
 
     if team is None or team.organisation_id != current_user.organisation_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
 
     return TeamResponse(
         id=str(team.id),
@@ -650,7 +653,7 @@ async def update_team_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -664,7 +667,7 @@ async def update_team_endpoint(
         ) from None
 
     if team is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
 
     from modulo.core.audit_logger import append_audit_event
 
@@ -760,7 +763,7 @@ async def delete_team_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -774,7 +777,7 @@ async def delete_team_endpoint(
         ) from None
 
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
 
     from modulo.core.audit_logger import append_audit_event
 
@@ -882,7 +885,7 @@ async def list_members_endpoint(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             team = await get_team(session, team_id)
             if team is None or team.organisation_id != current_user.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
             result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
     except IntegrityError as exc:
         _log.exception("teams.list_members_endpoint")
@@ -902,7 +905,7 @@ async def list_members_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -953,7 +956,7 @@ async def add_member_endpoint(
 
             team = await get_team(session, team_id)
             if team is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
 
             membership = await _add_team_member_checked(session, current_user, team_id, user_id, req.role)
     except IntegrityError as exc:
@@ -974,7 +977,7 @@ async def add_member_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -1062,7 +1065,7 @@ async def remove_member_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -1126,7 +1129,7 @@ async def change_member_role_endpoint(
 
             team = await get_team(session, team_id)
             if team is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
 
             membership, old_role = await _change_member_role_checked(
                 session,
@@ -1158,7 +1161,7 @@ async def change_member_role_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise

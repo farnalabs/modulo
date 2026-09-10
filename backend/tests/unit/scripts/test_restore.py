@@ -11,7 +11,19 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from scripts.restore import (
+
+# The ``scripts`` package lives at the REPO ROOT (not backend/scripts, the
+# backend-local script collection) — locate it by existence, mirroring the
+# test_backup.py shim. The unit/scripts conftest only puts backend/scripts on
+# sys.path (the check_partner_eligibility test's import root), which cannot
+# serve scripts.restore.
+for parent in Path(__file__).resolve().parents:
+    if (parent / "scripts" / "restore.py").exists():
+        sys.path.insert(0, str(parent))
+        break
+else:
+    raise RuntimeError("Could not find repo root (scripts/restore.py)")
+from scripts.restore import (  # noqa: E402
     decrypt_archive,
     extract_archive,
     get_db_url,
@@ -289,7 +301,13 @@ def test_pg_database_name_root_is_empty():
 
 
 def test_restore_postgres_missing_dump_exits(tmp_dir, capsys):
-    with pytest.raises(SystemExit):
+    # _validate_executable resolves the binary via shutil.which BEFORE the
+    # dump-exists check — fake the resolution so the test does not require
+    # pg_restore on PATH (the subprocess itself is never executed here).
+    with (
+        patch("scripts.restore.shutil.which", return_value="/usr/bin/pg_restore"),
+        pytest.raises(SystemExit),
+    ):
         restore_postgres(tmp_dir, "postgresql://u:p@h/db", "pg_restore")
     assert "modulo.pgdump not found" in capsys.readouterr().out
 
@@ -297,7 +315,10 @@ def test_restore_postgres_missing_dump_exits(tmp_dir, capsys):
 def test_restore_postgres_success(tmp_dir, capsys):
     Path(tmp_dir, "modulo.pgdump").write_text("dump")
     ok = MagicMock(returncode=0, stderr="")
-    with patch("scripts.restore.subprocess.run", return_value=ok) as mock_run:
+    with (
+        patch("scripts.restore.shutil.which", return_value="/usr/bin/pg_restore"),
+        patch("scripts.restore.subprocess.run", return_value=ok) as mock_run,
+    ):
         restore_postgres(tmp_dir, "postgresql://u:p@h/db", "pg_restore")
     assert mock_run.call_count == 4
     out = capsys.readouterr().out
@@ -310,6 +331,7 @@ def test_restore_postgres_createdb_failure_exits(tmp_dir, capsys):
     ok = MagicMock(returncode=0, stderr="")
     fail = MagicMock(returncode=1, stderr="createdb: database creation failed")
     with (
+        patch("scripts.restore.shutil.which", return_value="/usr/bin/pg_restore"),
         patch("scripts.restore.subprocess.run", side_effect=[ok, ok, fail]) as mock_run,
         pytest.raises(SystemExit),
     ):

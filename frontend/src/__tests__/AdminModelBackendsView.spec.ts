@@ -285,6 +285,8 @@ describe('AdminModelBackendsView — preset picker', () => {
 
     expect(wrapper.find('[data-testid="admin-model-backends-preset-openai"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-model-backends-preset-anthropic"]').exists()).toBe(true)
+    // The picker section exposes a labelled heading (preset_picker_title key).
+    expect(wrapper.text()).toContain('Choose a Provider Preset')
   })
 
   it('pre-fills provider and model_id when a preset is selected', async () => {

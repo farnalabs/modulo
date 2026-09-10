@@ -150,7 +150,6 @@ DUAL_WRITE_COUNTERS: tuple[str, ...] = (
     "outputs_dual_write_retries",
     "outputs_dual_write_degraded",
     "outputs_dual_write_sentinel_filtered",
-    "outputs_dual_write_skipped_no_org",
 )
 
 # Bounded lock_timeout for the separate-session terminalize: a lock collision
@@ -353,7 +352,7 @@ async def set_dual_write_enabled(enabled: bool, ttl_seconds: int) -> None:
     equivalent manual procedure).
 
     Writes the Redis key every process reads per dual-write call (through the
-    ~1s TTL cache), so the flip reaches web AND SAQ worker machines
+    ~5s TTL cache), so the flip reaches web AND SAQ worker machines
     immediately. *ttl_seconds* bounds the emergency state: an OFF must not
     silently outlive its incident (re-issue the flip when a state must outlive
     the TTL). Raises on a Redis failure — the operator must KNOW the flip did

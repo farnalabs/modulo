@@ -11,6 +11,7 @@ from typing import Any, cast
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.bundled_runner_template import BUNDLED_RUNNER_PROVIDER_TYPE
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, _checkpoint_detail
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -456,7 +457,13 @@ async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> 
 
 
 async def _scan_unused_environment_profiles(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
-    """Environment profiles not referenced by any pipeline snapshot."""
+    """Environment profiles not referenced by any pipeline snapshot.
+
+    Exempts the seeded/template Bundled Runner profile (``provider_type ==
+    BUNDLED_RUNNER_PROVIDER_TYPE``) which is created automatically per-org by
+    ``db.seed.seed_bundled_runner_profile`` and is not user-owned cleanup
+    material — see ``bundled_runner_template.BUNDLED_RUNNER_PROVIDER_TYPE``.
+    """
     used_ids = (
         select(PipelineSnapshot.environment_profile_id)
         .where(
@@ -472,6 +479,7 @@ async def _scan_unused_environment_profiles(session: AsyncSession, org_id: uuid.
                 select(EnvironmentProfile).where(
                     EnvironmentProfile.organisation_id == org_id,
                     EnvironmentProfile.deleted_at.is_(None),
+                    EnvironmentProfile.provider_type != BUNDLED_RUNNER_PROVIDER_TYPE,
                     EnvironmentProfile.id.notin_(select(used_ids.c.environment_profile_id)),
                 )
             )

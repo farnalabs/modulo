@@ -107,7 +107,7 @@ Each eval has a pass threshold and failure behaviour: `warn` (soft – run conti
 Manages Human-in-the-Loop gates using LangGraph's `interrupt()`. Atomic claim semantics via `SELECT ... FOR UPDATE` on `hitl_claims` table. Claim tokens are opaque random strings (alpha) or short-lived JWTs (v1).
 
 Features:
-- `human_only` flag – blocks LLM approval via MCP
+- `human_only` flag – blocks LLM approval via MCP; defaults to `true` (FAR-609) so every gate is human-only unless it explicitly opts out, and non-browser credentials cannot claim or decide such gates (REST claim route + MCP review_hitl claim both enforce it). Reject is not an agent escape hatch: it requires a claim token, and non-browser principals can no longer claim a default-human_only gate, so only a principal already holding a claim can reject — agent-only runs on default gates require browser-human intervention (intended policy)
 - `required_team_id` – restricts claims to specific team members
 - Claim expiry background job (default: 60s interval, Postgres advisory lock for single-worker execution)
 - `manual` node type – same as HITL but human provides full output
@@ -250,6 +250,10 @@ Versioned JSON Schema definitions (Draft 2020-12). Schemas are org-scoped, versi
 ### Library Service (`modulo/core/library_service/`)
 
 Manages the local and community library of reusable primitives (agents, schemas, workflows, integrations). Community primitives are Ed25519-signed. Copy-to-adapt via `CopyToAdaptWizard` UI component (ownership picker + optional binding step).
+
+### Declarative Configuration CLI (`modulo/cli/apply/`) – FAR-681
+
+`modulo apply -f <config.yaml>` applies an org's schemas (+ versions), model backends, pipelines and triggers to a live deployment from one YAML file (`api_version: modulo.dev/v1`), driven by `MODULO_URL` + `MODULO_API_KEY` (bearer `mk_` org key). Planning is name-based upsert (RLS-bound to the key's org): each entity chooses created / updated / unchanged / blocked from a canonical managed-field hash, so rerun is idempotent and runtime state (`next_fire_at`, `streak_epoch`, ...) never causes drift. Keys: entities apply in dependency order with per-entity containment; secrets are refs-only (`${env:VAR}` / `secretref://<key>` — inline literals are a validation error; the server masks stored secrets, so `--refresh-secrets` re-sends trigger configs whose secrets rotated); backend writes are health-check-verified; `--dry-run/--plan` reports without writing; `--diff` is a read-only drift report (plan-shaped, labelled `mode=drift`, with graph node/edge breakdown for drifted pipelines) used as a CI gate — exit 0 when the org matches the config, exit 1 on drift (created/updated/blocked), and real apply exits 1 on any blocked/failed entity.
 
 ## Data Flow
 

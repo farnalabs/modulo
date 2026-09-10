@@ -4,15 +4,23 @@ All HITL operations are scoped to the authenticated user's organisation.
 Claim, approve, and reject require the run to be in ``awaiting_human`` status.
 
 Claim-token-based approve/reject require the token returned from a successful
-claim.  ``human_only`` gates additionally reject decisions made with a
-non-browser credential: the resume routes (approve / approve-with-modification
-/ deliver-manual / submit-manual) resolve the gate's actual edge config and
-raise 403 for API-key principals (FAR-610 — the routes previously performed no
-``human_only`` check at all). When the config cannot be resolved but the gate
-fired (a claim row exists), API-key principals are denied too — fail closed,
-since the policy cannot be verified. ``reject_gate`` is deliberately exempt:
-rejection is the safe direction. The MCP surface (``mcp_server.py``) denies
-``human_only`` approve/deliver-manual outright — MCP clients authenticate with
+claim.  ``human_only`` gates additionally reject claim/decisions made with a
+non-browser credential: the claim route AND the resume routes (approve /
+approve-with-modification / deliver-manual / submit-manual) resolve the gate's
+actual edge config and raise 403 for API-key principals (FAR-610 — the routes
+previously performed no ``human_only`` check at all; FAR-609 extended the same
+check to claim). When the config cannot be resolved but the gate fired (a
+claim row exists), API-key principals are denied too — fail closed, since the
+policy cannot be verified.
+
+``reject_gate`` requires a claim_token, and that token can no longer be
+obtained by a non-browser principal on a ``human_only`` (now the default)
+gate, so non-browser principals can neither claim, decide, NOR reject such a
+gate. Only a principal already holding a claim (e.g. claimed before the
+policy change) can reject; agent-only runs on default ``human_only`` gates
+require browser-human intervention — that is the intended policy, NOT an
+agent escape hatch. The MCP surface (``mcp_server.py``) denies ``human_only``
+claim, approve and deliver-manual outright — MCP clients authenticate with
 API keys and are never browser sessions.
 """
 
@@ -114,7 +122,8 @@ router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
 
 class HumanOnlyDenied(HTTPException):
-    """403 raised when a non-browser credential decides a ``human_only`` gate.
+    """403 raised when a non-browser credential claims or decides a
+    ``human_only`` gate.
 
     Subclass (not a bare ``HTTPException``) so ``_run_hitl_manager`` — the
     single choke point of every REST decision route — can distinguish the
@@ -289,12 +298,21 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
 def _client_type(principal: TenantPrincipal) -> str:
     """The caller's credential kind for HITL audit enrichment (FAR-611).
 
-    JWTs carry no client-type claim (no amr / token-type marker), so the
-    principal's ``via_api_key`` credential-kind marker (FAR-610) is the only
-    reliable signal: ``"api_key"`` for mk_ principals, ``"browser"`` for JWT
-    logins. MCP callers pass ``"mcp"`` directly in ``mcp_server.py``.
+    FAR-609 fix: the previous implementation returned ``"browser"`` for every
+    JWT — but FAR-634 minted programmatic JWTs (``client_kind !=
+    "browser"``) that can claim explicitly opted-out gates, so a programmatic
+    claim was audited as a browser claim and polluted the FAR-611
+    sweep-alarm input. The audit field now records the principal's ACTUAL
+    credential class: ``"api_key"`` for mk_ principals, the JWT's
+    ``client_kind`` value (typically ``"programmatic"``) for non-browser JWT
+    logins, and ``"browser"`` for browser logins. MCP callers pass ``"mcp"``
+    directly in ``mcp_server.py``.
     """
-    return "api_key" if principal.via_api_key else "browser"
+    if principal.via_api_key:
+        return "api_key"
+    if principal.client_kind != CLIENT_KIND_BROWSER:
+        return principal.client_kind
+    return "browser"
 
 
 async def _enforce_human_only_gate(
@@ -322,9 +340,16 @@ async def _enforce_human_only_gate(
     UI is their enforcement surface), and manual-node ids short-circuit
     inside the helper, so ``submit_manual_output`` is unaffected.
 
-    Applied to the resume routes (approve / approve-with-modification /
-    deliver-manual / submit-manual). ``reject_gate`` is deliberately exempt:
-    rejection is the safe direction.
+    Applied to the claim route AND the resume routes (approve /
+    approve-with-modification / deliver-manual / submit-manual) — FAR-609
+    extended the check to claim, so a non-browser principal can neither
+    CLAIM nor decide a ``human_only`` gate. ``reject_gate`` is exempt
+    mechanically but NOT operationally: reject passes a claim_token, and
+    non-browser principals can no longer claim a default-human_only gate, so
+    they cannot reach reject either; only a principal already holding a claim
+    (e.g. claimed before the policy change) can reject. Agent-only runs on
+    default gates require browser-human intervention — that is the intended
+    policy, not an agent escape hatch.
 
     Credential semantics (FAR-610 finding + FAR-634 hardening): REST resolves
     principals from browser-login JWTs today — org API keys (``mk_``) are
@@ -462,6 +487,12 @@ async def claim_gate(
 ) -> ClaimResponse:
     """Atomically claim a HITL gate. Returns a claim_token for approve/reject.
 
+    FAR-609: claim is human_only too — a non-browser credential (API key /
+    non-browser JWT) cannot CLAIM nor decide a human_only gate, so the same
+    fail-closed policy as the decision routes applies here (no non-browser
+    principal can claim OR decide any HITL gate). The check runs inside the
+    claim transaction before ``claim``, so a denial has no side effects.
+
     The post-claim run-status flip to ``claimed`` is fenced to runs still in
     ``awaiting_human`` (``transition_run`` with ``allowed_from``): if the run
     goes terminal between the claim's status pre-check and the flip, the fenced
@@ -474,6 +505,10 @@ async def claim_gate(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             try:
+                # FAR-609: non-browser principals are denied human_only gates
+                # on claim exactly like on the decision routes. The check
+                # short-circuits browser JWTs before writing anything.
+                await _enforce_human_only_gate(session, principal, run_id, gate_id, "claim")
                 gate = await mgr.claim(
                     session,
                     run_id=run_id,
@@ -537,6 +572,12 @@ async def claim_gate(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
+    except HumanOnlyDenied as exc:
+        # FAR-609: the claim transaction rolled back on the denial — emit the
+        # failure-isolated audit event in a FRESH session, then re-raise the
+        # byte-identical 403 (same contract as _run_hitl_manager).
+        await _emit_human_only_denial_audit(exc)
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -791,9 +832,14 @@ async def reject_gate(
 ) -> dict[str, str]:
     """Reject an interrupted HITL gate and route to reject_target or fail."""
     # FAR-541: the payload is stamped with the gate it resolves (see approve_gate).
-    # No enforce_human_only / require_sandbox guards here (unlike the resume
-    # actions): rejecting routes the run to its reject_target or terminates it,
-    # so it must not be blocked because the org is at sandbox capacity.
+    # No require_sandbox guard here (unlike the resume actions): rejecting
+    # routes the run to its reject_target or terminates it, so it must not be
+    # blocked because the org is at sandbox capacity. The human_only guard is
+    # not applied mechanically, but it IS effectively in force: reject
+    # requires a claim_token and non-browser principals can no longer CLAIM a
+    # default-human_only gate (FAR-609), so they cannot reach reject either —
+    # only a principal already holding a claim can reject. Agent-only runs on
+    # default gates require browser-human intervention (intended policy).
     resume_data: dict[str, Any] = {"action": "rejected", "gate_id": gate_id, "reason": req.reason}
     await _run_hitl_manager(
         session,

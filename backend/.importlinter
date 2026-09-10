@@ -130,7 +130,7 @@ ignore_imports =
     # exceptions above: db.crud.run exposes the terminal write, classify.py is
     # the pure decision function.
     modulo.db.crud.run -> modulo.core.pipeline_engine.classify
-    # FAR-583 dual-write: the chokepoint helper (crud.run.dual_write_run_node_outputs)
+    # FAR-583 store write: the chokepoint helper (crud.run.write_run_outputs_from_run)
     # reads the modulo_run_outputs_dual_write kill-switch PER CALL and signals the
     # kill-switch-OFF degraded edge + the in-session retry counter through the
     # core feature module. The FAILURE orchestration itself (terminalize via

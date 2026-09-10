@@ -3,6 +3,24 @@ import { test, expect, loginAsAdmin } from './setup/fixtures'
 test.describe('Runners (Profiles tab, legacy environment-profiles routes)', { tag: "@regression" }, () => {
   test('renders the Runners page from the legacy /environment-profiles route', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
+    if (env.name === 'local') {
+      await page.route('**/api/v1/environment-profiles', (route) => {
+        if (route.request().method() !== 'GET') return route.fallback()
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ items: [mockProfileSummary], total: 1 }),
+        })
+      })
+      await page.route('**/api/v1/runners/status', (route) => {
+        if (route.request().method() !== 'GET') return route.fallback()
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(mockRunnersStatus),
+        })
+      })
+    }
     await page.goto('/environment-profiles')
     await expect(page).toHaveURL(/\/admin\/runners\/profiles$/)
     await expect(page.getByRole('heading', { name: 'Runners' })).toContainText('Runners')

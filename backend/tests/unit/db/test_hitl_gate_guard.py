@@ -63,6 +63,12 @@ _GATE = {
     [
         ({"human_only": True}, {"human_only": False}, ["human_only"]),
         ({"human_only": True}, {"human_only": True}, []),
+        # FAR-609: human_only has the fail-safe default True, so a config that
+        # was absent the flag and re-saves with an explicit False is a
+        # true->false relaxation and stays gated.
+        ({"human_only": None}, {"human_only": False}, ["human_only"]),
+        ({"human_only": None}, {"human_only": True}, []),
+        ({"human_only": False}, {"human_only": False}, []),
         ({"required_team_id": "team-1"}, {"required_team_id": None}, ["required_team_id"]),
         ({"required_team_id": "team-1"}, {"required_team_id": "team-2"}, ["required_team_id"]),
         ({"required_team_id": "team-1"}, {"required_team_id": "team-1"}, []),
@@ -89,6 +95,9 @@ _GATE = {
     ids=[
         "human_only_weakened",
         "human_only_unchanged",
+        "human_only_absent_then_off",
+        "human_only_absent_then_on",
+        "human_only_explicit_off_unchanged",
         "team_removed",
         "team_changed",
         "team_unchanged",
@@ -517,3 +526,327 @@ async def test_topology_bypass_same_edge_different_edge_type_is_structural() -> 
         caller_type="rest",
     )
     assert diff.denied
+
+
+# ---------------------------------------------------------------------------
+# Node-level weakening (FAR-609 review) — FAR-402 hitl_config on hitl nodes
+# ---------------------------------------------------------------------------
+
+
+def _hitl_node(node_id: str, cfg: dict | None = None, include_key: bool = True) -> dict:
+    node: dict = {"id": node_id, "node_type": "hitl", "label": "gate"}
+    if include_key:
+        node["hitl_config"] = cfg
+    return node
+
+
+def _old_nodes(*nodes: dict) -> list[dict]:
+    return list(nodes)
+
+
+def _new_nodes(*nodes: dict) -> list[dict]:
+    return list(nodes)
+
+
+async def test_node_level_human_only_false_write_is_weakening() -> None:
+    """An explicit human_only: false write on an existing hitl node is the
+    same runtime relaxation as the edge-level one — detected and audited."""
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=True,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", {"human_only": True})],
+        new_nodes=[_hitl_node("n1", {"human_only": False})],
+    )
+    assert diff.has_weakening
+    assert not diff.denied  # privileged caller is allowed (caller audits)
+    assert diff.weakened_nodes[0].weakening_types == ["human_only"]
+    assert diff.weakened_nodes[0].correlation_key == ("n1", "n1", "hitl_node")
+    assert diff.weakened_nodes[0].reason_code == REASON_INSUFFICIENT_ROLE
+
+
+async def test_node_level_absent_hitl_config_is_effectively_human_only() -> None:
+    """An existing hitl node with NO hitl_config (or an explicit None one) was
+    effectively human-only at runtime (fail-safe default), so re-saving it
+    with an explicit human_only: false is a weakening write."""
+    for old_cfg, include_key in ((None, True), (None, False), ({"human_only": None}, True)):
+        diff = await apply_gated_edge_diff(
+            _SESSION,
+            [],
+            [],
+            is_privileged=True,
+            caller_type="rest",
+            old_nodes=[_hitl_node("n1", old_cfg, include_key=include_key)],
+            new_nodes=[_hitl_node("n1", {"human_only": False})],
+        )
+        assert diff.has_weakening, f"old_cfg={old_cfg!r} include_key={include_key}"
+        assert diff.weakened_nodes[0].weakening_types == ["human_only"]
+
+
+async def test_node_level_false_to_false_is_silent() -> None:
+    """Explicit false -> explicit false is not a relaxation — no detection,
+    so nothing is audited and nothing denied."""
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", {"human_only": False})],
+        new_nodes=[_hitl_node("n1", {"human_only": False, "claim_expiry_min": 15})],
+    )
+    assert not diff.has_weakening
+    assert not diff.weakened_nodes
+
+
+async def test_node_level_false_then_removed_config_is_a_tightening() -> None:
+    """A previously opted-out gate re-saved with an absent/None hitl_config
+    becomes effectively human-only (the fail-safe default) — a TIGHTENING,
+    never denied."""
+    for include_key in (True, False):
+        diff = await apply_gated_edge_diff(
+            _SESSION,
+            [],
+            [],
+            is_privileged=False,
+            caller_type="rest",
+            old_nodes=[_hitl_node("n1", {"human_only": False})],
+            new_nodes=[_hitl_node("n1", None, include_key=include_key)],
+        )
+        assert not diff.has_weakening
+        assert not diff.weakened_nodes
+
+
+async def test_node_level_non_privileged_weakening_is_denied() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", {"human_only": True})],
+        new_nodes=[_hitl_node("n1", {"human_only": False})],
+    )
+    assert diff.denied
+    assert diff.reason_code == REASON_INSUFFICIENT_ROLE
+
+
+async def test_node_level_weakening_denied_for_mcp() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=True,
+        caller_type="mcp",
+        old_nodes=[_hitl_node("n1", {"human_only": True, "claim_team_id": "t1"})],
+        new_nodes=[_hitl_node("n1", {"human_only": False})],
+    )
+    assert diff.denied
+    assert diff.reason_code == REASON_MCP_NOT_PERMITTED
+
+
+async def test_node_removal_is_structural_weakening() -> None:
+    """Deleting a hitl node removes the runtime gate entirely — the one way a
+    node-level gate vanishes that the edge diff cannot see."""
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=True,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", {"human_only": True})],
+        new_nodes=[],  # node (and its gate) gone
+    )
+    assert diff.has_weakening
+    assert not diff.denied
+    assert diff.weakened_nodes[0].weakening_types == ["structural:hitl_node_removed"]
+    assert diff.weakened_nodes[0].reason_code == REASON_CORRELATION_KEY_MISMATCH
+
+
+async def test_node_down_typed_off_hitl_is_structural_weakening() -> None:
+    """A same-id node that is no longer node_type='hitl' no longer compiles a
+    gate — treated as removal."""
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=True,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", {"human_only": True})],
+        new_nodes=[{"id": "n1", "node_type": "agent", "label": "plain agent"}],
+    )
+    assert diff.has_weakening
+    assert diff.weakened_nodes[0].weakening_types == ["structural:hitl_node_removed"]
+
+
+async def test_node_creation_with_opt_out_is_not_weakening() -> None:
+    """A NEW hitl node (no prior row) with human_only: false creates a gate
+    with no prior value to weaken — mirroring the edge-level noop."""
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[],
+        new_nodes=[_hitl_node("n1", {"human_only": False})],
+    )
+    assert not diff.has_weakening
+    assert not diff.weakened_nodes
+
+
+async def test_non_hitl_node_configs_are_not_guarded() -> None:
+    """hitl_config on a non-hitl node is inert at runtime (the compiler
+    ignores it) — a human_only: false write there is never flagged."""
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[{"id": "n1", "node_type": "agent", "hitl_config": {"human_only": True}}],
+        new_nodes=[{"id": "n1", "node_type": "agent", "hitl_config": {"human_only": False}}],
+    )
+    assert not diff.has_weakening
+
+
+async def test_node_level_weakening_co_detected_with_edge_detection() -> None:
+    """The full graph-save shape: simultaneous edge-level and node-level
+    relaxations both surface as weakening in ONE diff result."""
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg=_GATE)],
+        [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", {"human_only": True})],
+        new_nodes=[_hitl_node("n1", {"human_only": False})],
+    )
+    assert diff.denied
+    assert diff.reason_code == REASON_INSUFFICIENT_ROLE
+    assert len(diff.weakened_edges) == 1
+    assert len(diff.weakened_nodes) == 1
+
+
+async def test_node_level_no_nodes_passed_keeps_legacy_behavior() -> None:
+    """Callers that do not pass node lists (older call sites, edge-only
+    contexts) must behave identically to before."""
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg=_GATE)],
+        [_new_edge("a", "b", cfg={**_GATE, "human_only": False})],
+        is_privileged=True,
+        caller_type="rest",
+    )
+    assert diff.has_weakening
+    assert not diff.weakened_nodes
+
+
+async def test_node_level_legacy_snapshot_fail_closed() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        legacy_snapshot=True,
+        old_nodes=[_hitl_node("n1", {"human_only": True})],
+        new_nodes=[_hitl_node("n1", {"human_only": False})],
+    )
+    assert diff.denied
+    assert diff.reason_code == REASON_LEGACY_SNAPSHOT_AMBIGUOUS
+
+
+async def test_primitive_does_not_mutate_node_inputs() -> None:
+    old_nodes = [_hitl_node("n1", {"human_only": True})]
+    snapshot_before = [dict(n) for n in old_nodes]
+    await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=True,
+        caller_type="rest",
+        old_nodes=old_nodes,
+        new_nodes=[_hitl_node("n1", {"human_only": False})],
+    )
+    assert old_nodes == snapshot_before, "the primitive must not mutate node inputs"
+
+
+def test_node_weakening_payload_includes_affected_nodes() -> None:
+    denied = DiffResult(
+        weakened_edges=[],
+        has_weakening=True,
+        denied=True,
+        reason_code=REASON_INSUFFICIENT_ROLE,
+        caller_type="rest",
+        weakened_nodes=[
+            EdgeWeakening(
+                correlation_key=("n1", "n1", "hitl_node"),
+                weakening_types=["human_only"],
+                reason_code=REASON_INSUFFICIENT_ROLE,
+            )
+        ],
+    )
+    allowed = DiffResult(
+        weakened_edges=[],
+        has_weakening=True,
+        denied=False,
+        reason_code=None,
+        caller_type="rest",
+        weakened_nodes=[
+            EdgeWeakening(
+                correlation_key=("n1", "n1", "hitl_node"),
+                weakening_types=["human_only"],
+                reason_code=REASON_INSUFFICIENT_ROLE,
+            )
+        ],
+    )
+    p_denied = build_gate_diff_payload(denied, "rest")
+    p_allowed = build_gate_diff_payload(allowed, "rest")
+    assert set(p_denied) == set(p_allowed)
+    assert set(p_allowed) == {"caller_type", "reason_code", "denied", "affected_edges", "affected_nodes"}
+    assert p_denied["affected_nodes"] == p_allowed["affected_nodes"]
+    assert p_allowed["affected_nodes"][0]["node_id"] == "n1"
+    assert p_allowed["affected_nodes"][0]["weakening_types"] == ["human_only"]
+
+
+def test_edge_only_payload_has_no_affected_nodes_key() -> None:
+    """Legacy edge-only results keep the historical payload shape."""
+    diff = DiffResult(
+        weakened_edges=[
+            EdgeWeakening(
+                correlation_key=("a", "b", "normal"),
+                weakening_types=["human_only"],
+                reason_code=REASON_INSUFFICIENT_ROLE,
+            )
+        ],
+        has_weakening=True,
+        denied=True,
+        reason_code=REASON_INSUFFICIENT_ROLE,
+        caller_type="rest",
+    )
+    payload = build_gate_diff_payload(diff, "rest")
+    assert set(payload) == {"caller_type", "reason_code", "denied", "affected_edges"}
+
+
+def test_denial_detail_names_affected_node() -> None:
+    from modulo.db.crud.hitl_gate_guard import denial_detail
+
+    diff = DiffResult(
+        weakened_edges=[],
+        has_weakening=True,
+        denied=True,
+        reason_code=REASON_INSUFFICIENT_ROLE,
+        caller_type="rest",
+        weakened_nodes=[
+            EdgeWeakening(
+                correlation_key=("n1", "n1", "hitl_node"),
+                weakening_types=["human_only"],
+                reason_code=REASON_INSUFFICIENT_ROLE,
+            )
+        ],
+    )
+    detail = denial_detail(diff)
+    assert "node n1 (hitl_node): human_only" in detail

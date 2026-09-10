@@ -312,6 +312,28 @@ async def test_hitl_gate_human_only_overrides_fully_autonomous():
     assert interrupt_list[0].value["human_only"] is True
 
 
+async def test_hitl_gate_missing_human_only_defaults_true_overrides_fully_autonomous():
+    """FAR-609: a gate config WITHOUT ``human_only`` is human-only — the
+    gate always interrupts, even under full autonomy."""
+    gate_config = {"gate_id": "legacy-gate"}
+    node_fn = make_hitl_gate_fn(gate_config)
+
+    with pytest.raises(GraphInterrupt) as exc_info:
+        await node_fn(
+            {
+                "artifacts": [],
+                "_hitl_gates": [],
+                "run_context": {
+                    "_pipeline_default_autonomy": "fully_autonomous",
+                },
+            }
+        )
+
+    interrupt_list = exc_info.value.args[0]
+    assert interrupt_list[0].value["gate_id"] == "legacy-gate"
+    assert interrupt_list[0].value["human_only"] is True
+
+
 async def test_hitl_gate_manual_approval_raises_interrupt():
     gate_config = {"gate_id": "manual-gate", "human_only": False}
     node_fn = make_hitl_gate_fn(gate_config)

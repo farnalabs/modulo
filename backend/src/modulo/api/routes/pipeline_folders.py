@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
+from modulo.api.constants import MSG_FOLDER_NOT_FOUND, MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -20,9 +20,6 @@ from modulo.db.crud.pipeline_folder import (
     update_folder,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
-
-_MSG_FOLDER_NOT_FOUND = "Folder not found"
-
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +120,7 @@ async def update_folder_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
             if folder is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FOLDER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_FOLDER_NOT_FOUND)
             await session.refresh(folder)
             response = FolderResponse.model_validate(folder)
     except ValueError as e:
@@ -159,7 +156,7 @@ async def delete_folder_endpoint(
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FOLDER_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_FOLDER_NOT_FOUND)
 
 
 @router.patch("/{folder_id}/move")
@@ -177,7 +174,7 @@ async def reorder_folder_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
             if folder is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FOLDER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_FOLDER_NOT_FOUND)
             await session.refresh(folder)
             response = FolderResponse.model_validate(folder)
     except ProgrammingError:

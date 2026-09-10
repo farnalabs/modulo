@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_THIS_FEATURE_NOT_AVAILABLE
+from modulo.api.constants import MSG_PIPELINE_NOT_FOUND, MSG_THIS_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     get_db_session,
@@ -116,7 +116,6 @@ from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_PIPELINE_LIST = "pipeline.list"
 _CODE_ROUTES_PIPELINES = "routes.pipelines"
-_MSG_PIPELINE_NOT_FOUND = "Pipeline not found"
 _CODE_PIPELINE_GRAPH_UPDATE = "pipeline.graph.update"
 _CODE_PIPELINE_UPDATE = "pipeline.update"
 _MSG_SNAPSHOT_NOT_FOUND = "Snapshot not found"
@@ -185,7 +184,7 @@ def _raise_db_migration_error(exc: ProgrammingError) -> None:
 def _require_pipeline(pipeline: Pipeline | None) -> Pipeline:
     """Return the pipeline, or raise 404 when it does not exist."""
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     return pipeline
 
 
@@ -1063,7 +1062,10 @@ class HitlGateConfig(BaseModel):
         "compiler currently kicks a rejection back to reject_target).",
     )
     claim_expiry_minutes: int = Field(gt=0, le=1440)
-    human_only: bool
+    # FAR-609: every HITL gate defaults to human_only — a graph save that
+    # omits the field gets the fail-safe security posture; opting out requires
+    # an explicit ``human_only: false``.
+    human_only: bool = True
     required_team_id: uuid.UUID | None = None
     condition: str | None = Field(
         default=None,
@@ -1576,7 +1578,7 @@ async def get_pipeline_endpoint(
         _raise_db_migration_error(exc)
 
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     return _pipeline_response(pipeline)
 
 
@@ -1597,7 +1599,7 @@ async def get_pipeline_graph_endpoint(
         _raise_db_migration_error(exc)
 
     if graph is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
     return _graph_response(nodes, edges)
 
@@ -1798,7 +1800,7 @@ async def replace_pipeline_graph_endpoint(
         _raise_db_migration_error(exc)
 
     if graph is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     nodes, edges = graph
     return _graph_response(nodes, edges, validation_issues=issues)
 
@@ -1929,7 +1931,7 @@ async def _apply_graph_update(
     node_data, edge_data, validator_graph, graph_bindings = _prepare_graph_write(graph_json)
     existing = await get_pipeline(session, pipeline_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
     await _enforce_connector_team_bindings(
         session,
@@ -1955,7 +1957,7 @@ async def _apply_graph_update(
         is_guardrail_admin=_is_guardrail_admin(principal),
     )
     if graph is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     # FAR-488a: same Agent-row sync as the PATCH /graph endpoint — a graph
     # replacement shipped inside a PATCH update payload must also run.
     await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)
@@ -2048,7 +2050,7 @@ async def update_pipeline_endpoint(
         _raise_db_migration_error(exc)
 
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     response = _pipeline_response(pipeline)
     response.connector_rebind_required = ownership_changed
     return response
@@ -2070,7 +2072,7 @@ async def delete_pipeline_endpoint(
         _raise_db_migration_error(exc)
 
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
 
 
 @router.post("/{pipeline_id}/restore")
@@ -2087,12 +2089,12 @@ async def restore_pipeline_endpoint(
                 session, pipeline_id, include_deleted=True, organisation_id=principal.organisation_id
             )
             if existing is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             pipeline = await restore_pipeline(session, pipeline_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     return _pipeline_response(pipeline)
 
 
@@ -2108,12 +2110,12 @@ async def archive_pipeline_endpoint(
             await _set_rls_context(session, principal)
             existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if existing is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             pipeline = await archive_pipeline(session, pipeline_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     return _pipeline_response(pipeline)
 
 
@@ -2129,12 +2131,12 @@ async def unarchive_pipeline_endpoint(
             await _set_rls_context(session, principal)
             existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if existing is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             pipeline = await unarchive_pipeline(session, pipeline_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     return _pipeline_response(pipeline)
 
 
@@ -2328,7 +2330,7 @@ async def save_as_composite_endpoint(
 
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
 
             all_nodes = pipeline.graph_nodes_json
             selected_ids_str = {str(nid) for nid in req.selected_node_ids}
@@ -2449,7 +2451,7 @@ async def trigger_quality_report(
 
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
 
             report = await generate_quality_report(session, principal.organisation_id)
 
@@ -2643,7 +2645,7 @@ async def save_edit_snapshot_endpoint(
             await _set_rls_context(session, principal)
             pipeline = await get_pipeline(session, pipeline_id)
             if pipeline is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             snapshot = await create_snapshot_edit(
                 session,
                 pipeline_id=pipeline_id,
@@ -2848,7 +2850,7 @@ async def move_pipeline_to_folder_endpoint(
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
     if pipeline is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     return _pipeline_response(pipeline)
 
 
@@ -2875,7 +2877,7 @@ async def _load_locked_pipeline_graph(
         await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id).with_for_update())
     ).scalar_one_or_none()
     if pipeline_row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
     edges = list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars())
     return nodes, edges
@@ -3040,7 +3042,7 @@ async def convert_node_to_agent_endpoint(
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     saved_nodes, saved_edges = saved
     return _graph_response(saved_nodes, saved_edges)
 
@@ -3133,7 +3135,7 @@ async def revert_node_to_manual_endpoint(
         await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
 
     if saved is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     saved_nodes, saved_edges = saved
     return _graph_response(saved_nodes, saved_edges)
 
