@@ -572,6 +572,18 @@ async def run_variant_batch(
     # with the same value so the compare route can load the batch purely by it.
     batch_id = uuid.uuid4()
 
+    # FAR-775: persist batch metadata row so the list/detail endpoints can
+    # load batches independently of scanning the runs table.
+    await upsert_batch_state(
+        session,
+        batch_id=batch_id,
+        org_id=org_id,
+        name=None,
+        pipeline_id=group.pipeline_id,
+        variant_group_id=group.id,
+        input_payload=input_payload or {},
+    )
+
     dispatch = _RunDispatch(org_id=org_id, account_id=account_id, trigger_type=trigger_type)
 
     results: list[dict[str, Any]] = []
@@ -838,3 +850,111 @@ async def get_batch_compare(
             }
         )
     return entries
+
+
+# ---------------------------------------------------------------------------
+# variant_batch_state CRUD (FAR-775)
+# ---------------------------------------------------------------------------
+
+from modulo.db.models.variant_batch_state import VariantBatchState  # noqa: E402
+
+
+async def get_batch_state(
+    session: AsyncSession,
+    *,
+    batch_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> VariantBatchState | None:
+    """Load a batch state row by batch_id, org-scoped."""
+    result = await session.execute(
+        select(VariantBatchState).where(
+            VariantBatchState.batch_id == batch_id,
+            VariantBatchState.organisation_id == org_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_batch_state(
+    session: AsyncSession,
+    *,
+    batch_id: uuid.UUID,
+    org_id: uuid.UUID,
+    name: str | None = None,
+    pipeline_id: uuid.UUID | None = None,
+    variant_group_id: uuid.UUID | None = None,
+    input_payload: dict[str, Any] | None = None,
+) -> VariantBatchState:
+    """Insert or update a batch state row.
+
+    If a row already exists (same batch_id + org), update the mutable fields.
+    Otherwise create a new row. Returns the state row after flush.
+    """
+    existing = await get_batch_state(session, batch_id=batch_id, org_id=org_id)
+    if existing is not None:
+        if name is not None:
+            existing.name = name
+        if pipeline_id is not None:
+            existing.pipeline_id = pipeline_id
+        if variant_group_id is not None:
+            existing.variant_group_id = variant_group_id
+        if input_payload is not None:
+            existing.input_payload = input_payload
+        await session.flush()
+        return existing
+
+    state = VariantBatchState(
+        batch_id=batch_id,
+        organisation_id=org_id,
+        name=name,
+        pipeline_id=pipeline_id,
+        variant_group_id=variant_group_id,
+        input_payload=input_payload or {},
+    )
+    session.add(state)
+    await session.flush()
+    return state
+
+
+async def soft_delete_batch_state(
+    session: AsyncSession,
+    *,
+    batch_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> bool:
+    """Soft-delete a batch state row. Returns True if a row was found and deleted."""
+    state = await get_batch_state(session, batch_id=batch_id, org_id=org_id)
+    if state is None:
+        return False
+    if state.deleted_at is not None:
+        return True  # already deleted
+    state.deleted_at = datetime.now(UTC)
+    await session.flush()
+    return True
+
+
+async def list_batch_states(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[VariantBatchState], int]:
+    """List non-deleted batch states for an org, paginated."""
+    base = select(VariantBatchState).where(
+        VariantBatchState.organisation_id == org_id,
+        VariantBatchState.deleted_at.is_(None),
+    )
+    count_q = (
+        select(func.count())
+        .select_from(VariantBatchState)
+        .where(
+            VariantBatchState.organisation_id == org_id,
+            VariantBatchState.deleted_at.is_(None),
+        )
+    )
+    offset = (page - 1) * page_size
+    total = (await session.execute(count_q)).scalar_one()
+    query = base.order_by(VariantBatchState.created_at.desc()).offset(offset).limit(page_size)
+    items = list((await session.execute(query)).scalars())
+    return items, total
