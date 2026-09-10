@@ -1,9 +1,9 @@
-"""Integration tests: the FAR-583 run-outputs dual-write chokepoints on real
+"""Integration tests: the FAR-583 run-outputs store-write chokepoints on real
 Postgres.
 
 Drives ``update_run_status`` (ORM branch + fenced branch) and the core
 catch/orchestrate contract (:func:`guard_dual_write`) through a NOBYPASSRLS
-role (the production ``modulo_app`` scenario), so the RLS-scoped dual-write,
+role (the production ``modulo_app`` scenario), so the RLS-scoped store write,
 the fail-closed abort, the transient retry, and the separate-session
 terminalization are exercised against the real migration-0192 table.
 
@@ -15,8 +15,7 @@ collision-free (xdist-safe).
 
 The orchestration's terminalize + error-event legs use the standalone
 ``saq_hooks`` engine (``settings.database_url`` — pointed at the testcontainer
-by the session conftest); the Redis counter bumps are best-effort and are
-swallowed when no Redis is reachable, exactly as in production.
+by the session conftest).
 """
 
 from __future__ import annotations
@@ -33,8 +32,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.run_outputs_dualwrite import DUAL_WRITE_ENABLED_KEY, guard_dual_write
-from modulo.core.runtime_config.store import get_runtime_config_store
+from modulo.core.run_outputs_dualwrite import guard_dual_write
 from modulo.db.crud.run import update_run_status
 from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs_with_fallback
 from modulo.db.rls import set_rls_org
@@ -509,88 +507,3 @@ async def test_transient_retry_succeeds_without_failure_event(
     assert final_node_ids == ["n1"]
     # No failure event for a successful retry.
     assert not await _fetch_error_events(db_engine, dual_write_tenant.org_id, "%dual-write failed%")
-
-
-# ---------------------------------------------------------------------------
-# Kill-switch OFF
-# ---------------------------------------------------------------------------
-
-
-async def test_kill_switch_off_does_not_disable_the_store_write(
-    db_engine: AsyncEngine,
-    rls_app_session: AsyncSession,
-    dual_write_tenant: _Tenant,
-) -> None:
-    """FAR-583 B1 contract cut: the blobs chokepoint consults NO kill-switch —
-    with the legacy columns no longer written there is no legacy-only mode to
-    fall back to, so even a switch forced OFF cannot disable the store write
-    (the flag dies with the legacy writes at B2a; the marker path in
-    node_runner keeps its gate until B2a)."""
-    from modulo.core import run_outputs_dualwrite as dualwrite_module
-
-    run_id = await _insert_run(db_engine, dual_write_tenant)
-    store = get_runtime_config_store()
-    store.set_override(DUAL_WRITE_ENABLED_KEY, "false")
-    # qa Minor 5: the switch read is TTL-cached — drop any cached ON value so
-    # this OFF flip is observed immediately.
-    dualwrite_module._reset_switch_read_cache()
-    try:
-        async with rls_app_session.begin():
-            await set_rls_org(rls_app_session, dual_write_tenant.org_id)
-            await update_run_status(
-                rls_app_session,
-                run_id,
-                "complete",
-                outputs_json={"n1": {"a": 1}},
-            )
-    finally:
-        store.clear_override(DUAL_WRITE_ENABLED_KEY)
-        dualwrite_module._reset_switch_read_cache()
-
-    legacy = await _fetch_run_row(db_engine, run_id)
-    assert legacy["status"] == "complete"
-    # The store write ran ANYWAY (it is the only store) — and the legacy
-    # column is never written post-B1.
-    rows = await _fetch_new_table_rows(db_engine, run_id)
-    final_node_ids = [r[0] for r in rows if r[1] == "__final__"]
-    assert final_node_ids == ["n1"]
-    assert legacy["outputs_json"] is None
-
-
-async def test_kill_switch_off_blobs_chokepoint_fires_no_degraded_event(
-    db_engine: AsyncEngine,
-    rls_app_session: AsyncSession,
-    dual_write_tenant: _Tenant,
-) -> None:
-    """FAR-583 B1: the degraded event is a legacy-mode signal — the blobs
-    chokepoint never consults the switch, so writes under a forced-OFF flag
-    fire NO degraded events (the marker path's gate still uses the edge note
-    until B2a; that is covered by the node-runner gate tests)."""
-    from modulo.core import run_outputs_dualwrite as module
-
-    run_id = await _insert_run(db_engine, dual_write_tenant)
-    store = get_runtime_config_store()
-    store.set_override(DUAL_WRITE_ENABLED_KEY, "false")
-    # qa Minor 5: drop any cached switch value so the OFF flip is observed
-    # immediately (and never leaks past the test).
-    module._reset_switch_read_cache()
-    try:
-        for _ in range(3):
-            async with rls_app_session.begin():
-                await set_rls_org(rls_app_session, dual_write_tenant.org_id)
-                await update_run_status(
-                    rls_app_session,
-                    run_id,
-                    "complete",
-                    outputs_json={"n1": {"a": 1}},
-                )
-    finally:
-        store.clear_override(DUAL_WRITE_ENABLED_KEY)
-        module._reset_switch_read_cache()
-
-    events = await _fetch_error_events(db_engine, dual_write_tenant.org_id, "%dual-write disabled%")
-    assert not events
-    # The store writes all landed.
-    rows = await _fetch_new_table_rows(db_engine, run_id)
-    final_node_ids = [r[0] for r in rows if r[1] == "__final__"]
-    assert final_node_ids == ["n1"]

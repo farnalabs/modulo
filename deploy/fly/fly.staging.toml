@@ -152,3 +152,6 @@ primary_region = 'lhr'
   memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
+  # 1024 MB swap: parity with prod (fly.toml). Applied to new staging machines
+  # only — live staging worker was not manually updated (staging is ephemeral).
+  swap_size_mb = 1024

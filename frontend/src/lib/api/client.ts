@@ -5,7 +5,7 @@ import {
   getAuthHeaders,
   attemptTokenRefresh,
   clearAccessToken,
-  redirectToLogin,
+  exitToLogin,
   wasDemoSessionEnded,
 } from './auth'
 
@@ -74,7 +74,7 @@ function withAuth(fn: (...args: any[]) => any) {
       }
       if (!refreshed || resp.response?.status === 401) {
         clearAccessToken()
-        redirectToLogin()
+        exitToLogin()
         return { response: undefined, data: undefined, error: undefined } as any
       }
     }

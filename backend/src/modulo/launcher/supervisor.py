@@ -61,11 +61,31 @@ Contracts locked by tests (``tests/unit/launcher/test_supervisor.py``):
   registered gate name pauses the supervisor right before the cap-trip
   teardown; an unregistered value is refused. The entry scrubs the variable
   before boot (env_safety), so the seam is inert in production.
+* **Terminal degraded statefulness (FAR-674)**: on crash-cap exhaustion the
+  ordered teardown STILL runs, and the degrade is PERSISTED to a sibling
+  ``degraded.json`` next to state.json (mechanism choice: state.json's v1
+  HMAC payload is frozen — its tests reject unknown fields — so the degrade
+  record is a separate, schema-versioned, credential-free file mirroring the
+  ``runtime.json`` precedent; 0600 on POSIX because persisted crash
+  backtraces are free text that could quote sensitive material). The record
+  carries the reason, the last ``policy.DEGRADED_BACKTRACE_RING`` crash
+  records (child, exit code, epoch, backtrace) and optional extra context
+  from the entry's ``degraded_context`` provider (the post-upgrade
+  detection). A subsequent normal start REFUSES with the reason and the
+  ``--clear-degraded`` resume path until the operator clears it. Child
+  stderr tails (real tracebacks) are captured by the default spawner via a
+  bounded, drain-threaded pipe so a crash's traceback survives into the
+  record; supervisor-side exceptions are recorded with their formatted
+  traceback.
+* **Doctor/status surface (FAR-674)**: :func:`read_degraded_record` and
+  :func:`collect_status`'s ``degraded`` key are the read-only accessors the
+  doctor/status commands consume — status never mutates the data dir.
 
-Timing knobs default to production values and are overridden directly by
-tests (≥6-8x tick-vs-window margins per the repo timing lesson); the
-``MODULO_LAUNCHER_*`` environment variables are the operator override seam
-until Settings grows launcher knob fields.
+Timing knobs default to the shared policy constants
+(:mod:`modulo.launcher.policy` — the single source) and are overridden
+directly by tests (≥6-8x tick-vs-window margins per the repo timing
+lesson); the ``MODULO_LAUNCHER_*`` environment variables are the operator
+override seam until Settings grows launcher knob fields.
 """
 
 import argparse
@@ -80,12 +100,14 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, Self
+from typing import IO, Any, Protocol, Self
 
+from modulo.launcher import policy
 from modulo.launcher.initdb import _sweep_stale_tmp_dirs
 from modulo.launcher.state import STATE_FILENAME
 
@@ -93,7 +115,11 @@ _log = logging.getLogger(__name__)
 
 LOCK_SUFFIX = ".lock"
 RUNTIME_FILENAME = "runtime.json"
+DEGRADED_FILENAME = "degraded.json"
+UPGRADE_MARKER_FILENAME = "upgrade.json"
+DEGRADED_SCHEMA_VERSION = 1
 POSTMASTER_PIDFILE = "postmaster.pid"
+LAUNCHER_LOG_FILENAME = "launcher.log"
 # Per-boot 0600 Redis config files (requirepass lives INSIDE the file so the
 # password never appears on the world-readable /proc cmdline). Written fresh
 # each boot next to pgdata; a SIGKILLed launcher leaves the previous one
@@ -110,9 +136,10 @@ _REGISTERED_GATES = frozenset({GATE_SUPERVISOR_PRE_TEARDOWN})
 _PAUSE_ENV_VAR = "MODULO_TEST_PAUSE_AT"
 
 # Shutdown priorities: lower tears down first (SAQ -> PG -> Redis).
-_PRIORITY_SAQ = 0
-_PRIORITY_POSTGRES = 1
-_PRIORITY_REDIS = 2
+# Single-sourced from the shared policy module.
+_PRIORITY_SAQ = policy.TEARDOWN_PRIORITY_SAQ
+_PRIORITY_POSTGRES = policy.TEARDOWN_PRIORITY_POSTGRES
+_PRIORITY_REDIS = policy.TEARDOWN_PRIORITY_REDIS
 
 # /proc helpers — exposed for the orphan-reconciliation tests (they import
 # the private names directly).
@@ -131,12 +158,16 @@ CHILD_LOG_NAMES = ("postgres", "redis")
 
 __all__ = [
     "DEFAULT_LOG_TAIL_BYTES",
+    "DEGRADED_FILENAME",
+    "DEGRADED_SCHEMA_VERSION",
     "GATE_SUPERVISOR_PRE_TEARDOWN",
     "REDIS_CONF_PREFIX",
     "ROTATE_DEFAULT_KEEP",
     "ROTATE_DEFAULT_MAX_BYTES",
     "RUNTIME_FILENAME",
+    "UPGRADE_MARKER_FILENAME",
     "ChildSpec",
+    "CrashRecord",
     "DataDirLock",
     "DataDirLockError",
     "LauncherError",
@@ -146,16 +177,20 @@ __all__ = [
     "_children_of",
     "child_shim_argv",
     "child_shim_main",
+    "clear_degraded_record",
     "collect_status",
     "knobs_from_env",
     "log_paths",
     "read_degraded_reason",
+    "read_degraded_record",
     "read_log_tail",
     "read_proc_starttime",
     "read_runtime_manifest",
+    "read_upgrade_marker",
     "reconcile_orphans",
     "request_stop",
     "rotate_log",
+    "write_degraded_record",
     "write_runtime_manifest",
 ]
 
@@ -200,6 +235,96 @@ ChildSpawner = Callable[[list[str], dict[str, str] | None], ChildProcess]
 
 
 @dataclass(frozen=True)
+class CrashRecord:
+    """One recorded crash (feeds the degraded record's backtrace ring).
+
+    ``exit_code`` is None for supervisor-side failures (an exception while
+    supervising a child); ``backtrace`` is the child's captured stderr tail
+    (the real traceback) or, for supervisor-side failures, the formatted
+    exception traceback.
+    """
+
+    child: str
+    exit_code: int | None
+    at: float
+    backtrace: str | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "child": self.child,
+            "exit_code": self.exit_code,
+            "at": self.at,
+            "backtrace": self.backtrace,
+        }
+
+
+# Bound on the per-child stderr tail kept in memory (and persisted with a
+# crash record). Tracebacks are rarely larger.
+STDERR_TAIL_BYTES = 16 * 1024
+
+
+class _StderrTail:
+    """Bounded tail of a child's stderr, drained by a daemon thread.
+
+    Without a drain thread a ``stderr=PIPE`` child would wedge on a full
+    pipe buffer; the thread reads continuously and keeps only the last
+    :data:`STDERR_TAIL_BYTES` bytes. A torn/closed pipe is not an error —
+    teardown races routinely close the stream mid-read.
+    """
+
+    def __init__(self, stream: IO[bytes]) -> None:
+        self._lock = threading.Lock()
+        self._chunks: deque[bytes] = deque()
+        self._size = 0
+        self._thread = threading.Thread(target=self._drain, args=(stream,), name="modulo-child-stderr", daemon=True)
+        self._thread.start()
+
+    def _drain(self, stream: IO[bytes]) -> None:  # pragma: no cover - thread body
+        try:
+            for chunk in iter(lambda: stream.read(4096), b""):
+                with self._lock:
+                    self._chunks.append(chunk)
+                    self._size += len(chunk)
+                    while self._size > STDERR_TAIL_BYTES and self._chunks:
+                        self._size -= len(self._chunks.popleft())
+        except Exception:
+            _log.debug("supervisor.stderr_tail_closed")
+        finally:
+            with contextlib.suppress(Exception):
+                stream.close()
+
+    def text(self) -> str | None:
+        with self._lock:
+            if not self._chunks:
+                return None
+            return b"".join(self._chunks).decode(errors="replace")
+
+
+class _TailProcess:
+    """Popen plus a captured stderr tail (duck-compatible with ChildProcess)."""
+
+    def __init__(self, proc: subprocess.Popen[bytes]) -> None:
+        self._proc = proc
+        self.pid = proc.pid
+        self._tail: _StderrTail | None = _StderrTail(proc.stderr) if proc.stderr is not None else None
+
+    def poll(self) -> int | None:
+        return self._proc.poll()
+
+    def terminate(self) -> None:
+        self._proc.terminate()
+
+    def kill(self) -> None:
+        self._proc.kill()
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self._proc.wait(timeout=timeout)
+
+    def stderr_tail(self) -> str | None:
+        return self._tail.text() if self._tail is not None else None
+
+
+@dataclass(frozen=True)
 class SupervisorKnobs:
     """Supervisor timing knobs (production defaults; tests shrink them).
 
@@ -211,17 +336,21 @@ class SupervisorKnobs:
     that trips the degraded state — the cap trips ON the Nth crash
     (``>=``), so ``crash_cap=5`` degrades after the 5th crash inside the
     window. Clean exits (code 0) never count and clear the window.
+
+    The defaults are the shared policy constants
+    (:mod:`modulo.launcher.policy`) — this dataclass binds them, it does not
+    restate them.
     """
 
-    tick_seconds: float = 1.0
-    restart_backoff_initial: float = 1.0
-    restart_backoff_max: float = 30.0
-    crash_window_seconds: float = 600.0
-    crash_cap: int = 5
-    pg_fast_shutdown_timeout: float = 15.0
-    shutdown_grace_seconds: float = 10.0
-    health_check_timeout: float = 60.0
-    health_check_interval: float = 0.25
+    tick_seconds: float = policy.TICK_SECONDS
+    restart_backoff_initial: float = policy.RESTART_BACKOFF_INITIAL
+    restart_backoff_max: float = policy.RESTART_BACKOFF_MAX
+    crash_window_seconds: float = policy.CRASH_WINDOW_SECONDS
+    crash_cap: int = policy.CRASH_CAP
+    pg_fast_shutdown_timeout: float = policy.PG_FAST_SHUTDOWN_TIMEOUT
+    shutdown_grace_seconds: float = policy.SHUTDOWN_GRACE_SECONDS
+    health_check_timeout: float = policy.HEALTH_CHECK_TIMEOUT
+    health_check_interval: float = policy.HEALTH_CHECK_INTERVAL
 
 
 # Sane upper bounds for the env-override seam: an operator typo (or a
@@ -795,6 +924,9 @@ class Supervisor:
         pause_hook: Callable[[str], None] | None = None,
         on_degraded: Callable[[str], None] | None = None,
         runtime_path: Path | None = None,
+        degraded_path: Path | None = None,
+        degraded_context: Callable[[], dict[str, Any]] | None = None,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.knobs = knobs
         self._spawner: ChildSpawner = spawner if spawner is not None else _default_spawner
@@ -804,6 +936,9 @@ class Supervisor:
         self._pause_hook = pause_hook
         self._on_degraded = on_degraded
         self._runtime_path = runtime_path
+        self._degraded_path = degraded_path
+        self._degraded_context = degraded_context
+        self._wall_clock = wall_clock
         self._children: dict[str, _Child] = {}
         self._mutex = threading.RLock()
         self._stop_event = threading.Event()
@@ -815,6 +950,7 @@ class Supervisor:
         # against the cluster's last-run version. None until `start()` runs
         # (or the binary is unresolvable).
         self._installed_bundle_pg_version: str | None = None
+        self._crash_records: deque[CrashRecord] = deque(maxlen=policy.DEGRADED_BACKTRACE_RING)
 
     # -- registration / lifecycle -------------------------------------------
 
@@ -858,6 +994,15 @@ class Supervisor:
                 # nonzero instead of leaving orphaned children behind.
                 _log.exception("supervisor.monitor_loop_failed")
                 reason = f"supervisor monitor crashed: {sys.exc_info()[1]!r}"
+                with self._mutex:
+                    self._crash_records.append(
+                        CrashRecord(
+                            child="supervisor-monitor",
+                            exit_code=None,
+                            at=self._wall_clock(),
+                            backtrace=traceback.format_exc(),
+                        )
+                    )
                 self._degrade_locked(reason)
                 return
             if self._degraded_reason is not None:
@@ -881,7 +1026,19 @@ class Supervisor:
                 try:
                     self._tick_child_locked(child)
                 except Exception:
+                    # Unexpected supervision failure for this child: record
+                    # it (traceback) in the crash ring — it may be the last
+                    # known state persisted with a later degrade — then
+                    # skip so the monitor survives for the other children.
                     _log.exception("supervisor.tick_child_failed name=%s", child.spec.name)
+                    self._crash_records.append(
+                        CrashRecord(
+                            child=child.spec.name,
+                            exit_code=None,
+                            at=self._wall_clock(),
+                            backtrace=traceback.format_exc(),
+                        )
+                    )
                     continue
 
     def _tick_child_locked(self, child: _Child) -> None:
@@ -996,6 +1153,7 @@ class Supervisor:
     def _on_exit_locked(self, child: _Child, code: int) -> None:
         name = child.spec.name
         now = self._clock()
+        stderr_tail = _child_stderr_tail(child.process)
         child.process = None
         child.healthy = False
         child.spawned_at = None
@@ -1017,6 +1175,9 @@ class Supervisor:
         window = self.knobs.crash_window_seconds
         while child.crash_times and now - child.crash_times[0] > window:
             child.crash_times.popleft()
+        self._crash_records.append(
+            CrashRecord(child=name, exit_code=code, at=self._wall_clock(), backtrace=stderr_tail)
+        )
         if self._crash_hook is not None:
             self._crash_hook(name, code)
         if len(child.crash_times) >= self.knobs.crash_cap:
@@ -1041,9 +1202,41 @@ class Supervisor:
         else:
             _pause_at(GATE_SUPERVISOR_PRE_TEARDOWN)
         self.shutdown()
+        self._persist_degraded_locked(reason)
         if self._on_degraded is not None:
             self._on_degraded(reason)
         self._stop_event.set()
+
+    def _persist_degraded_locked(self, reason: str) -> None:
+        """Persist the terminal-degraded record (post-teardown, pre-exit).
+
+        0600, atomic, credential-free by construction (backtraces are free
+        text, so the file stays 0600 like the secrets file). The entry's
+        ``degraded_context`` provider (post-upgrade detection) is merged in
+        when supplied; a provider failure must never mask the degrade.
+        """
+        if self._degraded_path is None:
+            return
+        record: dict[str, Any] = {
+            "schema_version": DEGRADED_SCHEMA_VERSION,
+            "degraded_at": self._wall_clock(),
+            "reason": reason,
+            "crashes": [record.to_payload() for record in self._crash_records],
+        }
+        launcher_log = self._degraded_path.parent / LAUNCHER_LOG_FILENAME
+        if launcher_log.exists():
+            record["launcher_log"] = str(launcher_log)
+        if self._degraded_context is not None:
+            try:
+                record.update(self._degraded_context())
+            except Exception:
+                _log.exception("supervisor.degraded_context_failed")
+        try:
+            write_degraded_record(self._degraded_path, record)
+        except OSError:
+            # Persistence failure must not skip the degraded exit itself:
+            # the exit code + message remain the degrade contract.
+            _log.exception("supervisor.degraded_persist_failed path=%s", self._degraded_path)
 
     # -- teardown -------------------------------------------------------------
 
@@ -1235,13 +1428,35 @@ def _resolve_bundled_postgres_version() -> str | None:
 
 
 def _default_spawner(argv: list[str], env: dict[str, str] | None) -> ChildProcess:
-    """Spawn a shim-wrapped child in its own process group (POSIX)."""
+    """Spawn a shim-wrapped child in its own process group (POSIX).
+
+    stderr is captured through a bounded, drain-threaded pipe
+    (:class:`_TailProcess`) so a crash's real traceback survives into the
+    degraded record; stdout stays inherited (service output belongs in the
+    launcher log, unbuffered by us).
+    """
     shim_argv = child_shim_argv(argv)
-    return subprocess.Popen(  # noqa: S603 — argv fully constructed by the supervisor
+    proc = subprocess.Popen(  # noqa: S603 — argv fully constructed by the supervisor
         shim_argv,
         env=env,
+        stderr=subprocess.PIPE,
         start_new_session=sys.platform != "win32",
     )
+    return _TailProcess(proc)
+
+
+def _child_stderr_tail(process: ChildProcess | None) -> str | None:
+    """The child's captured stderr tail (None when unavailable/double-free)."""
+    if process is None:
+        return None
+    provider = getattr(process, "stderr_tail", None)
+    if not callable(provider):
+        return None
+    try:
+        tail = provider()
+    except Exception:
+        return None
+    return tail if isinstance(tail, str) else None
 
 
 def _pause_at(gate: str) -> None:
@@ -1413,6 +1628,78 @@ def _read_manifest_fields(path: Path) -> dict[str, Any]:
     return payload
 
 
+# ---------------------------------------------------------------------------
+# Terminal-degraded persistence (FAR-674) — credential-free sibling record
+# ---------------------------------------------------------------------------
+
+
+def write_degraded_record(path: Path, record: dict[str, Any]) -> None:
+    """Persist the terminal-degraded record (atomic, 0o600).
+
+    Mechanism note (ADR 031, FAR-674): state.json's v1 HMAC payload is
+    FROZEN — its tests reject unknown fields — so the degrade record lives
+    in this sibling file instead (the ``runtime.json`` precedent). It is
+    schema-versioned and written 0600 because the persisted backtraces are
+    free text that could quote sensitive material.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.parent / f"{path.name}.tmp-{os.getpid()}"
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, json.dumps(record, sort_keys=True).encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    tmp_path.replace(path)
+
+
+def read_degraded_record(path: Path) -> dict[str, Any] | None:
+    """Read the terminal-degraded record (missing/corrupt = not degraded).
+
+    Tolerant by design: a missing file means a healthy data dir; a corrupt
+    or truncated file must never wedge boot forever, so it degrades to
+    None (the exit-code + message contract is the primary persistence
+    channel anyway). Unknown FIELDS are preserved (forward compatibility).
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("reason"), str):
+        return None
+    return payload
+
+
+def clear_degraded_record(path: Path) -> bool:
+    """Remove the persisted terminal-degraded state (``--clear-degraded``).
+
+    True when a record was removed. Idempotent and best-effort: the file
+    is only written by a now-dead launcher, so no lock coordination is
+    required (the kernel lock is already free).
+    """
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def read_upgrade_marker(path: Path) -> dict[str, Any] | None:
+    """Read the upgrade marker (FAR-675's seam) — read-only and tolerant.
+
+    FAR-675's upgrade machinery writes ``upgrade.json`` into the data dir
+    (``upgraded_at`` epoch, optional ``pre_upgrade_snapshot`` path). This
+    slice only consumes it: the entry's degraded-context provider uses it
+    to attach post-upgrade refuse/restore guidance to a degrade that
+    happens within ``policy.UPGRADE_DEGRADED_WINDOW_SECONDS`` of the boot.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _pid_alive(pid: int) -> bool:
     """Is *pid* running? POSIX uses kill(0); Windows uses OpenProcess.
 
@@ -1476,6 +1763,17 @@ def collect_status(data_dir: Path) -> dict[str, Any]:
         status["error"] = f"state unreadable: {exc}"
     except FileNotFoundError:
         pass
+    # Terminal-degraded state (FAR-674): read-only surface for status/doctor,
+    # surfaced even when state.json is unreadable (it is the launcher's
+    # last-word record about WHY it stopped).
+    degraded = read_degraded_record(data_dir / DEGRADED_FILENAME)
+    if degraded is not None:
+        crashes = degraded.get("crashes")
+        status["degraded"] = {
+            "reason": degraded.get("reason"),
+            "degraded_at": degraded.get("degraded_at"),
+            "crashes": crashes if isinstance(crashes, list) else [],
+        }
     if state is None:
         return status
     status["initialized"] = True

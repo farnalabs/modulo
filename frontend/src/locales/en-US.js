@@ -796,6 +796,8 @@ export default {
       "auto_refresh": "Auto-refresh: {seconds}s",
       "empty_title": "No pending HITL gates",
       "empty_description": "All gates have been resolved or no pipelines have hit a human-in-the-loop gate yet.",
+      "error_state": "Failed to load HITL gates. The review queue may still have pending gates — check your connection and try again.",
+      "error_retry": "Retry",
       "assigned_to": "Assigned: {user}",
       "unassigned": "Unassigned",
       "assignee_label": "Assignee",

@@ -1795,6 +1795,8 @@ def _system_functions() -> list[Any]:
     """Functions registered on the ``system`` worker (under their ``__qualname__``,
     which is the name SAQ's cron scheduler uses when enqueueing).
     """
+    from modulo.core.worker_memory import memory_monitor_cron
+
     return [
         fire_due_triggers,
         dispatcher_reconcile,
@@ -1817,11 +1819,14 @@ def _system_functions() -> list[Any]:
         library_sync,
         metrics_dump,
         connector_health_checks,
+        memory_monitor_cron,
     ]
 
 
 def _system_cron_jobs() -> list[CronJob[Any]]:
     """System cron jobs (plan F1) — all knobs explicit."""
+    from modulo.core.worker_memory import memory_monitor_cron
+
     return [
         # fire_due_triggers: every 60s (croniter parses 5-field cron, so the
         # 30s intent is not achievable — every minute); the atomic next_fire_at
@@ -2101,6 +2106,21 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=30,
             retries=1,
             ttl=900,
+        ),
+        # memory_monitor_cron: every 5 min (FAR-776) — captures /proc/meminfo
+        # + cgroup v1 memory counters to structured logs for durable OOM
+        # forensics; fires a LOUD worker.guest_memory_alarm when MemAvailable
+        # < 20% MemTotal or Committed_AS > CommitLimit. Advisory only — never
+        # fails the worker, never gates readiness. unique=True so overlapping
+        # system-worker ticks (multi-machine) do not double-capture.
+        CronJob(
+            memory_monitor_cron,
+            cron=_CRON_EVERY_5_MINUTES,
+            unique=True,
+            timeout=60,
+            heartbeat=30,
+            retries=1,
+            ttl=300,
         ),
     ]
 

@@ -1,0 +1,167 @@
+# Bundled Runner CI harness compose overlay (FAR-773).
+
+# Non-default compose file: this overlay is a STANDALONE test rig for the
+# Bundled Runner's real topology (app -> socket-proxy -> Docker engine). It is
+# NOT merged with the root docker-compose.yml and does NOT define Modulo
+# services — it exists so the CI job (and any local reproduction) can boot the
+# exact proxy/engine/network shape the docker-marked suite asserts against:
+#
+#   docker compose -f deploy/compose/runner-ci.yml --profile runner-ci up -d
+#   # then: DOCKER_HOST=tcp://127.0.0.1:<proxy-port> run the docker-marked
+#   # tests (see .github/workflows/runner-ci-harness.yml, job "harness";
+#   # called by ci.yml's path-filtered runner-ci-harness job and the weekly
+#   # runner-ci-backstop.yml drift backstop)
+#
+# Everything here is phase-0-spike-verified (Repos/devtools/adr/plans/
+# d9-phase0-spike.md); deviations from the spike are listed at the bottom.
+#
+# Suite shape (FAR-773 harness, backend/tests/docker/
+# test_bundled_runner_harness.py): 4 rig-backed tests (allow/deny matrix +
+# deny-refinement 403 probes, nested round-trip + completeness scan,
+# workspace-isolation probe, dind engine-kill) + 4 engine-free tests
+# (network-guard branches, composition guards). The 2 guard-branch tests and
+# the composition guards need no engine; the rig-backed tests skip cleanly
+# when the rig is absent.
+#
+# Wall-clock budget (measured locally, Docker Desktop 29.7.2, 4 CPU / 17.5 GiB,
+# compose v5.4.0, cold image cache for the proxy + dind, warm alpine:
+#   compose up (incl. proxy + dind pull)  ~105 s
+#   docker-marked suite                   ~75 s  (warm; first run pays the
+#                                                 in-dind alpine pull, +~30 s)
+#   total harness job                     ~3 min warm, ~5 min cold
+# The CI job timeout is 15 min = 3x the measured local cold path; the
+# 2-vCPU hosted-runner multiplier is UNMEASURED until the first CI run —
+# revisit the budget after (do not trust the local 4-CPU numbers).
+#
+# Cleanup: docker compose -f deploy/compose/runner-ci.yml --profile runner-ci
+# down -v --remove-orphans   (the harness tests also clean up their own
+# containers/networks; a failed run may leave modulo-ci-* strays).
+
+services:
+  # FILTERED Docker endpoint under test. The docker-marked suite points at
+  # this proxy through its published 127.0.0.1 port and asserts the
+  # allow/deny matrix, the deny-refinement 403s, the nested round-trip, log
+  # completeness, and the workspace isolation probe against it.
+  docker-socket-proxy:
+    # Digest-pinned (linuxserver/socket-proxy — the phase-0 spike
+    # recommendation) and ALIGNED to PRODUCTION's pin: this is the exact
+    # digest deploy/compose/runner.yml ships (the spike-verified build), so
+    # the rig validates what prod runs. Digest bumps MUST move the two
+    # files together — backend/tests/docker/test_bundled_runner_harness.py's
+    # composition guard (test_overlay_matches_prod_proxy_config) asserts the
+    # digests (and the 13-key allowlist env block) remain equal.
+    image: lscr.io/linuxserver/socket-proxy@sha256:cba12c42b1df30a6446856028f5ab726e9d8921f1ea74be509216c5e41357d42
+    restart: "no"
+    profiles: ["runner-ci"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # Same per-category allowlist as the production overlay
+      # (deploy/compose/runner.yml) — the CI rig must exercise the REAL
+      # config, not a widened test variant. Guarded key-for-key by the
+      # composition guard test; keep the two environment blocks identical:
+      #   CONTAINERS -> ^/containers/* (list/create/start/inspect/exec-create
+      #     + residual kill/attach/rename/update/... surface)
+      #   EXEC -> ^/exec/* (exec-start hijacked-stream + exec-inspect;
+      #     exec-create is gated by CONTAINERS, exec-start by EXEC)
+      #   IMAGES -> ^/images/* (POST /images/create = provision pulls)
+      #   PING/VERSION/INFO -> health + engine-shape probes
+      #   POST -> ALL non-GET methods (DELETE included — container destroy
+      #     needs no extra switch; the method gate is "GET or POST-flag")
+      #   ALLOW_* deny-refinements: archive/export/logs/top/change stay
+      #     denied even with CONTAINERS=1 (linuxserver's strictly-better
+      #     default posture; the matrix smoke test asserts the 403s and the
+      #     PR-- proxy-reject flag for them).
+      CONTAINERS: "1"
+      EXEC: "1"
+      IMAGES: "1"
+      INFO: "1"
+      PING: "1"
+      VERSION: "1"
+      POST: "1"
+      ALLOW_ARCHIVE: "0"
+      ALLOW_EXPORT: "0"
+      ALLOW_LOGS: "0"
+      ALLOW_TOP: "0"
+      ALLOW_CHANGE: "0"
+      LOG_LEVEL: "info"
+    ports:
+      # localhost-only publish: the Windows/macOS HOST (where pytest runs)
+      # cannot reach container bridge IPs directly. Never widen this beyond
+      # the loopback interface.
+      - "127.0.0.1::2375"
+    networks:
+      - harness
+    labels:
+      modulo.test: runner-ci-proxy
+
+  # The Docker ENGINE the docker-marked tests drive as the worker's
+  # MODULO_DOCKER_HOST target for the docker-marked tests' engine-kill strip
+  # and the in-dind nested round-trip. DOCKER_TLS_CERTDIR is deliberately
+  # EMPTY (plain TCP on 2375, loopback-only publish) — spike (d) shape.
+  # First-run image pulls are charged to dind's OWN store (no host-cache
+  # sharing): the CI job pre-pulls alpine on the OUTER engine, and
+  # inside dind the engine-kill test pre-pulls alpine itself; locally the
+  # first docker-marked run pays ~30 s for the same in-dind pull.
+  dind:
+    # Digest-pinned (the index manifest docker:28-dind resolves to).
+    image: docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac
+    restart: "no"
+    profiles: ["runner-ci"]
+    privileged: true
+    command:
+      - --host=unix:///var/run/docker.sock
+      - --host=tcp://0.0.0.0:2375
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    ports:
+      - "127.0.0.1::2375"
+    networks:
+      - harness
+    labels:
+      modulo.test: runner-ci-dind
+
+  # Spike surprise #1: `compose --profile` does NOT create unreferenced
+  # networks. The workspace network is referenced ONLY by provisioned
+  # containers (created via the proxy with NetworkingConfig at create — no
+  # /networks/* API calls, which the proxy denies by design), so without a
+  # reference-holding service compose never creates it and the first
+  # provision's container start fails with "network not found". This
+  # holder-only service exists purely to make compose materialize the
+  # network; it runs and exits immediately (image cost: the tiny busybox).
+  workspace-network-holder:
+    # Digest-pinned (the index manifest busybox:1.36 resolves to).
+    image: busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+    restart: "no"
+    profiles: ["runner-ci"]
+    entrypoint: ["true"]
+    networks:
+      - workspace
+    labels:
+      modulo.test: runner-ci-holder
+
+networks:
+  # The compose/backend-side network the proxy and dind attach to.
+  harness:
+    driver: bridge
+  # The dedicated workspace bridge. Provisioned workspace containers attach
+  # HERE at create-time and NEVER join `harness` — so they are name-blocked
+  # (the docker-socket-proxy alias exists only on `harness`). IP-blocked
+  # additionally relies on the ENGINE's bridge isolation rules, which are
+  # engine-dependent (observed 2026-09-10: Docker Desktop engine 29.7.2 no
+  # longer installs the DOCKER-ISOLATION ruleset — FAR-774). The isolation
+  # probe therefore runs a control experiment first and skips the IP leg
+  # LOUDLY when the engine demonstrably permits cross-bridge traffic;
+  # operators on such engines must firewall the proxy endpoint at the host
+  # (docs/security/bundled-runner-trust-boundary.md). The proxy itself never
+  # attaches to this network.
+  # The explicit `name:` pins the engine-side network name regardless of the
+  # compose -p / directory-derived project name, so the harness tests (and
+  # the DockerRuntimeProvider workspace attach) reference one stable name.
+  workspace:
+    driver: bridge
+    name: runner-ci-workspace
+
+# Volume note: nothing here declares volumes; the engine socket is a bind
+# mount and dind keeps its nested store on its container filesystem (discarded
+# with the container — the engine-kill test depends on exactly that).
