@@ -319,17 +319,24 @@ const section = ref<LibrarySection>('native')
 
 const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
   async () => {
-    const params = new URLSearchParams({
-      page: String(page.value),
-      page_size: String(pageSize.value),
-    })
-    if (search.value) params.set('search', search.value)
-    if (section.value === 'community') params.set('source', 'community')
-    if (selectedTypes.value.length === 1) params.set('primitive_type', selectedTypes.value[0])
-    if (selectedTypes.value.length > 1) params.set('primitive_types', selectedTypes.value.join(','))
+    const query: {
+      page: number
+      page_size: number
+      search?: string
+      source?: string
+      primitive_type?: string
+      primitive_types?: string
+    } = {
+      page: page.value,
+      page_size: pageSize.value,
+    }
+    if (search.value) query.search = search.value
+    if (section.value === 'community') query.source = 'community'
+    if (selectedTypes.value.length === 1) query.primitive_type = selectedTypes.value[0]
+    if (selectedTypes.value.length > 1) query.primitive_types = selectedTypes.value.join(',')
 
     const { data, error: err } = await api.GET('/api/v1/libraries', {
-      params: { query: Object.fromEntries(params) as any },
+      params: { query },
     })
     if (err) return { data: undefined, error: err }
     return { data: data as unknown as ListResponse, error: undefined }
@@ -376,15 +383,20 @@ const collectionsTotal = ref(0)
 
 const { loading: collectionsLoading, error: collectionsError, data: collectionsLoadResp, load: loadCollections } = useDataFetch<ListResponse>(
   async () => {
-    const params = new URLSearchParams({
-      page: String(page.value),
-      page_size: String(pageSize.value),
+    const query: {
+      page: number
+      page_size: number
+      primitive_type: string
+      search?: string
+    } = {
+      page: page.value,
+      page_size: pageSize.value,
       primitive_type: 'library_collection',
-    })
-    if (search.value) params.set('search', search.value)
+    }
+    if (search.value) query.search = search.value
 
     const { data, error: err } = await api.GET('/api/v1/libraries', {
-      params: { query: Object.fromEntries(params) as any },
+      params: { query },
     })
     if (err) return { data: undefined, error: err }
     return { data: data as unknown as ListResponse, error: undefined }
@@ -429,7 +441,7 @@ function prevPage() {
 }
 
 function nextPage() {
-  if (page.value < Math.ceil(total.value / pageSize.value)) {
+  if (page.value < Math.ceil(displayTotal.value / pageSize.value)) {
     page.value++
     if (section.value === 'collections') {
       loadCollections()

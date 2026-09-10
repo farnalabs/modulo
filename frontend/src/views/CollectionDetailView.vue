@@ -57,6 +57,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { api } from '../lib/api/client'
@@ -77,6 +78,7 @@ interface CollectionDetail {
 }
 
 const route = useRoute()
+const { t } = useI18n()
 
 const collection = ref<CollectionDetail | null>(null)
 const loading = ref(true)
@@ -96,7 +98,7 @@ async function load() {
       return
     }
     if (!data) {
-      error.value = $t('views.LibraryView.collection_failed_to_load')
+      error.value = t('views.LibraryView.collection_failed_to_load')
       return
     }
     collection.value = data as unknown as CollectionDetail

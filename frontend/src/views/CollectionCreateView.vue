@@ -19,6 +19,7 @@
             v-model="name"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             required
+            data-testid="collection-name"
           />
         </div>
         <div>
@@ -31,6 +32,7 @@
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             pattern="[a-z0-9-]+"
             required
+            data-testid="collection-slug"
           />
         </div>
         <div>
@@ -42,17 +44,19 @@
             v-model="description"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
             rows="3"
+            data-testid="collection-description"
           />
         </div>
         <div>
           <label for="collection-visibility" class="block text-sm font-medium mb-1">
             {{ $t('views.LibraryView.collection_visibility') }}
           </label>
-          <select
-            id="collection-visibility"
-            v-model="visibility"
-            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-          >
+            <select
+              id="collection-visibility"
+              v-model="visibility"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              data-testid="collection-visibility"
+            >
             <option value="org">{{ $t('views.LibraryView.collection_visibility_org') }}</option>
             <option value="team">{{ $t('views.LibraryView.collection_visibility_team') }}</option>
           </select>
@@ -156,7 +160,7 @@ async function submit() {
       error.value = formatApiError(err)
       return
     }
-    const created = data as unknown as { id: string }
+    const created = data
     router.push({ name: 'library-collection-detail', params: { id: created.id } })
   } catch (e) {
     error.value = formatApiError(e)
