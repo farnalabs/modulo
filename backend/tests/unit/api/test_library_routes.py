@@ -134,6 +134,9 @@ def _make_listable_primitive(
     p.visibility = "org"
     p.account_id = _USER_ID
     p.auto_update = True
+    p.status = None
+    p.manifest_pins = None
+    p.trust_header = None
     p.created_at = _NOW
     p.updated_at = _NOW
     return p

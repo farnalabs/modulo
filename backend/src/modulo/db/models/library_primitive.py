@@ -25,7 +25,8 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
         CheckConstraint("source IN ('local', 'registry', 'modulo', 'community')", name="ck_library_primitives_source"),
         CheckConstraint(
             "primitive_type IN ('schema', 'workflow', 'agent', 'integration', "
-            "'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map')",
+            "'test_fixture', 'pipeline_template', 'composite', 'lifecycle_map', "
+            "'library_collection')",
             name="ck_library_primitives_type",
         ),
         CheckConstraint(
@@ -71,6 +72,10 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
         CheckConstraint(
             "review_count IS NULL OR review_count >= 0",
             name="ck_library_primitives_review_count",
+        ),
+        CheckConstraint(
+            "status IS NULL OR status IN ('draft', 'published')",
+            name="ck_library_primitives_status",
         ),
         Index(
             "uq_library_primitive_version",
@@ -120,3 +125,7 @@ class LibraryPrimitive(SoftDeleteMixin, OrgScoped):
         Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL"), nullable=True, index=True
     )
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
+    # Collection authoring lifecycle fields (FAR-760).
+    status: Mapped[str | None] = mapped_column(String(20))
+    manifest_pins: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    trust_header: Mapped[dict[str, Any] | None] = mapped_column(JSON)

@@ -29,6 +29,13 @@
       >
         {{ $t('views.LibraryView.preview_badge') }}
       </span>
+      <span
+        v-else-if="badge === 'collection'"
+        class="badge badge-context-teal text-xs"
+        data-testid="library-collection-badge"
+      >
+        {{ $t('views.LibraryView.collection_badge') }}
+      </span>
     </div>
 
     <p v-if="prim.description" class="text-sm text-muted-foreground flex-1 mb-4 line-clamp-2">
@@ -115,7 +122,7 @@ export interface LibraryPrimitive {
 
 withDefaults(defineProps<{
   prim: LibraryPrimitive
-  badge: 'modulo' | 'community' | 'preview'
+  badge: 'modulo' | 'community' | 'preview' | 'collection'
   showTags?: boolean
   showAutoUpdate?: boolean
   toggleLoading?: Record<string, boolean>

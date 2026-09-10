@@ -94,6 +94,9 @@ def _make_mock_primitive(**overrides: Any) -> MagicMock:
     p.auto_update = overrides.get("auto_update", True)
     p.created_at = overrides.get("created_at", datetime(2025, 1, 1, tzinfo=UTC))
     p.updated_at = overrides.get("updated_at", datetime(2025, 1, 1, tzinfo=UTC))
+    p.status = overrides.get("status")
+    p.manifest_pins = overrides.get("manifest_pins")
+    p.trust_header = overrides.get("trust_header")
     return p
 
 
@@ -418,7 +421,6 @@ def community_primitive_exists(request: pytest.FixtureRequest) -> None:
     )
 )
 def crud_post_composite(client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-
     actual_url = _map_url("/api/composite-templates")
     _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
 
@@ -734,7 +736,6 @@ def when_save_composite_as_library(
     request: pytest.FixtureRequest,
     patches: list[Any],
 ) -> None:
-
     _patch_set_rls(patches, "modulo.api.routes.library.set_rls_org")
     _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")
 

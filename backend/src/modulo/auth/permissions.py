@@ -149,6 +149,7 @@ PERMISSIONS: dict[str, str] = {
     # library
     "library.copy": "runner",
     "library.search": "viewer",
+    "library.write": "operator",
     # evals
     "eval.list": "runner",
     "eval.run": "operator",

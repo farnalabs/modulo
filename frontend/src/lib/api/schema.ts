@@ -5150,6 +5150,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/libraries/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Collection Endpoint
+         * @description Create a new library collection (status=draft).
+         */
+        post: operations["create_collection_endpoint_api_v1_libraries_collections_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Collection Endpoint
+         * @description Update a draft collection's manifest pins.
+         */
+        patch: operations["update_collection_endpoint_api_v1_libraries_collections__primitive_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Collection Endpoint
+         * @description Publish a draft collection — validates pins and sets status=published.
+         */
+        post: operations["publish_collection_endpoint_api_v1_libraries_collections__primitive_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries/community": {
         parameters: {
             query?: never;
@@ -9576,6 +9636,75 @@ export interface components {
                 [key: string]: string;
             }[];
         };
+        /** CollectionCreateRequest */
+        CollectionCreateRequest: {
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+            /** Description */
+            description?: string | null;
+            /** Manifest Pins */
+            manifest_pins?: components["schemas"]["CollectionPin"][];
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+        };
+        /** CollectionPin */
+        CollectionPin: {
+            /** Slug */
+            slug: string;
+            /** Version */
+            version: string;
+        };
+        /** CollectionResponse */
+        CollectionResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Name */
+            name: string;
+            /** Slug */
+            slug: string;
+            /** Description */
+            description: string | null;
+            /** Status */
+            status: string | null;
+            /** Manifest Pins */
+            manifest_pins: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Trust Header */
+            trust_header: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** CollectionUpdateRequest */
+        CollectionUpdateRequest: {
+            /** Manifest Pins */
+            manifest_pins?: components["schemas"]["CollectionPin"][];
+        };
         /** CommunityContributeRequest */
         CommunityContributeRequest: {
             /** Primitive Type */
@@ -12277,6 +12406,16 @@ export interface components {
              * @default true
              */
             auto_update: boolean;
+            /** Status */
+            status?: string | null;
+            /** Manifest Pins */
+            manifest_pins?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Trust Header */
+            trust_header?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Created At
              * Format: date-time
@@ -29674,6 +29813,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LibraryPrimitiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_collection_endpoint_api_v1_libraries_collections_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_collection_endpoint_api_v1_libraries_collections__primitive_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_collection_endpoint_api_v1_libraries_collections__primitive_id__publish_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionResponse"];
                 };
             };
             /** @description Validation Error */

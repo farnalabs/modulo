@@ -245,6 +245,9 @@ def post_contribute_lifecycle_map(name: str, ctx: dict[str, Any], request: Any, 
         p.auto_update = True
         p.tier = "native"
         p.trust_tier = None
+        p.status = None
+        p.manifest_pins = None
+        p.trust_header = None
         p.created_at = datetime.now(UTC)
         p.updated_at = datetime.now(UTC)
         return p

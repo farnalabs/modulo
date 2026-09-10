@@ -51,6 +51,8 @@ const AnalyticsView = () => import('../views/AnalyticsView.vue')
 const DashboardView = () => import('../views/DashboardView.vue')
 const LibraryView = () => import('../views/LibraryView.vue')
 const LibraryPipelineWizard = () => import('../views/LibraryPipelineWizard.vue')
+const CollectionCreateView = () => import('../views/CollectionCreateView.vue')
+const CollectionDetailView = () => import('../views/CollectionDetailView.vue')
 const SettingsObservabilityView = () => import('../views/SettingsObservabilityView.vue')
 const SettingsRateLimitsView = () => import('../views/SettingsRateLimitsView.vue')
 const SettingsRuntimeConfigView = () => import('../views/SettingsRuntimeConfigView.vue')
@@ -198,6 +200,19 @@ const router = createRouter({
       component: LibraryPipelineWizard,
       props: true,
       meta: { breadcrumb: 'Create Pipeline', parent: 'library' },
+    },
+    {
+      path: '/library/collections/new',
+      name: 'library-collection-create',
+      component: CollectionCreateView,
+      meta: { breadcrumb: 'New Collection', parent: 'library' },
+    },
+    {
+      path: '/library/collections/:id',
+      name: 'library-collection-detail',
+      component: CollectionDetailView,
+      props: true,
+      meta: { breadcrumb: 'Collection', parent: 'library' },
     },
     {
       path: '/settings/email',

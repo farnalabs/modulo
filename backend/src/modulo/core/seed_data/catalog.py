@@ -333,4 +333,10 @@ FLAGS: list[dict[str, str | None]] = [
         "tier_id": "community",
         "depends_on": None,
     },
+    {
+        "name": "library_collection",
+        "description": "Library collections — pin multiple primitives into a browsable bundle",
+        "tier_id": "community",
+        "depends_on": None,
+    },
 ]

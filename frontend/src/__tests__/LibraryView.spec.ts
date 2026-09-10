@@ -26,6 +26,8 @@ const router = createRouter({
   routes: [
     { path: '/library', name: 'library', component: LibraryView },
     { path: '/library/:id/create-pipeline', name: 'library-pipeline-wizard', component: { template: '<div/>' } },
+    { path: '/library/collections/new', name: 'library-collection-create', component: { template: '<div/>' } },
+    { path: '/library/collections/:id', name: 'library-collection-detail', component: { template: '<div/>' } },
     { path: '/lifecycle-maps/:id', name: 'lifecycle-map-detail', component: { template: '<div/>' } },
   ],
 })
@@ -197,7 +199,7 @@ describe('LibraryView', () => {
 
     let lastCall = getMock.mock.calls.at(-1)!
     let opts = lastCall[1] as { params: { query: Record<string, unknown> } }
-    expect(opts.params.query.page).toBe('2')
+    expect(opts.params.query.page).toBe(2)
 
     const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
     expect(searchInput.exists()).toBe(true)
@@ -219,7 +221,7 @@ describe('LibraryView', () => {
     lastCall = getMock.mock.calls.at(-1)!
     opts = lastCall[1] as { params: { query: Record<string, unknown> } }
     expect(opts.params.query.search).toBe('foo')
-    expect(opts.params.query.page).toBe('1')
+    expect(opts.params.query.page).toBe(1)
     wrapper.unmount()
   })
 
@@ -310,5 +312,19 @@ describe('LibraryView responsive layout (FAR-640)', () => {
     expect(classes).not.toContain('sm:flex-row')
     expect(classes).not.toContain('sm:items-center')
     expect(classes).not.toContain('sm:justify-between')
+  })
+
+  it('shows collections tab and create button', async () => {
+    getMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
+    const wrapper = await mountLibrary()
+
+    const collectionsTab = wrapper.find('[data-testid="library-section-collections"]')
+    expect(collectionsTab.exists()).toBe(true)
+
+    await collectionsTab.trigger('click')
+    await nextTick()
+
+    const createBtn = wrapper.find('[data-testid="library-create-collection"]')
+    expect(createBtn.exists()).toBe(true)
   })
 })
