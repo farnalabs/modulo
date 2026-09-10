@@ -40,9 +40,11 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # slice 2 (#289/#293) added 0204_runner_probe_cache on top of 0203_triggers_add_name,
 # and FAR-760's 0205_library_collection_type chains off 0204_runner_probe_cache,
 # and FAR-644's 0206_deleted_defaults_signal_check chains off 0205,
-# and #337's 0208_notification_indexes_and_constraint chains off 0207, and
-# FAR-764's 0209_community_gate chains off 0208 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0209_community_gate"
+# and FAR-761's 0207_collection_install_tracking chains off 0206, and #337's
+# 0208_notification_indexes_and_constraint chains off 0207, and #337's
+# 0209_collection_install_id_entity_columns chains off 0208, and FAR-764's
+# 0210_community_gate chains off 0209 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0210_community_gate"
 
 
 def _source(name: str) -> str:
