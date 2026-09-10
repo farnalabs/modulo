@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.workflow_import_export import materialize_import
+from modulo.core.workflow_import_export import BUNDLE_FORMAT_VERSION, materialize_import
 from modulo.db.models.agent import Agent
 from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
@@ -124,7 +124,7 @@ async def _build_bundle_from_pins(
                 }
             )
         elif pin.primitive_type == "workflow":
-            workflow_content = content.get("bundle", content)
+            workflow_content = content.get("bundle") or content
             pipeline_info = workflow_content.get("pipeline", {})
             pipeline_graph_nodes = pipeline_info.get("graph_nodes_json", [])
             graph_nodes.extend(pipeline_graph_nodes)
@@ -132,6 +132,7 @@ async def _build_bundle_from_pins(
             schemas.extend(workflow_content.get("schemas", []))
 
     return {
+        "format_version": BUNDLE_FORMAT_VERSION,
         "pipeline": {
             "name": "Collection Install",
             "description": "Entities installed from a library collection",
@@ -272,13 +273,15 @@ async def install_collection(
     # 3. Build the materialize_import bundle
     bundle = await _build_bundle_from_pins(resolved_pins)
 
-    # 4. Check for existing install (resume/idempotent path)
+    # 4. Refuse if the collection is already installed in this organisation
     existing_stmt = select(CollectionInstall).where(
         CollectionInstall.organisation_id == org_id,
         CollectionInstall.collection_id == collection_id,
     )
     existing = (await session.execute(existing_stmt)).scalar_one_or_none()
-    install_id = existing.install_id if existing else uuid.uuid4()
+    if existing is not None:
+        raise CollectionInstallError(f"Collection '{collection.name}' is already installed in this organisation")
+    install_id = uuid.uuid4()
 
     # 5. Call materialize_import (all-or-nothing transaction)
     warnings: list[str] = []
@@ -312,37 +315,25 @@ async def install_collection(
     # connector access until an operator explicitly grants access.
     community_sourced = collection.source in ("community", "registry")
 
-    # 10. Create or update CollectionInstall record
-    if existing is not None:
-        existing.status = "installed"
-        existing.community_sourced = community_sourced
-        existing.resolved_manifest = {
-            "schemas": result.get("schemas", {}),
-            "agents": result.get("agents", {}),
-            "pipeline_id": result.get("pipeline_id"),
-            "warnings": warnings,
-        }
-        existing.connector_checklist = connector_checklist
-        existing.installed_entities = entities
-    else:
-        session.add(
-            CollectionInstall(
-                install_id=install_id,
-                collection_id=collection_id,
-                collection_version=collection.version,
-                organisation_id=org_id,
-                status="installed",
-                community_sourced=community_sourced,
-                resolved_manifest={
-                    "schemas": result.get("schemas", {}),
-                    "agents": result.get("agents", {}),
-                    "pipeline_id": result.get("pipeline_id"),
-                    "warnings": warnings,
-                },
-                connector_checklist=connector_checklist,
-                installed_entities=entities,
-            )
+    # 10. Create the CollectionInstall record
+    session.add(
+        CollectionInstall(
+            install_id=install_id,
+            collection_id=collection_id,
+            collection_version=collection.version,
+            organisation_id=org_id,
+            status="installed",
+            community_sourced=community_sourced,
+            resolved_manifest={
+                "schemas": result.get("schemas", {}),
+                "agents": result.get("agents", {}),
+                "pipeline_id": result.get("pipeline_id"),
+                "warnings": warnings,
+            },
+            connector_checklist=connector_checklist,
+            installed_entities=entities,
         )
+    )
 
     await session.flush()
 
