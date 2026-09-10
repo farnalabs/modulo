@@ -616,7 +616,7 @@ class TestValidateManifestPins:
                 return await _validate_manifest_pins([{"slug": "my-schema", "version": "1.0"}], MagicMock(), _ORG_ID)
 
         errors = asyncio.run(run())
-        assert not errors
+        assert errors == []
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +636,8 @@ def _make_install_record(
     rec.collection_version = "1.0"
     rec.organisation_id = _ORG_ID
     rec.status = status
+    rec.community_sourced = False
+    rec.agents_granted = False
     rec.resolved_manifest = {"schemas": {}, "agents": {}}
     rec.connector_checklist = []
     rec.installed_entities = []
@@ -1054,6 +1056,82 @@ class TestUninstallCollectionService:
         with pytest.raises(InstallNotFoundError):
             asyncio.run(run())
 
+
+# ---------------------------------------------------------------------------
+# Service: grant_collection_agents unit tests (FAR-764)
+# ---------------------------------------------------------------------------
+
+
+class TestGrantCollectionAgents:
+    def test_grant_community_sourced(self) -> None:
+        from modulo.core.library_service.grant import grant_collection_agents
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_install = MagicMock()
+            mock_install.organisation_id = _ORG_ID
+            mock_install.community_sourced = True
+            mock_install.agents_granted = False
+            mock_session.get = AsyncMock(return_value=mock_install)
+            result = await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
+            assert result.agents_granted is True
+
+        asyncio.run(run())
+
+    def test_grant_already_granted(self) -> None:
+        from modulo.core.library_service.grant import grant_collection_agents
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_install = MagicMock()
+            mock_install.organisation_id = _ORG_ID
+            mock_install.community_sourced = True
+            mock_install.agents_granted = True
+            mock_session.get = AsyncMock(return_value=mock_install)
+            result = await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
+            assert result.agents_granted is True
+
+        asyncio.run(run())
+
+    def test_grant_not_community_sourced(self) -> None:
+        from modulo.core.library_service.grant import NotCommunitySourcedError, grant_collection_agents
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_install = MagicMock()
+            mock_install.organisation_id = _ORG_ID
+            mock_install.community_sourced = False
+            mock_install.agents_granted = False
+            mock_session.get = AsyncMock(return_value=mock_install)
+            await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
+
+        with pytest.raises(NotCommunitySourcedError):
+            asyncio.run(run())
+
+    def test_grant_install_not_found(self) -> None:
+        from modulo.core.library_service.grant import InstallNotFoundError, grant_collection_agents
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_session.get = AsyncMock(return_value=None)
+            await grant_collection_agents(mock_session, _ORG_ID, uuid.uuid4())
+
+        with pytest.raises(InstallNotFoundError):
+            asyncio.run(run())
+
+    def test_grant_wrong_org(self) -> None:
+        from modulo.core.library_service.grant import InstallNotFoundError, grant_collection_agents
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_install = MagicMock()
+            mock_install.organisation_id = uuid.uuid4()  # different org
+            mock_session.get = AsyncMock(return_value=mock_install)
+            await grant_collection_agents(mock_session, _ORG_ID, mock_install.install_id)
+
+        with pytest.raises(InstallNotFoundError):
+            asyncio.run(run())
+
     def test_uninstall_skips_missing_entity(self) -> None:
         from modulo.core.library_service.uninstall import uninstall_collection
 
@@ -1105,3 +1183,124 @@ class TestUninstallCollectionService:
             return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
 
         assert asyncio.run(run()) is False
+
+
+# ---------------------------------------------------------------------------
+# API: grant endpoint tests (FAR-764)
+# ---------------------------------------------------------------------------
+
+
+def _make_install_record_with_grant(
+    *,
+    install_id: uuid.UUID | None = None,
+    community_sourced: bool = True,
+    agents_granted: bool = False,
+) -> MagicMock:
+    rec = _make_install_record(install_id=install_id)
+    rec.community_sourced = community_sourced
+    rec.agents_granted = agents_granted
+    return rec
+
+
+class TestGrantCollectionAgentsEndpoint:
+    def test_grant_success(self, client: TestClient) -> None:
+        mock_install = _make_install_record_with_grant()
+        with (
+            patch(
+                "modulo.api.routes.library.grant_collection_agents",
+                new_callable=AsyncMock,
+                return_value=mock_install,
+            ),
+            patch(
+                "modulo.api.routes.library.compute_runnable",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{mock_install.collection_id}/installs/{mock_install.install_id}/grant",
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["community_sourced"] is True
+        assert data["agents_granted"] is False
+
+    def test_grant_not_found(self, client: TestClient) -> None:
+        from modulo.core.library_service.grant import InstallNotFoundError
+
+        coll_id = uuid.uuid4()
+        install_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.grant_collection_agents",
+            new_callable=AsyncMock,
+            side_effect=InstallNotFoundError("not found"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/installs/{install_id}/grant",
+            )
+        assert resp.status_code == 404
+
+    def test_grant_not_community(self, client: TestClient) -> None:
+        from modulo.core.library_service.grant import NotCommunitySourcedError
+
+        coll_id = uuid.uuid4()
+        install_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.grant_collection_agents",
+            new_callable=AsyncMock,
+            side_effect=NotCommunitySourcedError("not community"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/installs/{install_id}/grant",
+            )
+        assert resp.status_code == 400
+
+    def test_grant_programming_error(self, client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        install_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.grant_collection_agents",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/installs/{install_id}/grant",
+            )
+        assert resp.status_code == 501
+
+    def test_grant_sqlalchemy_error(self, client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        install_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.grant_collection_agents",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/installs/{install_id}/grant",
+            )
+        assert resp.status_code == 503
+
+    def test_install_response_includes_grant_fields(self, client: TestClient) -> None:
+        mock_install = _make_install_record_with_grant(community_sourced=True, agents_granted=True)
+        with (
+            patch(
+                "modulo.api.routes.library.install_collection",
+                new_callable=AsyncMock,
+                return_value=mock_install,
+            ),
+            patch(
+                "modulo.api.routes.library.compute_runnable",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{mock_install.collection_id}/install",
+            )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "community_sourced" in data
+        assert "agents_granted" in data
+        assert data["community_sourced"] is True
+        assert data["agents_granted"] is True

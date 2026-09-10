@@ -313,11 +313,12 @@ class TestMigrationBackfillGrace:
         # of 0203_triggers_add_name, FAR-760's 0205_library_collection_type
         # chains on top of 0204_runner_probe_cache, and FAR-644's
         # 0206_deleted_defaults_signal_check chains on top of 0205, and FAR-761's
-        # 0207_collection_install_tracking chains on top of 0206, and #337's
-        # 0208_notification_indexes_and_constraint chains on top of 0207, and
-        # 0209_collection_install_id_entity_columns chains on top of 0208, so it
-        # is now the single linear head of the chain.
-        assert heads == ["0209_collection_install_id_entity_columns"], f"expected a single head, got {heads}"
+        # 0207_collection_install_tracking chains on top of 0206, #337's
+        # 0208_notification_indexes_and_constraint chains on top of 0207, and #337's
+        # 0209_collection_install_id_entity_columns chains on top of 0208, and
+        # FAR-764's 0210_community_gate chains on top of 0209, so it is now the
+        # single linear head of the chain.
+        assert heads == ["0210_community_gate"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
