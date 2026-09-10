@@ -17,6 +17,10 @@ Design notes (plan §1, §3):
 - **Correlation key** is the server-derived topology tuple
   ``(source_node_id, target_node_id, edge_type)`` — NEVER the client-supplied
   edge ``id`` (closes the topology-bypass from plan iteration 17).
+- **Node-level coverage (FAR-609 review)**: FAR-402 hitl nodes carry their
+  gate config on the node (``hitl_config``); the same diff pass covers
+  node-level ``human_only`` relaxations and hitl-node removal when the caller
+  passes ``old_nodes``/``new_nodes``.
 - **Presence signal**: a new edge whose topology key matches a pre-existing row
   preserves the stored value when ``hitl_gate_config_present`` is False;
   ``True`` means use the provided value verbatim, including explicit ``null``
@@ -35,6 +39,7 @@ import copy
 import logging
 import uuid
 from dataclasses import dataclass
+from dataclasses import field as dataclasses_field
 from typing import Any, Literal
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -84,13 +89,20 @@ class EdgeWeakening:
 
 @dataclass
 class DiffResult:
-    """Outcome of comparing old vs new edge sets for gate weakening."""
+    """Outcome of comparing old vs new edge sets for gate weakening.
+
+    ``weakened_nodes`` (FAR-609 review) carries the parallel node-level
+    detections for FAR-402 hitl nodes (config on the ``hitl_config`` node
+    field) — same weakening semantics, blended into ``has_weakening`` so the
+    guarded write paths deny/audit both surfaces through one result.
+    """
 
     weakened_edges: list[EdgeWeakening]
     has_weakening: bool
     denied: bool
     reason_code: str | None
     caller_type: CallerType
+    weakened_nodes: list[EdgeWeakening] = dataclasses_field(default_factory=list)
 
 
 class HitlGateWeakeningDenied(Exception):  # noqa: N818 — matched by callers
@@ -221,6 +233,105 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
     return types
 
 
+def _normalize_hitl_node(node: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize a graph node for node-level gate comparison (FAR-609 review).
+
+    Only ``node_type == "hitl"`` nodes carry a RUNTIME gate: the compiler
+    injects the node's ``hitl_config`` onto its outgoing edges at build time
+    (``graph_cache`` compile step) and IGNORES ``hitl_config`` on every other
+    node type, so honouring ``hitl_config`` on non-hitl nodes would over-block
+    saves of unrelated nodes (same rule as
+    ``hitl_gate_config.config_from_hitl_nodes``). Returns None for every
+    non-participating node; the returned dict is read-only data (never
+    mutated by the caller) so no deep-copy is required.
+    """
+    if not isinstance(node, dict) or node.get("node_type") != "hitl":
+        return None
+    node_id = node.get("id")
+    if node_id is None:
+        return None
+    config = node.get("hitl_config")
+    return {
+        "node_id": str(node_id),
+        "hitl_config": config if isinstance(config, dict) else None,
+    }
+
+
+def _hitl_node_weakenings(
+    old_nodes: list[dict[str, Any]] | None,
+    new_nodes: list[dict[str, Any]] | None,
+    *,
+    legacy_snapshot: bool = False,
+) -> list[EdgeWeakening]:
+    """Detect node-level (FAR-402) ``hitl_config`` human_only weakening.
+
+    FAR-609 review: the edge-level diff compares only edge dicts, but
+    FAR-402 hitl nodes carry the gate config on the NODE — an explicit
+    ``human_only: false`` write on a hitl node produced the same runtime
+    gate with NO guard denial or audit. Nodes are matched by node id (the
+    persisted node identity; the graph's nodes carry no client-supplied
+    edge-id renumbering seam). Semantics mirror the edge-level
+    ``human_only`` relaxation:
+
+    - effective-true -> effective-false is weakening (operator+ allowed +
+      audited, everyone else denied via the caller's privilege resolution);
+    - an old node whose ``hitl_config`` omits the flag was ALREADY
+      effectively human-only (the fail-safe default), so
+      absent -> explicit false is a true relaxation and stays gated;
+    - explicit false -> explicit false is silent;
+    - an old hitl node whose id is absent from the new list (node removed,
+      or flipped off ``node_type == "hitl"``) is a structural weakening
+      (``structural:hitl_node_removed``) — deletion is the one way a
+      node-level gate vanishes entirely, and the edge diff cannot see it
+      (node-level gates have no edge-level ``hitl_gate_config`` in the
+      persisted definition);
+    - a new node whose ``hitl_config`` is absent/None is NEVER flagged: at
+      compile time an absent config still compiles to an injected gate
+      whose effective ``human_only`` is True (fail-safe default), so config
+      removal TIGHTENS and must not be denied.
+
+    The comparison is pure — it never mutates its inputs.
+    """
+    old_by_id: dict[str, dict[str, Any]] = {}
+    for node in old_nodes or []:
+        normalized = _normalize_hitl_node(node)
+        if normalized is not None:
+            old_by_id[normalized["node_id"]] = normalized
+    detections: list[EdgeWeakening] = []
+    matched_ids: set[str] = set()
+    for node in new_nodes or []:
+        normalized = _normalize_hitl_node(node)
+        if normalized is None:
+            continue
+        matching_old = old_by_id.get(normalized["node_id"])
+        if matching_old is None:
+            continue
+        matched_ids.add(normalized["node_id"])
+        old_effective = human_only_effective(matching_old["hitl_config"])
+        new_effective = human_only_effective(normalized["hitl_config"])
+        if old_effective and not new_effective:
+            detections.append(
+                EdgeWeakening(
+                    correlation_key=(normalized["node_id"], normalized["node_id"], "hitl_node"),
+                    weakening_types=["human_only"],
+                    reason_code=(REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_INSUFFICIENT_ROLE),
+                )
+            )
+    # Old hitl nodes deleted (or down-typed to a non-gate node type): the
+    # compiler no longer injects any gate for them — structural weakening.
+    for node_id in old_by_id:
+        if node_id in matched_ids:
+            continue
+        detections.append(
+            EdgeWeakening(
+                correlation_key=(node_id, node_id, "hitl_node"),
+                weakening_types=["structural:hitl_node_removed"],
+                reason_code=REASON_LEGACY_SNAPSHOT_AMBIGUOUS if legacy_snapshot else REASON_CORRELATION_KEY_MISMATCH,
+            )
+        )
+    return detections
+
+
 async def apply_gated_edge_diff(
     _session: AsyncSession,
     old_edges: list[PipelineEdge] | list[dict[str, Any]],
@@ -229,6 +340,8 @@ async def apply_gated_edge_diff(
     caller_type: CallerType,
     *,
     legacy_snapshot: bool = False,
+    old_nodes: list[dict[str, Any]] | None = None,
+    new_nodes: list[dict[str, Any]] | None = None,
 ) -> DiffResult:
     """Compute gate-weakening between the current edge set and the proposed set.
 
@@ -236,6 +349,12 @@ async def apply_gated_edge_diff(
     contract so future DB-backed resolution can be added without changing the
     signature. ``old_edges`` MUST have been snapshotted (deepcopy) before any
     write on the session; the primitive re-copies defensively.
+
+    FAR-609 review — node-level coverage: when ``old_nodes``/``new_nodes``
+    are provided (the graph-save and rollback callers pass the graph's node
+    lists), FAR-402 hitl-node ``hitl_config`` weakening is detected in the
+    same pass and returned under ``DiffResult.weakened_nodes``, blended into
+    ``has_weakening`` so callers deny/audit both surfaces through one diff.
 
     Returns a ``DiffResult``. When ``has_weakening`` and ``is_privileged`` is
     False the result is ``denied`` with a plan §5 reason code. For
@@ -298,6 +417,9 @@ async def apply_gated_edge_diff(
             )
 
     has_weakening = bool(weakened)
+    node_weakenings = _hitl_node_weakenings(old_nodes, new_nodes, legacy_snapshot=legacy_snapshot)
+    if node_weakenings:
+        has_weakening = True
     denied = has_weakening and not is_privileged
     if not denied:
         reason_code: str | None = None
@@ -305,7 +427,7 @@ async def apply_gated_edge_diff(
         reason_code = REASON_MCP_NOT_PERMITTED
     elif legacy_snapshot:
         reason_code = REASON_LEGACY_SNAPSHOT_AMBIGUOUS
-    elif any("structural" in wt for e in weakened for wt in e.weakening_types):
+    elif any("structural" in wt for w in (*weakened, *node_weakenings) for wt in w.weakening_types):
         reason_code = REASON_CORRELATION_KEY_MISMATCH
     else:
         reason_code = REASON_INSUFFICIENT_ROLE
@@ -316,6 +438,7 @@ async def apply_gated_edge_diff(
         denied=denied,
         reason_code=reason_code,
         caller_type=caller_type,
+        weakened_nodes=node_weakenings,
     )
 
 
@@ -366,21 +489,27 @@ async def resolve_effective_privilege(
 
 
 def denial_detail(diff: DiffResult) -> str:
-    """Human-readable denial detail naming affected edges by structural key."""
-    if not diff.weakened_edges:
+    """Human-readable denial detail naming affected edges/nodes by structural key."""
+    if not diff.weakened_edges and not diff.weakened_nodes:
         return ""
     parts = []
     for w in diff.weakened_edges:
         src, tgt, etype = w.correlation_key
         parts.append(f"{src}->{tgt} ({etype}): {', '.join(w.weakening_types)}")
+    for w in diff.weakened_nodes:
+        node_id = w.correlation_key[0]
+        parts.append(f"node {node_id} (hitl_node): {', '.join(w.weakening_types)}")
     return "; ".join(parts)
 
 
 def build_gate_diff_payload(diff: DiffResult, caller_type: CallerType) -> dict[str, Any]:
     """Shared audit-payload builder (plan §3 item 9) — same schema for denied
     and allowed-weakening events so the two paths stay schema-parity consistent.
+    ``affected_nodes`` (FAR-609 review) is included only when the diff carries
+    node-level detections — legacy edge-only results keep the historical
+    payload shape.
     """
-    return {
+    payload: dict[str, Any] = {
         "caller_type": caller_type,
         "reason_code": diff.reason_code,
         "denied": diff.denied,
@@ -395,6 +524,16 @@ def build_gate_diff_payload(diff: DiffResult, caller_type: CallerType) -> dict[s
             for w in diff.weakened_edges
         ],
     }
+    if diff.weakened_nodes:
+        payload["affected_nodes"] = [
+            {
+                "node_id": w.correlation_key[0],
+                "weakening_types": w.weakening_types,
+                "reason_code": w.reason_code,
+            }
+            for w in diff.weakened_nodes
+        ]
+    return payload
 
 
 def denial_http_status(reason_code: str | None) -> int:

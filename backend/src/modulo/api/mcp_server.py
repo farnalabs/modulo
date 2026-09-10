@@ -3992,8 +3992,13 @@ async def _check_human_only_gate(
     (FAR-609: claim is human_only too — MCP clients authenticate with API
     keys, so a human_only gate can be neither CLAIMED nor decided through
     MCP): a ``human_only`` gate can only be decided by a browser-authenticated
-    human, never by an API-key/MCP client. ``reject`` stays allowed:
-    rejection is the safe direction.
+    human, never by an API-key/MCP client. ``reject`` is not mechanically
+    intercepted but it is NOT an agent escape hatch: reject requires a
+    claim_token, and the claim action is denied for MCP callers on a
+    human_only (now the default) gate, so an agent can neither claim, decide,
+    NOR reject such a gate — only a principal already holding a claim (e.g.
+    claimed before the policy change) can reject. Agent-only runs on default
+    gates require browser-human intervention (intended policy).
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
     (falling back to the live pipeline edges, then the live HITL-node config)
@@ -4230,9 +4235,13 @@ async def _review_hitl_impl(
         if action in ("claim", "approve", "deliver_manual"):
             # FAR-610: deliver_manual is a decision exactly like approve — a
             # human_only gate must not be decided by an API-key/MCP client.
-            # FAR-609: claim is human_only too — no non-browser principal may
-            # claim OR decide a human_only gate. reject stays allowed (safe
-            # direction).
+            # FAR-609: claim is human_only too — non-browser principals can
+            # neither claim OR decide a human_only gate. reject is not
+            # intercepted, but it is not an agent escape hatch either: reject
+            # requires a claim_token and claim is denied for non-browser
+            # principals on default-human_only gates, so only a principal
+            # already holding a claim can reject; agent-only runs on default
+            # gates require browser-human intervention (intended policy).
             human_only_err = await _check_human_only_gate(s, org_id, run, gate_id, action)
             if human_only_err:
                 return human_only_err
@@ -4265,7 +4274,11 @@ async def _review_hitl_impl(
         "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
         "human_only gates return 403 on claim, approve and deliver_manual "
         "(FAR-609: claim is human_only too) — only a browser-authenticated "
-        "human can claim or decide them."
+        "human can claim or decide them. reject is NOT an agent escape hatch: "
+        "it requires a claim_token, and claim is denied on default-"
+        "human_only gates, so only a principal already holding a claim can "
+        "reject; agent-only runs on default gates require browser-human "
+        "intervention (intended policy)."
     ),
 )
 @_RETRY_DB

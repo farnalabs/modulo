@@ -526,7 +526,8 @@ async def hitl_gate_exists_but_unresolved(
 EVENT_HUMAN_ONLY_DENIED = "hitl.human_only_denied"
 MSG_HUMAN_ONLY_DENY = (
     "human_only gate requires browser authentication; "
-    "non-browser credentials (API keys and programmatic tokens) cannot decide this gate"
+    "non-browser credentials (API keys and programmatic tokens) cannot "
+    "claim or decide this gate"
 )
 MSG_HUMAN_ONLY_UNRESOLVED = "HITL gate configuration could not be resolved; decision requires browser authentication"
 
@@ -537,11 +538,12 @@ def human_only_denial(
     non_browser_credential: bool,
     gate_fired: bool,
 ) -> str | None:
-    """Return the denial message for a human_only gate decision, or None to allow.
+    """Return the denial message for a human_only gate claim/decision, or None to allow.
 
-    Pure verdict shared by the REST decision routes and the MCP ``review_hitl``
-    tool so both surfaces enforce the SAME policy with the SAME wording
-    (FAR-610 review: the policy was previously implemented twice with slightly
+    Pure verdict shared by the REST claim + decision routes and the MCP
+    ``review_hitl`` tool (claim, approve, deliver_manual) so every surface
+    enforces the SAME policy with the SAME wording (FAR-610 review: the policy
+    was previously implemented twice with slightly
     different messages). Callers resolve the gate config first and compute
     ``gate_fired`` via :func:`hitl_gate_exists_but_unresolved` ONLY when the
     config is None (the claim query is wasted when the config resolved).

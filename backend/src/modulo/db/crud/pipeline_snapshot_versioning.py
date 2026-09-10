@@ -279,12 +279,18 @@ async def rollback_to_snapshot(
         is_privileged=effective_privileged,
         caller_type=caller_type,
         legacy_snapshot=True,
+        # FAR-609 review: node-level gate weakening (FAR-402 hitl_config) is
+        # guarded on rollback too — the current graph's nodes vs the target
+        # snapshot's nodes, deep-copied before any write.
+        old_nodes=copy.deepcopy(list(pipeline.graph_nodes_json or [])),
+        new_nodes=copy.deepcopy(snapshot_nodes),
     )
+    all_weakened = (*diff.weakened_edges, *diff.weakened_nodes)
     if diff.denied:
         raise HitlGateWeakeningDenied(
             reason_code=diff.reason_code or "legacy-snapshot-ambiguous",
-            correlation_keys=[w.correlation_key for w in diff.weakened_edges],
-            weakening_types=sorted({t for w in diff.weakened_edges for t in w.weakening_types}),
+            correlation_keys=[w.correlation_key for w in all_weakened],
+            weakening_types=sorted({t for w in all_weakened for t in w.weakening_types}),
             detail=denial_detail(diff),
             payload_json=build_gate_diff_payload(diff, caller_type),
         )
