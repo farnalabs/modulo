@@ -32,6 +32,11 @@ class Agent(OrgScoped):
         ),
     )
 
+    # Provenance pointer to the collection install that wrote this agent
+    # (migration 0207_collection_install_tracking, FAR-761). Nullable: not every
+    # agent originates from a library install.
+    collection_install_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, default=None)
+
     is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     prompt_always_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     template_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, default=None)
