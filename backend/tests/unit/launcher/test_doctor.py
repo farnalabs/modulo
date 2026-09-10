@@ -669,6 +669,15 @@ def test_tls_skip_absent_keypair() -> None:
     assert result.ok is True
 
 
+def test_tls_skip_absent_keypair_explains_no_generator() -> None:
+    """MINOR 3: the no-keypair skip is an honest 'feature not shipped' note,
+    not a silent pass — it documents that no keypair generator has landed yet."""
+    result = check_tls_expiry(Path(), None, _probes(tls_expiry=lambda: None))
+    assert result.ok is True
+    assert "keypair" in result.detail
+    assert "generator" in result.detail
+
+
 def test_stale_backup_warn_old(tmp_path: Path) -> None:
     result = check_stale_backup(tmp_path, None, _probes(last_backup_at=lambda: time.time() - 30 * 86400))
     assert result.ok is True

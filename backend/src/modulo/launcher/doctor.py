@@ -770,7 +770,12 @@ def check_tls_expiry(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Chec
     except Exception as exc:
         return CheckResult("tls", False, f"tls probe failed: {exc}")
     if expiry is None:
-        return CheckResult("tls", True, "no TLS keypair in the data dir — expiry check skipped")
+        return CheckResult(
+            "tls",
+            True,
+            "no TLS keypair in the data dir — expiry check skipped (modulo does not ship a "
+            "TLS keypair generator yet; wire tls_expiry to surface a real near-expiry WARNING once one lands)",
+        )
     import time
 
     now = time.time()
