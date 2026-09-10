@@ -74,10 +74,6 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     "chat_messages": frozenset({"tool_calls_json", "tool_results_json"}),
     "composite_templates": frozenset({"sub_pipeline_graph_json", "parameter_ports_json"}),
     "connector_instances": frozenset({"config_json", "allowed_operations"}),
-    # collection_install (0207, FAR-761): JSONB in the migration, generic JSON
-    # in the ORM for SQLite/MariaDB parity (the repo-wide multi-backend
-    # convention, same as the other JSON blob tables above).
-    "collection_install": frozenset({"resolved_manifest", "connector_checklist", "installed_entities"}),
     "environment_profiles": frozenset({"capabilities_json", "config_json", "secret_refs_json"}),
     "error_events": frozenset({"context_json"}),
     "error_forwarder_configs": frozenset({"config_json"}),

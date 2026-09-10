@@ -33,11 +33,6 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         ),
     )
 
-    # Provenance pointer to the collection install that wrote this pipeline
-    # (migration 0207_collection_install_tracking, FAR-761). Nullable: not every
-    # pipeline originates from a library install.
-    collection_install_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, default=None)
-
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
