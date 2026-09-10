@@ -273,21 +273,14 @@ async def install_collection(
     # 3. Build the materialize_import bundle
     bundle = await _build_bundle_from_pins(resolved_pins)
 
-    # 4. Refuse re-install when an install already exists for this collection.
-    # A single install per collection is enforced by a unique constraint, and
-    # re-running materialize_import would create a second full set of entities
-    # while orphaning the previously stamped ones. Callers must uninstall
-    # before installing again.
+    # 4. Refuse if the collection is already installed in this organisation
     existing_stmt = select(CollectionInstall).where(
         CollectionInstall.organisation_id == org_id,
         CollectionInstall.collection_id == collection_id,
     )
     existing = (await session.execute(existing_stmt)).scalar_one_or_none()
     if existing is not None:
-        raise CollectionInstallError(
-            f"Collection '{collection.name}' is already installed "
-            f"(install {existing.install_id}). Uninstall it before installing again."
-        )
+        raise CollectionInstallError(f"Collection '{collection.name}' is already installed in this organisation")
     install_id = uuid.uuid4()
 
     # 5. Call materialize_import (all-or-nothing transaction)

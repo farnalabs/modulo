@@ -616,7 +616,7 @@ class TestValidateManifestPins:
                 return await _validate_manifest_pins([{"slug": "my-schema", "version": "1.0"}], MagicMock(), _ORG_ID)
 
         errors = asyncio.run(run())
-        assert not errors
+        assert errors == []
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +636,8 @@ def _make_install_record(
     rec.collection_version = "1.0"
     rec.organisation_id = _ORG_ID
     rec.status = status
+    rec.community_sourced = False
+    rec.agents_granted = False
     rec.resolved_manifest = {"schemas": {}, "agents": {}}
     rec.connector_checklist = []
     rec.installed_entities = []
@@ -1054,62 +1056,12 @@ class TestUninstallCollectionService:
         with pytest.raises(InstallNotFoundError):
             asyncio.run(run())
 
-    def test_uninstall_skips_missing_entity(self) -> None:
-        from modulo.core.library_service.uninstall import uninstall_collection
-
-        async def run() -> dict:
-            mock_session = AsyncMock()
-            install = MagicMock()
-            install.organisation_id = _ORG_ID
-            install.collection_id = uuid.uuid4()
-            mock_session.get = AsyncMock(return_value=install)
-
-            # Tracking row points at an entity that no longer exists.
-            row = MagicMock()
-            row.entity_type = "schema"
-            row.entity_id = uuid.uuid4()
-            entity_result = MagicMock()
-            entity_result.scalars = MagicMock(return_value=[row])
-            mock_session.execute = AsyncMock(return_value=entity_result)
-            # _entity_exists → False (entity row gone)
-            mock_session.scalar = AsyncMock(return_value=None)
-
-            return await uninstall_collection(mock_session, _ORG_ID, uuid.uuid4())
-
-        result = asyncio.run(run())
-        assert not result["deleted"]
-        assert not result["detached"]
-
-    def test_check_unmodified_true_when_stamped(self) -> None:
-        from modulo.core.library_service.uninstall import _check_unmodified
-
-        async def run() -> bool:
-            install_id = uuid.uuid4()
-            entity = MagicMock()
-            entity.collection_install_id = install_id
-            mock_session = AsyncMock()
-            mock_session.scalar = AsyncMock(return_value=entity)
-            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
-
-        assert asyncio.run(run()) is True
-
-    def test_check_unmodified_false_when_detached(self) -> None:
-        from modulo.core.library_service.uninstall import _check_unmodified
-
-        async def run() -> bool:
-            install_id = uuid.uuid4()
-            entity = MagicMock()
-            entity.collection_install_id = uuid.uuid4()  # different stamp
-            mock_session = AsyncMock()
-            mock_session.scalar = AsyncMock(return_value=entity)
-            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
-
-        assert asyncio.run(run()) is False
-
 
 # ---------------------------------------------------------------------------
-# Grant service + endpoint tests (FAR-764) — merged from deliver/FAR-765
+# Service: grant_collection_agents unit tests (FAR-764)
 # ---------------------------------------------------------------------------
+
+
 class TestGrantCollectionAgents:
     def test_grant_community_sourced(self) -> None:
         from modulo.core.library_service.grant import grant_collection_agents
@@ -1180,8 +1132,59 @@ class TestGrantCollectionAgents:
         with pytest.raises(InstallNotFoundError):
             asyncio.run(run())
 
+    def test_uninstall_skips_missing_entity(self) -> None:
+        from modulo.core.library_service.uninstall import uninstall_collection
 
-# ---------------------------------------------------------------------------
+        async def run() -> dict:
+            mock_session = AsyncMock()
+            install = MagicMock()
+            install.organisation_id = _ORG_ID
+            install.collection_id = uuid.uuid4()
+            mock_session.get = AsyncMock(return_value=install)
+
+            # Tracking row points at an entity that no longer exists.
+            row = MagicMock()
+            row.entity_type = "schema"
+            row.entity_id = uuid.uuid4()
+            entity_result = MagicMock()
+            entity_result.scalars = MagicMock(return_value=[row])
+            mock_session.execute = AsyncMock(return_value=entity_result)
+            # _entity_exists → False (entity row gone)
+            mock_session.scalar = AsyncMock(return_value=None)
+
+            return await uninstall_collection(mock_session, _ORG_ID, uuid.uuid4())
+
+        result = asyncio.run(run())
+        assert not result["deleted"]
+        assert not result["detached"]
+
+    def test_check_unmodified_true_when_stamped(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = install_id
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is True
+
+    def test_check_unmodified_false_when_detached(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = uuid.uuid4()  # different stamp
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is False
+
+
 # API: grant endpoint tests (FAR-764)
 # ---------------------------------------------------------------------------
 

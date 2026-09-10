@@ -1,4 +1,4 @@
-"""Add denormalised ``collection_install_id`` provenance columns (FAR-762/FAR-761 drift).
+"""Add the ``collection_install_id`` ORM index (FAR-762/FAR-761 drift).
 
 Revision ID: 0209_collection_install_id_entity_columns
 Revises: 0208_notification_indexes_and_constraint
@@ -130,5 +130,4 @@ def downgrade() -> None:
         op.execute("SET search_path TO public")
 
     for table in reversed(_ENTITY_TABLES):
-        op.drop_index(f"ix_{table}_{_COLUMN}", table_name=table)
-        op.drop_column(table, _COLUMN)
+        op.execute(f"DROP INDEX IF EXISTS ix_{table}_{_COLUMN}")
