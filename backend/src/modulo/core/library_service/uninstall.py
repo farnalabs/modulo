@@ -22,12 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.models.agent import Agent
 from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.schema import Schema
-
-# Union of the entity types a collection install can track.  Reused across the
-# per-entity-type branches below so ``session.get`` resolves to the correct
-# model rather than being constrained by the first branch's assignment.
-type CollectionEntity = "Schema | Agent | Pipeline"
+from modulo.db.models.schema import Schema as CoreSchema
 
 __all__ = ["uninstall_collection"]
 
@@ -79,22 +74,21 @@ async def _check_unmodified(
         Returns True if the entity is unmodified (collection_install_id still
     matches); False if the user already detached it.
     """
-    entity: CollectionEntity | None = None
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
-        if entity is None:
+        schema_entity = await session.get(CoreSchema, entity_id)
+        if schema_entity is None:
             return False
-        return entity.collection_install_id == install_id
+        return schema_entity.collection_install_id == install_id
     if entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
-        if entity is None:
+        agent_entity = await session.get(Agent, entity_id)
+        if agent_entity is None:
             return False
-        return entity.collection_install_id == install_id
+        return agent_entity.collection_install_id == install_id
     if entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
-        if entity is None:
+        pipeline_entity = await session.get(Pipeline, entity_id)
+        if pipeline_entity is None:
             return False
-        return entity.collection_install_id == install_id
+        return pipeline_entity.collection_install_id == install_id
     return False
 
 
@@ -104,19 +98,18 @@ async def _delete_entity(
     entity_id: uuid.UUID,
 ) -> None:
     """Delete an unmodified entity."""
-    entity: CollectionEntity | None = None
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
-        if entity is not None:
-            await session.delete(entity)
+        schema_entity = await session.get(CoreSchema, entity_id)
+        if schema_entity is not None:
+            await session.delete(schema_entity)
     elif entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
-        if entity is not None:
-            await session.delete(entity)
+        agent_entity = await session.get(Agent, entity_id)
+        if agent_entity is not None:
+            await session.delete(agent_entity)
     elif entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
-        if entity is not None:
-            await session.delete(entity)
+        pipeline_entity = await session.get(Pipeline, entity_id)
+        if pipeline_entity is not None:
+            await session.delete(pipeline_entity)
 
 
 async def _detach_entity(
@@ -125,19 +118,18 @@ async def _detach_entity(
     entity_id: uuid.UUID,
 ) -> None:
     """Detach provenance from a modified entity (set collection_install_id = None)."""
-    entity: CollectionEntity | None = None
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
-        if entity is not None:
-            entity.collection_install_id = None
+        schema_entity = await session.get(CoreSchema, entity_id)
+        if schema_entity is not None:
+            schema_entity.collection_install_id = None
     elif entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
-        if entity is not None:
-            entity.collection_install_id = None
+        agent_entity = await session.get(Agent, entity_id)
+        if agent_entity is not None:
+            agent_entity.collection_install_id = None
     elif entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
-        if entity is not None:
-            entity.collection_install_id = None
+        pipeline_entity = await session.get(Pipeline, entity_id)
+        if pipeline_entity is not None:
+            pipeline_entity.collection_install_id = None
 
 
 # Reverse topological order: pipelines → agents → schemas
