@@ -11,7 +11,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR, MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.constants import (
+    MSG_DB_ERROR_PLEASE_TRY,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_INTERNAL_SERVER_ERROR,
+    MSG_RESOURCE_ALREADY_EXISTS,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     deny_break_glass_mint,
@@ -36,7 +41,6 @@ from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_SSO_MANAGE = "sso.manage"
-_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
 _MSG_SSO_PROVIDER_NOT_FOUND = "SSO provider not found"
 
 
@@ -150,7 +154,7 @@ async def get_providers(
         _log.warning("SSO providers DB error on list: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -222,7 +226,7 @@ async def create_provider_endpoint(
         _log.warning("SSO providers DB error on create: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -281,7 +285,7 @@ async def update_provider_endpoint(
         _log.warning("SSO providers DB error on update: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -336,7 +340,7 @@ async def delete_provider_endpoint(
         _log.warning("SSO providers DB error on delete: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -382,7 +386,7 @@ async def test_provider_connection(
         _log.warning("SSO providers DB error on test connection: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -622,7 +626,7 @@ async def toggle_provider_endpoint(
         _log.warning("SSO providers DB error on toggle: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -689,7 +693,7 @@ async def set_group_mappings_endpoint(
         _log.warning("SSO providers DB error on set_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -729,7 +733,7 @@ async def get_group_mappings_endpoint(
         _log.warning("SSO providers DB error on get_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise

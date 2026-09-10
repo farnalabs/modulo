@@ -20,7 +20,12 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.constants import (
+    MSG_DB_OPERATION_FAILED,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_PIPELINE_NOT_FOUND,
+    MSG_RESOURCE_ALREADY_EXISTS,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -66,7 +71,6 @@ _CODE_EVALS_TIMESERIES = "evals.timeseries"
 _CODE_EVALS_SUITE_ALERTING = "evals.suite_alerting"
 _CODE_EVALS_COVERAGE_GAP = "evals.coverage_gap"
 _EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
-_MSG_PIPELINE_NOT_FOUND = "Pipeline not found"
 _MSG_EVAL_SUITE_NOT_FOUND = "Eval suite not found"
 
 
@@ -291,7 +295,7 @@ async def create_eval_definition(
                 )
             ).scalar_one_or_none()
             if pipeline is None:
-                raise HTTPException(status_code=404, detail=_MSG_PIPELINE_NOT_FOUND)
+                raise HTTPException(status_code=404, detail=MSG_PIPELINE_NOT_FOUND)
 
             eval_def = EvalDefinition(
                 organisation_id=principal.organisation_id,
@@ -452,7 +456,7 @@ async def eval_coverage(
                 )
             ).scalar_one_or_none()
             if pipeline is None:
-                raise HTTPException(status_code=404, detail=_MSG_PIPELINE_NOT_FOUND)
+                raise HTTPException(status_code=404, detail=MSG_PIPELINE_NOT_FOUND)
 
             nodes_raw = pipeline.graph_nodes_json or []
             node_ids = [str(n.get("id")) for n in nodes_raw if n.get("id")]
@@ -1536,7 +1540,7 @@ async def _load_eval_source_pipeline(session: AsyncSession, principal: TenantPri
         )
     ).scalar_one_or_none()
     if pipeline is None:
-        raise HTTPException(status_code=404, detail=_MSG_PIPELINE_NOT_FOUND)
+        raise HTTPException(status_code=404, detail=MSG_PIPELINE_NOT_FOUND)
     return pipeline
 
 
