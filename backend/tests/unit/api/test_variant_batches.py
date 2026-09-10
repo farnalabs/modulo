@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -54,7 +54,6 @@ def _make_run(
     run.total_tokens = total_tokens
     run.created_at = created_at or datetime.now(UTC)
     run.completed_at = completed_at
-    run._eval_results = []
     return run
 
 
@@ -99,6 +98,7 @@ class TestRunToVariantRun:
         result = _run_to_variant_run(
             run,
             eval_stats={run.id: (10, 8)},
+            eval_results=[{"eval_id": "e1", "passed": True, "score": 0.8}],
             node_outputs={"agent1": {"text": "hello"}},
         )
         assert result["run_id"] == str(run.id)
@@ -109,6 +109,8 @@ class TestRunToVariantRun:
         assert result["total_cost_usd"] == pytest.approx(0.05)
         assert result["total_tokens"] == 5000
         assert result["node_outputs"] == {"agent1": {"text": "hello"}}
+        assert len(result["eval_results"]) == 1
+        assert result["eval_results"][0]["eval_id"] == "e1"
 
     def test_maps_pending_run_no_evals(self) -> None:
         run = _make_run(
@@ -118,6 +120,7 @@ class TestRunToVariantRun:
         result = _run_to_variant_run(
             run,
             eval_stats={},
+            eval_results=[],
             node_outputs=None,
         )
         assert result["run_status"] == "pending"
@@ -129,7 +132,7 @@ class TestRunToVariantRun:
             status="running",
             variant_config_snapshot={},
         )
-        result = _run_to_variant_run(run, eval_stats={}, node_outputs=None)
+        result = _run_to_variant_run(run, eval_stats={}, eval_results=[], node_outputs=None)
         assert result["variant_name"] == "unknown"
 
     def test_input_label_from_overrides(self) -> None:
@@ -139,7 +142,7 @@ class TestRunToVariantRun:
                 "run_context_overrides": {"temperature": 0.9, "model": "gpt-4o"},
             },
         )
-        result = _run_to_variant_run(run, eval_stats={}, node_outputs=None)
+        result = _run_to_variant_run(run, eval_stats={}, eval_results=[], node_outputs=None)
         assert result["input_label"] is not None
         assert "temperature" in result["input_label"]
 
@@ -148,5 +151,72 @@ class TestRunToVariantRun:
             status="complete",
             variant_config_snapshot={},
         )
-        result = _run_to_variant_run(run, eval_stats={}, node_outputs=None)
+        result = _run_to_variant_run(run, eval_stats={}, eval_results=[], node_outputs=None)
         assert result["input_label"] is None
+
+
+@pytest.mark.asyncio
+class TestCrossTenantIsolation:
+    """M10: Cross-tenant IDOR isolation for batch detail/re-fire/delete."""
+
+    async def test_get_batch_returns_404_for_cross_org_batch(self) -> None:
+        """Another org's batch_id returns 404, not the other org's data."""
+        from fastapi import HTTPException
+
+        from modulo.api.routes.variant_batches import get_batch
+
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        # Mock: no state row found + no runs found = 404.
+        with (
+            patch(
+                "modulo.api.routes.variant_batches.get_batch_state",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "modulo.api.routes.variant_batches.get_batch_runs",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await get_batch(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 404
+
+    async def test_delete_batch_returns_404_for_cross_org_batch(self) -> None:
+        """Soft-delete another org's batch_id returns 404."""
+        from fastapi import HTTPException
+
+        from modulo.api.routes.variant_batches import delete_batch
+
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variant_batches.soft_delete_batch_state",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await delete_batch(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 404
+
+    async def test_refire_batch_returns_404_for_cross_org_batch(self) -> None:
+        """Re-fire another org's batch_id returns 404."""
+        from fastapi import HTTPException
+
+        from modulo.api.routes.variant_batches import re_fire_batch
+
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+
+        with patch(
+            "modulo.api.routes.variant_batches.get_batch_state",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await re_fire_batch(uuid.uuid4(), mock_session, principal)
+            assert exc.value.status_code == 404

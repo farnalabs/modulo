@@ -21,6 +21,7 @@ from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.variant_batch_state import VariantBatchState
 from modulo.db.models.variant_group import VariantGroup
 
 _log = logging.getLogger(__name__)
@@ -856,7 +857,31 @@ async def get_batch_compare(
 # variant_batch_state CRUD (FAR-775)
 # ---------------------------------------------------------------------------
 
-from modulo.db.models.variant_batch_state import VariantBatchState  # noqa: E402
+
+async def list_batch_runs_for_batch_ids(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    batch_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[Run]]:
+    """Batch-load runs for multiple batch_ids in ONE query (no N+1).
+
+    Returns ``{batch_id: [Run, ...]}`` ordered by ``created_at`` per batch.
+    Only batch_ids present in the result dict have runs.
+    """
+    if not batch_ids:
+        return {}
+    result = await session.execute(
+        select(Run)
+        .where(Run.organisation_id == org_id, Run.batch_id.in_(batch_ids))
+        .order_by(Run.batch_id, Run.created_at)
+    )
+    runs = list(result.scalars().all())
+    by_batch: dict[uuid.UUID, list[Run]] = {}
+    for run in runs:
+        bid = uuid.UUID(str(run.batch_id))
+        by_batch.setdefault(bid, []).append(run)
+    return by_batch
 
 
 async def get_batch_state(
