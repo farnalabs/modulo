@@ -1599,6 +1599,29 @@ async def metrics_dump(ctx: dict[str, Any]) -> dict[str, Any]:
     return await _run_dump(ctx)
 
 
+async def connector_health_checks(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — 15-min cross-org connector health sweep (FAR-699).
+
+    The per-instance health-check endpoint only ran when a user hit the API,
+    so integration status showed ``last_check: "never"`` for every connector
+    forever. This cron runs every ACTIVE instance's ``health_check``
+    (cheap credential probes only — never ``query``/``write``, so nothing
+    mutates org data) and persists ``last_health_check_at`` /
+    ``last_health_check_error``. Per-instance isolation: one bad connector
+    records its own error and never aborts the sweep. The hub is built with
+    the instance's org so rate-limited connectors respect the org's SHARED
+    rate budget (FAR-442). Fail-open: a bad tick is logged; the next tick
+    re-checks everything (the sweep is idempotent).
+    """
+    from modulo.core.connector_hub.health_sweep import run_connector_health_checks
+
+    settings = get_settings()
+    result = await run_connector_health_checks(_make_system_session_factory(), fernet_key=settings.fernet_key)
+    if result["unhealthy"]:
+        _log.warning("saq.connector_health_checks.unhealthy", extra={"unhealthy": result["unhealthy"]})
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Worker settings
 # ---------------------------------------------------------------------------
@@ -1793,6 +1816,7 @@ def _system_functions() -> list[Any]:
         check_missed_fire_alerts_cron,
         library_sync,
         metrics_dump,
+        connector_health_checks,
     ]
 
 
@@ -2062,6 +2086,19 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             unique=True,
             timeout=600,
             heartbeat=60,
+            retries=1,
+            ttl=900,
+        ),
+        # connector_health_checks: every 15 min (FAR-699) — cross-org health
+        # sweep per ACTIVE connector instance. Cheap credential probes only
+        # (never query/write — no org-data mutation). unique=True so
+        # overlapping ticks cannot double-probe; fail-open (retries=1).
+        CronJob(
+            connector_health_checks,
+            cron=_CRON_EVERY_15_MINUTES,
+            unique=True,
+            timeout=600,
+            heartbeat=30,
             retries=1,
             ttl=900,
         ),
