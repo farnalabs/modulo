@@ -44,7 +44,11 @@ class RunEvidence(Base):
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("nodes.id", ondelete="RESTRICT"), nullable=False)
+    # FAR-644: no FK to nodes.id — ``nodes`` is the deprecated composite-template
+    # store; this node id is a JSON-graph id (pipelines.graph_nodes_json) that
+    # never materialises as a ``nodes`` row (see migration 0170's correction),
+    # so an enforced FK would reject every legitimate evidence write.
+    node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     evidence_state: Mapped[str] = mapped_column(String(20), nullable=False)
     evidence_detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     evidence_written_at: Mapped[datetime] = mapped_column(

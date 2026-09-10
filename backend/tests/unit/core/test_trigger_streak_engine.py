@@ -310,10 +310,11 @@ class TestMigrationBackfillGrace:
         # current head (0202_runs_error_code_claimed_by_indexes after re-merge
         # with main); FAR-681 slice 2 added 0203_triggers_add_name on top of
         # 0195, FAR-681 slice 2 (#289/#293) added 0204_runner_probe_cache on top
-        # of 0203_triggers_add_name, and FAR-760's 0205_library_collection_type
-        # chains on top of 0204_runner_probe_cache, so it is now the single linear
-        # head of the chain.
-        assert heads == ["0205_library_collection_type"], f"expected a single head, got {heads}"
+        # of 0203_triggers_add_name, FAR-760's 0205_library_collection_type
+        # chains on top of 0204_runner_probe_cache, and FAR-644's
+        # 0206_deleted_defaults_signal_check chains on top of 0205, so it is now the
+        # single linear head of the chain.
+        assert heads == ["0206_deleted_defaults_signal_check"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
