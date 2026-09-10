@@ -7,6 +7,7 @@ code:
   - backend/src/modulo/db/crud/environment_profile.py
   - backend/src/modulo/core/runtime_provider
   - backend/src/modulo/api/routes/admin.py
+  - frontend/src/views/runners
   - frontend/src/views/environment-profiles
   - frontend/src/stores/environmentProfiles.ts
 unit-tests:
@@ -26,10 +27,13 @@ status: covered
 Reusable, org-scoped run-environment definitions (image, provider, capabilities,
 network policy, persistence) served on the `/api/v1/environment-profiles` API
 surface, with per-profile sandbox test (SSE), graph-validator capability
-resolution, and org sandbox-concurrency control on `/admin/sandbox-concurrency`.
-(FAR-551 collapsed the duplicate `/api/v1/environments` router + `/admin/environments`
-table view into this one surface; `/admin/environments` now redirects to
-`/environment-profiles`.)
+resolution, and org sandbox-concurrency control. The UI lives on the Runners
+page: the profiles tab is `/admin/runners/profiles` (create/edit at
+`/admin/runners/profiles/new` and `/admin/runners/profiles/:id/edit`) and the
+concurrency tab is `/admin/runners/concurrency`. (FAR-551 collapsed the duplicate
+`/api/v1/environments` router + `/admin/environments` table view into this one
+surface; FAR-591 D5 folded `/environment-profiles*` and `/admin/environments`
+into the Runners page as redirects.)
 
 ## Behaviours
 
@@ -72,11 +76,13 @@ table view into this one surface; `/admin/environments` now redirects to
       `GET/PUT /api/v1/admin/org/sandbox-concurrency` (value clamped 1..100), writing
       an `org.sandbox_concurrency_updated` audit event on success
       (`backend/src/modulo/api/routes/admin.py`)
-- [x] The frontend surfaces the whole lifecycle: list + search + per-card
-      "Test connection" (SSE) + new/edit form (`/environment-profiles`,
-      `/environment-profiles/new`, `/environment-profiles/:id/edit`) and admin
-      sandbox-concurrency control (`/admin/sandbox-concurrency`) — testids enumerated
-      in the product map
+- [x] The frontend surfaces the whole lifecycle on the Runners page (FAR-591 D5):
+      profiles tab (`/admin/runners/profiles`) with list + search + per-card
+      "Test connection" (SSE) and new/edit form (`/admin/runners/profiles/new`,
+      `/admin/runners/profiles/:id/edit`), plus the concurrency tab
+      (`/admin/runners/concurrency`); the legacy `/environment-profiles*` and
+      `/admin/environments` deep links redirect to the profiles tab — testids
+      enumerated in the product map
 
 ## Known Gaps
 
@@ -87,6 +93,11 @@ table view into this one surface; `/admin/environments` now redirects to
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — reconciled this entry
+  and the graph-root registry index with the FAR-591 D5 Runners page: the
+  canonical routes are `/admin/runners/profiles{,/new,/:id/edit}` and
+  `/admin/runners/concurrency`, and the old `/environment-profiles*` /
+  `/admin/environments` URLs are redirects. No shipped behaviour changed.
 - 2026-09-02: **FAR-551** — collapsed the duplicate `/admin/environments` UI +
   `environments.py` router (`/api/v1/environments`) into `/environment-profiles`;
   ported the `POST /{id}/test` connectivity check onto the survivor with a dedicated

@@ -7,8 +7,11 @@ code:
   - backend/src/modulo/api/routes/community_library.py
   - backend/src/modulo/core/library_service/community.py
   - backend/src/modulo/core/library_sync
+  - frontend/src/views/CollectionCreateView.vue
+  - frontend/src/views/CollectionDetailView.vue
 unit-tests:
   - backend/tests/unit/library_service/test_library_service.py
+  - backend/tests/unit/api/test_library_collection.py
   - backend/tests/unit/library_service/test_contribution_flow.py
   - backend/tests/unit/library_service/test_ratings.py
   - backend/tests/unit/library_service/test_composite_library.py
@@ -41,6 +44,8 @@ type-filtered, searched and detail-viewed; community primitives are copied into 
 adapted (forked) with an owner team; community sync/install, contribution, ratings and
 auto-update are served by `core/library_sync` + `core/library_service/community.py`; and
 each primitive carries an integration tier (native / preview / in_dev) per ADR 010.
+Library collections (FAR-760) are authored at `/library/collections/new` and viewed at
+`/library/collections/:id`, gated behind the `library_collection` feature flag.
 
 ## Behaviours
 
@@ -59,6 +64,15 @@ each primitive carries an integration tier (native / preview / in_dev) per ADR 0
       (`community_registry.feature`, `core/library_sync`, `test_community_install.py`)
 - [x] Library-schema seeding and dogfood schemas underpin create-pipeline from a template
       (`library/schemas.feature`, `test_schema_seeds.py`)
+- [x] Library collections (FAR-760): a `library_collection` primitive can be created as a
+      draft (201), its manifest pins updated while draft, and published (200) — invalid
+      pins, duplicate pins, an empty manifest and more than `MAX_COLLECTION_PINS` are
+      rejected 422, a duplicate slug is 409, mutating a non-collection or non-draft
+      primitive is 400, and every collection endpoint 404s when the `library_collection`
+      feature flag is off; write requires the operator role
+      (`backend/tests/unit/api/test_library_collection.py`,
+      `frontend/src/views/CollectionCreateView.vue`,
+      `frontend/src/views/CollectionDetailView.vue`)
 
 ## Known Gaps
 
@@ -70,6 +84,11 @@ each primitive carries an integration tier (native / preview / in_dev) per ADR 0
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — added the FAR-760 library
+  collections behaviour (flag-gated draft → publish lifecycle) and cited the collection
+  unit test and frontend views; the graph-root registry index now lists the collection
+  routes. Verified against `backend/tests/unit/api/test_library_collection.py`,
+  `frontend/src/views/CollectionCreateView.vue` and `CollectionDetailView.vue`.
 - 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-library`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/library.py`,

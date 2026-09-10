@@ -154,6 +154,37 @@ _REGISTRY_INDEX_START = "## Index — manifest feature registry"
 _REGISTRY_INDEX_END = "## Index — feature graph entries"
 _REGISTRY_INDEX_TOKEN = "**{feature}**"
 
+#: A registry-index line: ``- **feat-<id>** - <description> - routes: `a`, `b```.
+_REGISTRY_ROUTE_LINE = re.compile(
+    r"^- \*\*(?P<feature>feat-[a-z0-9-]+)\*\* - .*? - routes: (?P<routes>.+)$",
+    re.MULTILINE,
+)
+
+
+def _registry_index_routes() -> dict[str, list[str]]:
+    """Map each graph-root registry feature to the routes listed on its line."""
+    index_text = GRAPH_INDEX.read_text(encoding="utf-8")
+    section = index_text.split(_REGISTRY_INDEX_START, 1)[1].split(_REGISTRY_INDEX_END, 1)[0]
+    return {
+        match.group("feature"): re.findall(r"`([^`]+)`", match.group("routes"))
+        for match in _REGISTRY_ROUTE_LINE.finditer(section)
+    }
+
+
+def _manifest_feature_routes() -> dict[str, list[tuple[str, str | None]]]:
+    """Map each manifest feature to its ``(route, visibility)`` pairs."""
+    with MANIFEST_PATH.open() as handle:
+        data = yaml.safe_load(handle)
+    routes = data.get("routes") if isinstance(data, dict) else None
+    assert isinstance(routes, dict), "manifest.yaml must declare a 'routes' mapping"
+    by_feature: dict[str, list[tuple[str, str | None]]] = {}
+    for path, entry in routes.items():
+        if not isinstance(entry, dict):
+            continue
+        for feature in entry.get("product_map") or []:
+            by_feature.setdefault(feature, []).append((path, entry.get("visibility")))
+    return by_feature
+
 
 def test_graph_root_registry_index_enumerates_every_manifest_feature():
     """The graph root's "manifest feature registry" index lists every registered feature.
@@ -185,6 +216,72 @@ def test_graph_root_registry_index_enumerates_every_manifest_feature():
         + GRAPH_INDEX.relative_to(REPO_ROOT).as_posix()
         + " so the graph root enumerates the full product surface):\n"
         + "\n".join(f"  {feature}" for feature in missing)
+    )
+
+
+def test_graph_root_registry_routes_match_manifest():
+    """The registry index's ``routes:`` lists are a sound, complete public view.
+
+    Each ``- **feat-<id>** ... - routes: ...`` line in the graph root's "manifest
+    feature registry" index is the human-readable route surface for that feature.
+    The manifest is the source of truth, but nothing pinned the two together, so
+    the lists drifted in both directions after the FAR-591 D5 Runners-page rename
+    and the FAR-760 library collections ship: the index still named
+    ``/admin/environments``, ``/admin/sandbox-concurrency`` and
+    ``/environment-profiles*`` (routes that no longer exist in the manifest) and
+    omitted ``/admin/runners/*``, ``/accept-invite`` and
+    ``/library/collections/*``. A reader (or Remy's docs indexer) following the
+    graph root to a dead route is a dangling edge.
+
+    Two invariants keep the lists honest:
+
+    - **soundness** — every route named in the index exists in the manifest and is
+      tagged with the feature on that line (no stale/foreign routes);
+    - **completeness** — every route the manifest exposes *publicly* (visibility is
+      not ``private_preview``) is named on its feature's line. Features whose whole
+      surface is ``private_preview`` (``feat-remy``, ``feat-plugins``,
+      ``feat-feedback``) still list their routes, so this only constrains public
+      routes; deferred routes may legitimately be summarised in prose instead.
+    """
+    listing = _registry_index_routes()
+    assert listing, "graph root registry index must list features with route lists"
+    by_feature = _manifest_feature_routes()
+
+    with MANIFEST_PATH.open() as handle:
+        routes = yaml.safe_load(handle)["routes"]
+
+    unknown: dict[str, list[str]] = {}
+    misattributed: dict[str, list[str]] = {}
+    for feature, paths in listing.items():
+        tagged = {path for path, _ in by_feature.get(feature, [])}
+        for path in paths:
+            if path not in routes:
+                unknown.setdefault(feature, []).append(path)
+            elif path not in tagged:
+                misattributed.setdefault(feature, []).append(path)
+    assert not unknown, (
+        "graph-root registry index names routes that do not exist in "
+        + MANIFEST_PATH.relative_to(REPO_ROOT).as_posix()
+        + " (stale route citations):\n"
+        + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(unknown.items()))
+    )
+    assert not misattributed, (
+        "graph-root registry index names routes that are not tagged with the feature "
+        "on that line (misattributed routes):\n"
+        + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(misattributed.items()))
+    )
+
+    missing: dict[str, list[str]] = {}
+    for feature, entries in by_feature.items():
+        listed = set(listing.get(feature, []))
+        public = {path for path, visibility in entries if visibility != "private_preview"}
+        gap = public - listed
+        if gap:
+            missing[feature] = sorted(gap)
+    assert not missing, (
+        "public manifest routes missing from their feature's graph-root registry line "
+        "(add each to the 'Index — manifest feature registry' section):\n"
+        + "\n".join(f"  {feature} -> {', '.join(paths)}" for feature, paths in sorted(missing.items()))
     )
 
 
