@@ -68,10 +68,26 @@
       :dismiss-label="$t('views.SettingsHitlReviewView.dismiss')"
     />
     <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
+    <!-- FAR-768: an API failure is NOT an empty queue — surfacing "No pending
+         HITL gates" during an incident would mislead operators. -->
+    <div
+      v-else-if="error"
+      data-testid="hitl-review-fetch-error"
+      class="rounded-lg border border-ink-700 bg-ink-800 p-8 text-center"
+    >
+      <p class="text-ink-50 font-semibold">{{ $t('views.SettingsHitlReviewView.error_state') }}</p>
+      <button
+        type="button"
+        data-testid="hitl-review-retry"
+        class="mt-4 rounded-lg border border-ink-700 bg-ink-800 px-3 py-1.5 text-sm text-ink-300 transition-colors hover:bg-ink-700 hover:text-ink-100"
+        @click="loadGates"
+      >
+        {{ $t('views.SettingsHitlReviewView.error_retry') }}
+      </button>
+    </div>
     <template v-else>
       <EmptyState
-        v-if="filteredGates.length === 0"
+        v-if="fetched && filteredGates.length === 0"
         :title="$t('views.SettingsHitlReviewView.empty_title')"
         :description="$t('views.SettingsHitlReviewView.empty_description')"
       />
@@ -275,7 +291,7 @@ const searchQuery = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
 
-const { loading, error, data: gates, load: loadGates } = useDataFetch<GateItem[]>(
+const { loading, error, data: gates, fetched, load: loadGates } = useDataFetch<GateItem[]>(
   async () => {
     // Reads the CURRENT status/page refs on every load: filter and page
     // changes re-invoke loadGates(), so each fetch reflects the latest state.

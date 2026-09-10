@@ -976,4 +976,117 @@ describe('SettingsHitlReviewView', () => {
     expect(node.text()).toContain('Needs human approval')
     expect(node.text()).not.toContain('#approval')
   })
+
+  it('renders a fetch-error state (not the empty state) when the gates API fails (FAR-768)', async () => {
+    // THE reported bug: an API failure (HTTP 5xx or network error) rendered
+    // "No pending HITL gates" — operators saw an empty review queue during an
+    // outage. A fetch failure is NOT an empty queue: the error panel must
+    // replace the empty state and offer a Retry button.
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.resolve({
+          data: null,
+          error: { type: 'about:blank', title: 'Internal Server Error', status: 503, detail: 'Service unavailable' },
+        })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-fetch-error"]').exists()).toBe(true)
+    expect(wrapper!.text()).toContain('Failed to load HITL gates')
+    expect(wrapper!.find('[data-testid="hitl-review-retry"]').exists()).toBe(true)
+    expect(wrapper!.text()).not.toContain('No pending HITL gates')
+  })
+
+  it('renders the fetch-error state when the gates request rejects (FAR-768)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        return Promise.reject(new Error('network down'))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-fetch-error"]').exists()).toBe(true)
+    expect(wrapper!.text()).not.toContain('No pending HITL gates')
+  })
+
+  it('re-invokes the gates fetch when Retry is clicked (FAR-768)', async () => {
+    const { api } = await import('../lib/api/client')
+    let gatesCalls = 0
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        gatesCalls++
+        if (gatesCalls === 1) {
+          return Promise.resolve({
+            data: null,
+            error: { type: 'about:blank', title: 'Internal Server Error', status: 503, detail: 'Service unavailable' },
+          })
+        }
+        return Promise.resolve(gatesResponse([PENDING_GATE]))
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-fetch-error"]').exists()).toBe(true)
+    const callsBeforeRetry = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
+
+    await wrapper!.find('[data-testid="hitl-review-retry"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const callsAfterRetry = (api.GET as any).mock.calls.filter((c: unknown[]) => c[0] === GATES_URL).length
+    expect(callsAfterRetry).toBe(callsBeforeRetry + 1)
+    expect(wrapper!.find('[data-testid="hitl-review-fetch-error"]').exists()).toBe(false)
+    expect(wrapper!.text()).toContain('#approval')
+  })
+
+  it('renders the empty state ONLY on a successful response with zero rows (FAR-768)', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-fetch-error"]').exists()).toBe(false)
+    expect(wrapper!.text()).toContain('No pending HITL gates')
+  })
+
+  it('renders gate rows on a successful response with rows (FAR-768)', async () => {
+    const { api } = await import('../lib/api/client');
+    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-fetch-error"]').exists()).toBe(false)
+    expect(wrapper!.find('[data-testid="hitl-review-column-headers"]').exists()).toBe(true)
+    expect(wrapper!.text()).toContain('#approval')
+    expect(wrapper!.text()).toContain('pending')
+  })
 })
