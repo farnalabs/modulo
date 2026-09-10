@@ -95,11 +95,13 @@ def upgrade() -> None:
         if migrate_owns_table:
             op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-        op.add_column(
-            table,
-            sa.Column(_COLUMN, sa.Uuid(), nullable=True),
-        )
-        op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
+        # Idempotent: migration 0207 already adds this column (via
+        # ``ADD COLUMN IF NOT EXISTS``) to every entity table, so re-adding it
+        # here with a plain ``op.add_column`` raised ``DuplicateColumn`` on a
+        # fresh DB. Mirror 0207's idempotent style for both the column and the
+        # index the ORM declares.
+        op.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {_COLUMN} UUID")
+        op.execute(f"CREATE INDEX IF NOT EXISTS ix_{table}_{_COLUMN} ON {table} ({_COLUMN})")
 
         if pg and migrate_owns_table:
             op.execute("RESET ROLE")
