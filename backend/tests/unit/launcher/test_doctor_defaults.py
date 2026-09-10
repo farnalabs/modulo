@@ -58,7 +58,7 @@ def _write_state_secrets(tmp_path: Path) -> LauncherState:
 def test_password_from_url_unquotes_password() -> None:
     assert _password_from_url("redis://:p%40ss@127.0.0.1:6379/0") == "p@ss"
     assert _password_from_url("redis://:plain@127.0.0.1:6379/0") == "plain"
-    assert _password_from_url("redis://127.0.0.1:6379/0") == ""
+    assert not _password_from_url("redis://127.0.0.1:6379/0")
 
 
 def test_cwd_env_file_present_and_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,7 +66,8 @@ def test_cwd_env_file_present_and_absent(tmp_path: Path, monkeypatch: pytest.Mon
     assert _cwd_env_file() is None
     (tmp_path / ".env").write_text("FOO=bar", encoding="utf-8")
     found = _cwd_env_file()
-    assert found is not None and found.name == ".env"
+    assert found is not None
+    assert found.name == ".env"
 
 
 def test_decode_proc_address_ipv4_and_ipv6() -> None:
@@ -93,7 +94,7 @@ class _FakeProcPath:
         return self._real.read_text(encoding=encoding)
 
 
-def test_parse_listeners_from_proc_reads_loopback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parse_listeners_from_proc_reads_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     real_path = doctor_module.Path
 
     def _fake_path(p: str | Path) -> Path | _FakeProcPath:
@@ -107,7 +108,7 @@ def test_parse_listeners_from_proc_reads_loopback(tmp_path: Path, monkeypatch: p
     assert "127.0.0.1" in listeners
     assert any(entry.startswith("::") for entry in listeners)
     # a different port is not listening
-    assert _parse_listeners_from_proc(99999) == []
+    assert not _parse_listeners_from_proc(99999)
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +170,7 @@ class _FakeEngine:
         return None
 
 
-def test_default_probes_builds_and_exercises_testable_closures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_probes_builds_and_exercises_testable_closures(tmp_path: Path) -> None:
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)
 
@@ -188,7 +189,7 @@ def test_default_probes_builds_and_exercises_testable_closures(tmp_path: Path, m
     assert probes.file_owner(tmp_path) is None or probes.file_owner(tmp_path) == me
 
     # _listening_on delegates to /proc parsing (no listeners in this sandbox)
-    assert probes.listening_on(state.postgres_port) == []
+    assert not probes.listening_on(state.postgres_port)
 
 
 def test_default_probes_postgres_probe_reachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

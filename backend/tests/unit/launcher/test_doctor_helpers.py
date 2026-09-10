@@ -64,7 +64,7 @@ def _write_secrets(tmp_path: Path) -> LauncherSecrets:
 
 def test_password_from_url_with_and_without_password() -> None:
     assert _password_from_url("redis://:topsecret@127.0.0.1:6379") == "topsecret"
-    assert _password_from_url("redis://127.0.0.1:6379") == ""
+    assert not _password_from_url("redis://127.0.0.1:6379")
     assert _password_from_url("redis://user:with%23hash@127.0.0.1:6379") == "with#hash"
 
 
@@ -84,10 +84,10 @@ def test_decode_proc_address_ipv4_and_ipv6() -> None:
 
 def test_parse_listeners_from_proc_closed_port_is_empty() -> None:
     # port 1 is never listening in a healthy sandbox
-    assert _parse_listeners_from_proc(1) == []
+    assert not _parse_listeners_from_proc(1)
 
 
-def test_parse_listeners_from_proc_detects_loopback_listener(tmp_path: Path) -> None:
+def test_parse_listeners_from_proc_detects_loopback_listener() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         sock.listen(1)
@@ -104,21 +104,25 @@ def test_parse_listeners_from_proc_detects_loopback_listener(tmp_path: Path) -> 
 def test_load_state_readonly_no_secrets(tmp_path: Path) -> None:
     state, err = _load_state_readonly(tmp_path)
     assert state is None
-    assert err is not None and "not initialized" in err
+    assert err is not None
+    assert "not initialized" in err
 
 
 def test_load_state_readonly_unreadable_secrets(tmp_path: Path) -> None:
     (tmp_path / "secrets.json").write_text("{not valid json", encoding="utf-8")
     state, err = _load_state_readonly(tmp_path)
     assert state is None
-    assert err is not None and "unreadable" in err
+    assert err is not None
+    assert "unreadable" in err
 
 
 def test_load_state_readonly_no_state_file(tmp_path: Path) -> None:
     _write_secrets(tmp_path)
     state, err = _load_state_readonly(tmp_path)
     assert state is None
-    assert err is not None and "state.json" in err and "unreadable" in err
+    assert err is not None
+    assert "state.json" in err
+    assert "unreadable" in err
 
 
 def test_load_state_readonly_integrity_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,7 +139,8 @@ def test_load_state_readonly_integrity_error(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(state_module, "load_state", _boom)
     state, err = _load_state_readonly(tmp_path)
     assert state is None
-    assert err is not None and "state.json unreadable" in err
+    assert err is not None
+    assert "state.json unreadable" in err
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +158,7 @@ def test_default_probes_state_none_exercises_all_probes(tmp_path: Path) -> None:
     assert uid is not None
     assert probes.username_of_uid(uid) is not None
     assert probes.file_owner(tmp_path) is not None
-    assert probes.listening_on(1) == []  # no listener on port 1
+    assert not probes.listening_on(1)  # no listener on port 1
     assert probes.launcher_running() is False
     assert probes.env_file_pinned() is False
     assert probes.cwd_env_file is None
@@ -221,7 +226,7 @@ def test_default_probes_service_probes_connect_with_mocks(tmp_path: Path, monkey
 
     probes = default_probes(tmp_path, loaded_state)
     probes.probe_postgres()  # connect -> SELECT 1
-    assert probes.role_violations() == []  # connect -> audit -> []
+    assert not probes.role_violations()  # connect -> audit -> []
     probes.probe_redis()  # ping -> True
     assert probes.migrations_at_head() is True  # engine -> at head
 
