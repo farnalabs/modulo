@@ -550,7 +550,10 @@ def run_doctor(data_dir: Path, *, as_json: bool = False, probes: DoctorProbes | 
         except Exception as exc:
             name = _CRASH_NAMES.get(check.__name__, check.__name__.removeprefix("check_"))
             results.append(CheckResult(name, False, f"check crashed: {exc}"))
-    healthy = all(result.ok for result in results)
+    if not results:  # noqa: SIM108 — guard all() on empty iterable (semgrep all-empty-iterable)
+        healthy = False
+    else:
+        healthy = all(result.ok for result in results)
     if as_json:
         import json
 
