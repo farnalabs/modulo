@@ -9,20 +9,19 @@ every entity a collection install writes — see
 ``core/library_service/install.py::_stamp_install_id`` (schemas, agents,
 pipelines) and ``uninstall.py`` which reads/clears the same column. The ORM
 models declare ``collection_install_id`` on ``Schema``, ``Agent`` and
-``Pipeline`` (nullable UUID, indexed), but no migration ever added the columns
-to the database. Migration ``0207_collection_install_tracking`` deliberately
-adds the ``collection_install`` / ``collection_install_entity`` audit tables but
-explicitly does NOT add a denormalised column to the entity tables — that left
-the ORM↔DB schema out of sync, so every query that selects an entity row
-(including unrelated integration tests) failed with
-``column <table>.collection_install_id does not exist``.
+``Pipeline`` (nullable UUID, indexed). On a fresh DB, migration
+``0207_collection_install_tracking`` already creates this column (with
+``IF NOT EXISTS``) on the entity tables; on a prod DB whose ``0207`` predates
+that column add the column is still absent. Either way the column must exist and
+carry the index the ORM declares for the ORM↔DB schema to stay in sync.
 
-This migration closes the gap by adding the nullable UUID column (plus the
-index the ORM declares) to ``schemas``, ``agents`` and ``pipelines``, matching
-the model declarations exactly. The column is nullable: an entity may or may
-not belong to a collection install, and the audit history already exists in
-``collection_install_entity`` (no backfill is required — every row simply starts
-NULL, the same as a fresh install never performed).
+This migration closes the gap idempotently: it adds the nullable UUID column
+only when missing (so it does not collide with ``0207`` on a fresh DB) and
+creates the ORM-declared index ``ix_<table>_collection_install_id``. The column
+is nullable: an entity may or may not belong to a collection install, and the
+audit history already exists in ``collection_install_entity`` (no backfill is
+required — every row simply starts NULL, the same as a fresh install never
+performed).
 
 ROLE WIRING (the 0134 ceremony, verbatim in spirit from 0066): migrations run
 as the ``DATABASE_ADMIN_URL`` superuser, but the org-scoped entity tables are
