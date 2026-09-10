@@ -132,6 +132,7 @@ async def _build_bundle_from_pins(
             schemas.extend(workflow_content.get("schemas", []))
 
     return {
+        "format_version": "1",
         "pipeline": {
             "name": "Collection Install",
             "description": "Entities installed from a library collection",
