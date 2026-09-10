@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0205_library_collection_type."""
+    """Exactly one migration chains off each predecessor, and the head is 0206_collection_install_tracking."""
     import re
 
     revisions = {}
@@ -837,9 +837,12 @@ def test_single_migration_head() -> None:
     # 0205_library_collection_type (FAR-760) chains off 0204_runner_probe_cache.
     chaining_off_0204 = [p for p in revisions if parents[p] == "0204_runner_probe_cache"]
     assert [_basename(p) for p in chaining_off_0204] == ["0205_library_collection_type.py"]
-    # Nothing chains off 0205 -> it is the single head.
+    # 0206_collection_install_tracking (FAR-761) chains off 0205_library_collection_type.
     chaining_off_0205 = [p for p in revisions if parents[p] == "0205_library_collection_type"]
-    assert not chaining_off_0205
+    assert [_basename(p) for p in chaining_off_0205] == ["0206_collection_install_tracking.py"]
+    # Nothing chains off 0206 -> it is the single head.
+    chaining_off_0206 = [p for p in revisions if parents[p] == "0206_collection_install_tracking"]
+    assert not chaining_off_0206
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

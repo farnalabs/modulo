@@ -72,7 +72,7 @@ _MIGRATION_PATH = (
 # 0203_triggers_add_name (FAR-681 slice 2, from main) chained onto 0195, FAR-681
 # slice 2 (#289/#293) added 0204_runner_probe_cache on top of 0203_triggers_add_name,
 # and FAR-760's 0205_library_collection_type chained onto 0204_runner_probe_cache as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0205_library_collection_type"
+_CHAIN_HEAD_MIGRATION_NAME = "0206_collection_install_tracking"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
