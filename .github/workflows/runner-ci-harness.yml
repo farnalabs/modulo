@@ -1,0 +1,199 @@
+# Reusable Bundled Runner CI-harness job (FAR-773).
+#
+# Callers:
+#   - ci.yml `runner-ci-harness` job (path-filtered, PR/push triggered).
+#   - runner-ci-backstop.yml (weekly cron, force=true -> skips the path
+#     filter and boots the rig unconditionally).
+#
+# Boots the deploy/compose/runner-ci.yml rig (socket-proxy + dind +
+# workspace-network holder) and runs the docker-marked harness suite
+# (backend/tests/docker/test_bundled_runner_harness.py) against it.
+name: "Bundled Runner harness (reusable)"
+
+on:
+  workflow_call:
+    inputs:
+      force:
+        description: "Skip the path filter and run the harness unconditionally (weekly drift backstop)."
+        required: false
+        default: false
+        type: boolean
+
+env:
+  # Authenticate GitHub git fetches so `uv sync --frozen` can resolve git-pinned
+  # dependencies (e.g. pytest-bdd @ refs/pull/827/head) without an anonymous
+  # fetch-by-SHA, which GitHub rejects from CI runners. With `secrets: inherit`
+  # on both callers this resolves to the caller context.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
+  GIT_CONFIG_VALUE_0: "https://github.com/"
+
+jobs:
+  harness:
+    name: Bundled Runner harness (compose + socket-proxy + dind)
+    runs-on: ubicloud-standard-2
+    # Wall-clock budget: measured local cold ~5 min (Docker Desktop, warm
+    # alpine; deploy/compose/README-runner-ci.md). 15 min = 3x the local
+    # cold path; the 2-vCPU hosted-runner multiplier is UNMEASURED until the
+    # first CI run - revisit the budget after it.
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Detect Bundled Runner surface changes
+        id: changed
+        shell: bash
+        # Path filter mirroring the runner topology (FAR-773 scope): the
+        # runtime provider + bundled runner + dispatch/exec surface, the
+        # runner overlay(s), and this harness suite. force=true (weekly
+        # backstop) skips the filter.
+        working-directory: .
+        # Mapped through the env block (S7630): GitHub expressions inside a
+        # run block are interpolated before the shell parses the script, so
+        # values are data, never code.
+        env:
+          HARNESS_FORCE: ${{ inputs.force }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$HARNESS_FORCE" = "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Forced run (weekly drift backstop) - path filter skipped."
+            exit 0
+          fi
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # The job sets `working-directory: backend`; the Detect step runs
+            # from the repo root so the pathspecs below resolve correctly.
+            # PR checks out the merge commit (refs/pull/N/merge) whose first
+            # parent IS the base branch - diff against that directly. Do NOT
+            # use a remote-tracking origin/<base> ref here: actions/checkout
+            # does not always fetch it and the diff then errors (fail-open
+            # below would run the harness on every PR).
+            if git rev-parse -q --verify "HEAD^2" >/dev/null 2>&1; then
+              BASE="HEAD^"
+            else
+              BASE="origin/$GITHUB_BASE_REF"
+            fi
+          elif [ "$EVENT_NAME" = "push" ]; then
+            # push-to-main: a merge-base with the default branch is DEGENERATE
+            # here (HEAD == origin/main after the push, so the diff would be
+            # empty and silently skip - the exact vacuity this guard fixes),
+            # and BASE=HEAD^ only covers the tip commit of a multi-commit
+            # push. Diff against github.event.before (the pre-push tip)
+            # instead: it covers the whole push and git diff needs no
+            # ancestry, so a force-push before-SHA still diffs. A missing /
+            # unreachable before-SHA fails the `git diff` below, which fails
+            # OPEN loudly (never silently skips).
+            if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "Push without a resolvable before-SHA - running harness."
+              exit 0
+            fi
+            BASE="$EVENT_BEFORE"
+          else
+            # workflow_dispatch (manual validation) - run unconditionally.
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch - running harness unconditionally."
+            exit 0
+          fi
+          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py"
+          # `rc=0; out=$(...)` survives Actions' `bash -e -o pipefail`: a bare
+          # `out=$(...)` aborts the step before the failure can be inspected,
+          # and swallowing the error into empty output silently SKIPS the
+          # harness (PR #2190; FAR-528 lesson - guards fail open WITH a
+          # loud ::warning::, never silently).
+          rc=0
+          CHANGED="$(git diff --name-only "$BASE" HEAD -- $PATHS)" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::path-filter git diff failed (rc=$rc); running Bundled Runner harness unconditionally (fail open)"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$CHANGED" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Bundled Runner surface changed:"
+            echo "$CHANGED"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No Bundled Runner surface changes - skipping harness."
+          fi
+      - name: Pre-pull the workspace image (outer engine)
+        # Deterministic cold-cache fix (spike surprise #5 + #6): the harness
+        # exercise creates workspaces with alpine:3.20 via POST
+        # /images/create through the proxy; a cold engine's first pull can
+        # transiently 500 (registry-side). 500s are NOT PR-- proxy
+        # rejections and cannot fail the completeness scan, but pre-pulling
+        # here on the OUTER engine removes the cold-cache flake window
+        # outright - no retry loop in the exercise itself.
+        if: steps.changed.outputs.changed == 'true'
+        working-directory: .
+        run: docker pull alpine:3.20
+      - name: Boot the runner-ci compose rig
+        if: steps.changed.outputs.changed == 'true'
+        shell: bash
+        working-directory: .
+        run: |
+          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci up -d
+          PROXY_PORT="$(docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port docker-socket-proxy 2375 | awk -F: '{print $NF}')"
+          DIND_PORT="$(docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port dind 2375 | awk -F: '{print $NF}')"
+          echo "PROXY_PORT=${PROXY_PORT}" >> "$GITHUB_ENV"
+          echo "DIND_PORT=${DIND_PORT}" >> "$GITHUB_ENV"
+          for i in $(seq 1 40); do
+            if curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:${PROXY_PORT}/_ping"; then
+              echo "socket-proxy ready on 127.0.0.1:${PROXY_PORT}"
+              break
+            fi
+            if [ "$i" = "40" ]; then
+              echo "::error::socket-proxy did not become ready"
+              docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs docker-socket-proxy || true
+              exit 1
+            fi
+            sleep 2
+          done
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:${DIND_PORT}/_ping"; then
+              echo "dind engine ready on 127.0.0.1:${DIND_PORT}"
+              break
+            fi
+            if [ "$i" = "60" ]; then
+              echo "::error::dind engine did not become ready"
+              docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs dind || true
+              exit 1
+            fi
+            sleep 2
+          done
+      - name: Sync backend deps
+        if: steps.changed.outputs.changed == 'true'
+        run: uv sync --frozen
+      - name: Run the docker-marked harness suite
+        if: steps.changed.outputs.changed == 'true'
+        shell: bash
+        env:
+          MODULO_RUNNER_HARNESS_PROXY_HOST: "127.0.0.1:${{ env.PROXY_PORT }}"
+          MODULO_RUNNER_HARNESS_DIND_HOST: "tcp://127.0.0.1:${{ env.DIND_PORT }}"
+          MODULO_RUNNER_HARNESS_NETWORK: "runner-ci-workspace"
+        run: |
+          uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py -m docker --tb=short -q --timeout=600 -p no:warnings
+      - name: Proxy log completeness dump (always)
+        if: always() && steps.changed.outputs.changed == 'true'
+        shell: bash
+        working-directory: .
+        # Keep the proxy's per-request log in the job output: a failed
+        # completeness assertion names its 403/PR-- lines, and this dump
+        # preserves the full request trail for triage.
+        run: |
+          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs docker-socket-proxy || true
+      - name: Tear down the compose rig
+        if: always() && steps.changed.outputs.changed == 'true'
+        shell: bash
+        working-directory: .
+        run: |
+          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci down -v --remove-orphans

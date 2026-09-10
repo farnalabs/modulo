@@ -24,10 +24,17 @@ documented.
 A workspace container is created attached to the dedicated
 `modulo-runner-workspace` bridge ONLY. It never joins the compose/backend
 network, and the Docker endpoint (socket proxy) exists only on the backend
-network — a workspace resolves no `docker-socket-proxy` DNS name and bridge
-isolation rules block cross-network IP reachability (asserted by the
-docker-marked suite and verified in the phase-0 spike: name-blocked AND
-IP-blocked).
+network — a workspace resolves no `docker-socket-proxy` DNS name
+(engine-guaranteed, hard-asserted). Cross-network IP reachability
+additionally relies on the ENGINE's bridge isolation rules: verified in the
+phase-0 spike (name-blocked AND IP-blocked), and re-asserted by the
+docker-marked harness suite — but the IP leg is engine-dependent. The
+harness runs a control experiment first and skips it with an explicit
+notice when an engine demonstrably permits cross-bridge traffic (observed
+2026-09-10 on Docker Desktop engine 29.7.2, which no longer installs the
+DOCKER-ISOLATION ruleset). Operators on engines without bridge isolation
+must firewall the proxy endpoint (or the workspace subnet) at the host for
+the containment claim to hold.
 
 **Egress default: permitted.** The tier's purpose is an agent with network
 access (git, package registries, model APIs). A per-profile opt-in sets
@@ -65,7 +72,7 @@ fails on ANY request the allowlist rejects.
 | `IMAGES=1` | `^/images/*` — inspect/list/create (pull) | Provision pulls; also serves the deprecated shell connector's `python:3.12-slim` default — its surface is inside the completeness assertion so enabling the overlay cannot silently re-home the connector |
 | `PING=1` / `VERSION=1` / `INFO=1` | `^/_ping`, `^/version`, `^/info` | Health + engine-shape probes |
 | `POST=1` | all non-GET methods, globally | Create/start/exec/destroy need it. NOTE: DELETE also passes when `POST=1` (the method gate is "GET or POST-flag", not per-method) — container destroy needs it; every other DELETE is residual-only because the volumes/networks/swarm categories stay closed |
-| `ALLOW_ARCHIVE=0` etc. | linuxserver deny-refinements | archive/export/logs/top/change denied even with `CONTAINERS=1` |
+| `ALLOW_ARCHIVE=0` etc. | linuxserver deny-refinements | archive/export/logs/top/change denied even with `CONTAINERS=1` — the denial (403 + the `PR--` proxy-reject flag in the proxy log) is asserted by the docker-marked harness matrix probes on a real running container, so widening `ALLOW_LOGS` (etc.) in production FAILS CI |
 
 No `networks/*` endpoints are needed: the workspace network is
 compose-defined and containers attach to it at create-time via
@@ -115,7 +122,11 @@ opens an issue; off-cycle rebuild for critical CVEs). The digest-drift guard
 (the release job asserts the seed/docs digest constant matches the latest
 `released-<minor>` tag) is a GA/CI item; until it exists, digest advances are
 manual and the pinned digests in `deploy/compose/runner.yml` +
-`modulo/db/bundled_runner_template.py` are the source of truth.
+`modulo/db/bundled_runner_template.py` are the source of truth. The CI
+rig's proxy pin in `deploy/compose/runner-ci.yml` is ALIGNED to production's
+digest — digest bumps must move the two compose files together, asserted by
+the harness composition guard
+(`test_overlay_matches_prod_proxy_config`).
 
 ## Registration env matrix
 
