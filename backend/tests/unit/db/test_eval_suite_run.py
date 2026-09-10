@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0209_community_gate."""
+    """Exactly one migration chains off each predecessor, and the head is 0210_collection_install_id_columns."""
     import re
 
     revisions = {}
@@ -840,7 +840,8 @@ def test_single_migration_head() -> None:
     # 0206_deleted_defaults_signal_check (FAR-644) chains off 0205_library_collection_type;
     # 0207_collection_install_tracking (FAR-761) chains off 0206_deleted_defaults_signal_check;
     # 0208_notification_indexes_and_constraint (#337) chains off 0207;
-    # 0209_community_gate (FAR-764) chains off 0208_notification_indexes_and_constraint as the head.
+    # 0209_community_gate (FAR-764) chains off 0208_notification_indexes_and_constraint;
+    # 0210_collection_install_id_columns (FAR-765) chains off 0209 as the head.
     chaining_off_0205 = [p for p in revisions if parents[p] == "0205_library_collection_type"]
     assert [_basename(p) for p in chaining_off_0205] == ["0206_deleted_defaults_signal_check.py"]
     chaining_off_0206 = [p for p in revisions if parents[p] == "0206_deleted_defaults_signal_check"]
@@ -850,9 +851,12 @@ def test_single_migration_head() -> None:
     # 0209_community_gate chains off 0208_notification_indexes_and_constraint.
     chaining_off_0208 = [p for p in revisions if parents[p] == "0208_notification_indexes_and_constraint"]
     assert [_basename(p) for p in chaining_off_0208] == ["0209_community_gate.py"]
-    # Nothing chains off 0209 -> it is the single head.
+    # 0210_collection_install_id_columns (FAR-765) chains off 0209_community_gate.
     chaining_off_0209 = [p for p in revisions if parents[p] == "0209_community_gate"]
-    assert not chaining_off_0209
+    assert [_basename(p) for p in chaining_off_0209] == ["0210_collection_install_id_columns.py"]
+    # Nothing chains off 0210 -> it is the single head.
+    chaining_off_0210 = [p for p in revisions if parents[p] == "0210_collection_install_id_columns"]
+    assert not chaining_off_0210
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:

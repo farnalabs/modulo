@@ -3043,7 +3043,10 @@ def make_node_fn(
         # instead of invoking the model — the agent cannot execute until the
         # operator grants access.
         gated = state.get("_community_gated_agents") or set()
-        if agent_id_raw and agent_id_raw in gated:
+        # Compare the canonicalised UUID form, not the raw snapshot string — a
+        # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+        # id would otherwise slip past the gate and fail it open.
+        if agent_id is not None and str(agent_id) in gated:
             return {
                 "artifacts": [
                     {
@@ -7824,7 +7827,11 @@ def make_sandbox_agent_fn(
         # that have not been granted are blocked from executing.
         agent_id_raw = node_def.get("agent_id")
         gated = state.get("_community_gated_agents") or set()
-        if agent_id_raw and agent_id_raw in gated:
+        # Compare the canonicalised UUID form, not the raw snapshot string — a
+        # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+        # id would otherwise slip past the gate and fail it open.
+        agent_id = _parse_uuid_opt(agent_id_raw)
+        if agent_id is not None and str(agent_id) in gated:
             return {
                 "artifacts": [
                     {

@@ -176,45 +176,6 @@ class TestPostgresCeremony:
         assert assert_mock.call_count >= 1
 
 
-class TestEntityProvenanceColumns:
-    """The ORM models (schema.py / agent.py / pipeline.py) declare a
-    ``collection_install_id`` pointer that ``install.py`` / ``uninstall.py``
-    stamp and clear on the live entity rows, but the original migration only
-    tracked provenance in ``collection_install_entity``. The migration MUST
-    add the denormalised column to the three entity tables (FAR-765 review
-    blocker — the column was missing and integration tests raised
-    UndefinedColumnError)."""
-
-    def test_adds_collection_install_id_to_entity_tables(self) -> None:
-        migration = _load_migration()
-        for dialect in ("sqlite", "postgresql"):
-            rec = _run_upgrade(migration, dialect, roles_exist=True)
-            for table in ("schemas", "agents", "pipelines"):
-                cols = rec.columns.get(table, [])
-                assert "collection_install_id" in cols, (
-                    f"{dialect}: migration 0207 must add collection_install_id to {table}; got {cols}"
-                )
-                idx = f"ix_{table}_collection_install_id"
-                assert idx in rec.indexes, f"{dialect}: migration 0207 must create index {idx}; got {rec.indexes}"
-
-    def test_downgrade_drops_entity_columns(self) -> None:
-        migration = _load_migration()
-        rec = _Recorder()
-        bind = _make_bind("postgresql")
-        with (
-            patch.object(migration, "op", rec),
-            patch.object(migration, "_role_exists", return_value=True),
-            patch.object(migration, "_assert_owner_is_migrate", return_value=None),
-        ):
-            rec.get_bind = MagicMock(return_value=bind)  # type: ignore[attr-defined]
-            migration.op.get_bind = MagicMock(return_value=bind)  # type: ignore[attr-defined]
-            migration.downgrade()
-        for table in ("schemas", "agents", "pipelines"):
-            assert "collection_install_id" not in rec.columns.get(table, []), (
-                f"downgrade must drop collection_install_id from {table}"
-            )
-
-
 class TestOrmMigrationConformance:
     """Pin the ORM metadata to the migration's schema so model/migration drift
     cannot silently pass the mocked unit tests (the class of bug the PR-review

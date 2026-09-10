@@ -38,7 +38,7 @@ _COMMUNITY_BY_ID_BASELINE = dict(_COMMUNITY_BY_ID)
 _COMMUNITY_BY_SLUG_BASELINE = dict(_COMMUNITY_BY_SLUG)
 
 _EXPECTED_MODULO_SLUGS = {
-    "agent": {"prd-ingestion", "requirements-writer", "spec-implementer"},
+    "agent": {"prd-ingestion", "requirements-writer", "spec-implementer", "pr-review-agent"},
     "composite": {
         "approver",
         "booleaner",
@@ -56,6 +56,7 @@ _EXPECTED_MODULO_SLUGS = {
     "schema": {"prd-input", "requirements-output", "pr-review-decision"},
     "test_fixture": {"example-test-fixture"},
     "workflow": {"prd-to-requirements", "simplest-workflow"},
+    "library_collection": {"github-pr-reviewer"},
 }
 _EXPECTED_COMMUNITY_SLUGS = {
     "commit-message-linter",

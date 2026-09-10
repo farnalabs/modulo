@@ -1200,7 +1200,9 @@ def _make_install_record_with_grant(
 
 class TestGrantCollectionAgentsEndpoint:
     def test_grant_success(self, client: TestClient) -> None:
-        mock_install = _make_install_record_with_grant()
+        # A successful grant flips agents_granted to True — assert the real
+        # post-grant response shape, not the pre-grant default.
+        mock_install = _make_install_record_with_grant(agents_granted=True)
         with (
             patch(
                 "modulo.api.routes.library.grant_collection_agents",
@@ -1219,7 +1221,7 @@ class TestGrantCollectionAgentsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["community_sourced"] is True
-        assert data["agents_granted"] is False
+        assert data["agents_granted"] is True
 
     def test_grant_not_found(self, client: TestClient) -> None:
         from modulo.core.library_service.grant import InstallNotFoundError
