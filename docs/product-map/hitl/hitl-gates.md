@@ -108,8 +108,16 @@ may decide.
 - [x] Deliver-manual / submit-manual validates reviewer-supplied output and
       passes it to the pipeline; manual output delivery is audited
       (deliver_manual.feature, `test_output_delivery_audit`)
-- [x] `human_only` gates refuse automation/MCP clients entirely
-      (team_hitl_gate.feature, `test_mcp_security`, `test_mcp_runtime_tools`,
+- [x] `human_only` gates refuse automation/MCP clients entirely — and every
+      gate DEFAULTS to `human_only: true` (FAR-609): a gate config that omits
+      the flag is human-only (fail-safe, not only the high-risk paths);
+      opting out requires an explicit `human_only: false` write, which the
+      gate-removal guard flags as a weakening change. Legacy stored gates
+      whose config lacks the flag become human-only under the default.
+      Claim is human_only too — a non-browser credential can neither CLAIM
+      nor decide a human_only gate (REST claim route + MCP `review_hitl`
+      claim action both enforce it) (team_hitl_gate.feature,
+      `test_mcp_security`, `test_mcp_runtime_tools`,
       `test_node_runner_hitl`). REST enforcement keys on the credential
       class: a principal is denied when it is an API key OR its JWT
       `client_kind` claim is not `browser` (FAR-634 — every access/refresh

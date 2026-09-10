@@ -462,6 +462,12 @@ async def claim_gate(
 ) -> ClaimResponse:
     """Atomically claim a HITL gate. Returns a claim_token for approve/reject.
 
+    FAR-609: claim is human_only too — a non-browser credential (API key /
+    non-browser JWT) cannot CLAIM nor decide a human_only gate, so the same
+    fail-closed policy as the decision routes applies here (no non-browser
+    principal can claim OR decide any HITL gate). The check runs inside the
+    claim transaction before ``claim``, so a denial has no side effects.
+
     The post-claim run-status flip to ``claimed`` is fenced to runs still in
     ``awaiting_human`` (``transition_run`` with ``allowed_from``): if the run
     goes terminal between the claim's status pre-check and the flip, the fenced
@@ -474,6 +480,10 @@ async def claim_gate(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             try:
+                # FAR-609: non-browser principals are denied human_only gates
+                # on claim exactly like on the decision routes. The check
+                # short-circuits browser JWTs before writing anything.
+                await _enforce_human_only_gate(session, principal, run_id, gate_id, "claim")
                 gate = await mgr.claim(
                     session,
                     run_id=run_id,
@@ -537,6 +547,12 @@ async def claim_gate(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
+    except HumanOnlyDenied as exc:
+        # FAR-609: the claim transaction rolled back on the denial — emit the
+        # failure-isolated audit event in a FRESH session, then re-raise the
+        # byte-identical 403 (same contract as _run_hitl_manager).
+        await _emit_human_only_denial_audit(exc)
+        raise
     except HTTPException:
         raise
     except Exception as e:

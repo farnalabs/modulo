@@ -67,6 +67,29 @@ from modulo.db.models.run import Run
 
 GATE_ID_PREFIX = "hitl_gate_"
 
+#: FAR-609: every HITL gate defaults to ``human_only: true`` — fail-safe by
+#: construction, not only the high-risk paths. A gate config that omits the
+#: field is human_only; opting out requires the explicit ``human_only: false``
+#: write (which the gate-removal guard flags as a weakening change). Legacy
+#: stored gates whose config_json lacks the field therefore BECOME human-only
+#: under this default — intended (fail-safe backward compatibility).
+DEFAULT_HUMAN_ONLY = True
+
+
+def human_only_effective(config: dict[str, Any] | None) -> bool:
+    """Return the gate config's ``human_only`` flag with the fail-safe default.
+
+    FAR-609 single-source the default: every enforcement site (the engine's
+    autonomy override in ``node_runner``, the REST/MCP denial verdict, the
+    MCP gate-detail payload) reads the flag through this helper so a missing
+    or non-dict config resolves to :data:`DEFAULT_HUMAN_ONLY` (True), and an
+    explicit ``human_only: false`` opts out.
+    """
+    if not isinstance(config, dict):
+        return DEFAULT_HUMAN_ONLY
+    value = config.get("human_only")
+    return DEFAULT_HUMAN_ONLY if value is None else bool(value)
+
 
 def make_gate_id(source: str, target: str) -> str:
     """Derive a gate id from an edge's topology: ``hitl_gate_<source>_<target>``.
@@ -534,8 +557,9 @@ def human_only_denial(
       decisions are denied rather than silently allowed. Unfired/non-gate ids
       stay allowed (manual delivery must not over-block).
     - ``config`` dict with a truthy ``human_only`` →
-      :data:`MSG_HUMAN_ONLY_DENY` (the same ``config.get("human_only", False)``
-      truthiness rule the enforcement sites have always used).
+      :data:`MSG_HUMAN_ONLY_DENY` (read through
+      :func:`human_only_effective` — absent from FAR-609 the FAIL-SAFE
+      default is True, not False).
     - otherwise → None.
     """
     if not non_browser_credential:
@@ -544,6 +568,6 @@ def human_only_denial(
         if gate_fired:
             return MSG_HUMAN_ONLY_UNRESOLVED
         return None
-    if config.get("human_only", False):
+    if human_only_effective(config):
         return MSG_HUMAN_ONLY_DENY
     return None

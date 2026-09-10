@@ -3760,7 +3760,7 @@ async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("get_hitl_gate")
-    from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
+    from modulo.db.crud.hitl_gate_config import human_only_effective, resolve_hitl_gate_config
 
     org_id = _ctx_org_id_val()
     rid, rid_err = _parse_uuid_param(run_id, "run_id")
@@ -3797,7 +3797,7 @@ async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
         result["gate_config"] = {
             "label": config.get("label"),
             "condition": config.get("condition"),
-            "human_only": bool(config.get("human_only", False)),
+            "human_only": human_only_effective(config),
             "claim_expiry_minutes": config.get("claim_expiry_minutes"),
             "reject_target": config.get("reject_target"),
             "required_team_id": str(required_team) if required_team else None,
@@ -3988,11 +3988,12 @@ async def _check_human_only_gate(
 ) -> dict[str, Any] | None:
     """Return an error dict when the gate is human_only, else ``None``.
 
-    Called for the ``approve`` and ``deliver_manual`` actions: a ``human_only``
-    gate can only be decided by a browser-authenticated human, never by an
-    API-key/MCP client (MCP clients authenticate with API keys — they are
-    never browser sessions). ``reject`` stays allowed: rejection is the safe
-    direction.
+    Called for the ``claim``, ``approve`` and ``deliver_manual`` actions
+    (FAR-609: claim is human_only too — MCP clients authenticate with API
+    keys, so a human_only gate can be neither CLAIMED nor decided through
+    MCP): a ``human_only`` gate can only be decided by a browser-authenticated
+    human, never by an API-key/MCP client. ``reject`` stays allowed:
+    rejection is the safe direction.
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
     (falling back to the live pipeline edges, then the live HITL-node config)
@@ -4226,10 +4227,12 @@ async def _review_hitl_impl(
         if run is None:
             return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
 
-        if action in ("approve", "deliver_manual"):
+        if action in ("claim", "approve", "deliver_manual"):
             # FAR-610: deliver_manual is a decision exactly like approve — a
             # human_only gate must not be decided by an API-key/MCP client.
-            # reject stays allowed (safe direction).
+            # FAR-609: claim is human_only too — no non-browser principal may
+            # claim OR decide a human_only gate. reject stays allowed (safe
+            # direction).
             human_only_err = await _check_human_only_gate(s, org_id, run, gate_id, action)
             if human_only_err:
                 return human_only_err
@@ -4260,8 +4263,9 @@ async def _review_hitl_impl(
         "Step 1: call with action='claim' to get a claim_token. "
         "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
         "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
-        "human_only gates return 403 on approve and deliver_manual — "
-        "only a browser-authenticated human can decide them."
+        "human_only gates return 403 on claim, approve and deliver_manual "
+        "(FAR-609: claim is human_only too) — only a browser-authenticated "
+        "human can claim or decide them."
     ),
 )
 @_RETRY_DB

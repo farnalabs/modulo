@@ -63,6 +63,12 @@ _GATE = {
     [
         ({"human_only": True}, {"human_only": False}, ["human_only"]),
         ({"human_only": True}, {"human_only": True}, []),
+        # FAR-609: human_only has the fail-safe default True, so a config that
+        # was absent the flag and re-saves with an explicit False is a
+        # true->false relaxation and stays gated.
+        ({"human_only": None}, {"human_only": False}, ["human_only"]),
+        ({"human_only": None}, {"human_only": True}, []),
+        ({"human_only": False}, {"human_only": False}, []),
         ({"required_team_id": "team-1"}, {"required_team_id": None}, ["required_team_id"]),
         ({"required_team_id": "team-1"}, {"required_team_id": "team-2"}, ["required_team_id"]),
         ({"required_team_id": "team-1"}, {"required_team_id": "team-1"}, []),
@@ -89,6 +95,9 @@ _GATE = {
     ids=[
         "human_only_weakened",
         "human_only_unchanged",
+        "human_only_absent_then_off",
+        "human_only_absent_then_on",
+        "human_only_explicit_off_unchanged",
         "team_removed",
         "team_changed",
         "team_unchanged",

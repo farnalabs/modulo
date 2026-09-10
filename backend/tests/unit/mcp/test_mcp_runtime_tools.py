@@ -1,7 +1,7 @@
 """Unit tests for the pipeline/HITL/library MCP tools without dedicated coverage."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import ProgrammingError
@@ -1215,6 +1215,148 @@ class TestReviewHitl(_AuthContext):
 
         assert result["error"] == "human_only_gate"
         manager.deliver_manual.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
+    async def test_claim_blocks_human_only_gate(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-609: claim is human_only — an MCP client (always a
+        non-browser credential) can neither CLAIM nor decide a human_only
+        gate, so the claim action is denied like approve/deliver_manual."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.claim = AsyncMock()
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": True}},
+            ],
+        }
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                # FAR-634: the claim-stamp lookup (no stamped row - legacy).
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="claim")
+
+        assert result["error"] == "human_only_gate"
+        manager.claim.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._append_hitl_human_only_denied_audit", new=AsyncMock())
+    async def test_claim_blocks_gate_without_explicit_human_only(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-609 default flip: a gate config WITHOUT ``human_only`` is
+        human-only, so an MCP claim is denied."""
+        self._set_role_operator()
+        manager = MagicMock()
+        manager.claim = AsyncMock()
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"label": "Legacy"}},
+            ],
+        }
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="claim")
+
+        assert result["error"] == "human_only_gate"
+        manager.claim.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.HITLManager")
+    @patch("modulo.api.mcp_server._session")
+    async def test_claim_allows_explicit_opt_out_gate(
+        self,
+        mock_session: AsyncMock,
+        mock_manager_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-609: an explicit ``human_only: false`` opts the gate out —
+        the MCP claim proceeds (role permitting)."""
+        self._set_role_operator()
+        gate = MagicMock()
+        gate.claim_token = "tok-claim"
+        gate.expires_at = datetime.now(UTC) + timedelta(minutes=15)
+        manager = MagicMock()
+        manager.claim = AsyncMock(return_value=gate)
+
+        src = uuid.uuid4()
+        tgt = uuid.uuid4()
+        gate_id = f"hitl_gate_{src}_{tgt}"
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.snapshot_id = uuid.uuid4()
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {"source": str(src), "target": str(tgt), "hitl_gate_config": {"human_only": False}},
+            ],
+        }
+
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(
+            side_effect=[
+                _make_run_lookup_result(run),
+                _make_run_lookup_result(None),
+                _make_run_lookup_result(snapshot),
+            ]
+        )
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_manager_cls.return_value = manager
+
+        result = await review_hitl(run_id=str(run.id), gate_id=gate_id, action="claim")
+
+        assert result.get("status") == "claimed", result
+        manager.claim.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.HITLManager")

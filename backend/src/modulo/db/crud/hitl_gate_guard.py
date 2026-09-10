@@ -41,6 +41,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.team_rbac import org_role_level
+from modulo.db.crud.hitl_gate_config import human_only_effective
 from modulo.db.models.pipeline_edge import PipelineEdge
 
 _log = logging.getLogger(__name__)
@@ -202,7 +203,10 @@ def _weakening_types(old_cfg: dict[str, Any], new_cfg: dict[str, Any]) -> list[s
     because it drops the expiry requirement without tightening anything.
     """
     types: list[str] = []
-    if old_cfg.get("human_only") is True and new_cfg.get("human_only") is not True:
+    # FAR-609: human_only has the fail-safe default True, so "absent →
+    # explicitly false" is a true→false weakening (the gate was effectively
+    # human-only) and must stay gated like any other relaxation.
+    if human_only_effective(old_cfg) and not human_only_effective(new_cfg):
         types.append("human_only")
     old_team = old_cfg.get("required_team_id")
     new_team = new_cfg.get("required_team_id")

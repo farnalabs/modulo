@@ -107,7 +107,7 @@ Each eval has a pass threshold and failure behaviour: `warn` (soft – run conti
 Manages Human-in-the-Loop gates using LangGraph's `interrupt()`. Atomic claim semantics via `SELECT ... FOR UPDATE` on `hitl_claims` table. Claim tokens are opaque random strings (alpha) or short-lived JWTs (v1).
 
 Features:
-- `human_only` flag – blocks LLM approval via MCP
+- `human_only` flag – blocks LLM approval via MCP; defaults to `true` (FAR-609) so every gate is human-only unless it explicitly opts out, and non-browser credentials cannot claim or decide such gates (REST claim route + MCP review_hitl claim both enforce it)
 - `required_team_id` – restricts claims to specific team members
 - Claim expiry background job (default: 60s interval, Postgres advisory lock for single-worker execution)
 - `manual` node type – same as HITL but human provides full output
