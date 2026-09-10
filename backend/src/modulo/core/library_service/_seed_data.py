@@ -1188,8 +1188,74 @@ _MODULO_PRIMITIVES.extend(
             },
             tags=["pipeline_template", "incident-response", "alerting", "runbook"],
         ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-000000000097",
+            primitive_type="agent",
+            name="PR Review Agent",
+            slug="pr-review-agent",
+            description=(
+                "Reviews a GitHub PR diff and returns a structured"
+                " APPROVE/REQUEST_CHANGES verdict following the PR Review"
+                " Decision schema."
+            ),
+            content_json={
+                "output_schema": "pr-review-decision",
+                "prompt_template": (
+                    "You are a senior code reviewer. Review the following"
+                    " GitHub PR diff for bugs, security issues, style"
+                    " violations, and correctness problems.\n\n"
+                    "For each issue found, provide:\n"
+                    "- severity: critical, major, minor, or nit\n"
+                    "- file: the file path\n"
+                    "- line: the line number (approximate is fine)\n"
+                    "- message: a clear description of the issue\n\n"
+                    "Return a JSON verdict with:\n"
+                    "- decision: APPROVE (no critical/major issues) or"
+                    " REQUEST_CHANGES\n"
+                    "- summary: a 1-3 sentence overall assessment\n"
+                    "- findings: array of issues found (empty if APPROVE)\n\n"
+                    "PR Diff:\n{{ input }}"
+                ),
+                "connector_type_refs": ["github"],
+            },
+            tags=["agent", "code-review", "pr", "github"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-000000000098",
+            primitive_type="library_collection",
+            name="GitHub PR Reviewer",
+            slug="github-pr-reviewer",
+            description=(
+                "One-click AI PR review for GitHub repos. Installs a review"
+                " agent, decision schema, and pipeline. Requires: model"
+                " backend + GitHub token."
+            ),
+            content_json={
+                "manifest_pins": [
+                    {"slug": "pr-review-decision", "version": "1.0"},
+                    {"slug": "pr-review-agent", "version": "1.0"},
+                    {"slug": "pr-review-pipeline", "version": "1.0"},
+                ],
+                "connector_requirements": [
+                    {
+                        "connector_type_id": "github",
+                        "description": ("GitHub token for reading PR diffs and posting review comments"),
+                        "capabilities": ["code_review", "write"],
+                    }
+                ],
+                "trust_header": {"source": "modulo", "verified": True},
+            },
+            tags=["library_collection", "code-review", "pr", "github", "quick-start"],
+        ),
     ]
 )
+
+# The library_collection type requires status="published" to be installable.
+# Pin to the specific primitive rather than the list tail so appending new
+# primitives later cannot silently change which collection is published.
+_github_pr_reviewer = _MODULO_PRIMITIVES[-1]
+assert _github_pr_reviewer.slug == "github-pr-reviewer", "seed order changed; pin explicitly"
+_github_pr_reviewer.status = "published"
 
 # Indexes for O(1) community lookup
 _MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRIMITIVES}

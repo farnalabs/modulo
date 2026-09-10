@@ -616,7 +616,7 @@ class TestValidateManifestPins:
                 return await _validate_manifest_pins([{"slug": "my-schema", "version": "1.0"}], MagicMock(), _ORG_ID)
 
         errors = asyncio.run(run())
-        assert errors == []
+        assert not errors
 
 
 # ---------------------------------------------------------------------------
@@ -636,8 +636,6 @@ def _make_install_record(
     rec.collection_version = "1.0"
     rec.organisation_id = _ORG_ID
     rec.status = status
-    rec.community_sourced = False
-    rec.agents_granted = False
     rec.resolved_manifest = {"schemas": {}, "agents": {}}
     rec.connector_checklist = []
     rec.installed_entities = []
@@ -1056,12 +1054,62 @@ class TestUninstallCollectionService:
         with pytest.raises(InstallNotFoundError):
             asyncio.run(run())
 
+    def test_uninstall_skips_missing_entity(self) -> None:
+        from modulo.core.library_service.uninstall import uninstall_collection
+
+        async def run() -> dict:
+            mock_session = AsyncMock()
+            install = MagicMock()
+            install.organisation_id = _ORG_ID
+            install.collection_id = uuid.uuid4()
+            mock_session.get = AsyncMock(return_value=install)
+
+            # Tracking row points at an entity that no longer exists.
+            row = MagicMock()
+            row.entity_type = "schema"
+            row.entity_id = uuid.uuid4()
+            entity_result = MagicMock()
+            entity_result.scalars = MagicMock(return_value=[row])
+            mock_session.execute = AsyncMock(return_value=entity_result)
+            # _entity_exists → False (entity row gone)
+            mock_session.scalar = AsyncMock(return_value=None)
+
+            return await uninstall_collection(mock_session, _ORG_ID, uuid.uuid4())
+
+        result = asyncio.run(run())
+        assert not result["deleted"]
+        assert not result["detached"]
+
+    def test_check_unmodified_true_when_stamped(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = install_id
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is True
+
+    def test_check_unmodified_false_when_detached(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = uuid.uuid4()  # different stamp
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is False
+
 
 # ---------------------------------------------------------------------------
-# Service: grant_collection_agents unit tests (FAR-764)
+# Grant service + endpoint tests (FAR-764) — merged from deliver/FAR-765
 # ---------------------------------------------------------------------------
-
-
 class TestGrantCollectionAgents:
     def test_grant_community_sourced(self) -> None:
         from modulo.core.library_service.grant import grant_collection_agents
@@ -1132,58 +1180,6 @@ class TestGrantCollectionAgents:
         with pytest.raises(InstallNotFoundError):
             asyncio.run(run())
 
-    def test_uninstall_skips_missing_entity(self) -> None:
-        from modulo.core.library_service.uninstall import uninstall_collection
-
-        async def run() -> dict:
-            mock_session = AsyncMock()
-            install = MagicMock()
-            install.organisation_id = _ORG_ID
-            install.collection_id = uuid.uuid4()
-            mock_session.get = AsyncMock(return_value=install)
-
-            # Tracking row points at an entity that no longer exists.
-            row = MagicMock()
-            row.entity_type = "schema"
-            row.entity_id = uuid.uuid4()
-            entity_result = MagicMock()
-            entity_result.scalars = MagicMock(return_value=[row])
-            mock_session.execute = AsyncMock(return_value=entity_result)
-            # _entity_exists → False (entity row gone)
-            mock_session.scalar = AsyncMock(return_value=None)
-
-            return await uninstall_collection(mock_session, _ORG_ID, uuid.uuid4())
-
-        result = asyncio.run(run())
-        assert not result["deleted"]
-        assert not result["detached"]
-
-    def test_check_unmodified_true_when_stamped(self) -> None:
-        from modulo.core.library_service.uninstall import _check_unmodified
-
-        async def run() -> bool:
-            install_id = uuid.uuid4()
-            entity = MagicMock()
-            entity.collection_install_id = install_id
-            mock_session = AsyncMock()
-            mock_session.scalar = AsyncMock(return_value=entity)
-            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
-
-        assert asyncio.run(run()) is True
-
-    def test_check_unmodified_false_when_detached(self) -> None:
-        from modulo.core.library_service.uninstall import _check_unmodified
-
-        async def run() -> bool:
-            install_id = uuid.uuid4()
-            entity = MagicMock()
-            entity.collection_install_id = uuid.uuid4()  # different stamp
-            mock_session = AsyncMock()
-            mock_session.scalar = AsyncMock(return_value=entity)
-            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
-
-        assert asyncio.run(run()) is False
-
 
 # ---------------------------------------------------------------------------
 # API: grant endpoint tests (FAR-764)
@@ -1204,7 +1200,9 @@ def _make_install_record_with_grant(
 
 class TestGrantCollectionAgentsEndpoint:
     def test_grant_success(self, client: TestClient) -> None:
-        mock_install = _make_install_record_with_grant()
+        # A successful grant flips agents_granted to True — assert the real
+        # post-grant response shape, not the pre-grant default.
+        mock_install = _make_install_record_with_grant(agents_granted=True)
         with (
             patch(
                 "modulo.api.routes.library.grant_collection_agents",
@@ -1223,7 +1221,7 @@ class TestGrantCollectionAgentsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["community_sourced"] is True
-        assert data["agents_granted"] is False
+        assert data["agents_granted"] is True
 
     def test_grant_not_found(self, client: TestClient) -> None:
         from modulo.core.library_service.grant import InstallNotFoundError
@@ -1304,3 +1302,81 @@ class TestGrantCollectionAgentsEndpoint:
         assert "agents_granted" in data
         assert data["community_sourced"] is True
         assert data["agents_granted"] is True
+
+
+# ---------------------------------------------------------------------------
+# Seed data integrity tests (FAR-757)
+# ---------------------------------------------------------------------------
+
+
+class TestSeedPrReviewAgent:
+    """Verify the PR Review Agent seed entry exists with correct fields."""
+
+    def test_seed_pr_review_agent_exists(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        key = ("agent", "pr-review-agent")
+        assert key in _MODULO_BY_SLUG, f"Missing seed entry for {key}"
+        agent = _MODULO_BY_SLUG[key]
+        assert agent.primitive_type == "agent"
+        assert "code-review" in agent.tags
+        assert "pr" in agent.tags
+        assert "github" in agent.tags
+        assert agent.content_json["output_schema"] == "pr-review-decision"
+        assert "github" in agent.content_json["connector_type_refs"]
+
+    def test_seed_pr_review_agent_prompt_mentions_decision_schema(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        agent = _MODULO_BY_SLUG[("agent", "pr-review-agent")]
+        prompt = agent.content_json["prompt_template"]
+        assert "APPROVE" in prompt
+        assert "REQUEST_CHANGES" in prompt
+        assert "findings" in prompt
+
+
+class TestSeedGitHubPrReviewerBundle:
+    """Verify the GitHub PR Reviewer bundle seed entry exists with correct fields."""
+
+    def test_seed_github_pr_reviewer_bundle_exists(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        key = ("library_collection", "github-pr-reviewer")
+        assert key in _MODULO_BY_SLUG, f"Missing seed entry for {key}"
+        coll = _MODULO_BY_SLUG[key]
+        assert coll.primitive_type == "library_collection"
+        assert coll.status == "published"
+        assert "code-review" in coll.tags
+        assert "quick-start" in coll.tags
+
+    def test_bundle_pins_reference_existing_primitives(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        coll = _MODULO_BY_SLUG[("library_collection", "github-pr-reviewer")]
+        pins = coll.content_json["manifest_pins"]
+        pin_slugs = [pin["slug"] for pin in pins]
+        assert pin_slugs == ["pr-review-decision", "pr-review-agent", "pr-review-pipeline"]
+
+        for pin in pins:
+            if pin["slug"] == "pr-review-decision":
+                key = ("schema", pin["slug"])
+            elif pin["slug"] == "pr-review-agent":
+                key = ("agent", pin["slug"])
+            else:
+                key = ("pipeline_template", pin["slug"])
+            assert key in _MODULO_BY_SLUG, f"Pinned slug '{pin['slug']}' not found in seed data"
+
+    def test_bundle_connector_requirements(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        coll = _MODULO_BY_SLUG[("library_collection", "github-pr-reviewer")]
+        reqs = coll.content_json["connector_requirements"]
+        assert len(reqs) == 1
+        assert reqs[0]["connector_type_id"] == "github"
+        assert "code_review" in reqs[0]["capabilities"]
+
+    def test_bundle_trust_header(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        coll = _MODULO_BY_SLUG[("library_collection", "github-pr-reviewer")]
+        assert coll.content_json["trust_header"] == {"source": "modulo", "verified": True}

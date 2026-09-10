@@ -315,7 +315,7 @@ async def install_collection(
     # connector access until an operator explicitly grants access.
     community_sourced = collection.source in ("community", "registry")
 
-    # 10. Create the CollectionInstall record
+    # 10. Create the CollectionInstall provenance record
     session.add(
         CollectionInstall(
             install_id=install_id,

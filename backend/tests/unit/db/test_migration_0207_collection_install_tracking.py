@@ -47,6 +47,7 @@ class _Recorder:
         self.sql: list[str] = []
         self.tables: list[str] = []
         self.table_columns: dict[str, list[str]] = {}
+        self.columns: dict[str, list[str]] = {}
         self.indexes: list[str] = []
         self.index_columns: dict[str, list[str]] = {}
 
@@ -62,6 +63,14 @@ class _Recorder:
             if hasattr(col, "name"):
                 cols.append(col.name)
         self.table_columns[name] = cols
+
+    def add_column(self, table_name: str, column: object, *_args: object, **_kwargs: object) -> None:
+        self.columns.setdefault(table_name, []).append(getattr(column, "name", str(column)))
+
+    def drop_column(self, table_name: str, column_name: str, *_args: object, **_kwargs: object) -> None:
+        cols = self.columns.get(table_name)
+        if cols and column_name in cols:
+            cols.remove(column_name)
 
     def create_index(self, name: str, _table_name: str, columns: list[str], *_args: object, **_kwargs: object) -> None:
         self.indexes.append(name)
