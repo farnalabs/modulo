@@ -87,6 +87,12 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     eng = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
+        # IN THE DATABASE until B2b — finalize's read-switch reads them through
+        # the repo's raw Core legacy table, so the test schema reproduces the
+        # migrated shape (SQLite ADD COLUMN per legacy column).
+        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -855,6 +861,13 @@ class TestFinalizeCostWiring:
         _patch_finalize_machinery(monkeypatch)
         run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
         run_id = run.id
+        # FAR-583 B1: the blobs write is the PRIMARY store write — it requires
+        # a bound RLS org (fail-closed); production finalize sessions are
+        # org-bound, and the SQLite-side binding mirrors that contract (bound
+        # after _seed_run so the fixture's lazy transaction is active).
+        from modulo.db.rls import set_rls_org
+
+        await set_rls_org(session, _ORG)
         await _seed_journey_by_kind(session, "github_pr", "456")
         await finalize_cost(
             session,
@@ -1007,6 +1020,10 @@ class TestRawWriterJourneyAdvance:
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+                # FAR-583 B1: legacy blob columns stay in the database until
+                # B2b (raw-SQL readers) — reproduce the migrated shape.
+                for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+                    await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
                 await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
             maker = async_sessionmaker(engine, expire_on_commit=False)
             async with maker() as s, s.begin():

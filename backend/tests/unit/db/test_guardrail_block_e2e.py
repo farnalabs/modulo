@@ -3,9 +3,9 @@
 Proves that when a block-action guardrail fires at the ingestion edge:
 
 * the run is created TERMINAL ``eval_failed`` (error_code ``eval_blocked``);
-* NO node executes — the run is never dispatched: ``started_at`` is NULL,
-  ``outputs_json`` / ``node_telemetry_json`` are NULL, and the run counters
-  (``claim_count`` / ``node_attempt_count``) are untouched at 0;
+  NO node executes — the run is never dispatched: ``started_at`` is NULL, the
+  per-node store (``run_node_outputs``) has NO rows for the run, and the run
+  counters (``claim_count`` / ``node_attempt_count``) are untouched at 0;
 * the guardrail evidence rows are persisted (a guardrail result with the
   ``guardrail_blocked`` trigger-event vocabulary), so the block is visible in
   the run list without ever reaching the pipeline.
@@ -35,6 +35,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.models.team import Team
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -57,6 +58,7 @@ _TABLES: list[Table] = cast(
         AuditEvent.__table__,
         AuditChainHead.__table__,
         EnvironmentProfile.__table__,
+        RunNodeOutput.__table__,
     ],
 )
 
@@ -163,8 +165,11 @@ async def test_block_e2e_node_effect_prevented(session: AsyncSession):
     assert run.started_at is None  # never dispatched — no execution start
 
     # 2. Node effect prevented: no output, no telemetry, no claim, no attempt.
-    assert run.outputs_json is None
-    assert run.node_telemetry_json is None
+    #    FAR-583 B1: the per-node store is the single blob surface — the
+    #    blocked run must have ZERO rows there (the legacy ``runs`` blob
+    #    columns are unmapped and never written post-B1).
+    store_rows = (await session.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run.id))).scalars().all()
+    assert not store_rows
     assert run.claim_count == 0
     assert run.node_attempt_count == 0
 

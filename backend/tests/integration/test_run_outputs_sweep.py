@@ -337,7 +337,7 @@ async def test_org_failure_is_isolated_and_counted(
     async def _boom(*args: Any, **kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("injected sweep failure")
 
-    monkeypatch.setattr("modulo.db.crud.run_node_outputs.backfill_run_node_outputs_batch", _boom)
+    monkeypatch.setattr("modulo.db.crud.run_node_outputs_backfill.backfill_run_node_outputs_batch", _boom)
     summary = await _run_sweep(sweep_tenant)
     assert summary["outputs_sweep_org_failed"] == 1
     assert summary["outputs_sweep_healed"] == 0
@@ -374,7 +374,9 @@ async def test_sweep_then_dual_write_replace(
     assert final_nodes == ["a"]
     assert rows[0][2] == {"v": 10}
     legacy = await _fetch_legacy_row(db_engine, run_id)
-    assert legacy["outputs_json"] == {"a": {"v": 10}}
+    # FAR-583 B1: the REPLACE write is the only write — the legacy column
+    # keeps its SEEDED value (the pre-sweep state) until B2b drops it.
+    assert legacy["outputs_json"] == {"a": {"v": 1}, "b": {"v": 2}}
 
 
 @pytest.mark.asyncio
@@ -581,7 +583,7 @@ async def test_selection_excludes_json_array_sides_via_repo_helper(
     """qa M1a (direct): the batched helper selects ZERO runs for an org whose
     only blob is a jsonb array (the old text-cast heuristic selected it every
     tick). The object-shaped control run IS selected."""
-    from modulo.db.crud.run_node_outputs import backfill_run_node_outputs_batch
+    from modulo.db.crud.run_node_outputs_backfill import backfill_run_node_outputs_batch
 
     await _seed_terminal_run(db_engine, sweep_tenant, run_number=1, outputs={"ctrl": {"v": 1}})
     run_array = await _seed_terminal_run(db_engine, sweep_tenant, run_number=2)

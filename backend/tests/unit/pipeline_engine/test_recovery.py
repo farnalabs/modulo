@@ -103,6 +103,41 @@ def _mock_session() -> AsyncMock:
     return session
 
 
+def _stub_blob_reader(run: Any) -> Any:
+    """FAR-583 B1 stub for the recovery paths' blob reads.
+
+    ``recover_node`` reads the completed-marker check and the pre-mutation
+    dicts through :func:`read_run_blobs_with_fallback` (new table + legacy
+    fallback); the mocked sessions here have no schema, so the stub serves
+    the run's PRE-state from the mock attrs — mirroring the pre-B1 ORM read
+    the assertions were written against.
+    """
+    from modulo.db.crud.run_node_outputs import RunBlobs
+
+    async def _read(_session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        outputs = (
+            run.outputs_json if isinstance(getattr(run, "outputs_json", None), dict) and run.outputs_json else None
+        )
+        telemetry = (
+            run.node_telemetry_json
+            if isinstance(getattr(run, "node_telemetry_json", None), dict) and run.node_telemetry_json
+            else None
+        )
+        return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
+
+    return _read
+
+
+def _capturing_store_write(captured: dict[str, Any]) -> Any:
+    """FAR-583 B1: capture the primary store write's merged payloads (the
+    former in-transaction ORM write the assertions read off the run)."""
+
+    async def _write(session: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    return _write
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -116,7 +151,12 @@ async def test_recover_node_with_valid_input():
 
     with (
         patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        # Two binding points consume the reader: the module-level import in
+        # recover_node and the in-function import in _apply_recovery_markers.
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
         patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write(captured := {})),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
@@ -144,12 +184,14 @@ async def test_recover_node_with_valid_input():
 
     assert result is not None
     assert result.status == "running"
-    assert result.outputs_json is not None
-    assert _NODE_ID in result.outputs_json
-    assert result.outputs_json[_NODE_ID] == {"review": "approved", "comments": "LGTM"}
-    assert result.node_telemetry_json is not None
-    assert result.node_telemetry_json[_NODE_ID]["recovered"] is True
-    assert result.node_telemetry_json[_NODE_ID]["recovery_input"] == {"review": "approved", "comments": "LGTM"}
+    # FAR-583 B1: the markers land on the PRIMARY store write — the returned
+    # run object no longer carries them on (dropped) legacy columns.
+    assert captured["outputs"] is not None
+    assert _NODE_ID in captured["outputs"]
+    assert captured["outputs"][_NODE_ID] == {"review": "approved", "comments": "LGTM"}
+    assert captured["telemetry"] is not None
+    assert captured["telemetry"][_NODE_ID]["recovered"] is True
+    assert captured["telemetry"][_NODE_ID]["recovery_input"] == {"review": "approved", "comments": "LGTM"}
 
     mock_audit.assert_awaited_once()
     audit_kwargs = mock_audit.await_args.kwargs
@@ -172,7 +214,10 @@ async def test_skip_node_on_awaiting_human():
 
     with (
         patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
         patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()),
+        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write(captured := {})),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
@@ -200,9 +245,11 @@ async def test_skip_node_on_awaiting_human():
 
     assert result is not None
     assert result.status == "running"
-    assert _NODE_ID not in result.outputs_json
-    assert result.node_telemetry_json is not None
-    assert result.node_telemetry_json[_NODE_ID]["skipped"] is True
+    # FAR-583 B1: the skip marker lands on the PRIMARY store write.
+    assert captured["outputs"] is not None
+    assert _NODE_ID not in captured["outputs"]
+    assert captured["telemetry"] is not None
+    assert captured["telemetry"][_NODE_ID]["skipped"] is True
 
 
 @pytest.mark.asyncio
@@ -213,7 +260,13 @@ async def test_recovery_audit_without_actor_resolves_to_system():
 
     with (
         patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        # Two binding points consume the reader: the module-level import in
+        # recover_node and the in-function import in _apply_recovery_markers
+        # (same shape as test_recover_node_with_valid_input).
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
         patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write({})),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
@@ -395,7 +448,13 @@ async def test_recover_already_completed_node():
             ]
         )
 
-        with pytest.raises(NodeAlreadyCompletedError) as exc_info:
+        with (
+            patch(
+                "modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback",
+                _stub_blob_reader(run),
+            ),
+            pytest.raises(NodeAlreadyCompletedError) as exc_info,
+        ):
             await recover_node(
                 session,
                 org_id=_ORG_ID,
@@ -427,7 +486,13 @@ async def test_recover_skipped_node_not_recoverable():
             ]
         )
 
-        with pytest.raises(NodeAlreadyCompletedError) as exc_info:
+        with (
+            patch(
+                "modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback",
+                _stub_blob_reader(run),
+            ),
+            pytest.raises(NodeAlreadyCompletedError) as exc_info,
+        ):
             await recover_node(
                 session,
                 org_id=_ORG_ID,
@@ -462,7 +527,13 @@ async def test_concurrent_recovery_race():
             ]
         )
 
-        with pytest.raises(ConcurrentRecoveryError) as exc_info:
+        with (
+            patch(
+                "modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback",
+                _stub_blob_reader(run),
+            ),
+            pytest.raises(ConcurrentRecoveryError) as exc_info,
+        ):
             await recover_node(
                 session,
                 org_id=_ORG_ID,
@@ -535,10 +606,13 @@ async def test_recover_node_audit_failure_is_logged_not_fatal():
 
     with (
         patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
         patch(
             "modulo.core.pipeline_engine.recovery.append_audit_event",
             AsyncMock(side_effect=RuntimeError("db down")),
         ),
+        patch("modulo.db.crud.run.write_run_outputs_from_run", AsyncMock()),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()

@@ -21,7 +21,6 @@ swallowed when no Redis is reachable, exactly as in production.
 
 from __future__ import annotations
 
-import itertools
 import json
 import uuid
 from dataclasses import dataclass
@@ -250,10 +249,14 @@ async def test_success_path_populates_both_stores_byte_identical(
     assert final_rows[0][0] == "n1"
 
     blobs = await _read_blobs(rls_app_session, dual_write_tenant, run_id)
-    # Byte-identical reassembly: the serialized bytes of the reassembled dicts
-    # equal the legacy column's serialized bytes.
-    assert json.dumps(blobs.outputs, default=str) == json.dumps(legacy["outputs_json"], default=str)
-    assert json.dumps(blobs.telemetry, default=str) == json.dumps(legacy["node_telemetry_json"], default=str)
+    # FAR-583 B1 contract cut: the store write is the ONLY write — the legacy
+    # ``runs`` blob columns are never touched (they exist until B2b's migration
+    # 0194 and stay NULL post-B1), and the reassembled read returns the written
+    # payloads byte-identical through the JSONB round-trip.
+    assert legacy["outputs_json"] is None
+    assert legacy["node_telemetry_json"] is None
+    assert json.dumps(blobs.outputs, default=str) == json.dumps(outputs, default=str)
+    assert json.dumps(blobs.telemetry, default=str) == json.dumps(telemetry, default=str)
     assert blobs.outputs == outputs
     assert blobs.telemetry == telemetry
 
@@ -288,8 +291,10 @@ async def test_shrinking_replace_through_orm_branch(
     node_ids = sorted(r[0] for r in rows if r[1] == "__final__")
     assert node_ids == ["a"]
     legacy = await _fetch_run_row(db_engine, run_id)
-    assert legacy["outputs_json"] == {"a": 1}
-    assert legacy["node_telemetry_json"] == {"a": {"t": 1}}
+    # FAR-583 B1: the REPLACE shrink deletes the absent store rows; the legacy
+    # column is never written (stays NULL until B2b drops it).
+    assert legacy["outputs_json"] is None
+    assert legacy["node_telemetry_json"] is None
 
 
 async def test_shrinking_replace_through_fenced_branch(
@@ -322,7 +327,8 @@ async def test_shrinking_replace_through_fenced_branch(
     node_ids = sorted(r[0] for r in rows if r[1] == "__final__")
     assert node_ids == ["a"]
     legacy = await _fetch_run_row(db_engine, run_id)
-    assert legacy["outputs_json"] == {"a": 1}
+    # FAR-583 B1: the fenced branch's store leg is the only write.
+    assert legacy["outputs_json"] is None
 
 
 async def test_fenced_rowcount_zero_writes_no_new_table_rows(
@@ -510,11 +516,16 @@ async def test_transient_retry_succeeds_without_failure_event(
 # ---------------------------------------------------------------------------
 
 
-async def test_kill_switch_off_legacy_only_write_with_degraded_event(
+async def test_kill_switch_off_does_not_disable_the_store_write(
     db_engine: AsyncEngine,
     rls_app_session: AsyncSession,
     dual_write_tenant: _Tenant,
 ) -> None:
+    """FAR-583 B1 contract cut: the blobs chokepoint consults NO kill-switch —
+    with the legacy columns no longer written there is no legacy-only mode to
+    fall back to, so even a switch forced OFF cannot disable the store write
+    (the flag dies with the legacy writes at B2a; the marker path in
+    node_runner keeps its gate until B2a)."""
     from modulo.core import run_outputs_dualwrite as dualwrite_module
 
     run_id = await _insert_run(db_engine, dual_write_tenant)
@@ -538,17 +549,23 @@ async def test_kill_switch_off_legacy_only_write_with_degraded_event(
 
     legacy = await _fetch_run_row(db_engine, run_id)
     assert legacy["status"] == "complete"
-    assert legacy["outputs_json"] == {"n1": {"a": 1}}
-    # Zero new-table rows — the legacy-only write is a true emergency valve.
-    assert not await _fetch_new_table_rows(db_engine, run_id)
+    # The store write ran ANYWAY (it is the only store) — and the legacy
+    # column is never written post-B1.
+    rows = await _fetch_new_table_rows(db_engine, run_id)
+    final_node_ids = [r[0] for r in rows if r[1] == "__final__"]
+    assert final_node_ids == ["n1"]
+    assert legacy["outputs_json"] is None
 
 
-async def test_kill_switch_off_edge_triggered_degraded_event(
+async def test_kill_switch_off_blobs_chokepoint_fires_no_degraded_event(
     db_engine: AsyncEngine,
     rls_app_session: AsyncSession,
     dual_write_tenant: _Tenant,
 ) -> None:
-    """The edge gate fires the degraded event exactly once per window."""
+    """FAR-583 B1: the degraded event is a legacy-mode signal — the blobs
+    chokepoint never consults the switch, so writes under a forced-OFF flag
+    fire NO degraded events (the marker path's gate still uses the edge note
+    until B2a; that is covered by the node-runner gate tests)."""
     from modulo.core import run_outputs_dualwrite as module
 
     run_id = await _insert_run(db_engine, dual_write_tenant)
@@ -557,28 +574,23 @@ async def test_kill_switch_off_edge_triggered_degraded_event(
     # qa Minor 5: drop any cached switch value so the OFF flip is observed
     # immediately (and never leaks past the test).
     module._reset_switch_read_cache()
-    edge_counter = itertools.count()
-    edge_values = itertools.cycle([True, False, False])
-
-    async def _edge(key: str, ttl: int) -> bool | None:
-        next(edge_counter)
-        return next(edge_values)
-
     try:
-        with patch.object(module, "_redis_set_nx", _edge):
-            for _ in range(3):
-                async with rls_app_session.begin():
-                    await set_rls_org(rls_app_session, dual_write_tenant.org_id)
-                    await update_run_status(
-                        rls_app_session,
-                        run_id,
-                        "complete",
-                        outputs_json={"n1": {"a": 1}},
-                    )
+        for _ in range(3):
+            async with rls_app_session.begin():
+                await set_rls_org(rls_app_session, dual_write_tenant.org_id)
+                await update_run_status(
+                    rls_app_session,
+                    run_id,
+                    "complete",
+                    outputs_json={"n1": {"a": 1}},
+                )
     finally:
         store.clear_override(DUAL_WRITE_ENABLED_KEY)
         module._reset_switch_read_cache()
 
     events = await _fetch_error_events(db_engine, dual_write_tenant.org_id, "%dual-write disabled%")
-    assert len(events) == 1
-    assert events[0][0] == "backend"
+    assert not events
+    # The store writes all landed.
+    rows = await _fetch_new_table_rows(db_engine, run_id)
+    final_node_ids = [r[0] for r in rows if r[1] == "__final__"]
+    assert final_node_ids == ["n1"]

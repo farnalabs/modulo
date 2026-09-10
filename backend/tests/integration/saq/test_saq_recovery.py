@@ -99,7 +99,6 @@ class TestNoSaqEvictionRedispatch:
             dispatched_at=None,
             heartbeat_at=None,
             node_token_usage={},
-            outputs_json={},
             started_at=None,
             dispatcher="saq",
             enqueue_failed_at=None,

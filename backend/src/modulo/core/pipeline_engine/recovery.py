@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
 from modulo.db.crud.run import _input_hash, get_run
+from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
@@ -144,10 +145,11 @@ async def recover_node(
     run = await _fetch_locked_run(session, run_id)
     _require_recoverable_status(run, run_id)
     node_type = await _resolve_node_type(session, run, run_id, node_id)
-    _require_node_not_completed(run, run_id, node_id)
+    blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=run.organisation_id)
+    _require_node_not_completed(run, run_id, node_id, blobs)
     await _acquire_recovery_lock(session, run, run_id)
 
-    # FAR-583: the marker write is a dual-write chokepoint. A DualWriteError is
+    # FAR-583: the marker write is a store-write chokepoint. A DualWriteError is
     # caught here (the catch/orchestrate contract): the caller's transaction is
     # rolled back cleanly, the run is terminalized ``dual_write_failed`` by the
     # separate-session orchestrator, and the error re-raises so the recovery
@@ -221,15 +223,19 @@ async def _resolve_node_type(session: AsyncSession, run: Run, run_id: uuid.UUID,
     return node_def.get("node_type", "agent")
 
 
-def _require_node_not_completed(run: Run, run_id: uuid.UUID, node_id: str) -> None:
-    """Raise if the node already has a completed marker in either output column.
+def _require_node_not_completed(run: Run, run_id: uuid.UUID, node_id: str, blobs: Any) -> None:
+    """Raise if the node already has a completed marker in either blob side.
 
-    A skipped recovery marker lives ONLY in ``node_telemetry_json`` (its
-    outputs key is omitted), so both columns must be checked (Agent Return
-    Contract, FAR-125 P1c).
+    The node may hold a PURE return on its *outputs* side (a replay marker)
+    or ONLY a telemetry record (a skip marker omits the outputs key — Agent
+    Return Contract, FAR-125 P1c), so both sides must be checked. FAR-583 B1:
+    the check reads through the repo's blobs reader (new table + legacy
+    fallback) instead of the cut ORM mapping — post-B1 completions live ONLY
+    in ``run_node_outputs``, so a legacy-only read would silently let a
+    recovered node replay twice.
     """
-    outputs = dict(run.outputs_json) if run.outputs_json else {}
-    telemetry = dict(run.node_telemetry_json) if run.node_telemetry_json else {}
+    outputs = dict(blobs.outputs) if blobs.outputs else {}
+    telemetry = dict(blobs.telemetry) if blobs.telemetry else {}
     if node_id in outputs or node_id in telemetry:
         raise NodeAlreadyCompletedError(run_id, node_id)
 
@@ -261,36 +267,35 @@ async def _acquire_recovery_lock(session: AsyncSession, run: Run, run_id: uuid.U
 async def _apply_recovery_markers(
     session: AsyncSession, run: Run, node_id: str, input_data: dict[str, Any] | None
 ) -> None:
-    """Write the recovery markers into the run's split output columns.
+    """Write the recovery markers onto the run's blob sides.
 
-    The PURE return lands in ``outputs_json`` and the marker in
-    ``node_telemetry_json``; a skipped node OMITS its outputs key entirely (the
-    telemetry entry is the sole record). Both columns are written on the same
-    ORM object (Agent Return Contract, FAR-125) — the caller flushes once so
-    the pair lands atomically, mirroring ``update_run_outputs`` /
-    ``update_run_status``.
+    The PURE return lands on the *outputs* side and the marker on the
+    *telemetry* side; a skipped node OMITS its outputs key entirely (the
+    telemetry entry is the sole record). FAR-583 B1: the legacy ``runs`` blob
+    columns are no longer written (their ORM mapping is cut) — the merged
+    dicts are persisted on ``run_node_outputs`` by the primary repo write
+    (:func:`modulo.db.crud.run.write_run_outputs_from_run`), same-transaction.
+    Requires an active transaction on *session* (the caller's); a
+    :class:`DualWriteError` propagates to :func:`recover_node`'s guard for
+    the catch/orchestrate contract.
 
-    FAR-583 dual-write: gains the same-transaction REPLACE write of the
-    new-table leg via the shared chokepoint helper
-    (:func:`modulo.db.crud.run.dual_write_run_node_outputs`) — the same
-    kill-switch + retry + fail-closed-abort semantics as
-    ``update_run_status``'s branches. Requires an active transaction on
-    *session* (the caller's); a :class:`DualWriteError` propagates to
-    :func:`recover_node`'s guard for the catch/orchestrate contract.
-
-    qa iteration 2 (Major 4): the PRE-mutation dicts are captured and passed
-    as *inherited_outputs* / *inherited_telemetry* (mirroring the ORM path in
-    ``crud.run``) — without them, pre-0176 legacy data carrying
-    ``__``-prefixed sentinel keys (inherited junk) would make the REPLACE
-    raise :class:`OutputsSentinelViolation` and wedge the node's recovery
+    The PRE-mutation dicts (qa Major 4) are captured and passed as
+    *inherited_outputs* / *inherited_telemetry* (mirroring the branches in
+    ``crud.run``) — pre-0176 legacy data carrying ``__``-prefixed sentinel
+    keys (inherited junk) would otherwise make the REPLACE raise
+    :class:`OutputsSentinelViolation` and wedge the node's recovery
     permanently (the exact wedge the M19 fix removed from the other
     chokepoints).
     """
-    outputs = dict(run.outputs_json) if run.outputs_json else {}
-    telemetry = dict(run.node_telemetry_json) if run.node_telemetry_json else {}
+    from modulo.db.crud.run import write_run_outputs_from_run
+    from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+
+    stored = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+    outputs: dict[str, Any] = dict(stored.outputs) if stored.outputs else {}
+    telemetry: dict[str, Any] = dict(stored.telemetry) if stored.telemetry else {}
 
     # qa Major 4: capture PRE-mutation state for the inherited-sentinel
-    # filter (the dual-write compares against exactly these dicts).
+    # filter (the store write compares against exactly these dicts).
     inherited_outputs = dict(outputs)
     inherited_telemetry = dict(telemetry)
 
@@ -300,17 +305,7 @@ async def _apply_recovery_markers(
     else:
         telemetry[node_id] = {"skipped": True}
 
-    run.outputs_json = outputs
-    run.node_telemetry_json = telemetry
-
-    from modulo.db.crud.run import dual_write_run_node_outputs
-
-    # qa M18: the run's claim_token fences the failure orchestration — without
-    # it a DualWriteError's separate-session terminalize could mark a
-    # SUCCESSOR's re-claim of this run (the successor re-claimed with a fresh
-    # token while the poisoned transaction was aborting). None passes through
-    # (the fence idiom skips the token predicate when the run has no token).
-    await dual_write_run_node_outputs(
+    await write_run_outputs_from_run(
         session,
         run_id=run.id,
         organisation_id=run.organisation_id,

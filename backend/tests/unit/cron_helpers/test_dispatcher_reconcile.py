@@ -132,9 +132,12 @@ def _run_row(
         dispatched_at=dispatched_at,
         heartbeat_at=heartbeat,
         # Non-None by default (has finalised node output → NOT nodeless); a
-        # nodeless zombie has never finalised any node.
+        # nodeless zombie has never finalised any node. FAR-583 B1: the
+        # reconcile SELECT carries the computed ``outputs_absent`` flag
+        # (NOT EXISTS(run_node_outputs __final__ row)) instead of the cut
+        # ``outputs_json`` column.
         node_token_usage=None if nodeless else {},
-        outputs_json=None if nodeless else {},
+        outputs_absent=nodeless,
         started_at=datetime.now(UTC) - timedelta(minutes=60) if nodeless else datetime.now(UTC) - timedelta(minutes=1),
         error_code=error_code,
         dispatcher=dispatcher,
@@ -797,6 +800,51 @@ class TestReDispatchPredicateMatchesParked:
         assert "hitl_parked" in values
         assert "awaiting_human" in values
         assert "claimed" in values
+
+
+class TestNodelessZombiePredicateCompiled:
+    """FAR-583 B1: the nodeless zombie predicate pinned at SQL-compile level.
+
+    The legacy ``runs.outputs_json IS NULL`` leg is GONE (the column's ORM
+    mapping is cut); the ``NOT EXISTS(run_node_outputs __final__ row)`` leg
+    SUBSUMES it for running runs — a finalising write feeds the new table
+    in-transaction and the sweep heals a straggler within one tick. A
+    MARKER-ONLY run (markers never produce ``__final__`` rows) stays
+    re-dispatch-eligible by construction.
+
+    The predicate is compiled EMBEDDED in its production SELECT (an
+    ``exists()`` auto-correlates only against an enclosing statement's FROM —
+    a standalone compile renders an uncorrelated shape that is never executed).
+    """
+
+    @staticmethod
+    def _compiled_predicate(age_minutes: int = 35) -> tuple[str, dict[str, Any]]:
+        import sqlalchemy as sa
+
+        from modulo.db.models.run import Run
+
+        predicate = ch._nodeless_zombie_predicate(age_minutes)
+        compiled = sa.select(Run.id).where(predicate).compile()
+        return str(compiled), dict(compiled.params)
+
+    def test_compiles_without_the_legacy_outputs_json_leg(self) -> None:
+        sql, _params = self._compiled_predicate()
+        assert "outputs_json" not in sql, "the legacy outputs_json leg must stay gone (B1)"
+        # The NOT EXISTS leg auto-correlates: the subquery's FROM carries ONLY
+        # run_node_outputs (an inner runs copy would shadow the outer row and
+        # break the predicate on Postgres).
+        assert "FROM run_node_outputs" in sql
+        assert "FROM run_node_outputs, runs" not in sql
+        assert "NOT (EXISTS" in sql
+
+    def test_final_attempt_key_is_the_subquery_parameter(self) -> None:
+        from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+
+        _sql, params = self._compiled_predicate()
+        assert FINAL_ATTEMPT_KEY in params.values(), (
+            "the NOT EXISTS leg must gate on the __final__ attempt key — a marker-only run "
+            "(non-final rows only) never matches EXISTS and stays re-dispatch-eligible"
+        )
 
 
 class TestNodelessRedispatchBudget:
