@@ -22,7 +22,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_ERROR
+from modulo.api.constants import (
+    MSG_DB_OPERATION_FAILED,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_INTERNAL_SERVER_ERROR,
+    MSG_TRIGGER_NOT_FOUND,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     deny_break_glass_mint,
@@ -66,7 +71,6 @@ from modulo.settings import Settings, get_settings
 
 _CODE_TRIGGER_LIST = "trigger.list"
 _CODE_TRIGGER_UPDATE = "trigger.update"
-_MSG_TRIGGER_NOT_FOUND = "Trigger not found"
 _MSG_ONLY_CRON_TRIGGERS_CAN = "Only cron triggers can have cron configuration"
 _CODE_TRIGGERS_TEST_TRIGGER = "triggers.test_trigger"
 _MAX_PREVIEW_COUNT = 50
@@ -556,7 +560,7 @@ async def preview_cron_schedule(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
 
             if not trigger.cron_expression:
                 raise HTTPException(
@@ -839,7 +843,7 @@ async def test_polling_condition(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
 
             _require_trigger_type(trigger, "polling", "Only polling triggers can be tested")
     except ProgrammingError:
@@ -1138,7 +1142,7 @@ async def delete_trigger(
 
             deleted = await soft_delete_trigger(session, trigger_id)
             if deleted is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
     except ProgrammingError:
         _log.exception("triggers.delete_trigger")
         raise HTTPException(
@@ -1180,7 +1184,7 @@ async def restore_trigger(
 
             trigger = await _restore_trigger(session, trigger_id)
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
             # An ongoing trigger restored back into service must fire on the
             # next tick (its next_fire_at was advanced while it was deleted).
             if trigger.trigger_type == "ongoing":
@@ -1243,7 +1247,7 @@ async def toggle_trigger(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
 
             trigger.active = not trigger.active
             # An ongoing trigger being turned back ON must fire on the next
@@ -1351,7 +1355,7 @@ async def test_trigger(
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
 
             raw_body = json.dumps(req.payload, sort_keys=True).encode()
             payload_hash = hashlib.sha256(raw_body).hexdigest()
@@ -1439,7 +1443,7 @@ async def list_trigger_events(
             )
             trigger = trigger_result.scalar_one_or_none()
             if trigger is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
 
             q = select(TriggerEvent).where(
                 TriggerEvent.trigger_id == trigger_id,

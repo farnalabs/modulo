@@ -14,7 +14,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
+from modulo.api.constants import (
+    MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+    MSG_ENVIRONMENT_PROFILE_NOT_FOUND,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_UNEXPECTED_ERROR,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -35,9 +40,7 @@ from modulo.db.crud.environment_profile import (
 from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
-_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again later."
 _CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE = "environment_profiles.create_profile"
-_MSG_ENVIRONMENT_PROFILE_NOT_FOUND = "Environment profile not found"
 _CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE = "environment_profiles.update_profile"
 _CODE_ENVIRONMENT_PROFILES_TEST_PROFILE = "environment_profiles.test_profile"
 
@@ -187,7 +190,7 @@ async def list_profiles(
         _log.exception("environment_profiles.list_profiles")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -253,7 +256,7 @@ async def create_profile(
         _log.exception(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -288,7 +291,7 @@ async def get_profile(
         _log.exception("environment_profiles.get_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except Exception as exc:
         _log.exception("Unexpected error fetching environment profile: %s", exc)
@@ -297,7 +300,7 @@ async def get_profile(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if profile is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
     return _to_response(profile)
 
 
@@ -339,7 +342,7 @@ async def update_profile(
         _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -350,7 +353,7 @@ async def update_profile(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if profile is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
     return _to_response(profile)
 
 
@@ -376,7 +379,7 @@ async def delete_profile(
         _log.exception("environment_profiles.delete_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except Exception as exc:
         _log.exception("Unexpected error deleting environment profile: %s", exc)
@@ -385,7 +388,7 @@ async def delete_profile(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
 
 
 @router.post("/{profile_id}/restore")
@@ -410,7 +413,7 @@ async def restore_profile(
         _log.exception("environment_profiles.restore_profile")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -421,7 +424,7 @@ async def restore_profile(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
     if profile is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
     return _to_response(profile)
 
 
@@ -435,7 +438,7 @@ async def _get_profile_or_404(session: AsyncSession, profile_id: uuid.UUID) -> E
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND,
+            detail=MSG_ENVIRONMENT_PROFILE_NOT_FOUND,
         )
     return profile
 

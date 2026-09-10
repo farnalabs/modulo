@@ -16,9 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import modulo.db.crud.account as account_crud
 from modulo.api.constants import (
+    MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_ORGANISATION_NOT_FOUND,
     MSG_RESOURCE_ALREADY_EXISTS,
+    MSG_TEAM_NAME_ALREADY_EXISTS,
+    MSG_TEAM_NOT_FOUND,
     MSG_THIS_FEATURE_NOT_AVAILABLE,
     MSG_UNEXPECTED_ERROR,
 )
@@ -105,8 +108,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
 
 _CODE_ROUTES_ADMIN = "routes.admin"
-_MSG_TEAM_NAME_ALREADY_EXISTS = "A team with this name already exists in your organisation"
-_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable. Please try again."
 _CODE_ADMIN_ADMIN_CREATE_TEAM = "admin.admin_create_team"
 _MSG_USER_NOT_FOUND = "User not found"
 _MSG_USER_NOT_FOUND_IN_ORGANISATION = "User not found in this organisation"
@@ -124,7 +125,6 @@ _CODE_ADMIN_DELETE_ORG_IMMEDIATE = "admin.delete_org_immediate"
 _MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again later."
 _RE_GREEN_OR_AMBER = "^(green|amber)$"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again later."
-_MSG_TEAM_NOT_FOUND = "Team not found"
 _MSG_INVITATION_NOT_FOUND = "Invitation not found"
 _MSG_EMAIL_ALREADY_MEMBER = "A user with this email already exists in this organisation"
 _MSG_INVITE_ALREADY_PENDING = "An active invitation for this email already exists in this organisation"
@@ -176,7 +176,7 @@ def _raise_db_temporarily_unavailable() -> NoReturn:
     """Standard SQLAlchemyError mapping: 503 database temporarily unavailable."""
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+        detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
     ) from None
 
 
@@ -824,7 +824,7 @@ async def admin_create_team(
             if existing is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
+                    detail=MSG_TEAM_NAME_ALREADY_EXISTS,
                 )
             team = await create_team(
                 session,
@@ -839,7 +839,7 @@ async def admin_create_team(
         logger.exception("admin_create_team IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
+            detail=MSG_TEAM_NAME_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
@@ -1981,7 +1981,7 @@ async def _update_team_or_raise(
             if existing is not None and existing.id != team_id:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=_MSG_TEAM_NAME_ALREADY_EXISTS,
+                    detail=MSG_TEAM_NAME_ALREADY_EXISTS,
                 )
 
         if expected_updated_at is not None:
@@ -1992,7 +1992,7 @@ async def _update_team_or_raise(
                 expected_updated_at,
             )
             if outcome is TeamUpdateOutcome.NOT_FOUND:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
             if outcome is TeamUpdateOutcome.STALE:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -2039,7 +2039,7 @@ async def admin_update_team(
         _raise_unexpected("An unexpected error occurred while updating the team.")
 
     if team is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
 
     await _append_team_audit_event(
         session,
@@ -2096,7 +2096,7 @@ async def admin_reassign_all_team_resources(
 
             team = await get_team(session, team_id)
             if team is None or team.organisation_id != current_user.organisation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
 
             reassigned, touched = await reassign_team_resources_to_org(
                 session,
@@ -2187,7 +2187,7 @@ async def admin_delete_team(
         _raise_unexpected("An unexpected error occurred while deleting the team.")
 
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TEAM_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
 
     from modulo.core.audit_logger import append_audit_event
 

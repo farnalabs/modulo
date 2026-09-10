@@ -24,6 +24,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_DATABASE_ERROR_OCCURRED_PLEASE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -48,7 +49,6 @@ _CODE_FEEDBACK_AUDIT_APPEND_FAILED = "feedback.audit_append_failed"
 _CODE_FEEDBACK_PUBLISH_EVAL_PROPOSAL = "feedback.publish_eval_proposal"
 _MSG_RESOURCE_CONFLICT_OCCURRED_PLEASE = "A resource conflict occurred. Please try again."
 _MSG_FEEDBACK_SYSTEM_NOT_AVAILABLE = "Feedback system is not available. Run database migrations to enable this feature."
-_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again later."
 _MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE = "An unexpected error occurred. Please try again later."
 _CODE_FEEDBACK_LIST = "feedback.list"
 _CODE_FEEDBACK_LIST_FEEDBACK = "feedback.list_feedback"
@@ -185,7 +185,7 @@ async def create_feedback(
         logger.exception(_CODE_FEEDBACK_CREATE_FEEDBACK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
     except HTTPException:
         raise
@@ -259,7 +259,7 @@ async def list_feedback(
         logger.exception(_CODE_FEEDBACK_LIST_FEEDBACK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
     except HTTPException:
         raise
@@ -324,7 +324,7 @@ async def list_feedback_inbox(
         logger.exception(_CODE_FEEDBACK_LIST_FEEDBACK_INBOX)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
     except HTTPException:
         raise
@@ -409,7 +409,7 @@ async def list_eval_proposals(
         logger.exception(_CODE_FEEDBACK_LIST_EVAL_PROPOSALS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
     except HTTPException:
         raise
@@ -635,7 +635,7 @@ async def get_feedback(
         logger.exception(_CODE_FEEDBACK_GET_FEEDBACK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
     except HTTPException:
         raise
@@ -708,7 +708,7 @@ async def _update_feedback_status_transaction(
         logger.exception(_CODE_FEEDBACK_UPDATE_FEEDBACK_STATUS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
     except HTTPException:
         raise
@@ -796,7 +796,7 @@ async def detect_eval_gap(
         logger.exception(_CODE_FEEDBACK_DETECT_EVAL_GAP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
     except HTTPException:
         raise
@@ -854,7 +854,7 @@ async def get_inbox_item(
         logger.exception(_CODE_FEEDBACK_GET_INBOX_ITEM)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
     except HTTPException:
         raise
@@ -983,7 +983,7 @@ async def review_feedback(
         logger.exception(_CODE_FEEDBACK_REVIEW_FEEDBACK)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except (InvalidTransitionError, ConcurrentModificationError) as exc:
         raise HTTPException(

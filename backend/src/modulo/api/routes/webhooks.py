@@ -26,6 +26,7 @@ from modulo.api.constants import (
     MSG_DB_OPERATION_FAILED,
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_INTERNAL_SERVER_ERROR,
+    MSG_TRIGGER_NOT_FOUND,
 )
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.db_error_reporting import log_service_unavailable
@@ -81,7 +82,6 @@ from modulo.version import get_version
 
 _CODE_WEBHOOKS_RECEIVE_WEBHOOK = "webhooks.receive_webhook"
 _CODE_WEBHOOKS_REPLAY_WEBHOOK = "webhooks.replay_webhook"
-_MSG_TRIGGER_NOT_FOUND = "Trigger not found"
 
 
 _log = logging.getLogger(__name__)
@@ -331,9 +331,9 @@ async def receive_webhook(
                 # acked-as-accepted, and no run was created.
                 guardrail_block_detail = exc.detail
     except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerConfigInvalidError as exc:
         _log.warning(
             "webhooks.receive_webhook.trigger_config_invalid",
@@ -699,9 +699,9 @@ async def replay_webhook(
     except ReplayNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger event not found") from exc
     except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_TRIGGER_NOT_FOUND) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND) from exc
     except TriggerConfigInvalidError as exc:
         _log.warning(
             "webhooks.replay_webhook.trigger_config_invalid",
