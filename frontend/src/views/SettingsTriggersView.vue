@@ -112,7 +112,7 @@
                         class="h-1.5 w-1.5 rounded-full"
                         :class="t.active ? 'bg-success' : 'bg-muted-foreground'"
                       />
-                      {{ triggerToggling[t.id] ? '...' : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
+                      {{ triggerToggling[t.id] ? $t('views.SettingsTriggersView.toggling') : (t.active ? $t('views.SettingsTriggersView.active') : $t('views.SettingsTriggersView.inactive')) }}
                     </button>
                     <Button v-if="isDeactivatedOngoing(t) && isOrgOperator" data-testid="settings-triggers-reenable" size="small" severity="secondary" outlined :disabled="triggerToggling[t.id]" @click="toggleActive(t)">
                       {{ $t('views.SettingsTriggersView.re_enable') }}
