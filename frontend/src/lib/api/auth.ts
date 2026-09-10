@@ -194,3 +194,16 @@ export function redirectToLogin(): void {
     window.location.href = '/login'
   }
 }
+
+/**
+ * Force-exit to /login after an auth-fatal event (failed token refresh,
+ * token cleared). Unlike redirectToLogin(), this ALWAYS redirects — even
+ * when auto-login config exists. Auto-login only suppresses bounces while
+ * a login attempt may be in flight from app startup; a dead session is a
+ * different situation and must not silently no-op.
+ */
+export function exitToLogin(): void {
+  if (!window.location.pathname.startsWith('/login')) {
+    window.location.href = '/login'
+  }
+}
