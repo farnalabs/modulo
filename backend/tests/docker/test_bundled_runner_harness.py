@@ -614,8 +614,6 @@ async def test_engine_kill_via_dind_fails_client_never_success() -> None:
                 process = await provider.exec_command_stream(ref, ["sh", "-c", "echo nested; sleep 30"])
                 break
             except aiodocker.exceptions.DockerError:
-                if process is not None:
-                    break
                 await asyncio.sleep(2.0)
         assert ref is not None, "workspace could not be provisioned inside dind"
         assert process is not None, "exec stream could not be established inside dind"
