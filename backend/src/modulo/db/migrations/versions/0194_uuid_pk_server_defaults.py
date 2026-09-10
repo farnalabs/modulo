@@ -26,9 +26,8 @@ at authoring time and is committed here as explicit literals. The migration
 MUST NOT inspect metadata at runtime (a runtime-enumerated list would silently
 change on future model edits). Excluded deliberately: non-uuid primary keys
 (``tier_catalog``, ``oauth_authorization_codes``/``oauth_tokens`` string keys),
-composite-PK columns that are also foreign keys (``run_evidence.run_id`` — note
-``run_evidence.node_id`` is a uuid PK with no FK and IS covered), and
-``alembic_version``.
+composite-PK columns that are also foreign keys (``run_evidence.run_id`` /
+``run_evidence.node_id``), and ``alembic_version``.
 
 Downgrade mirrors the list exactly, dropping every default (restoring the
 pre-0194 state where raw inserts without id fail again).
@@ -110,7 +109,6 @@ _UPGRADE_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE remy_context_sources ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE remy_skills ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE run_daily_facts ALTER COLUMN id SET DEFAULT gen_random_uuid()",
-    "ALTER TABLE run_evidence ALTER COLUMN node_id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE runs ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE runner_probe_cache ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     "ALTER TABLE saved_views ALTER COLUMN id SET DEFAULT gen_random_uuid()",
@@ -198,7 +196,6 @@ _DOWNGRADE_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE remy_context_sources ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE remy_skills ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE run_daily_facts ALTER COLUMN id DROP DEFAULT",
-    "ALTER TABLE run_evidence ALTER COLUMN node_id DROP DEFAULT",
     "ALTER TABLE runs ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE runner_probe_cache ALTER COLUMN id DROP DEFAULT",
     "ALTER TABLE saved_views ALTER COLUMN id DROP DEFAULT",
