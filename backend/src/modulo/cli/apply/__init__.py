@@ -1,10 +1,14 @@
-"""``modulo apply`` orchestration + CLI registration (FAR-681, slices 1+2).
+"""``modulo apply`` orchestration + CLI registration (FAR-681, slices 1-3).
 
 Declarative configuration: ``modulo apply -f config.yaml`` plans name-based
 upserts against the live org and executes them idempotently. Slices 1+2
 cover schemas (+versions), model_backends, pipelines (agent name-refs in
-graphs) and triggers ((pipeline, name) identity). Exit-code semantics:
+graphs) and triggers ((pipeline, name) identity); slice 3 adds --diff.
+Exit-code semantics:
 - dry-run (--dry-run/--plan): always exit 0
+- drift mode (--diff): exit 0 when the org matches the config (all
+  unchanged), exit 1 when drift is detected (created/updated/blocked) so
+  CI can gate on config drift
 - real apply: exit 1 if any entity was blocked or failed, else 0
 """
 
@@ -38,13 +42,14 @@ def run_apply(
     dry_run: bool,
     client: Any = None,
     refresh_secrets: bool = False,
+    drift: bool = False,
 ) -> dict[str, Any]:
     """Plan (and unless dry-run, execute) an ApplyConfig; returns the report."""
     from modulo.cli.apply.executor import ApplyExecutor
 
     executor = ApplyExecutor(base_url, api_key, client=client)
     try:
-        return executor.run(config, dry_run=dry_run, refresh_secrets=refresh_secrets)
+        return executor.run(config, dry_run=dry_run, refresh_secrets=refresh_secrets, drift=drift)
     finally:
         executor.close()
 
@@ -60,10 +65,17 @@ def _http_error_message(exc: ApplyHttpError) -> str:
 
 
 def render_table(report: dict[str, Any]) -> str:
-    """Human-friendly plan/apply report rendering."""
+    """Human-friendly plan/apply/drift report rendering.
+
+    Drift reports (``mode == "drift"``) are explicitly labelled: each verb
+    is prefixed (``drift create`` / ``drift update``), the summary line reads
+    ``drift summary``, and pipelines in ``drift_detail`` get a graph
+    breakdown line.
+    """
+    drift_mode = report.get("mode") == "drift"
     verbs = {
-        "created": "create",
-        "updated": "update",
+        "created": "drift create" if drift_mode else "create",
+        "updated": "drift update" if drift_mode else "update",
         "blocked": "block",
     }
     lines: list[str] = []
@@ -75,9 +87,17 @@ def render_table(report: dict[str, Any]) -> str:
             lines.append(line)
     lines.extend(f"fail {entry['kind']} {entry['name']!r}: {entry['error']}" for entry in report.get("failed", []))
     lines.extend(f"unchanged {entry['kind']} {entry['name']!r}" for entry in report.get("unchanged", []))
+    for name, breakdown in sorted((report.get("drift_detail") or {}).items()):
+        nodes, edges = breakdown["nodes"], breakdown["edges"]
+
+        def _counts(section: dict[str, list[str]]) -> str:
+            return f"+{len(section['added'])}/-{len(section['removed'])}/~{len(section['modified'])}"
+
+        lines.append(f"drift detail pipeline {name!r}: graph {_counts(nodes)} nodes, {_counts(edges)} edges")
     counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
+    label = "drift summary" if drift_mode else "summary"
     lines.append(
-        f"summary: {counts['created']} created, {counts['updated']} updated, "
+        f"{label}: {counts['created']} created, {counts['updated']} updated, "
         f"{counts['unchanged']} unchanged, {counts['blocked']} blocked, {counts['failed']} failed"
     )
     return "\n".join(lines)
@@ -116,6 +136,18 @@ def register_apply(group: click.Group) -> None:
         ),
     )
     @click.option(
+        "--diff",
+        "diff_mode",
+        is_flag=True,
+        default=False,
+        help=(
+            "Drift mode: read-only comparison of the live org against the config "
+            "(same managed-field hashes as the plan). Writes NOTHING. Exit code 0 "
+            "when the org matches the config, 1 when drift is detected "
+            "(created/updated/blocked) so CI can gate on config drift."
+        ),
+    )
+    @click.option(
         "--output",
         "output_format",
         type=click.Choice(["json", "table"]),
@@ -133,6 +165,7 @@ def register_apply(group: click.Group) -> None:
         config_path: Path,
         dry_run: bool,
         refresh_secrets: bool,
+        diff_mode: bool,
         output_format: str,
         json_flag: bool,
     ) -> None:
@@ -148,7 +181,12 @@ def register_apply(group: click.Group) -> None:
             raise click.ClickException(msg)
         try:
             report = run_apply(
-                config, base_url=base_url, api_key=api_key, dry_run=dry_run, refresh_secrets=refresh_secrets
+                config,
+                base_url=base_url,
+                api_key=api_key,
+                dry_run=dry_run,
+                refresh_secrets=refresh_secrets,
+                drift=diff_mode,
             )
         except ApplyHttpError as exc:
             raise click.ClickException(_http_error_message(exc)) from None
@@ -160,6 +198,12 @@ def register_apply(group: click.Group) -> None:
             click.echo(json.dumps(report, indent=2, sort_keys=True))
         else:
             click.echo(render_table(report))
-        if not dry_run and has_blockers(report):
+        if diff_mode:
+            from modulo.cli.apply.drift import has_drift
+
+            if has_drift(report):
+                ctx = click.get_current_context()
+                ctx.exit(1)
+        elif not dry_run and has_blockers(report):
             ctx = click.get_current_context()
             ctx.exit(1)
