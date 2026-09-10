@@ -345,9 +345,8 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
             import pwd
         except ImportError:
             return None
-        # POSIX-only module; unused attr that mypy's django-stubs typeshed does not declare — pin ruff via noqa.
         try:
-            record: Any = pwd.getpwuid(uid)  # type: ignore[attr-defined]
+            record: Any = pwd.getpwuid(uid)
             name = getattr(record, "pw_name", None)
             return str(name) if name else None
         except KeyError:

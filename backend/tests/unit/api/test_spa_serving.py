@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from starlette.routing import Mount
 from starlette.testclient import TestClient
 
-from modulo.api.main import _mount_spa
+from modulo.api.main import _init_once_mount_spa
 
 ASSET_NAME = "app-a1b2c3d4.js"
 
@@ -40,13 +40,13 @@ def _spa_app(dist: Path, extra: dict[str, str] | None = None) -> tuple[FastAPI, 
     app = _plain_api_app()
     env: dict[str, str] = {"MODULO_SERVE_SPA": "1", "MODULO_FRONTEND_DIST": str(dist)}
     env.update(extra or {})
-    _mount_spa(app, env)
+    _init_once_mount_spa(app, env)
     return app, TestClient(app, base_url="http://127.0.0.1:18000")
 
 
 def test_serve_spa_disabled_mounts_nothing() -> None:
     app = _plain_api_app()
-    _mount_spa(app, {})
+    _init_once_mount_spa(app, {})
     static_mounts = [r for r in app.router.routes if isinstance(r, Mount) and r.name in ("spa", "spa-assets")]
     assert not static_mounts
     middleware_names = {item.cls.__name__ for item in app.user_middleware}
@@ -55,13 +55,16 @@ def test_serve_spa_disabled_mounts_nothing() -> None:
 
 def test_serve_spa_disabled_by_default() -> None:
     app = _plain_api_app()
-    assert _mount_spa(app, {}) is False
-    assert _mount_spa(app, {"MODULO_SERVE_SPA": "false"}) is False
+    assert _init_once_mount_spa(app, {}) is False
+    assert _init_once_mount_spa(app, {"MODULO_SERVE_SPA": "false"}) is False
 
 
 def test_truthy_flag_refuses_missing_dist(tmp_path: Path) -> None:
     app = _plain_api_app()
-    assert _mount_spa(app, {"MODULO_SERVE_SPA": "true", "MODULO_FRONTEND_DIST": str(tmp_path / "missing")}) is False
+    assert (
+        _init_once_mount_spa(app, {"MODULO_SERVE_SPA": "true", "MODULO_FRONTEND_DIST": str(tmp_path / "missing")})
+        is False
+    )
 
 
 def test_serve_spa_on_serves_the_spa_shell(tmp_path: Path) -> None:

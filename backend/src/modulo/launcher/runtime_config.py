@@ -6,7 +6,7 @@ reads before anything else. Two delivery paths produce it:
 * the container path — ``deploy/fly/entrypoint.sh`` renders
   ``runtime-config.js`` into the nginx docroot;
 * the native single-port path — the API serves ``GET /runtime-config.js``
-  when ``serve_spa`` is ON (``modulo.api.main._mount_spa``).
+  when ``serve_spa`` is ON (``modulo.api.main._init_once_mount_spa``).
 
 ONE allowlist backs both: its top-level keys are exactly
 :data:`RUNTIME_CONFIG_KEYS`, and both paths generate through

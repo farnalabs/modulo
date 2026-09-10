@@ -11,7 +11,7 @@ LAN mode: ``MODULO_LAN_ORIGINS`` (comma-separated hostnames) widens the
 allowlist with the explicitly configured LAN hostnames ONLY — an open allow
 everything behaviour would re-open the rebinding class.
 
-Only mounted when ``serve_spa`` is ON (``modulo.api.main._mount_spa``);
+Only mounted when ``serve_spa`` is ON (``modulo.api.main._init_once_mount_spa``);
 Docker/Fly are unaffected — nginx terminates the public Host there.
 
 TODO(P3): the middleware is platform-independent; the launcher's Windows

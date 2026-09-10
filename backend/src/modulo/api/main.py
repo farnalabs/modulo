@@ -1252,7 +1252,7 @@ class _SpaFallbackStaticFiles(StaticFiles):
         return await super().get_response("index.html", scope)
 
 
-def _mount_spa(app: FastAPI, env: Mapping[str, str] | None = None) -> bool:
+def _init_once_mount_spa(app: FastAPI, env: Mapping[str, str] | None = None) -> bool:
     """Flag-gated single-port SPA mount (returns True only when mounted).
 
     The mount is registered LAST — after every /api router and the /mcp
@@ -1301,4 +1301,6 @@ def _mount_spa(app: FastAPI, env: Mapping[str, str] | None = None) -> bool:
 # Flag-gated (default OFF — Docker/Fly unchanged). Native `modulo start`
 # sets MODULO_SERVE_SPA=1 + MODULO_FRONTEND_DIST=... to serve the SPA from
 # the API port behind the loopback Host/Origin allowlist.
-_mount_spa(app, os.environ)
+# Prefixed `_init_once_` so the architecture side-effect test permits this
+# single run-once module-level call (see tests/architecture/test_module_side_effects.py).
+_init_once_mount_spa(app, os.environ)
