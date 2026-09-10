@@ -310,7 +310,7 @@ QUARANTINE_TABLE = Table(
 # The legacy ``runs`` blob columns as a CORE-ONLY Table (B1 — FAR-583): the
 # ORM mapping of ``outputs_json`` / ``node_telemetry_json`` /
 # ``raw_output_markers`` was CUT from :class:`modulo.db.models.run.Run` in B1,
-# but the columns EXIST IN THE DATABASE until migration 0194 (B2b), so the
+# but the columns EXIST IN THE DATABASE until the B2b repair/drop migration, so the
 # EMPTY/MISMATCH fallback readers, the fenced markers read, and the marker
 # dual-write's legacy read-merge-write leg
 # select/patch them through this table. Statement-shaped parameterised SQL
@@ -534,11 +534,12 @@ async def replace_run_node_outputs(
     in *inherited_outputs* / *inherited_telemetry* (the caller-captured
     PRE-WRITE legacy dicts) are FILTERED from the new-table write — the
     caller's legacy write retains them — and counted in the returned
-    ``outputs_dual_write_sentinel_filtered`` (the core orchestrator wires the
-    counter). A ``__``-prefixed key NOT already stored (newly introduced by
-    the caller) still raises :class:`OutputsSentinelViolation`; when the
-    caller captured no legacy dict (``None``), every ``__``-prefixed key
-    raises (fail-closed — nothing proves it was inherited).
+    ``outputs_dual_write_sentinel_filtered`` (a diagnostic count returned to
+    callers; the B2b repair migration mirrors this filter). A ``__``-prefixed
+    key NOT already stored (newly introduced by the caller) still raises
+    :class:`OutputsSentinelViolation`; when the caller captured no legacy dict
+    (``None``), every ``__``-prefixed key raises (fail-closed — nothing
+    proves it was inherited).
 
     Returns ``{"outputs_dual_write_sentinel_filtered": <int>}``.
     """
@@ -933,8 +934,13 @@ def _direction_aware_side(
     Compares the LEGACY key set with the REASSEMBLED key set:
 
     * legacy ⊆ new (incl. equal, incl. legacy empty) → serve NEW — the legacy
-      column is a stale subset (legacy is only ever behind, since the legacy
-      writes stopped at B1), so an already-represented run is NOT shadowed;
+      column is a stale subset (legacy is only ever behind for
+      outputs/telemetry, whose legacy writes stopped at B1; markers keep a
+      legacy read-merge-write leg via
+      ``node_runner._persist_raw_output_marker``, so a momentarily-behind
+      marker column is backstopped by the run's next marker persist and,
+      finally, the B2b repair), so an already-represented run is NOT
+      shadowed;
     * new ⊂ legacy (proper) → serve LEGACY — the truncation guard: the new
       table is missing rows the legacy column has (pre-B1 straggler rows),
       legacy is the more complete store;

@@ -27,8 +27,8 @@ Usage::
     DATABASE_URL=... python backfill_lifecycle_map_legacy_content.py --apply --limit 100
 
 This is a version-controlled maintenance tool (see ``repair_accounts_fks.py``
-for a similar one-off; the run-outputs catch-up sweep is wired in-product via
-``src/modulo/db/crud/run_node_outputs_backfill.py``); it uses a SYNC SQLAlchemy engine
+for a similar one-off; the run-outputs catch-up repair ships as SQL in the
+B2b repair migration); it uses a SYNC SQLAlchemy engine
 (psycopg) and is never invoked from the async application path. Quiesce writes
 (app drained / workers stopped) while running ``--apply`` so the per-map
 read-modify-write is not raced by live edits.
