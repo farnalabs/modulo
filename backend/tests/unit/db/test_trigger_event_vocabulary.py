@@ -74,7 +74,7 @@ _MIGRATION_PATH = (
 # and FAR-760's 0205_library_collection_type chained onto 0204_runner_probe_cache,
 # and FAR-644's 0206_deleted_defaults_signal_check chained onto 0205,
 # and FAR-761's 0207_collection_install_tracking chained onto 0206 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0207_collection_install_tracking"
+_CHAIN_HEAD_MIGRATION_NAME = "0209_variant_batch_state"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

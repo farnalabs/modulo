@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0207_collection_install_tracking."""
+    """Exactly one migration chains off each predecessor, and the head is 0209_variant_batch_state."""
     import re
 
     revisions = {}
@@ -838,14 +838,21 @@ def test_single_migration_head() -> None:
     chaining_off_0204 = [p for p in revisions if parents[p] == "0204_runner_probe_cache"]
     assert [_basename(p) for p in chaining_off_0204] == ["0205_library_collection_type.py"]
     # 0206_deleted_defaults_signal_check (FAR-644) chains off 0205_library_collection_type;
-    # 0207_collection_install_tracking (FAR-761) chains off 0206_deleted_defaults_signal_check.
+    # 0207_collection_install_tracking (FAR-761) chains off 0206_deleted_defaults_signal_check;
+    # 0208_notification_indexes_and_constraint (improve-database/1789050319) chains off 0207.
     chaining_off_0205 = [p for p in revisions if parents[p] == "0205_library_collection_type"]
     assert [_basename(p) for p in chaining_off_0205] == ["0206_deleted_defaults_signal_check.py"]
     chaining_off_0206 = [p for p in revisions if parents[p] == "0206_deleted_defaults_signal_check"]
     assert [_basename(p) for p in chaining_off_0206] == ["0207_collection_install_tracking.py"]
-    # Nothing chains off 0207 -> it is the single head.
+    # 0208_notification_indexes_and_constraint chains off 0207.
     chaining_off_0207 = [p for p in revisions if parents[p] == "0207_collection_install_tracking"]
-    assert not chaining_off_0207
+    assert [_basename(p) for p in chaining_off_0207] == ["0208_notification_indexes_and_constraint.py"]
+    # 0209_variant_batch_state (FAR-775) chains off 0208_notification_indexes_and_constraint,
+    # and nothing chains off 0209 -> it is the single head.
+    chaining_off_0208 = [p for p in revisions if parents[p] == "0208_notification_indexes_and_constraint"]
+    assert [_basename(p) for p in chaining_off_0208] == ["0209_variant_batch_state.py"]
+    chaining_off_0209 = [p for p in revisions if parents[p] == "0209_variant_batch_state"]
+    assert not chaining_off_0209
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
