@@ -300,7 +300,7 @@ class TestNonGatedEndpoints:
     def test_export_unaffected(self, licensed_client: TestClient) -> None:
         rows = [{"entity_id": str(_TEAM_ID), "entity_name": "Team A", "total_spend_usd": 100.0, "total_runs": 5}]
         with (
-            patch("modulo.api.routes.costs.get_cost_report", return_value=rows),
+            patch("modulo.api.routes.costs.get_cost_export_rows", return_value=rows),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.get("/api/v1/admin/costs/export?period=this_month&group_by=team&format=csv")

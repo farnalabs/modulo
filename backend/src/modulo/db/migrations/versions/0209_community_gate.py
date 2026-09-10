@@ -1,7 +1,7 @@
 """community execution gate on collection_install (FAR-764).
 
-Revision ID: 0208_community_gate
-Revises: 0207_collection_install_tracking
+Revision ID: 0209_community_gate
+Revises: 0208_notification_indexes_and_constraint
 Create Date: 2026-09-10
 
 Adds ``community_sourced`` and ``agents_granted`` boolean columns to
@@ -20,8 +20,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0208_community_gate"
-down_revision: str | None = "0207_collection_install_tracking"
+revision: str = "0209_community_gate"
+down_revision: str | None = "0208_notification_indexes_and_constraint"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

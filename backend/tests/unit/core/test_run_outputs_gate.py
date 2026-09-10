@@ -3,12 +3,9 @@
 Covers the chokepoint-side fixes that the repo/migration fix Worker did not
 own:
 
-* qa M7 — the node-runner marker savepoint is KILL-SWITCH-GATED: switch OFF →
-  zero new-table marker rows, a degraded note, and the legacy marker still
-  written;
 * qa rider (f) — a transaction-aborting savepoint failure (deadlock /
   shutdown / connection loss) logs ``legacy_marker_also_lost`` (the legacy
-  write is rolled back too) instead of claiming the sweep heals;
+  write is rolled back too) instead of claiming the 0177 repair migrates;
 * qa M4/M5 — the FAR-228 gate read and the connector rewrite read consume the
   repo's SINGLE fenced markers reader (``read_run_markers_fenced``): no
   predicate SELECT outside the repo, one statement, lock-preserving;
@@ -18,6 +15,10 @@ own:
   and the docstrings document the Raises contract;
 * qa M18 — the recovery failure path carries the run's ``claim_token`` into
   the orchestration (a successor's re-claim must never be terminalized).
+
+The marker savepoint's kill-switch gating was removed at B2a (FAR-694) with
+the switch machinery — the new-table write is unconditional — so the
+switch-gated tests went with it.
 
 DB-backed cases run on in-memory SQLite with ``Base.metadata.create_all`` over
 the involved tables only (the ``test_run_outputs_dualwrite`` harness).
@@ -131,109 +132,32 @@ async def _load_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) 
 
 
 # ---------------------------------------------------------------------------
-# qa M7 — the marker savepoint is kill-switch-gated
+# the marker savepoint (unconditional post-B2a) + the legacy-lost classification
 # ---------------------------------------------------------------------------
 
 
-class TestMarkerSavepointKillSwitchGate:
+class TestMarkerSavepointWrite:
     @pytest.mark.asyncio
-    async def test_switch_off_skips_new_table_and_writes_legacy_only(
+    async def test_write_persists_the_merged_marker_row(
         self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
     ) -> None:
-        """Switch OFF: ZERO new-table marker rows, the edge-triggered degraded
-        note fires, and the legacy ``runs.raw_output_markers`` column still
-        carries the merged marker (the emergency valve is legacy-only)."""
+        """The savepoint leg runs the REAL ``write_run_markers`` — one row
+        per attempt key in the new table."""
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
-        note = AsyncMock()
-        written = AsyncMock()
-
-        async def _switch_off() -> bool:
-            return False
-
-        with (
-            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_off),
-            patch("modulo.core.run_outputs_dualwrite.note_dual_write_disabled", note),
-            patch("modulo.db.crud.run_node_outputs.write_run_markers", written),
-        ):
-            await _write_raw_output_marker(
-                sqlite_sessionmaker,
-                org_uuid=_ORG,
-                run_id=str(run_id),
-                node_id="n1",
-                attempt_key=None,
-                marker={"status": "failed", "raw_output": "raw"},
-            )
-
-        note.assert_awaited_once_with(str(run_id), _ORG)
-        written.assert_not_awaited()
-        # FAR-583 B1: the legacy column's ORM mapping is cut — read it through
-        # the repo's raw parameterised-SQL helper.
-        from modulo.db.crud.run_node_outputs import read_legacy_raw_output_markers
-
-        async with sqlite_sessionmaker() as check, check.begin():
-            legacy = await read_legacy_raw_output_markers(check, run_id=run_id)
-        assert legacy is not None, "the legacy marker write must survive the switch-off"
-        assert f"run:{run_id}:node:n1:fallback" in legacy
-
-    @pytest.mark.asyncio
-    async def test_switch_on_writes_the_merged_marker_row(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
-        """Switch ON (default): the savepoint leg runs the REAL
-        ``write_run_markers`` — one row per attempt key in the new table, and
-        the degraded note stays silent."""
-        run_id = uuid.uuid4()
-        await _seed_run(sqlite_sessionmaker, run_id)
-        note = AsyncMock()
-
-        async def _switch_on() -> bool:
-            return True
-
-        with (
-            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on),
-            patch("modulo.core.run_outputs_dualwrite.note_dual_write_disabled", note),
-        ):
-            await _write_raw_output_marker(
-                sqlite_sessionmaker,
-                org_uuid=_ORG,
-                run_id=str(run_id),
-                node_id="n1",
-                attempt_key=None,
-                marker={"status": "failed", "raw_output": "raw"},
-            )
-
-        note.assert_not_awaited()
+        await _write_raw_output_marker(
+            sqlite_sessionmaker,
+            org_uuid=_ORG,
+            run_id=str(run_id),
+            node_id="n1",
+            attempt_key=None,
+            marker={"status": "failed", "raw_output": "raw"},
+        )
         async with sqlite_sessionmaker() as check, check.begin():
             rows = (await check.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run_id))).scalars().all()
         assert len(rows) == 1
         assert rows[0].attempt_key == f"run:{run_id}:node:n1:fallback"
         assert rows[0].node_id == "n1"
-
-    @pytest.mark.asyncio
-    async def test_switch_read_failure_is_fail_closed_on(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
-        run_id = uuid.uuid4()
-        await _seed_run(sqlite_sessionmaker, run_id)
-        written = AsyncMock()
-
-        async def _boom() -> bool:
-            raise RuntimeError("switch store down")
-
-        with (
-            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _boom),
-            patch("modulo.db.crud.run_node_outputs.write_run_markers", written),
-        ):
-            await _write_raw_output_marker(
-                sqlite_sessionmaker,
-                org_uuid=_ORG,
-                run_id=str(run_id),
-                node_id="n1",
-                attempt_key=None,
-                marker={"status": "failed", "raw_output": "raw"},
-            )
-        written.assert_awaited_once(), "a switch-read failure must NOT disable the new-table leg (fail-closed ON)"
 
     @pytest.mark.asyncio
     async def test_missing_org_is_an_explicit_runtime_error(
@@ -247,19 +171,15 @@ class TestMarkerSavepointKillSwitchGate:
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
 
-        async def _switch_on() -> bool:
-            return True
-
         caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
-        with patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on):
-            await _write_raw_output_marker(
-                sqlite_sessionmaker,
-                org_uuid=None,
-                run_id=str(run_id),
-                node_id="n1",
-                attempt_key=None,
-                marker={"status": "failed", "raw_output": "raw"},
-            )
+        await _write_raw_output_marker(
+            sqlite_sessionmaker,
+            org_uuid=None,
+            run_id=str(run_id),
+            node_id="n1",
+            attempt_key=None,
+            marker={"status": "failed", "raw_output": "raw"},
+        )
         assert "requires a parsed organisation id" in caplog.text, (
             "the explicit RuntimeError must surface through the persist-failure log"
         )
@@ -274,7 +194,7 @@ class TestMarkerSavepointLegacyLostClassification:
     ) -> None:
         """qa rider (f): a 40P01-class savepoint failure poisons the WHOLE
         transaction — the log must say the legacy marker is lost too, not
-        claim the sweep heals."""
+        claim the 0177 repair migrates."""
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
 
@@ -284,10 +204,7 @@ class TestMarkerSavepointLegacyLostClassification:
             raise err
 
         caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
-        with (
-            patch("modulo.db.crud.run_node_outputs.write_run_markers", _failing_write),
-            patch("modulo.core.run_outputs_dualwrite.note_dual_write_marker_failure", new_callable=AsyncMock) as note,
-        ):
+        with patch("modulo.db.crud.run_node_outputs.write_run_markers", _failing_write):
             await _write_raw_output_marker(
                 sqlite_sessionmaker,
                 org_uuid=_ORG,
@@ -296,7 +213,6 @@ class TestMarkerSavepointLegacyLostClassification:
                 attempt_key=None,
                 marker={"status": "failed", "raw_output": "raw"},
             )
-        note.assert_awaited_once()
         assert any("raw_output_marker_legacy_marker_also_lost" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
@@ -317,10 +233,7 @@ class TestMarkerSavepointLegacyLostClassification:
             raise err
 
         caplog.set_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner")
-        with (
-            patch("modulo.db.crud.run_node_outputs.write_run_markers", _failing_write),
-            patch("modulo.core.run_outputs_dualwrite.note_dual_write_marker_failure", new_callable=AsyncMock) as note,
-        ):
+        with patch("modulo.db.crud.run_node_outputs.write_run_markers", _failing_write):
             await _write_raw_output_marker(
                 sqlite_sessionmaker,
                 org_uuid=_ORG,
@@ -329,7 +242,6 @@ class TestMarkerSavepointLegacyLostClassification:
                 attempt_key=None,
                 marker={"status": "failed", "raw_output": "raw"},
             )
-        note.assert_awaited_once()
         assert not any("legacy_marker_also_lost" in r.message for r in caplog.records)
         # FAR-583 B1: the legacy column's ORM mapping is cut — read it through
         # the repo's raw parameterised-SQL helper.
@@ -387,14 +299,10 @@ class TestGateReadUsesFencedReader:
             fenced_calls.append(kwargs)
             return {"run:x:node:n1:1": {"delivery_done": True}}
 
-        async def _switch_on() -> bool:
-            return True
-
         session = _CountingSession()
         with (
             patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
             patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
-            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on),
             patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers = await _read_run_raw_output_markers_for_gate(
@@ -411,7 +319,6 @@ class TestGateReadUsesFencedReader:
                 "organisation_id": _ORG,
                 "claim_token": "tok-1",
                 "for_update": False,
-                "legacy_tiebreak_on_equal_mismatch": False,
             }
         ]
         assert markers is not None
@@ -422,14 +329,10 @@ class TestGateReadUsesFencedReader:
         async def _fenced(session: Any, **kwargs: Any) -> None:
             return None
 
-        async def _switch_on() -> bool:
-            return True
-
         session = _CountingSession()
         with (
             patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
             patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
-            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on),
             patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers = await _read_run_raw_output_markers_for_gate(
@@ -452,14 +355,10 @@ class TestGateReadUsesFencedReader:
             fenced_calls.append(kwargs)
             return {"run:x:node:n1:connector": {"delivery_done": True}}
 
-        async def _switch_on() -> bool:
-            return True
-
         session = _CountingSession(rows=[("run-row-id", "key-1")])
         with (
             patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
             patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
-            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_on),
             patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
         ):
             markers, persisted_key = await _read_connector_idempotency_gate_state(
@@ -476,7 +375,6 @@ class TestGateReadUsesFencedReader:
                 "claim_token": None,
                 "for_update": True,
                 "fence_status": False,
-                "legacy_tiebreak_on_equal_mismatch": False,
             }
         ], (
             "the connector read must fence by other means (no claim token) WITH the row lock, "
@@ -485,37 +383,6 @@ class TestGateReadUsesFencedReader:
         assert markers is not None
         assert "run:x:node:n1:connector" in markers
         assert len(session.execute_calls) == 1, "only the idempotency-key SELECT remains outside the repo"
-
-    @pytest.mark.asyncio
-    async def test_gate_read_tiebreaks_to_legacy_when_switch_off(self) -> None:
-        """qa iteration 2 (Major 1): with the kill-switch OFF the gate readers
-        pass ``legacy_tiebreak_on_equal_mismatch=True`` — an equal-key-set
-        delivery_done rewrite in the legacy column must be served, not
-        masked by a stale new-table row."""
-
-        async def _switch_off() -> bool:
-            return False
-
-        async def _fenced(session: Any, **kwargs: Any) -> dict[str, Any] | None:
-            captured.update(kwargs)
-            return None
-
-        captured: dict[str, Any] = {}
-        session = _CountingSession()
-        with (
-            patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-            patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
-            patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", _switch_off),
-            patch("modulo.db.crud.run_node_outputs.read_run_markers_fenced", _fenced),
-        ):
-            await _read_run_raw_output_markers_for_gate(
-                lambda: session,
-                run_id=str(_RUN_ID),
-                org_id_raw=str(_ORG),
-                claim_lease="tok-1",
-                node_id="n1",
-            )
-        assert captured["legacy_tiebreak_on_equal_mismatch"] is True
 
 
 class TestFenceStatusVisibilityDuringCancel:
@@ -695,10 +562,10 @@ class TestGuardContract:
         assert doc is not None
         assert "DualWriteError" in doc
         # B1 contract cut: the helper is the PRIMARY store write — the
-        # kill-switch check is gone and the docstring documents that (there is
-        # no legacy-only mode to fall back to).
+        # kill-switch machinery is GONE (removed at B2a) and the docstring
+        # documents that (there is no legacy-only mode to fall back to).
         assert "PRIMARY" in doc
-        assert "kill-switch check is REMOVED" in doc
+        assert "no emergency OFF" in doc
 
 
 # ---------------------------------------------------------------------------
@@ -758,7 +625,6 @@ class TestRecoveryClaimTokenFence:
         with (
             patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, return_value=1) as mark,
             patch("modulo.core.run_outputs_dualwrite._emit_dual_write_failed_event", new_callable=AsyncMock),
-            patch("modulo.core.run_outputs_dualwrite.bump_dual_write_counter", new_callable=AsyncMock),
         ):
             await orchestrate_dual_write_failure(exc)
         assert mark.await_args.kwargs["claim_token"] == "tok-owner"
@@ -823,18 +689,9 @@ class TestRecoveryInheritedSentinelKeys:
         async with sqlite_sessionmaker() as session, session.begin():
             loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
             await set_rls_org(session, _ORG)
-            with (
-                patch("modulo.core.run_outputs_dualwrite.is_dual_write_enabled", new=AsyncMock(return_value=True)),
-                patch(
-                    "modulo.core.run_outputs_dualwrite.bump_dual_write_counter",
-                    new_callable=AsyncMock,
-                ) as bump,
-            ):
-                # MUST NOT raise OutputsSentinelViolation — the M19 wedge this
-                # fix removes from the recovery path.
-                await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
-        bumps = [(call.args[0], call.args[1]) for call in bump.await_args_list]
-        assert ("outputs_dual_write_sentinel_filtered", 1) in bumps
+            # MUST NOT raise OutputsSentinelViolation — the M19 wedge this
+            # fix removes from the recovery path.
+            await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
         async with sqlite_sessionmaker() as check, check.begin():
             rows = (await check.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run_id))).scalars().all()
         final_nodes = {row.node_id for row in rows if row.attempt_key == "__final__"}
@@ -842,8 +699,8 @@ class TestRecoveryInheritedSentinelKeys:
         assert "a" in final_nodes
         assert "n1" in final_nodes
         # The legacy column is NEVER written post-B1 (the store write is the
-        # only store) — the inherited key survives there untouched until B2a's
-        # sweep heals it into the new table.
+        # only store) — the inherited key survives there untouched until B2b's
+        # repair migrates it into the new table.
         async with sqlite_sessionmaker() as check_legacy, check_legacy.begin():
             legacy = await read_legacy_run_blobs(check_legacy, run_id=run_id)
         assert legacy.outputs is not None

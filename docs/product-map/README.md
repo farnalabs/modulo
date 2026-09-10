@@ -85,7 +85,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-dashboard** - Home dashboard and metrics overview (Saved Views deferred from the MVP nav — hidden via private_preview; see FAR-546) - routes: `/`
 - **feat-pipelines** - Visual pipeline editor and composite editor (Node Categories deferred from the MVP nav — hidden via private_preview; see FAR-545) - routes: `/library/:id/create-pipeline`, `/pipelines`, `/pipelines/copy`, `/pipelines/:id/editor`, `/composites/:id/editor`
 - **feat-router** - Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A) - routes: `/pipelines`
-- **feat-library** - Reusable pipeline templates and the template library - routes: `/library/:id/create-pipeline`, `/library`
+- **feat-library** - Reusable pipeline templates, the community library, and library collections (collection authoring/publishing is flag-gated behind `library_collection`; see FAR-760) - routes: `/library/:id/create-pipeline`, `/library`, `/library/collections/new`, `/library/collections/:id`
 - **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav — hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
 - **feat-lifecycle-maps** - Lifecycle maps and stage workflows - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
 
@@ -107,7 +107,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-mcp** - Model Context Protocol tool configuration - routes: `/settings/mcp`
 - **feat-guardrails** - Guardrail policies - routes: `/settings/guardrails`
 - **feat-connectors** - External tool connectors - routes: `/admin/connectors`
-- **feat-environments** - Environment profiles and run environments - routes: `/admin/environments`, `/admin/sandbox-concurrency`, `/environment-profiles`, `/environment-profiles/new`, `/environment-profiles/:id/edit`
+- **feat-environments** - Environment profiles and run environments (canonical UI is the Runners page; the `/environment-profiles*` and `/admin/environments` deep links redirect there — FAR-591 D5) - routes: `/admin/runners/profiles`, `/admin/runners/profiles/new`, `/admin/runners/profiles/:id/edit`, `/admin/runners/concurrency`
 - **feat-triggers** - Manual, webhook, and scheduled triggers - routes: `/settings/triggers`
 - **feat-apply** - `modulo apply` declarative configuration CLI (FAR-681) - routes: `/schemas`, `/admin/model-backends`, `/pipelines`, `/settings/triggers`
 
@@ -121,13 +121,13 @@ Fresh entries for these features are added to the graph below as behaviour track
 
 ### System
 - **feat-license** - Feature licensing and plan tiers - routes: `/settings/license`
-- **feat-runtime** - Runtime configuration, rate limits, retention, and sandbox concurrency (Runtime Config and Rate Limits deferred from the MVP nav — hidden via private_preview; see FAR-549 / FAR-550) - routes: `/admin/housekeeping`, `/admin/environments`, `/admin/run-retention`, `/admin/sandbox-concurrency`
+- **feat-runtime** - Runtime configuration, rate limits, retention, and sandbox concurrency on the Runners page (Runtime Config and Rate Limits deferred from the MVP nav — hidden via private_preview; see FAR-549 / FAR-550) - routes: `/admin/housekeeping`, `/admin/run-retention`, `/admin/runners/profiles`, `/admin/runners/concurrency`
 - **feat-system-config** - System-level configuration administration - routes: `/admin/system/config`
 - **feat-system-orgs** - System-level organization administration - routes: `/admin/system/orgs`
 - **feat-product-analytics** - Product usage and adoption analytics for system administrators - routes: `/admin/product-analytics`
 
 ### Auth & onboarding
-- **feat-auth** - OAuth authorization, sessions, and user profile - routes: `/oauth/authorize`, `/admin/my-profile`
+- **feat-auth** - OAuth authorization, sessions, and user profile - routes: `/accept-invite`, `/oauth/authorize`, `/admin/my-profile`
 - **feat-onboarding** - First-run onboarding wizard for new users and organizations - routes: `/onboarding`
 
 ## Index — feature graph entries
@@ -150,7 +150,10 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `feat-costs`, `feat-notifications`, `feat-observability`, `feat-plugins`,
 > `feat-triggers`, `feat-analytics`, `feat-audit` gained their behaviour-tracker
 > entries — see the graph index below. The 2026-09-10 walk added `feat-apply`
-> (registered in the manifest by FAR-681 but never tracked).
+> (registered in the manifest by FAR-681 but never tracked). A follow-up
+> 2026-09-10 walk reconciled this registry's `routes:` lists with the manifest
+> after the FAR-591 D5 Runners-page rename and the FAR-760 library collections
+> ship (`test_graph_root_registry_routes_match_manifest` now guards the lists).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

@@ -2118,8 +2118,7 @@ async def install_collection_endpoint(
 ) -> CollectionInstallResponse:
     """Install a published collection into the organisation.
 
-    Requires the AND union of: library.copy + schema.create + agent.create +
-    pipeline.create (all resolve to 'operator' role).
+    Requires the ``pipeline.create`` permission (resolves to the operator role).
     """
     org_id = _require_organisation_id(principal)
     await _require_library_collection_flag(org_id)
@@ -2201,6 +2200,7 @@ async def uninstall_collection_endpoint(
                 session,
                 org_id=org_id,
                 install_id=req.install_id,
+                collection_id=primitive_id,
             )
     except InstallNotFoundError as exc:
         raise HTTPException(

@@ -6,7 +6,7 @@ vi.mock('../../lib/api/auth', () => ({
   getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer token-1' })),
   attemptTokenRefresh: vi.fn(async () => true),
   clearAccessToken: vi.fn(),
-  redirectToLogin: vi.fn(),
+  exitToLogin: vi.fn(),
 }))
 
 import { useLifecycleMapsStore, updatedSinceForPeriod } from '../../stores/lifecycleMaps'

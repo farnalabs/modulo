@@ -1190,3 +1190,79 @@ class TestGrantCollectionAgentsEndpoint:
         assert "agents_granted" in data
         assert data["community_sourced"] is True
         assert data["agents_granted"] is True
+
+
+class TestUninstallCollectionService:
+    def test_uninstall_collection_id_mismatch_raises(self) -> None:
+        from modulo.core.library_service.uninstall import (
+            InstallNotFoundError,
+            uninstall_collection,
+        )
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            install = MagicMock()
+            install.organisation_id = _ORG_ID
+            install.collection_id = uuid.uuid4()
+            mock_session.get = AsyncMock(return_value=install)
+            await uninstall_collection(
+                mock_session,
+                _ORG_ID,
+                uuid.uuid4(),
+                collection_id=uuid.uuid4(),
+            )
+
+        with pytest.raises(InstallNotFoundError):
+            asyncio.run(run())
+
+    def test_uninstall_skips_missing_entity(self) -> None:
+        from modulo.core.library_service.uninstall import uninstall_collection
+
+        async def run() -> dict:
+            mock_session = AsyncMock()
+            install = MagicMock()
+            install.organisation_id = _ORG_ID
+            install.collection_id = uuid.uuid4()
+            mock_session.get = AsyncMock(return_value=install)
+
+            # Tracking row points at an entity that no longer exists.
+            row = MagicMock()
+            row.entity_type = "schema"
+            row.entity_id = uuid.uuid4()
+            entity_result = MagicMock()
+            entity_result.scalars = MagicMock(return_value=[row])
+            mock_session.execute = AsyncMock(return_value=entity_result)
+            # _entity_exists → False (entity row gone)
+            mock_session.scalar = AsyncMock(return_value=None)
+
+            return await uninstall_collection(mock_session, _ORG_ID, uuid.uuid4())
+
+        result = asyncio.run(run())
+        assert not result["deleted"]
+        assert not result["detached"]
+
+    def test_check_unmodified_true_when_stamped(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = install_id
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is True
+
+    def test_check_unmodified_false_when_detached(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = uuid.uuid4()  # different stamp
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is False

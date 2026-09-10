@@ -9,8 +9,8 @@ representation matrix: outputs-only / telemetry-only / both / per-node JSON
 null / column-level NULL sides / ``{}`` (both + mixed) / NULL / colon node
 ids / sentinel-named ids / ``__unknown__`` keys / multi-attempt markers /
 order-hostile key ordering / shrinking REPLACE / DIRECTION-AWARE fallback
-semantics / quarantined backfill selection / the fenced markers reader /
-malformed-metadata fail-open / inherited-sentinel filtering.
+semantics / the fenced markers reader / malformed-metadata fail-open /
+inherited-sentinel filtering.
 """
 
 import itertools
@@ -43,7 +43,6 @@ from modulo.db.crud.run_node_outputs import (
     replace_run_node_outputs,
     write_run_markers,
 )
-from modulo.db.crud.run_node_outputs_backfill import backfill_run_node_outputs_batch
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
@@ -70,13 +69,14 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
         tables = [t for t in Base.metadata.sorted_tables if t.name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
         # The quarantine side table has NO ORM model (migration-0192-owned,
-        # Core-only in the repo module) — created here so the sweep's
-        # quarantine exclusion + INSERT run against the real schema.
+        # Core-only in the repo module) — created here so the B2b repair's
+        # quarantine runs against the real schema. The side table itself
+        # drops at B2b+ (its only writer left is the migration).
         await conn.run_sync(lambda sync_conn: QUARANTINE_TABLE.create(sync_conn, checkfirst=True))
         # FAR-583 B1: the legacy blob columns left the ORM mapping but are
         # still IN THE DATABASE until B2b — the patching ALTERs reproduce the
         # migrated schema (SQLite ADD COLUMN per legacy column) so the raw
-        # Core legacy-table readers/sweep/fenced legs run against real DDL.
+        # Core legacy-table readers/fenced legs run against real DDL.
         for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
             await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
@@ -155,14 +155,6 @@ async def _set_legacy_blobs(
         return
     async with session.begin():
         await seed_legacy_blobs(session, run.id, **values)
-
-
-async def _quarantine_row_count(session: AsyncSession, run_id: uuid.UUID) -> int:
-    async with session.begin():
-        rows = (
-            await session.execute(select(QUARANTINE_TABLE.c.run_id).where(QUARANTINE_TABLE.c.run_id == run_id))
-        ).all()
-    return len(rows)
 
 
 def _canonical(mapping: dict[str, Any]) -> dict[str, Any]:
@@ -549,38 +541,27 @@ class TestDirectionAwareFallback:
         _assert_bytes_round_trip(blobs.telemetry, {"a": {"ms": 1}, "b": {"ms": 2}, "c": {"ms": 3}})
 
 
-class TestEqualKeysValueTiebreak:
-    """qa iteration 2 (Major 1): EQUAL key sets with DIVERGENT values — the
-    old ``legacy ⊆ new`` rule served NEW blind to the rewrite. With the
-    kill-switch OFF a value rewrite on an existing key set can only be a
-    legacy-only write (legacy is fresher) → tiebreak to LEGACY; with the
-    switch ON the new table stays authoritative (documented posture)."""
+class TestEqualKeysValueDivergence:
+    """FAR-583 B2a: the legacy `runs` columns are no longer written (B1) and
+    the former kill-switch-OFF tiebreak is gone with the switch — EQUAL key
+    sets with DIVERGENT values can only be pre-B1 straggler divergence or
+    corruption, and the documented posture serves the NEW table (the
+    forward-looking authority; B2b's repair migrates the stragglers)."""
 
-    async def test_tiebreak_on_serves_legacy_on_equal_key_sets(self, session: AsyncSession) -> None:
-        run = await _seed_run(session, outputs={"a": {"v": 0}, "b": {"v": 0}})
-        await _replace(session, run, outputs={"a": {"v": 1}, "b": {"v": 1}}, telemetry=None)
-        # Kill-switch-OFF legacy-only value REWRITE: same keys, new values.
-        await _set_legacy_blobs(session, run, outputs={"a": {"v": 9}, "b": {"v": 9}})
-        async with session.begin():
-            blobs = await read_run_blobs_with_fallback(
-                session, run_id=run.id, organisation_id=run.organisation_id, legacy_tiebreak_on_equal_mismatch=True
-            )
-        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 9}, "b": {"v": 9}})
-
-    async def test_tiebreak_off_keeps_new_authoritative(self, session: AsyncSession) -> None:
-        """The documented general-reader posture: equal key sets with
-        divergent values serve NEW (UI/analytics tolerate ≤1 sweep interval;
-        B2b repair is the backstop)."""
+    async def test_equal_key_sets_with_divergent_values_serve_new(self, session: AsyncSession) -> None:
         run = await _seed_run(session, outputs={"a": {"v": 0}})
         await _replace(session, run, outputs={"a": {"v": 1}}, telemetry=None)
         await _set_legacy_blobs(session, run, outputs={"a": {"v": 9}})
         blobs = await _read_blobs(session, run)
         _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}})
 
-    async def test_fenced_markers_reader_tiebreak_serves_legacy(self, session: AsyncSession) -> None:
+    async def test_fenced_markers_reader_equal_key_rewrite_serves_new(self, session: AsyncSession) -> None:
+        """Same posture on the fenced markers leg (the pre-B2a switch-OFF
+        readers used to tiebreak to legacy here; with the legacy writes
+        stopped the new table governs)."""
         run = await _seed_run(session, status="running", claim_token="tok-1", markers={"k1": {"raw": "old"}})
         await _write_markers(session, run, {"k1": {"raw": "old"}})
-        # Kill-switch-OFF legacy-only rewrite: same attempt key, delivery_done stamped.
+        # Pre-B1 legacy rewrite: same attempt key, delivery_done stamped.
         await _set_legacy_blobs(session, run, markers={"k1": {"delivery_done": True}})
         async with session.begin():
             await set_rls_org(session, run.organisation_id)
@@ -589,21 +570,8 @@ class TestEqualKeysValueTiebreak:
                 run_id=run.id,
                 organisation_id=run.organisation_id,
                 claim_token="tok-1",
-                legacy_tiebreak_on_equal_mismatch=True,
             )
-        assert served == {"k1": {"delivery_done": True}}
-
-    async def test_identical_values_still_serve_new_under_tiebreak(self, session: AsyncSession) -> None:
-        """Equal key sets with EQUAL values (the steady dual-written state) do
-        NOT flip to legacy — the tiebreak fires on value DIVERGENCE only."""
-        run = await _seed_run(session, outputs={"a": {"v": 1}})
-        await _replace(session, run, outputs={"a": {"v": 1}}, telemetry=None)
-        await _set_legacy_blobs(session, run, outputs={"a": {"v": 1}})
-        async with session.begin():
-            blobs = await read_run_blobs_with_fallback(
-                session, run_id=run.id, organisation_id=run.organisation_id, legacy_tiebreak_on_equal_mismatch=True
-            )
-        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}})
+        assert served == {"k1": {"raw": "old"}}
 
 
 class TestShrinkBlindSpot:
@@ -922,272 +890,6 @@ class TestInheritedSentinelFiltering:
         await _write_markers(session, run, {"weird-legacy-key": {"raw": "keep"}})
         blobs = await _read_blobs(session, run, raw=True)
         assert blobs.markers == {"weird-legacy-key": {"raw": "keep"}}
-
-
-class TestBackfill:
-    async def test_full_representation_and_idempotency(self, session: AsyncSession) -> None:
-        run = await _seed_run(
-            session,
-            status="complete",
-            completed_at=datetime(2026, 9, 1, 12, 0, 0),
-            outputs={"a": {"v": 1}},
-            telemetry={"a": {"ms": 1}, "b": {"ms": 2}},
-            markers={"junk-key": {"raw": "x"}},
-        )
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert first["runs_selected"] == 1
-        assert first["runs_backfilled"] == 1
-        assert first["unknown_marker_keys"] == 1
-        assert first["new_high_water"] == datetime(2026, 9, 1, 12, 0, 0)
-
-        blobs = await _read_blobs(session, run, raw=True)
-        _assert_bytes_round_trip(blobs.outputs, {"a": {"v": 1}})
-        _assert_bytes_round_trip(blobs.telemetry, _canonical({"a": {"ms": 1}, "b": {"ms": 2}}))
-        assert blobs.markers == {"junk-key": {"raw": "x"}}
-
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            second = await backfill_run_node_outputs_batch(
-                session, organisation_id=_ORG_A, high_water_mark=first["new_high_water"], cap=100
-            )
-        assert second["runs_selected"] == 0
-
-    async def test_empty_outputs_side_writes_metadata_row(self, session: AsyncSession) -> None:
-        run = await _seed_run(
-            session,
-            status="failed",
-            completed_at=datetime(2026, 9, 2, 8, 0, 0),
-            outputs={},
-            telemetry={"a": {"ms": 4}},
-        )
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        blobs = await _read_blobs(session, run, raw=True)
-        assert blobs.outputs is not None
-        assert not blobs.outputs
-        assert blobs.telemetry == {"a": {"ms": 4}}
-
-    async def test_sentinel_named_ids_quarantine_the_run(self, session: AsyncSession) -> None:
-        run = await _seed_run(
-            session,
-            status="complete",
-            completed_at=datetime(2026, 9, 3, 6, 0, 0),
-            outputs={"__sneaky__": {"v": 1}},
-        )
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert result["runs_quarantined"] == 1
-        assert result["runs_backfilled"] == 0
-        blobs = await _read_blobs(session, run, raw=True)
-        assert blobs == RunBlobs(outputs=None, telemetry=None, markers=None)
-        # qa M1b: the quarantine row lands and the run is NEVER re-selected
-        # (the old code skipped it in-body only — it stayed re-selectable
-        # on every tick, consuming the cap).
-        assert await _quarantine_row_count(session, run.id) == 1
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            second = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert second["runs_selected"] == 0
-        assert second["runs_backfilled"] == 0
-
-    async def test_non_dict_blob_anomaly_is_quarantined_never_reselected(self, session: AsyncSession) -> None:
-        """qa M1c: a jsonb ARRAY in a blob side is junk — on SQLite the
-        text-cast trigger still selects it (the jsonb-native OBJECT predicate
-        that excludes it on Postgres is dialect-branched); the body must
-        QUARANTINE the run, not silently continue (the old silent continue
-        left the run re-selected on EVERY tick, starving the cap)."""
-        run = await _seed_run(
-            session,
-            status="complete",
-            completed_at=datetime(2026, 9, 3, 6, 0, 0),
-        )
-        await _set_legacy_blobs(session, run, markers=["not", "a", "dict"])
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert first["runs_quarantined"] == 1
-        assert first["runs_backfilled"] == 0
-        assert await _quarantine_row_count(session, run.id) == 1
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            second = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert second["runs_selected"] == 0
-
-    async def test_sentinel_marker_attempt_key_quarantines_the_run(self, session: AsyncSession) -> None:
-        """qa M1c: a '__'-prefixed marker attempt key (e.g. '__final__') used
-        to be silently dropped key-by-key — the run stayed re-selectable
-        forever with its marker evidence unrepresented. Now the run is
-        quarantined (evidence preserved on the side table)."""
-        run = await _seed_run(
-            session,
-            status="complete",
-            completed_at=datetime(2026, 9, 3, 6, 0, 0),
-            markers={FINAL_ATTEMPT_KEY: {"raw": "squat"}},
-        )
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert result["runs_quarantined"] == 1
-        assert result["runs_backfilled"] == 0
-        assert await _quarantine_row_count(session, run.id) == 1
-
-    async def test_backdated_unhealed_run_is_still_selected(self, session: AsyncSession) -> None:
-        """qa M20 prove-the-fix: the OLD selection filtered
-        ``completed_at > high_water_mark`` — a run terminalizing with an
-        EARLIER completed_at than the current mark (its terminalizing
-        transaction started before the mark advanced) was permanently
-        missed. Without the filter, the trigger legs pick it up."""
-        run_old = await _seed_run(
-            session, status="complete", completed_at=datetime(2026, 8, 1, 0, 0, 0), outputs={"old": {}}
-        )
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=10)
-        assert first["runs_backfilled"] == 1
-        # A BACKDATED un-healed run appears AFTER the mark advanced past
-        # 2026-08-01 (e.g. an old machine's terminalizing transaction).
-        run_backdated = await _seed_run(
-            session, status="failed", completed_at=datetime(2026, 7, 15, 0, 0, 0), outputs={"late": {}}
-        )
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            second = await backfill_run_node_outputs_batch(
-                session,
-                organisation_id=_ORG_A,
-                high_water_mark=first["new_high_water"],  # accepted, IGNORED for selection
-                cap=10,
-            )
-        assert second["runs_selected"] == 1
-        assert second["runs_backfilled"] == 1
-        blobs = await _read_blobs(session, run_backdated, raw=True)
-        _assert_bytes_round_trip(blobs.outputs, {"late": {}})
-        # The healed run stays healed (the trigger excludes it).
-        blobs_old = await _read_blobs(session, run_old, raw=True)
-        _assert_bytes_round_trip(blobs_old.outputs, {"old": {}})
-
-    async def test_cap_bounds_selection_across_ticks_without_high_water(self, session: AsyncSession) -> None:
-        """The per-tick cap + ORDER BY completed_at ASC + trigger legs bound
-        the drain with NO high-water filter: each tick heals the oldest
-        un-healed run; the mark-less steady state selects nothing."""
-        await _seed_run(session, status="complete", completed_at=datetime(2026, 8, 1, 0, 0, 0), outputs={"a": {}})
-        await _seed_run(session, status="complete", completed_at=datetime(2026, 8, 2, 0, 0, 0), outputs={"b": {}})
-        await _seed_run(session, status="complete", completed_at=datetime(2026, 8, 3, 0, 0, 0), outputs={"c": {}})
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=1)
-        assert first["runs_selected"] == 1
-        assert first["runs_backfilled"] == 1
-        assert first["new_high_water"] == datetime(2026, 8, 1, 0, 0, 0)
-
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            second = await backfill_run_node_outputs_batch(
-                session, organisation_id=_ORG_A, high_water_mark=first["new_high_water"], cap=1
-            )
-        assert second["runs_selected"] == 1
-        assert second["new_high_water"] == datetime(2026, 8, 2, 0, 0, 0)
-
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            third = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=1)
-        assert third["runs_selected"] == 1
-
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            drained = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=1)
-        assert drained["runs_selected"] == 0
-
-    async def test_non_terminal_runs_are_untouched(self, session: AsyncSession) -> None:
-        await _seed_run(session, status="running", outputs={"a": {"v": 1}})
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert result["runs_selected"] == 0
-        assert result["rows_written"] == 0
-
-    async def test_other_org_is_out_of_scope(self, session: AsyncSession) -> None:
-        await _seed_run(session, status="complete", completed_at=datetime(2026, 9, 1, 0, 0, 0), outputs={"a": {}})
-        async with session.begin():
-            await set_rls_org(session, _ORG_B)
-            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_B, cap=100)
-        assert result["runs_selected"] == 0
-
-    async def test_already_healed_runs_are_excluded_from_selection(self, session: AsyncSession) -> None:
-        """The NOT-EXISTS trigger legs keep healed runs out of the batch — a
-        drained org selects nothing on the steady-state (mark-less) tick."""
-        await _seed_run(session, completed_at=datetime(2026, 9, 1, 12, 0, 0), outputs={"a": {"v": 1}})
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            first = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert first["runs_selected"] == 1
-        assert first["runs_backfilled"] == 1
-
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            second = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert second["runs_selected"] == 0
-        assert second["runs_backfilled"] == 0
-
-    async def test_markers_only_run_selected_by_trigger_leg(self, session: AsyncSession) -> None:
-        """A markers-only run (no outputs/telemetry) matches the markers leg."""
-        await _seed_run(
-            session,
-            completed_at=datetime(2026, 9, 1, 12, 0, 0),
-            markers={"junk-key": {"raw": "x"}},
-        )
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert result["runs_selected"] == 1
-        assert result["unknown_marker_keys"] == 1
-
-    async def test_empty_markers_dict_run_is_never_selected(self, session: AsyncSession) -> None:
-        """A run whose ONLY blob is markers = '{}' (explicit empty dict) is
-        never selected: '{}' markers mean "no markers" and are not
-        representable (migration 0192's _ANY_BLOB_OBJECT_SQL excludes them).
-        Selecting such a run would write zero rows every pass — an
-        un-healable zombie re-selected on every sweep tick."""
-        await _seed_run(
-            session,
-            completed_at=datetime(2026, 9, 1, 12, 0, 0),
-            markers={},
-        )
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert result["runs_selected"] == 0
-        assert result["runs_backfilled"] == 0
-        assert result["rows_written"] == 0
-
-    async def test_ghost_moved_rows_skip_the_insert(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Re-terminalization ghost protection: rows that moved between the
-        census and the pre-insert re-check are skipped, never overwritten."""
-        import modulo.db.crud.run_node_outputs_backfill as backfill_module
-
-        run = await _seed_run(session, completed_at=datetime(2026, 9, 1, 12, 0, 0), outputs={"a": {"v": 1}})
-
-        async def _moved_recheck(s: AsyncSession, run_ids: Any) -> dict[uuid.UUID, datetime | None]:
-            # The pre-insert re-check pretends a concurrent dual-write just
-            # committed new rows for the run after the census read.
-            return {uuid.UUID(str(rid)): datetime(2026, 9, 2, 0, 0, 0) for rid in run_ids}
-
-        monkeypatch.setattr(backfill_module, "_existing_row_updated_at", _moved_recheck)
-        async with session.begin():
-            await set_rls_org(session, _ORG_A)
-            result = await backfill_run_node_outputs_batch(session, organisation_id=_ORG_A, cap=100)
-        assert result["runs_selected"] == 1
-        assert result["runs_skipped_ghost"] == 1
-        assert result["runs_backfilled"] == 0
-        assert result["rows_written"] == 0
-        blobs = await _read_blobs(session, run, raw=True)
-        # Nothing was written by the ghosted pass.
-        assert blobs == RunBlobs(outputs=None, telemetry=None, markers=None)
 
 
 class TestBytesAccounting:
