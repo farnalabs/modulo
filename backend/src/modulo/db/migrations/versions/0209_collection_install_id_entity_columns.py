@@ -10,12 +10,12 @@ every entity a collection install writes — see
 pipelines) and ``uninstall.py`` which reads/clears the same column. The ORM
 models declare ``collection_install_id`` on ``Schema``, ``Agent`` and
 ``Pipeline`` (nullable UUID, indexed), but no migration ever added the columns
-to the database. Migration ``0207_collection_install_tracking`` deliberately
-adds the ``collection_install`` / ``collection_install_entity`` audit tables but
-explicitly does NOT add a denormalised column to the entity tables — that left
-the ORM↔DB schema out of sync, so every query that selects an entity row
-(including unrelated integration tests) failed with
-``column <table>.collection_install_id does not exist``.
+to the database. Migration ``0207_collection_install_tracking`` adds the
+``collection_install`` / ``collection_install_entity`` audit tables and ALSO
+adds this denormalised column to the entity tables (via ``ADD COLUMN IF NOT
+EXISTS``) as part of a later deploy fix, but it does not create the index the
+ORM declares. This migration guarantees the index exists and is idempotent so
+the full chain replays cleanly on a fresh DB.
 
 This migration closes the gap by adding the nullable UUID column (plus the
 index the ORM declares) to ``schemas``, ``agents`` and ``pipelines``, matching
@@ -95,11 +95,16 @@ def upgrade() -> None:
         if migrate_owns_table:
             op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-        op.add_column(
-            table,
-            sa.Column(_COLUMN, sa.Uuid(), nullable=True),
-        )
-        op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
+        # Migration 0207 (merged to main, FAR-762 deploy fix) ALSO adds this
+        # denormalised provenance column to every entity table via
+        # ``ADD COLUMN IF NOT EXISTS``. Running the full migration chain on a
+        # fresh DB therefore hits this step after the column already exists, which
+        # ``op.add_column`` would fail with
+        # ``column <table>.collection_install_id already exists``. Keep this step
+        # idempotent so the chain is replayable; 0207 does not create the index,
+        # so that part remains owned by this migration.
+        op.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {_COLUMN} UUID")
+        op.execute(f"CREATE INDEX IF NOT EXISTS ix_{table}_{_COLUMN} ON {table} ({_COLUMN})")
 
         if pg and migrate_owns_table:
             op.execute("RESET ROLE")

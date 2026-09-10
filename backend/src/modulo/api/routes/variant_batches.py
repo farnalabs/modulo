@@ -6,6 +6,7 @@ Routes match the TypeScript contract in frontend/src/lib/api/variantBatches.ts.
 import logging
 import uuid
 from collections import defaultdict
+from collections.abc import Collection
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -196,6 +197,40 @@ async def _batch_load_eval_stats(
     return eval_stats
 
 
+def _resolve_batch_meta(
+    state: Any,
+    runs: list[Run],
+) -> tuple[str, uuid.UUID | None]:
+    """Batch name + pipeline_id: state row wins, runs table is the fallback.
+
+    Legacy batches (created before FAR-775) have no state row, so the name is
+    synthesised from the first run's variant_name.
+    """
+    batch_name = ""
+    if state and state.name:
+        batch_name = state.name
+    elif runs:
+        frozen = runs[0].variant_config_snapshot or {}
+        batch_name = f"{frozen.get('variant_name', 'unknown')} comparison"
+
+    pipeline_id = state.pipeline_id if state else None
+    if pipeline_id is None and runs:
+        pipeline_id = runs[0].pipeline_id
+    return batch_name, pipeline_id
+
+
+def _resolve_batch_timestamps(
+    state: Any,
+    runs: list[Run],
+) -> tuple[Any, Any]:
+    """Batch-level created/updated timestamps: state row wins, runs table falls back."""
+    if state:
+        return state.created_at, state.updated_at
+    if runs:
+        return runs[0].created_at, runs[-1].completed_at or runs[-1].created_at
+    return None, None
+
+
 async def _load_batch_detail(
     session: Any,
     *,
@@ -214,32 +249,8 @@ async def _load_batch_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_BATCH_NOT_FOUND)
 
     run_statuses = [r.status for r in runs]
-
-    # Batch name: prefer state row; fall back to first run's variant_name.
-    batch_name = ""
-    if state and state.name:
-        batch_name = state.name
-    elif runs:
-        frozen = runs[0].variant_config_snapshot or {}
-        batch_name = f"{frozen.get('variant_name', 'unknown')} comparison"
-
-    # Pipeline name: state row has pipeline_id but no name column — resolve
-    # from pipeline if available.
-    pipeline_name = None
-    pipeline_id = state.pipeline_id if state else None
-    if pipeline_id is None and runs:
-        pipeline_id = runs[0].pipeline_id
-
-    # Batch-level timestamps: use state row when present, else first/last run.
-    if state:
-        created_at = state.created_at
-        updated_at = state.updated_at
-    elif runs:
-        created_at = runs[0].created_at
-        updated_at = runs[-1].completed_at or runs[-1].created_at
-    else:
-        created_at = None
-        updated_at = None
+    batch_name, pipeline_id = _resolve_batch_meta(state, runs)
+    created_at, updated_at = _resolve_batch_timestamps(state, runs)
 
     # Eval stats: one grouped query across the whole batch (no N+1).
     run_ids = [r.id for r in runs]
@@ -265,7 +276,7 @@ async def _load_batch_detail(
         "batch_id": str(batch_id),
         "name": batch_name,
         "pipeline_id": str(pipeline_id) if pipeline_id else "",
-        "pipeline_name": pipeline_name,
+        "pipeline_name": None,
         "status": _compute_batch_status(run_statuses),
         "created_at": created_at.isoformat() if created_at else "",
         "updated_at": updated_at.isoformat() if updated_at else "",
@@ -286,6 +297,116 @@ def _summarise_batch_runs(
 # ---------------------------------------------------------------------------
 # GET /api/v1/variant-batches — paginated list
 # ---------------------------------------------------------------------------
+
+
+def _legacy_batch_id_filter(
+    all_state_ids: Collection[uuid.UUID],
+) -> Any:
+    """Exclude state-table batch_ids from the legacy scan.
+
+    Excluding ALL org-wide state ids (not just the current page) stops state
+    batches being double-counted on pages 2+ (FAR-775). When there are no state
+    rows the filter degenerates to ``batch_id IS NOT NULL``.
+    """
+    if all_state_ids:
+        return RunModel.batch_id.notin_(all_state_ids)
+    return RunModel.batch_id.isnot(None)
+
+
+def _build_state_summaries(
+    states_items: list[Any],
+    all_runs_by_batch: dict[uuid.UUID, list[Run]],
+) -> list[dict[str, Any]]:
+    """Summaries for FAR-775 state-table batches on the current page."""
+    summaries: list[dict[str, Any]] = []
+    for st in states_items:
+        batch_runs = all_runs_by_batch.get(st.batch_id, [])
+        run_statuses = [r.status for r in batch_runs]
+
+        batch_name = st.name or ""
+        pipeline_id = st.pipeline_id
+        if batch_runs and pipeline_id is None:
+            pipeline_id = batch_runs[0].pipeline_id
+
+        batch_status, run_count = _summarise_batch_runs(run_statuses, runs=batch_runs)
+        summaries.append(
+            {
+                "batch_id": str(st.batch_id),
+                "name": batch_name,
+                "pipeline_name": None,
+                "status": batch_status,
+                "run_count": run_count,
+                "created_at": st.created_at.isoformat() if st.created_at else "",
+            }
+        )
+    return summaries
+
+
+async def _build_legacy_summaries(
+    session: Any,
+    *,
+    org_id: uuid.UUID,
+    all_state_ids: Collection[uuid.UUID],
+    existing_count: int,
+    page_size: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Synthesised summaries for legacy (pre-FAR-775) batches, plus their total.
+
+    Only fills the remainder of the page after the state-table summaries.
+    """
+    legacy_count_result = await session.execute(
+        select(func.count(func.distinct(RunModel.batch_id))).where(
+            RunModel.organisation_id == org_id,
+            RunModel.batch_id.isnot(None),
+            _legacy_batch_id_filter(all_state_ids),
+        )
+    )
+    legacy_total_count = legacy_count_result.scalar_one() or 0
+
+    limit = page_size - existing_count
+    if limit <= 0:
+        return legacy_total_count, []
+
+    legacy_result = await session.execute(
+        select(RunModel.batch_id, func.count(RunModel.id))
+        .where(
+            RunModel.organisation_id == org_id,
+            RunModel.batch_id.isnot(None),
+            _legacy_batch_id_filter(all_state_ids),
+        )
+        .group_by(RunModel.batch_id)
+        .order_by(func.min(RunModel.created_at).desc())
+        .limit(limit)
+    )
+    legacy_batch_ids = [uuid.UUID(str(bid)) for bid, _ in legacy_result.all()]
+
+    legacy_runs_by_batch = await list_batch_runs_for_batch_ids(session, org_id=org_id, batch_ids=legacy_batch_ids)
+
+    summaries: list[dict[str, Any]] = []
+    for bid in legacy_batch_ids:
+        if bid in all_state_ids:
+            continue
+        legacy_runs = legacy_runs_by_batch.get(bid, [])
+        run_statuses = [r.status for r in legacy_runs]
+        frozen_first: dict[str, Any] = {}
+        if legacy_runs:
+            raw = legacy_runs[0].variant_config_snapshot
+            if isinstance(raw, dict):
+                frozen_first = raw
+        batch_name = f"{frozen_first.get('variant_name', 'unknown')} comparison"
+        created_at = legacy_runs[0].created_at if legacy_runs else None
+        batch_status, run_count = _summarise_batch_runs(run_statuses, runs=legacy_runs)
+        summaries.append(
+            {
+                "batch_id": str(bid),
+                "name": batch_name,
+                "pipeline_name": None,
+                "status": batch_status,
+                "run_count": run_count,
+                "created_at": created_at.isoformat() if created_at else "",
+            }
+        )
+    return legacy_total_count, summaries
 
 
 @router.get("", response_model=None)
@@ -319,90 +440,21 @@ async def list_batches(
         known_ids: list[uuid.UUID] = [st.batch_id for st in states_items]
         all_runs_by_batch = await list_batch_runs_for_batch_ids(_session, org_id=org_id, batch_ids=known_ids)
 
-        # Build summaries from state rows.
-        summaries: list[dict[str, Any]] = []
-        for st in states_items:
-            batch_runs = all_runs_by_batch.get(st.batch_id, [])
-            run_statuses = [r.status for r in batch_runs]
+        summaries = _build_state_summaries(states_items, all_runs_by_batch)
 
-            batch_name = st.name or ""
-            pipeline_name = None
-            pipeline_id = st.pipeline_id
-            if batch_runs and not pipeline_name:
-                pipeline_id = pipeline_id or batch_runs[0].pipeline_id
-
-            batch_status, run_count = _summarise_batch_runs(run_statuses, runs=batch_runs)
-            summaries.append(
-                {
-                    "batch_id": str(st.batch_id),
-                    "name": batch_name,
-                    "pipeline_name": pipeline_name,
-                    "status": batch_status,
-                    "run_count": run_count,
-                    "created_at": st.created_at.isoformat() if st.created_at else "",
-                }
-            )
-
-        # Phase 2: legacy batches not in the state table.
-        # Scan runs for batch_ids not yet known — these predate FAR-775.
-
-        # Count legacy batches for the true total.
-        # Exclude ALL state-table batch_ids (org-wide), not just the current
-        # page's — page 2+ state rows would otherwise be double-counted.
-        legacy_count_result = await _session.execute(
-            select(func.count(func.distinct(RunModel.batch_id))).where(
-                RunModel.organisation_id == org_id,
-                RunModel.batch_id.isnot(None),
-                RunModel.batch_id.notin_(all_state_ids) if all_state_ids else RunModel.batch_id.isnot(None),
-            )
+        # Phase 2: legacy batches not in the state table (fills the page).
+        legacy_total_count, legacy_summaries = await _build_legacy_summaries(
+            _session,
+            org_id=org_id,
+            all_state_ids=all_state_ids,
+            existing_count=len(summaries),
+            page_size=page_size,
         )
-        legacy_total_count = legacy_count_result.scalar_one() or 0
-
-        legacy_result = await _session.execute(
-            select(RunModel.batch_id, func.count(RunModel.id))
-            .where(
-                RunModel.organisation_id == org_id,
-                RunModel.batch_id.isnot(None),
-                RunModel.batch_id.notin_(all_state_ids) if all_state_ids else RunModel.batch_id.isnot(None),
-            )
-            .group_by(RunModel.batch_id)
-            .order_by(func.min(RunModel.created_at).desc())
-            .limit(max(0, page_size - len(summaries)))
-        )
-        legacy_batch_ids = [uuid.UUID(str(bid)) for bid, _ in legacy_result.all()]
-
-        # Batch-load runs for all legacy batch_ids in ONE query (M7).
-        legacy_runs_by_batch = await list_batch_runs_for_batch_ids(_session, org_id=org_id, batch_ids=legacy_batch_ids)
-
-        for bid in legacy_batch_ids:
-            if bid in all_state_ids:
-                continue
-            legacy_runs = legacy_runs_by_batch.get(bid, [])
-            run_statuses = [r.status for r in legacy_runs]
-            frozen_first: dict[str, Any] = {}
-            if legacy_runs:
-                raw = legacy_runs[0].variant_config_snapshot
-                if isinstance(raw, dict):
-                    frozen_first = raw
-            batch_name = f"{frozen_first.get('variant_name', 'unknown')} comparison"
-            created_at = legacy_runs[0].created_at if legacy_runs else None
-            batch_status, run_count = _summarise_batch_runs(run_statuses, runs=legacy_runs)
-            summaries.append(
-                {
-                    "batch_id": str(bid),
-                    "name": batch_name,
-                    "pipeline_name": None,
-                    "status": batch_status,
-                    "run_count": run_count,
-                    "created_at": created_at.isoformat() if created_at else "",
-                }
-            )
-
-        total_count = states_total + legacy_total_count
+        summaries.extend(legacy_summaries)
 
         return {
             "items": summaries,
-            "total": total_count,
+            "total": states_total + legacy_total_count,
         }
 
 
