@@ -123,7 +123,6 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-license** - Feature licensing and plan tiers - routes: `/settings/license`
 - **feat-runtime** - Runtime configuration, rate limits, retention, and sandbox concurrency (Runtime Config and Rate Limits deferred from the MVP nav — hidden via private_preview; see FAR-549 / FAR-550) - routes: `/admin/housekeeping`, `/admin/environments`, `/admin/run-retention`, `/admin/sandbox-concurrency`
 - **feat-system-config** - System-level configuration administration - routes: `/admin/system/config`
-- **feat-apply** - `modulo apply` declarative configuration CLI (FAR-681) - routes: `/admin/system/config`
 - **feat-system-orgs** - System-level organization administration - routes: `/admin/system/orgs`
 - **feat-product-analytics** - Product usage and adoption analytics for system administrators - routes: `/admin/product-analytics`
 

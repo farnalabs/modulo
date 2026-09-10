@@ -722,7 +722,7 @@ routes:
         name: admin-system-config
         breadcrumb: System Config
         parent: /
-        product_map: [feat-system-config, feat-apply]
+        product_map: [feat-system-config]
         sidebar_group:
         sidebar_order:
         type: page
