@@ -84,6 +84,10 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — registered the
+  `library-collection-badge` testid of `LibraryPrimitiveCard.vue` in the `/library`
+  manifest `elements:` inventory, so the collection-membership badge on library
+  cards is no longer invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **improve-architecture (product-map walk)** — registered the collection
   authoring/detail and collections-tab testids (`collection-*`,
   `library-section-collections`, `library-create-collection`, `library-collections-error`)
