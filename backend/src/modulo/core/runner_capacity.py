@@ -78,6 +78,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.db.models.run import TERMINAL_STATUSES
@@ -1040,6 +1041,16 @@ async def reconcile_runner_dispatch_markers(
                     from modulo.db.rls import set_rls_org
 
                     await set_rls_org(session, org_id)
+                    # FAR-767: bound the lock wait for every statement in this
+                    # org pass.  A sandbox-run transaction that holds a row lock
+                    # on a marker-carrying run must NOT block the sweep past the
+                    # 120s SAQ job timeout — the timeout converts any unbounded
+                    # wait into a bounded, fail-open, self-healing skip.
+                    lock_timeout_s = settings.runner_marker_sweep_lock_timeout_seconds
+                    await session.execute(
+                        text("SELECT set_config('lock_timeout', :val, true)"),
+                        {"val": f"{lock_timeout_s}s"},
+                    )
                     cursor: uuid.UUID | None = None
                     while True:
                         batch = (
@@ -1103,9 +1114,21 @@ async def reconcile_runner_dispatch_markers(
                     org_breach = await _assert_capacity_within_cap(session, org_id)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 orgs_failed += 1
-                _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
+                # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
+                # transaction holds a conflicting row lock.  Log at warning level
+                # with a distinctive event name so the sweep is visible in prod
+                # logs without the noisy traceback of a genuine org failure; the
+                # 60s cadence retries the org next tick (fail-open, self-healing).
+                sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+                if sqlstate == "55P03":
+                    _log.warning(
+                        "runner.capacity.marker_sweep_org_lock_timeout org=%s",
+                        org_id,
+                    )
+                else:
+                    _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
                 continue
             # The org transaction COMMITTED — emit the outcomes + the breach
             # verdict now (post-commit, never phantom).
