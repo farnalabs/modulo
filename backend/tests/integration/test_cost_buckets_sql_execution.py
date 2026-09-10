@@ -409,12 +409,18 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
     pipeline_export = {
         (str(row.pipeline_id), _safe_float(row.total_spend_usd), _safe_int(row.total_runs)) for row in pipeline_rows
     }
-    # pipeline_one: 1.25 + 2.75 (NULL ignored by SUM) = 4.00, COUNT(*) 3
-    # pipeline_two: 3.00 only (5.00 out-of-window excluded), COUNT 1
-    # pipeline_three: only NULL-cost runs → 0.0 total, COUNT 1
+    # `_SQL_EXPORT_PIPELINE` sums EVERY in-window run for the org — it ignores the
+    # `cost_breakdown`; the per-component/model split is the job of
+    # `_SQL_EXPORT_MODEL`, so the self_reported/calculated runs below DO count
+    # toward each pipeline's total.
+    # pipeline_one: 1.25 + 2.75 + NULL(0) + 1.00 + 0.50 (in-window) = 5.50, COUNT(*) 5
+    #   (the 10.00 out-of-window gpt4 run is excluded)
+    # pipeline_two: 3.00 + 4.00(claude) + 99.00(gpt4 calculated) = 106.00, COUNT(*) 3
+    #   (the 5.00 out-of-window run is excluded)
+    # pipeline_three: only NULL-cost in-window runs → 0.0 total, COUNT 1
     assert pipeline_export == {
-        (str(pipeline_one), 4.0, 3),
-        (str(pipeline_two), 3.0, 1),
+        (str(pipeline_one), 5.5, 5),
+        (str(pipeline_two), 106.0, 3),
         (str(pipeline_three), 0.0, 1),
     }
 
