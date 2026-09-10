@@ -683,7 +683,11 @@ def _override_principal(via_api_key: bool, client_kind: str = "browser") -> None
 class TestHumanOnlyRestEnforcement:
     """FAR-610: human_only gates deny API-key principals on the resume routes
     (approve / approve-with-modification / deliver-manual / submit-manual);
-    browser JWTs pass. reject stays allowed for every client."""
+    browser JWTs pass. reject itself has no human_only guard, but since
+    FAR-609 a non-browser principal cannot CLAIM a default-human_only gate,
+    so it can never reach reject on one — reject works only for a
+    claim-holder (browser JWT, or credentials holding a claim minted
+    before gate became human_only)."""
 
     @pytest.fixture(autouse=True)
     def _no_real_audit_db(self) -> Generator[None, None, None]:

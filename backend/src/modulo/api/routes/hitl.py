@@ -122,7 +122,8 @@ router = APIRouter(prefix="/api/v1", tags=["hitl"])
 
 
 class HumanOnlyDenied(HTTPException):
-    """403 raised when a non-browser credential decides a ``human_only`` gate.
+    """403 raised when a non-browser credential claims or decides a
+    ``human_only`` gate.
 
     Subclass (not a bare ``HTTPException``) so ``_run_hitl_manager`` — the
     single choke point of every REST decision route — can distinguish the

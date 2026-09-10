@@ -52,7 +52,7 @@ Common issues, their causes, and resolutions.
 | `Claim token expired` | 15-minute TTL exceeded since claim | Re-claim the gate – a new claim token is auto-generated | `401: Claim token expired` |
 | `409 Conflict on claim` | Another user already claimed this gate | Wait for the other user to complete their review or for the claim token to expire (15 min) | `409: Gate <id> already claimed by user <name>` |
 | Cannot approve/reject | Claim token is invalid, expired, or gate already decided | Refresh the page; re-claim the gate if needed | `401: Invalid claim token` or `409: Gate already decided` |
-| `human_only gate blocked` | Pipeline has `human_only` (true by default, FAR-609) and requires a human-in-the-loop | This is by design – review in the browser UI; MCP/API-key clients cannot claim, decide, or reject a human_only gate (reject requires a claim token that only those clients can no longer obtain) | `human_only gate <id> is blocked – manual review required` |
+| `human_only gate blocked` | Pipeline has `human_only` (true by default, FAR-609) and requires a human-in-the-loop | This is by design – review in the browser UI; MCP/API-key clients cannot claim, decide, or reject a human_only gate (reject requires a claim token, and non-browser clients can no longer obtain one) | `human_only gate <id> is blocked – manual review required` |
 
 ---
 

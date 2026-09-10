@@ -1467,8 +1467,10 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls: MagicMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        """FAR-610: reject is the safe direction — never blocked, even when
-        the gate is human_only."""
+        """FAR-610: reject has no human_only guard of its own — it passes for
+        a claim-holder even when the gate is human_only. A non-browser MCP
+        client can no longer CLAIM a default-human_only gate (FAR-609), so
+        it can never claim/decide/reject one going forward."""
         self._set_role_operator()
         manager = MagicMock()
         manager.reject = AsyncMock()
