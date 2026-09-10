@@ -1077,8 +1077,8 @@ class TestUninstallCollectionService:
             return await uninstall_collection(mock_session, _ORG_ID, uuid.uuid4())
 
         result = asyncio.run(run())
-        assert result["deleted"] == []
-        assert result["detached"] == []
+        assert not result["deleted"]
+        assert not result["detached"]
 
     def test_check_unmodified_true_when_stamped(self) -> None:
         from modulo.core.library_service.uninstall import _check_unmodified

@@ -124,7 +124,8 @@ async def _build_bundle_from_pins(
                 }
             )
         elif pin.primitive_type == "workflow":
-            workflow_content = content.get("bundle", content)
+            bundle = content.get("bundle")
+            workflow_content = bundle if bundle is not None else content
             pipeline_info = workflow_content.get("pipeline", {})
             pipeline_graph_nodes = pipeline_info.get("graph_nodes_json", [])
             graph_nodes.extend(pipeline_graph_nodes)
