@@ -2,7 +2,10 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from modulo.api.routes.variant_batches import (
     _compute_batch_status,
@@ -36,7 +39,7 @@ def _make_run(
     run_id: uuid.UUID | None = None,
     status: str = "complete",
     pipeline_id: uuid.UUID | None = None,
-    variant_config_snapshot: dict | None = None,
+    variant_config_snapshot: dict[str, Any] | None = None,
     total_cost_usd: float | None = 0.01,
     total_tokens: int | None = 1000,
     created_at: datetime | None = None,
@@ -102,8 +105,8 @@ class TestRunToVariantRun:
         assert result["variant_name"] == "control"
         assert result["snapshot_label"] == "snap-123"
         assert result["run_status"] == "complete"
-        assert result["pass_rate"] == 0.8
-        assert result["total_cost_usd"] == 0.05
+        assert result["pass_rate"] == pytest.approx(0.8)
+        assert result["total_cost_usd"] == pytest.approx(0.05)
         assert result["total_tokens"] == 5000
         assert result["node_outputs"] == {"agent1": {"text": "hello"}}
 
