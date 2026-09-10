@@ -72,11 +72,13 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     ),
     "audit_events": frozenset({"payload_json"}),
     "chat_messages": frozenset({"tool_calls_json", "tool_results_json"}),
-    # collection_install: migration 0207 creates these three blob columns as
-    # JSONB on Postgres; the ORM models them as generic JSON for SQLite/MariaDB
-    # parity (repo-wide multi-backend convention). permanent (documented repo
-    # divergence).
-    "collection_install": frozenset({"resolved_manifest", "connector_checklist", "installed_entities"}),
+    "collection_install": frozenset(
+        {
+            "resolved_manifest",
+            "connector_checklist",
+            "installed_entities",
+        }
+    ),
     "composite_templates": frozenset({"sub_pipeline_graph_json", "parameter_ports_json"}),
     "connector_instances": frozenset({"config_json", "allowed_operations"}),
     "environment_profiles": frozenset({"capabilities_json", "config_json", "secret_refs_json"}),

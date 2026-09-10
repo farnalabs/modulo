@@ -337,6 +337,37 @@ def test_status_on_uninitialized_dir_does_not_crash(tmp_path: Path) -> None:
     assert "initialized: False" in result.output
 
 
+def test_doctor_command_invokes_run_doctor_and_propagates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.cli.main as cli_main_module
+    import modulo.launcher.doctor as doctor_module
+
+    calls: list[tuple[Path, bool]] = []
+
+    def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+        calls.append((data_dir, as_json))
+        return 1
+
+    monkeypatch.setattr(doctor_module, "run_doctor", fake_run_doctor)
+    result = CliRunner().invoke(cli_main_module.cli, ["doctor", "--data-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 1
+    assert calls == [(tmp_path, True)]
+
+
+def test_doctor_command_render_runtime_error_as_click_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import modulo.cli.main as cli_main_module
+    import modulo.launcher.doctor as doctor_module
+
+    def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+        raise RuntimeError("data dir is not initialized")
+
+    monkeypatch.setattr(doctor_module, "run_doctor", fake_run_doctor)
+    result = CliRunner().invoke(cli_main_module.cli, ["doctor", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "data dir is not initialized" in result.output
+
+
 def test_platform_guard_failure_degrades_status(tmp_path: Path) -> None:
     """On Windows (no launcher support) status still renders, without raising."""
     if sys.platform != "win32":
@@ -344,3 +375,47 @@ def test_platform_guard_failure_degrades_status(tmp_path: Path) -> None:
     result = CliRunner().invoke(cli_main.cli, ["status", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
     assert "initialized: False" in result.output
+
+
+def test_doctor_command_invokes_run_doctor_and_propagates_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import modulo.launcher.doctor as doctor_module
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+        captured["data_dir"] = data_dir
+        captured["as_json"] = as_json
+        return 1
+
+    monkeypatch.setattr(doctor_module, "run_doctor", _fake_run_doctor)
+    monkeypatch.setattr(cli_main, "_resolve_data_dir", lambda data_dir: tmp_path)
+
+    result = CliRunner().invoke(cli_main.cli, ["doctor", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert captured["data_dir"] == tmp_path
+
+
+def test_doctor_command_json_flag_passed_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.doctor as doctor_module
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+        captured["as_json"] = as_json
+        return 0
+
+    monkeypatch.setattr(doctor_module, "run_doctor", _fake_run_doctor)
+    monkeypatch.setattr(cli_main, "_resolve_data_dir", lambda data_dir: tmp_path)
+
+    result = CliRunner().invoke(cli_main.cli, ["doctor", "--data-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    assert captured["as_json"] is True
+
+
+def test_doctor_command_help_lists_options() -> None:
+    result = CliRunner().invoke(cli_main.cli, ["doctor", "--help"])
+    assert result.exit_code == 0
+    assert "--data-dir" in result.output
+    assert "--json" in result.output

@@ -313,4 +313,10 @@ __all__ = [
     #     call site for. The route, request model, and unit/integration tests all
     #     exercise it, so it is load-bearing, not dead.
     "approve_with_modification",
+    # --- FAR-671 slice 3: the serve_spa runtime-config route. The nested
+    #     handler is registered via @app.get, which the gate's
+    #     --ignore-decorators set does not cover (it whitelists @router.*
+    #     only); FastAPI consumes it as an HTTP endpoint, so it is
+    #     load-bearing, not dead.
+    "runtime_config_endpoint",
 ]
