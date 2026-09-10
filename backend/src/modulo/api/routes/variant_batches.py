@@ -9,6 +9,7 @@ from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import case, func, select
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
@@ -23,9 +24,12 @@ from modulo.db.crud.variant_group import (
     get_variant_group,
     list_batch_runs_for_batch_ids,
     list_batch_states,
+    run_variant_batch,
     soft_delete_batch_state,
 )
+from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.run import Run
+from modulo.db.models.run import Run as RunModel
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 router = APIRouter(prefix="/api/v1/variant-batches", tags=["variant-batches"])
@@ -104,10 +108,6 @@ async def _batch_load_eval_results(
     Excludes guardrail rows per the eval_results consumer contract.
     Returns ``{run_id: [{eval_id, node_id, passed, score, detail}, ...]}``.
     """
-    from sqlalchemy import select
-
-    from modulo.db.models.eval_result import EvalResult
-
     if not run_ids:
         return {}
 
@@ -175,10 +175,6 @@ async def _batch_load_eval_stats(
     Excludes guardrail rows per the eval_results consumer contract.
     Returns ``{run_id: (total, passed)}``.
     """
-    from sqlalchemy import case, func, select
-
-    from modulo.db.models.eval_result import EvalResult
-
     if not run_ids:
         return {}
 
@@ -311,8 +307,6 @@ async def list_batches(
         await set_rls_user_context(_session, _principal.account_id, _principal.org_role)
         org_id = _principal.organisation_id
 
-        from sqlalchemy import func, select
-
         # Phase 1: known batches from the state table.
         states_items, states_total = await list_batch_states(_session, org_id=org_id, page=page, page_size=page_size)
 
@@ -351,7 +345,6 @@ async def list_batches(
 
         # Phase 2: legacy batches not in the state table.
         # Scan runs for batch_ids not yet known — these predate FAR-775.
-        from modulo.db.models.run import Run as RunModel
 
         # Count legacy batches for the true total.
         # Exclude ALL state-table batch_ids (org-wide), not just the current
@@ -479,8 +472,6 @@ async def re_fire_batch(
     and fires a fresh batch with the same input payload. Returns the new
     batch detail (with new batch_id).
     """
-    from modulo.db.crud.variant_group import run_variant_batch
-
     async with _session.begin():
         await set_rls_org(_session, _principal.organisation_id)
         await set_rls_user_context(_session, _principal.account_id, _principal.org_role)

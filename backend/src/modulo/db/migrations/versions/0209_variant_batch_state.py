@@ -1,7 +1,7 @@
 """variant_batch_state table (FAR-775).
 
-Revision ID: 0208_variant_batch_state
-Revises: 0207_collection_install_tracking
+Revision ID: 0209_variant_batch_state
+Revises: 0208_notification_indexes_and_constraint
 Create Date: 2026-09-10
 
 Adds a lightweight persistence row for variant batch metadata: name,
@@ -34,8 +34,8 @@ from modulo.db.migrations._rls_ceremony import (
     role_exists as _role_exists,
 )
 
-revision: str = "0208_variant_batch_state"
-down_revision: str | None = "0207_collection_install_tracking"
+revision: str = "0209_variant_batch_state"
+down_revision: str | None = "0208_notification_indexes_and_constraint"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
