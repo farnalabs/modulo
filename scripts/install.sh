@@ -255,6 +255,7 @@ preflight() {
   [ "$(uname -s)" = "Linux" ] || die "this installer supports Linux only (P1a). macOS and Windows installers come later — see ADR 031."
   command -v curl >/dev/null 2>&1 || die "curl is required (install it, e.g. 'apt install curl')"
   command -v tar >/dev/null 2>&1 || die "tar is required (install it, e.g. 'apt install tar')"
+  command -v python3 >/dev/null 2>&1 || die "python3 is required: install.sh extracts the sha256 + release fields from the SIGNED release manifest with it (FAR-675). Install it, e.g. 'apt install python3'."
   command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || die "a sha256 tool (sha256sum or shasum) is required to verify the download"
 
   case "$(uname -m)" in
@@ -340,11 +341,30 @@ trap 'rm -rf "${tmp}"' EXIT
 # beside the tarball; the SAME trust store verifies (no operator-added keys).
 
 # The embedded ed25519 trust store (SPKI DER, base64) - current + next.
-# These are the DEV/TEST keys; production keys are provisioned by the repo
-# owner (Duncan) as CI secrets and pasted into the MATCHING Python trust
-# store (backend/src/modulo/launcher/manifest.py). Rotation per ADR 031.
-TRUST_KEY_CURRENT_B64="MCowBQYDK2VwAyEA8sRwKVj7ZJ5hGU7EzJJ9z+CA2TI3ZmrMxMWEQr4B+XQ="
-TRUST_KEY_NEXT_B64="MCowBQYDK2VwAyEAF99rybwTwBB4ksqRJ3LDkvkJ1tbrY8lDHOftxDHObtF94XS4="
+# FAIL-CLOSED by default: BOTH values are EMPTY until the repo owner
+# provisionally pastes the production public keys (needs-human). The SAME
+# keys must go into backend/src/modulo/launcher/manifest.py (_TRUST_ROWS)
+# - a unit test asserts the two assemblies stay equal (no drift); rotation
+# per ADR 031 Decision 3. Empty values make every signature gate refuse.
+TRUST_KEY_CURRENT_B64=""
+TRUST_KEY_NEXT_B64=""
+
+# The store-blessed signing key-ids (must mirror manifest.py's slot ids).
+TRUST_KEY_ID_CURRENT="modulo-2026-a"
+TRUST_KEY_ID_NEXT="modulo-2026-a-next"
+
+_sig_key_id() {
+  # sig_key_id <sig-file> — the .sig's recorded "key_id" (store-selected).
+  grep -o '"key_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
+}
+
+_openssl_ed25519_check() {
+  # At least OpenSSL 1.1.1: ed25519 in `pkeyutl -rawin` needs it.
+  openssl version >/dev/null 2>&1 || die "openssl is required to verify the SIGNED release manifest (e.g. 'apt install openssl')"
+  if ! printf '%s' "$(openssl version)" | grep -qE 'OpenSSL (1\.1|2\.|3\.|4\.)'; then
+    die "openssl ed25519 verification needs OpenSSL 1.1.1+ (the 'pkeyutl -rawin' mode); got: $(openssl version 2>/dev/null || echo none)"
+  fi
+}
 
 hex_to_bin() {
   # hex_to_bin <hex> -> binary on stdout (the ed25519 signature input).
@@ -365,23 +385,51 @@ b64_to_der() {
 
 verify_shipped_manifest() {
   # verify_shipped_manifest <manifest-path> <signature-path> <tarball-path>
-  local manifest_file="$1" signature_file="$2" tarball_file="$3" key_file sig_file sig_hex
-  command -v openssl >/dev/null 2>&1 || die "openssl is required to verify the SIGNED release manifest (e.g. 'apt install openssl')"
+  # <expected-release-tag>
+  #
+  # Signature verification ONLY accepts store-blessed key-ids: the .sig's
+  # recorded key_id selects the embedded trust key; without a parsable
+  # key_id BOTH embedded keys are tried (rotation race) - an unknown
+  # key-id never reaches openssl at all.
+  #
+  # Preconditions: openssl (>=1.1.1, ed25519 -rawin), coreutils base64, and
+  # python3 (the manifest sha256 extraction below). The trust store is
+  # EMBEDDED and empty-by-default: no operator-added key can ever verify.
+  local manifest_file="$1" signature_file="$2" tarball_file="$3" expected_release="$4"
+  _openssl_ed25519_check
   command -v base64 >/dev/null 2>&1 || die "coreutils base64 is required to decode the trust-store keys"
   [ -f "${manifest_file}" ] || die "the signed release manifest is missing: ${manifest_file}"
   [ -f "${signature_file}" ] || die "the signature file is missing: ${signature_file}"
+  [ -n "${TRUST_KEY_CURRENT_B64}" ] || [ -n "${TRUST_KEY_NEXT_B64}" ] || die \
+    "no production trust keys are provisioned in this installer (TRUST_KEY_CURRENT_B64/NEXT_B64 are empty) - refusing to verify anything (provisioning: backend/src/modulo/launcher/manifest.py PROVISIONING_NOTE)"
+  local key_file sig_file sig_hex sig_key_id candidate_keys key_b64 verified=0
   key_file="$(mktemp)"
   sig_file="$(mktemp)"
-  b64_to_der "${TRUST_KEY_CURRENT_B64}" "${key_file}"
   sig_hex="$(sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]\{128\}\)".*/\1/p' "${signature_file}" | head -n 1)"
   [ -n "${sig_hex}" ] || die "the signature file's 'signature' field is malformed (expected 128 hex chars)"
+  sig_key_id="$(_sig_key_id "${signature_file}")" || sig_key_id=""
+  case "${sig_key_id}" in
+    "") # key_id unparsable: try both embedded store keys (never unknown ones)
+      candidate_keys="current next"
+      ;;
+    "${TRUST_KEY_ID_CURRENT}") candidate_keys="current" ;;
+    "${TRUST_KEY_ID_NEXT}") candidate_keys="next" ;;
+    *) die "unknown signing key-id '${sig_key_id}' - not in the embedded current+next trust store; refusing"
+  esac
   hex_to_bin "${sig_hex}" > "${sig_file}"
-  if openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" >/dev/null 2>&1; then
-    info "release-manifest signature verified (embedded current trust store)"
-  else
-    die "release-manifest signature FAILED to verify - do not use this download; report it at https://github.com/farnalabs/modulo/issues"
-  fi
+  for slot in ${candidate_keys}; do
+    case "${slot}" in current) key_b64="${TRUST_KEY_CURRENT_B64}" ;; next) key_b64="${TRUST_KEY_NEXT_B64}" ;; esac
+    [ -n "${key_b64}" ] || continue
+    b64_to_der "${key_b64}" "${key_file}"
+    if openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" >/dev/null 2>&1; then
+      verified=1
+      info "release-manifest signature verified (embedded ${slot} trust store, key-id '${sig_key_id:-any-store-key}')"
+      break
+    fi
+  done
   rm -f "${key_file}" "${sig_file}"
+  [ "${verified}" -eq 1 ] || die "release-manifest signature FAILED to verify against the embedded trust store - do not use this download; report it at https://github.com/${REPO}/issues (openssl 1.1.1+ required for the ed25519 -rawin mode)"
+  local expected actual
   expected="$(python3 - "$manifest_file" "$tarball_name" <<'PYEOF'
 import json, sys
 body = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -398,6 +446,13 @@ PYEOF
   actual="$(sha256_of "${tarball_file}")"
   [ "${actual}" = "${expected}" ] || die "sha256 mismatch for ${tarball_name} (signed manifest): expected ${expected}, got ${actual}"
   info "sha256 verified against the SIGNED manifest: ${actual}"
+  # The manifest's release field must BE the bundle the operator asked for
+  # (never sign bundle-v1.2.0 and ship bundle-v9.9.9's bytes).
+  local release_in_manifest
+  release_in_manifest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["release"])' "${manifest_file}" 2>/dev/null)" || \
+    die "cannot read the signed manifest's release field"
+  [ "${release_in_manifest}" = "${expected_release}" ] || \
+    die "the signed release manifest describes '${release_in_manifest}', not the requested bundle '${expected_release}' - refusing the cross-version mismatch"
 }
 
 
@@ -405,11 +460,14 @@ if [ -n "${FROM_FILE}" ]; then
   info "Offline install from ${FROM_FILE}"
   manifest_file="${FROM_FILE%/*}/RELEASE_MANIFEST.json"
   signature_file="${manifest_file}.sig"
-  if [ -f "${manifest_file}" ] && [ -f "${signature_file}" ]; then
-    verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}"
-  else
-    info "Note: no locally provided manifest beside the tarball (${manifest_file} + .sig); the bundle's internal SHA256SUMS is still verified after extraction. Per ADR 031 the SIGNED manifest is the offline escape hatch - place it beside the tarball for the full gate."
+  # HARD GATE: the SIGNED manifest is NOT optional. A tarball without a
+  # signature is exactly the bypass this design closes - the offline escape
+  # hatch verifies against the SAME embedded trust store; there is no
+  # SHA256SUMS-only fallback.
+  if [ ! -f "${manifest_file}" ] || [ ! -f "${signature_file}" ]; then
+    die "offline install REFUSED: the SIGNED release manifest must sit beside the tarball: ${manifest_file} (+ .sig). The bundle's internal SHA256SUMS is verified too, but a signature over the SIGNED manifest is REQUIRED (ADR 031 Decision 3) - download exactly these two release assets from the matched bundle release."
   fi
+  verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" "bundle-v${VERSION_NUM}"
   cp -- "${FROM_FILE}" "${tmp}/${tarball_name}"
 else
   info "Installing Modulo bundle ${RELEASE_TAG} (linux-${ARCH})"
@@ -418,7 +476,7 @@ else
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json.sig" "${tmp}/RELEASE_MANIFEST.json.sig"
   # The SIGNED manifest is the primary gate: signature verify FIRST, then the
   # tarball's sha256 against the manifest's entry - BEFORE extraction.
-  verify_shipped_manifest "${tmp}/RELEASE_MANIFEST.json" "${tmp}/RELEASE_MANIFEST.json.sig" "${tmp}/${tarball_name}"
+  verify_shipped_manifest "${tmp}/RELEASE_MANIFEST.json" "${tmp}/RELEASE_MANIFEST.json.sig" "${tmp}/${tarball_name}" "${RELEASE_TAG}"
   info "sha256 verified against the SIGNED manifest: $(sha256_of "${tmp}/${tarball_name}")"
 fi
 
@@ -485,11 +543,13 @@ target="${INSTALL_ROOT}/versions/${VERSION_NUM}"
 staging="${INSTALL_ROOT}/versions/.staging-${VERSION_NUM}.$$"
 mv "${bundle_dir}" "${staging}"
 
+# Re-run over the SAME version keeps the old bytes at <target>.prev-<ts>
+# (never destroyed before any post-install verification), matching the
+# upgrade flow's restore guidance.
 if [ -e "${target}" ]; then
-  mv "${target}" "${target}.old.$$"
+  mv "${target}" "${target}.prev-$(date +%Y%m%d%H%M%S)"
 fi
 mv "${staging}" "${target}"
-[ ! -e "${target}.old.$$" ] || rm -rf "${target}.old.$$"
 info "installed bundle to ${target}"
 
 # Atomic-ish symlink swap: build a temp symlink, then rename it over `current`

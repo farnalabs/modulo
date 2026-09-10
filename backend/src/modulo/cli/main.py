@@ -241,7 +241,16 @@ def _redacted_settings_dump(settings: Any) -> dict[str, str]:
 def start(ctx: click.Context, data_dir: Path | None, detach: bool, clear_degraded: bool, bin_dir: Path | None) -> None:
     """Boot the single-install stack: bundled Postgres/Redis, SAQ, and the API."""
     _scrub_for_launcher_command()
+    import contextlib
+
+    from modulo.launcher import upgrade as upgrade_module
     from modulo.launcher.entry import run_start
+
+    if data_dir is None:
+        with contextlib.suppress(Exception):
+            repaired = upgrade_module.repair_current_symlink(upgrade_module.default_install_root())
+            if repaired:
+                click.echo(f"repaired the dangling `current` symlink (-> versions/{repaired})")
 
     try:
         code = run_start(data_dir, detach=detach, bin_dir=bin_dir, clear_degraded=clear_degraded)
@@ -519,6 +528,7 @@ def upgrade(
     """
     _scrub_for_launcher_command()
     from modulo.launcher import upgrade as upgrade_module
+    from modulo.launcher.manifest import ManifestSecurityError
 
     resolved_root = install_root if install_root is not None else upgrade_module.default_install_root()
     try:
@@ -529,7 +539,7 @@ def upgrade(
             from_file=from_file,
             skip_backup=skip_backup,
         )
-    except upgrade_module.UpgradeError as exc:
+    except (upgrade_module.UpgradeError, ManifestSecurityError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"upgraded {result.previous_version} -> {result.version}")
     click.echo(f"  bundle: {resolved_root / 'current'}")

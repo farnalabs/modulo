@@ -32,7 +32,9 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
+import signal
 import subprocess  # nosec B404 â€” the only exec is a fully argv-pinned pg_dump invocation below (never shell=True)
 import sys
 import tarfile
@@ -40,7 +42,7 @@ import tempfile
 import time
 import urllib.parse
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -48,6 +50,7 @@ from typing import Any
 from modulo.launcher import manifest as manifest_module
 from modulo.launcher.env_safety import scrub_os_environment
 from modulo.launcher.initdb import _binary
+from modulo.launcher.manifest import ManifestSecurityError, ReleaseManifest
 from modulo.launcher.supervisor import _read_lock_holder
 
 _log = logging.getLogger(__name__)
@@ -461,10 +464,17 @@ def _strip_bundle_prefix(version_text: str) -> str:
 
 
 def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
-    """0600-creation JSON write (the secrets-adjacent convention)."""
+    """0600-creation JSON write, fsynced before close.
+
+    The fsync closes the crash window: an upgrade.json marker written just
+    before a power loss must be on disk when the next boot reads it (the
+    FAR-674 degraded-window seam keys off exactly this file).
+    """
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _PRIVATE_MODE)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _sha256_file(path: Path) -> str:
@@ -532,6 +542,7 @@ def restore_guidance(
     previous_version: str,
     install_root: Path,
     data_dir: Path,
+    prior_link_target: str | None = None,
 ) -> str:
     """The exact manual restore command restoring BOTH binary AND data.
 
@@ -541,6 +552,11 @@ def restore_guidance(
     restore ran (none exists in v1; the fast-follow design - temp dir +
     verify + atomic exchange, gated on never-reached-healthy - is recorded
     in ADR 031 Decision 7, referenced here per the ADR policy).
+
+    *prior_link_target* names the version dir that still holds the OLD
+    binary's bytes: a re-run of the same version keeps the previous bytes
+    at ``versions/<v>.prev-<ts>``, so the link target names THAT dir and
+    never the fresh copy sitting at ``versions/<v>``.
     """
     head = (
         "Manual restore - this restores BOTH the binary AND the data. The attempted upgrade's\n"
@@ -548,19 +564,33 @@ def restore_guidance(
         "head, so restoring the old binary ALONE is not sufficient."
     )
     fault = "NO automatic restore ran (none exists in v1; the fast-follow design is recorded in\nADR 031 Decision 7)."
+    link_version = prior_link_target if prior_link_target is not None else previous_version
     if snapshot is None:
-        link_cmd = f"ln -sfn versions/{previous_version} {install_root / 'current'}"
+        link_cmd = f"ln -sfn versions/{link_version} {install_root / 'current'}"
         return f"{fault}\n{head}\nExact manual restore command:\n  {link_cmd}"
     restore_cmd = f"modulo restore {snapshot} --data-dir {data_dir} --yes"
-    link_cmd = f"ln -sfn versions/{previous_version} {install_root / 'current'}"
+    link_cmd = f"ln -sfn versions/{link_version} {install_root / 'current'}"
     compound = link_cmd + " && " + restore_cmd
     return f"{fault}\n{head}\nPre-upgrade snapshot: {snapshot}\nExact manual restore command:\n  {compound}"
 
 
+def _temp_owner_pid(name: str) -> int | None:
+    """The trailing pid suffix of a swap/sweep temp name, or None."""
+    match = re.search(r"(\d+)$", name)
+    return int(match.group(1)) if match is not None else None
+
+
 def sweep_symlink_temps(link_path: Path) -> None:
-    """Remove stale `.current.new.<pid>` temps from earlier crashed swaps."""
+    """Remove stale `.current.new.<pid>` temps from earlier crashed swaps.
+
+    A temp owned by a LIVE pid is another concurrent swap's in-flight link —
+    never swept (only the owning process's crash leaves it stale).
+    """
     with contextlib.suppress(OSError):
         for stale in link_path.parent.glob(f".{link_path.name}.new.*"):
+            owner_pid = _temp_owner_pid(stale.name)
+            if owner_pid is not None and _pid_alive(owner_pid):
+                continue
             with contextlib.suppress(OSError):
                 if stale.is_symlink() or stale.is_file():
                     stale.unlink()
@@ -572,7 +602,8 @@ def sweep_upgrade_caches(install_root: Path) -> list[str]:
     """Sweep stale `.staging-*` / `.downloads-*` / `.current.new.*` debris.
 
     The download/extract caches land here when an interrupted run dies;
-    retention NEVER touches a state.json-referenced (versioned) dir.
+    retention NEVER touches a state.json-referenced (versioned) dir. Temps
+    carrying a LIVE pid suffix are concurrent runs' working state — skipped.
     """
     pruned: list[str] = []
     if not install_root.is_dir():
@@ -580,6 +611,9 @@ def sweep_upgrade_caches(install_root: Path) -> list[str]:
     with contextlib.suppress(OSError):
         for entry in install_root.iterdir():
             if not any(entry.name.startswith(prefix) for prefix in _CACHE_PREFIXES):
+                continue
+            owner_pid = _temp_owner_pid(entry.name)
+            if owner_pid is not None and _pid_alive(owner_pid):
                 continue
             try:
                 if entry.is_symlink() or entry.is_file():
@@ -624,6 +658,9 @@ def no_live_process_inside(target_root: Path) -> None:
 
     Covers the locked-file failure class: a still-running binary/library
     from the version dir about to be swapped. Names every offending PID.
+    The UPGRADING PROCESS ITSELF is excluded: self-upgrades re-run the CLI
+    whose executable shim lives inside the scanned incumbent dir — without
+    the self-exclusion every self-upgrade aborts on its own process.
     POSIX-only (the /proc scan); the flow's own platform gate refuses the
     remaining platforms before reaching here.
     """
@@ -632,14 +669,19 @@ def no_live_process_inside(target_root: Path) -> None:
         # that path reads /proc (the Linux-first P1a scan shape).
         return
     resolved_root = str(target_root)
+    own_pid = os.getpid()
+    own_exe = os.path.realpath(sys.executable)
     offenders: list[str] = []
     for proc_entry in Path("/proc").iterdir():
         if not proc_entry.name.isdigit():
             continue
+        pid = int(proc_entry.name)
         try:
             exe = (proc_entry / "exe").readlink()
             cwd = (proc_entry / "cwd").readlink()
         except OSError:
+            continue
+        if pid == own_pid or os.path.realpath(str(exe)) == own_exe:
             continue
         if exe.startswith(resolved_root + os.sep) or cwd.startswith(resolved_root + os.sep):
             offenders.append(f"pid {proc_entry.name} (cwd={cwd}, exe={exe})")
@@ -692,22 +734,35 @@ def prune_versions(
     current_target: Path,
     retained: int = _RETAINED_VERSIONS,
 ) -> list[str]:
-    """Keep the newest *retained* version dirs; NEVER delete `current_target`.
+    """Keep the newest *retained* version dirs; never delete the live one.
 
-    `current_target` is the state.json-referenced dir (the version the
-    data dir runs on): retention drops only non-referenced dirs beyond
-    the bound, oldest first.
+    `current` is RE-RESOLVED at prune time (the swap may have re-pointed it
+    moments ago — pruning against the pre-swap incumbent can delete the dir
+    `current` now serves) and the state.json-referenced dir
+    (*current_target*) — neither is ever deleted. `.prev-<ts>` re-run
+    retention dirs are pruned only at their own later cycle, never here.
     """
     versioned_root = install_root / "versions"
+    protected: set[Path] = {current_target.resolve()}
+    link = install_root / "current"
+    if link.is_symlink():
+        with contextlib.suppress(OSError):
+            resolved_now = link.resolve(strict=True)
+            if resolved_now.is_dir():
+                protected.add(resolved_now.resolve())
     entries = sorted(
-        (entry for entry in versioned_root.iterdir() if entry.is_dir() and not entry.name.startswith(".")),
+        (
+            entry
+            for entry in versioned_root.iterdir()
+            if entry.is_dir() and not entry.name.startswith(".") and ".prev-" not in entry.name
+        ),
         key=lambda entry: _version_sort_key(entry.name),
         reverse=True,
     )
     pruned: list[str] = []
     walked = 0
     for entry in entries:
-        if entry.resolve() == current_target:
+        if entry.resolve() in protected:
             continue
         walked += 1
         if walked <= retained:
@@ -825,28 +880,75 @@ def stop_running_stack(data_dir: Path, *, unit_file: Path | None = None) -> None
     """Service-aware stop: the FAR-674 systemd user unit when installed
     (stopped FIRST - a restart=on-failure unit would otherwise respawn the
     foreground holder), then the SIGTERM via the supervisor's stop;
-    refuses with the holder PID when the stack is STILL live afterwards."""
+    refuses with the holder PID when the stack is STILL live afterwards.
+
+    A systemctl-stop timeout is handled (logged loudly, never a traceback):
+    the supervisor's own request_stop still runs, and any residual holder
+    produces the refusal path below.
+    """
     from modulo.launcher import service as service_module
     from modulo.launcher.supervisor import request_stop
 
     unit_path = unit_file if unit_file is not None else service_module.default_unit_path()
     if unit_path.is_file():
-        stop_result = subprocess.run(  # noqa: S603
-            ["systemctl", "--user", "stop", service_module.UNIT_FILENAME],  # noqa: S607
+        try:
+            stop_result = subprocess.run(  # noqa: S603
+                ["systemctl", "--user", "stop", service_module.UNIT_FILENAME],  # noqa: S607
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            if stop_result.returncode != 0:
+                _log.warning(
+                    "upgrade.unit_stop_failed rc=%s stderr=%s",
+                    stop_result.returncode,
+                    stop_result.stderr[-300:],
+                )
+        except subprocess.TimeoutExpired:
+            _log.warning("upgrade.unit_stop_timed_out after 30s - falling through to the supervisor stop")
+    request_stop(data_dir)
+    holder = _read_lock_holder(data_dir.parent / (data_dir.name + ".lock"))
+    if holder is not None and _pid_alive(holder.pid):
+        _restart_unit_best_effort(data_dir, why="post-stop abort: restoring the stopped service")
+        raise UpgradeError(
+            f"Refusing: the data dir {data_dir} is STILL locked by a live launcher (holder PID "
+            f"{holder.pid}) - stop it first: modulo stop"
+        )
+
+
+def _restart_unit_best_effort(data_dir: Path, *, why: str) -> None:
+    """Best-effort `systemctl --user start` of the FAR-674 unit (+ loud log).
+
+    Post-stop aborts otherwise leave the bundled stack DARK: the unit was
+    stopped, the supervisor's stop already ran, and no path restarts it.
+    The stack is restarted whenever a unit exists so a refusal never has a
+    dark side-effect; without the unit there is nothing to restart (the
+    foreground launcher either lives or was never running).
+    """
+    try:
+        from modulo.launcher import service as service_module
+
+        if not service_module.default_unit_path().is_file():
+            return
+        restart = subprocess.run(  # noqa: S603
+            ["systemctl", "--user", "start", service_module.UNIT_FILENAME],  # noqa: S607
             capture_output=True,
             text=True,
             check=False,
             timeout=30,
         )
-        if stop_result.returncode != 0:
-            _log.warning("upgrade.unit_stop_failed rc=%s stderr=%s", stop_result.returncode, stop_result.stderr[-300:])
-    request_stop(data_dir)
-    holder = _read_lock_holder(data_dir.parent / (data_dir.name + ".lock"))
-    if holder is not None and _pid_alive(holder.pid):
-        raise UpgradeError(
-            f"Refusing: the data dir {data_dir} is STILL locked by a live launcher (holder PID "
-            f"{holder.pid}) - stop it first: modulo stop"
-        )
+        if restart.returncode == 0:
+            _log.warning("upgrade.unit_started_after_abort reason=%s", why)
+        else:
+            _log.error(
+                "upgrade.unit_restart_after_abort_FAILED rc=%s stderr=%s (%s)",
+                restart.returncode,
+                restart.stderr[-300:],
+                why,
+            )
+    except Exception:  # best-effort path, never masks the primary error
+        _log.exception("upgrade.unit_restart_best_effort_failed (%s)", why)
 
 
 def _snapshot_schema_versions(snapshot_dir: Path) -> list[str]:
@@ -887,18 +989,19 @@ def check_no_downgrade(
 ) -> None:
     """Refuse a downgrade: DB revision ahead of the target bundle's head.
 
-    The OLD runtime's live alembic probe answers FIRST; when it reads
-    "unknown", the pre-upgrade snapshot's recorded ``schema_versions`` is
-    the authoritative DB side - and neither available is a refusal, never
-    a guess. The refusal carries the restore guidance.
+    *current_heads* is the LIVE DB side (the caller passes the old runtime's
+    live alembic probe on a skip-backup run, the snapshot's recorded heads
+    otherwise). "unknown" is never pass-through: when the live side reads
+    unknown and a snapshot exists, the snapshot's recorded schema versions
+    answer instead - and if BOTH read unknown (or nothing at all), the
+    check REFUSES blind, never guesses. The refusal carries the restore
+    guidance wording.
     """
     target_heads = _bundle_alembic_revisions(bundle_dir)
-    db_heads = (
-        current_heads
-        if current_heads != ["unknown"]
-        else (_snapshot_schema_versions(snapshot_dir) if snapshot_dir is not None else [])
-    )
-    if not db_heads:
+    db_heads = list(current_heads)
+    if snapshot_dir is not None and (not db_heads or "unknown" in db_heads):
+        db_heads = _snapshot_schema_versions(snapshot_dir)
+    if not db_heads or all(head == "unknown" for head in db_heads):
         raise UpgradeError(
             "cannot verify the database's migration revision(s): neither the live probe nor "
             "the pre-upgrade snapshot recorded them - refusing the downgrade check blind"
@@ -925,8 +1028,11 @@ def _check_pg_major(components: dict[str, str], data_dir: Path) -> None:
     CVE).
     """
     pg_version = str(components.get("postgres", "")).strip()
-    if not pg_version:
-        raise UpgradeError("the release manifest's 'components' carry no postgres version - refusing the upgrade")
+    if not pg_version or not re.fullmatch(r"\d+(?:\.\d+)*", pg_version):
+        raise UpgradeError(
+            f"the release manifest's 'components' carry no USABLE postgres version ({pg_version!r}) "
+            "- refusing the upgrade (a version the pg-major gate cannot compare is never guessed)"
+        )
     target_major = int(pg_version.split(".")[0])
     version_file = data_dir / _PGDATA_DIRNAME / _PG_VERSION_FILE
     if not version_file.exists():
@@ -977,23 +1083,40 @@ def run_boot(
 ) -> int:
     """Exec the NEW bundle's launch and gate on /healthz.
 
-    subprocess.Popen the boot argv (a foreground child; stderr captured),
-    then poll `http://127.0.0.1:<api_port>/healthz` until HTTP 200 - the
-    launcher's own migration gate (lifespan migrations ran; SAQ spawns
-    only past migration-head readiness). Healthy -> SIGTERM (ordered
-    teardown). A failing boot / no health inside *timeout* ->
-    UpgradeError (the caller attaches the snapshot path + the EXACT
-    restore commands).
+    subprocess.Popen the boot argv in its OWN process group
+    (``start_new_session=True``): the bundled postgres/redis/SAQ children
+    belong to the same group, so teardown never orphans them. stderr is a
+    temp FILE (never a PIPE): a chatty child cannot fill a 64KB pipe and
+    deadlock while /healthz is never served - a false timeout referral -
+    and the failure path reads the file for diagnostics.
+
+    Health gate = an EXACT HTTP 200 whose body is ``{"status": "ok"}``:
+    /healthz is the launcher's liveness endpoint (its migration gate - the
+    lifespan runs the migrations BEFORE the API serves). The current
+    endpoint carries no version/head field; when the launcher ships one
+    the upgrade flow should assert it here (TODO adjacent), and the boot's
+    own migration readiness is additionally the launcher's OWN gate -
+    /healthz freshness is honest about being liveness-only.
+
+    The caller decides the resting state (see perform_upgrade): a healthy
+    gate-restores the stack when the FAR-674 systemd unit exists (no
+    systemd unit -> the flow leaves the stack stopped and says so).
+
+    A failing boot / no health inside *timeout* -> UpgradeError; the
+    teardown is a GROUP kill (SIGTERM to the group, escalated).
     """
     import urllib.error
     import urllib.request
 
     launcher = Path(boot_argv[0])
+    stderr_allowance = 65536
+    stderr_file = tempfile.TemporaryFile(prefix="modulo-upgrade-boot-stderr-")  # noqa: SIM115 - the lifetime must span Popen + the poll loop
     process = subprocess.Popen(  # noqa: S603 - pinned argv, synthesized trusted input
         boot_argv,
         cwd=str(launcher.parent),
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=stderr_file,
+        start_new_session=(sys.platform != "win32"),
     )
     health_url = f"http://127.0.0.1:{api_port}/healthz"
     started_at = time.monotonic()
@@ -1002,33 +1125,59 @@ def run_boot(
         while process.poll() is None:
             try:
                 with urllib.request.urlopen(health_url, timeout=2) as response:  # nosec B310 - loopback-only health probe
-                    if 200 <= response.status < 300:
-                        healthy = True
-                        break
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+                    if response.status == 200:
+                        body = json.loads(response.read().decode("utf-8", errors="replace"))
+                        if isinstance(body, dict) and body.get("status") == "ok":
+                            healthy = True
+                            break
+            except (urllib.error.URLError, urllib.error.HTTPError, ValueError, OSError):
                 pass
             if time.monotonic() - started_at > timeout:
                 break
             time.sleep(poll_interval)
     finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+        _terminate_boot_process_group(process)
+        stderr_file.seek(0)
+        stderr_text = stderr_file.read(stderr_allowance).decode("utf-8", errors="replace").strip()
+        stderr_file.close()
     if not healthy:
-        stderr_text = (
-            (process.stderr.read() if process.stderr is not None else b"").decode("utf-8", errors="replace").strip()
-        )
-        if process.stderr is not None:
-            process.stderr.close()
         raise UpgradeError(
             f"the NEW bundle's boot did not reach a healthy /healthz (child exit code "
             f"{process.returncode}): {stderr_text[-400:] if stderr_text else '(no stderr)'}"
         )
     return int(process.returncode or 0)
+
+
+def _terminate_boot_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Ordered teardown of the boot child's WHOLE process group.
+
+    The bundled postgres/redis/SAQ children share the group, so the direct
+    child is never orphaned owning a live stack. SIGTERM first, a short
+    wait, then SIGKILL - on every exit path (timeout AND crash).
+    """
+    if process.poll() is not None:
+        return
+    try:
+        if sys.platform != "win32":
+            process_group = os.getpgid(process.pid)
+            os.killpg(process_group, signal.SIGTERM)
+        else:  # pragma: no cover - the platform gate refuses Windows earlier
+            process.terminate()
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        process.wait(timeout=30)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if sys.platform != "win32":
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        else:  # pragma: no cover
+            process.kill()
+        process.wait(timeout=10)
+    except (ProcessLookupError, PermissionError, OSError, subprocess.TimeoutExpired):
+        _log.exception("upgrade.boot_group_kill_incomplete pid=%s", process.pid)
 
 
 def _quantified_disk_preflight(tarball: Path, data_dir: Path) -> None:
@@ -1038,8 +1187,14 @@ def _quantified_disk_preflight(tarball: Path, data_dir: Path) -> None:
     footprint) x 2 (the enforced pg_dump plus its headroom).
     """
     pgdata = data_dir / _PGDATA_DIRNAME
-    pgdata_bytes = sum(entry.stat().st_size for entry in pgdata.rglob("*") if entry.is_file())
     tarball_bytes = tarball.stat().st_size
+    pgdata_bytes = 0
+    try:
+        for entry in pgdata.rglob("*"):
+            if entry.is_file():
+                pgdata_bytes += entry.stat().st_size
+    except OSError as exc:
+        raise UpgradeError(f"cannot measure the pgdata footprint for the disk preflight: {exc}") from exc
     required = 2 * tarball_bytes + 2 * pgdata_bytes
     free = shutil.disk_usage(str(data_dir)).free
     if free < required:
@@ -1050,21 +1205,32 @@ def _quantified_disk_preflight(tarball: Path, data_dir: Path) -> None:
         )
 
 
-def _move_into_place(bundle_dir: Path, install_root: Path, version: str) -> Path:
-    """Lay the staged bundle down as versions/<version> (the v1 layout)."""
+def _move_into_place(bundle_dir: Path, install_root: Path, version: str) -> tuple[Path, Path | None]:
+    """Lay the staged bundle down as versions/<version> (the v1 layout).
+
+    A re-run over the SAME version keeps the old bytes at
+    ``versions/<v>.prev-<ts>`` (never destroyed before the boot gate):
+    restore_guidance then names that surviving dir as the link target.
+    """
     versioned_root = install_root / "versions"
     versioned_root.mkdir(parents=True, exist_ok=True)
     target = versioned_root / version
+    prior_dir: Path | None = None
     if target.exists():
-        aside = versioned_root / f"{target.name}.old.{os.getpid()}"
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        prior_dir = versioned_root / f"{target.name}.prev-{timestamp}"
+        counter = 0
+        while prior_dir.exists():
+            counter += 1
+            prior_dir = versioned_root / f"{target.name}.prev-{timestamp}-{counter}"
         with contextlib.suppress(OSError):
-            target.rename(aside)
-        shutil.rmtree(aside, ignore_errors=True)
+            target.rename(prior_dir)
+            prior_dir = prior_dir if prior_dir.is_dir() else None
     shutil.rmtree(target, ignore_errors=True)
     shutil.copytree(bundle_dir, target, symlinks=True)
     shutil.rmtree(bundle_dir, ignore_errors=True)
-    _log.info("upgrade.installed_target dir=%s", target)
-    return target
+    _log.info("upgrade.installed_target dir=%s prior=%s", target, prior_dir)
+    return target, prior_dir
 
 
 def _api_port_of(data_dir: Path) -> int:
@@ -1078,7 +1244,12 @@ def _api_port_of(data_dir: Path) -> int:
 
 
 def _resolve_current_target(install_root: Path) -> Path:
-    """The incumbent (state.json-referenced) version dir - never deleted."""
+    """The incumbent (state.json-referenced) version dir - never deleted.
+
+    A DANGLING `current` is repaired first (repair_current_symlink —
+    `modulo start` runs the same repair): an operator's bricked install
+    self-heals instead of dead-ending on an internal Python function.
+    """
     current_link = install_root / "current"
     if not current_link.is_symlink():
         raise UpgradeError(
@@ -1087,11 +1258,18 @@ def _resolve_current_target(install_root: Path) -> Path:
         )
     try:
         resolved_target = current_link.resolve(strict=True)
-    except OSError as exc:
-        raise UpgradeError(
-            f"the `current` symlink under {install_root} is DANGLING (its target dir is gone) - "
-            f"run the repair routine (repair_current_symlink) or reinstall: {exc}"
-        ) from exc
+    except OSError:
+        repair_state = repair_current_symlink(install_root)
+        if repair_state is None:
+            raise UpgradeError(
+                f"the `current` symlink under {install_root} is DANGLING and could not be repaired "
+                "(no version dir survives) - reinstall:  bash scripts/install.sh"
+            ) from None
+        _log.info("upgrade.current_symlink_repaired version=%s", repair_state)
+        try:
+            resolved_target = current_link.resolve(strict=True)
+        except OSError as exc:
+            raise UpgradeError(f"the repaired `current` symlink still does not resolve: {exc}") from exc
     if not resolved_target.is_dir():
         raise UpgradeError(f"the `current` symlink resolves to a non-directory ({resolved_target})")
     return resolved_target
@@ -1140,16 +1318,24 @@ def perform_upgrade(
        refuses at the seam, TODO(P3)) + upgrade.json written BEFORE the
        boot.
     6. Boot the new bundle's lifespan migrations via `launcher start`,
-       gated on /healthz.
+       gated on /healthz. After a HEALTHY gate the FAR-674 systemd unit is
+       restarted (best-effort; without the unit the flow leaves the stack
+       stopped and the refusal/runbook wording says so) - the boot child's
+       own process group was torn down by the /healthz gate, so the resting
+       state is deliberately the systemd-managed service, never an orphaned
+       boot child.
     7. On failure: the hard refusal prints the snapshot path + the EXACT
        manual restore command restoring BOTH binary AND data (explicit
        forward-migrated-schema wording). NO automatic restore runs (the
        fast-follow design is recorded in ADR 031 Decision 7 - the message
-       references it).
+       references it). Every post-stop abort restarts the stopped unit
+       best-effort: a refusal must never leave the stack DARK.
     8. Retention (the last 2 version dirs; sweep caches; never the
-       state.json-referenced incumbent).
+       state.json-referenced incumbent or the re-run .prev-<ts> copies).
     """
     assert_upgrade_platform()
+    if target_version is not None:
+        target_version = _strip_bundle_prefix(target_version)
     reserve_target = _resolve_current_target(install_root)
     previous_version = reserve_target.name
     scrub_os_environment()
@@ -1182,34 +1368,41 @@ def perform_upgrade(
             manifest_file = downloads.manifest
             signature_file = downloads.signature
 
-        release_manifest = manifest_module.verify_manifest(
-            manifest_file.read_bytes(), manifest_module.read_signature_file(signature_file)
-        )
-        tarball_sha = _sha256_file(tarball)
-        expected_tarball_sha = release_manifest.checksum_for(tarball.name)
-        if tarball_sha != expected_tarball_sha:
-            raise UpgradeError(
-                f"the signed release manifest sha256 MISMATCH for {tarball.name}: expected "
-                f"{expected_tarball_sha}, got {tarball_sha} - do not use this download; report "
-                "it at https://github.com/farnalabs/modulo/issues"
-            )
+        release_manifest = _verify_release_stage(manifest_file, signature_file, tarball, version)
+
         _log.info("upgrade.release_manifest_verified release=%s", release_manifest.release)
         bundle_dir = extract_and_verify_bundle(tarball, staging_dir / "extracted")
+        # Per-binary manifest check (post-extraction): the manifest covers the
+        # major bundle binaries too - release artifacts get checked against the
+        # files as they sit in the REAL bundle, not just the tarball.
+        _verify_extracted_bundle_artifacts(bundle_dir, release_manifest, tarball.name)
 
         # -- Pre-flight refusals (BEFORE anything version-specific) -------
         _check_pg_major(release_manifest.components, data_dir)
-        snapshot = None if skip_backup else pre_upgrade_dump(data_dir, bin_dir=_prior_pg_bin(reserve_target))
-        snapshot_dir = None if snapshot is None else snapshot.directory
-        db_heads = ["unknown"] if snapshot_dir is None else _snapshot_schema_versions(snapshot_dir)
+        if skip_backup:
+            # A stopped stack cannot be dumped: the LIVE probe answers the
+            # DB side instead (failing blind when it cannot - see
+            # check_no_downgrade; "unknown" is never pass-through).
+            snapshot = None
+            snapshot_dir = None
+            db_heads = _alembic_heads()
+        else:
+            snapshot = pre_upgrade_dump(data_dir, bin_dir=_prior_pg_bin(reserve_target))
+            snapshot_dir = snapshot.directory
+            db_heads = _snapshot_schema_versions(snapshot_dir)
         check_no_downgrade(db_heads, snapshot_dir, bundle_dir)
         _quantified_disk_preflight(tarball, data_dir)
 
         # -- The DESTRUCTIVE phase (stages 4-8) ---------------------------
         stop_running_stack(data_dir)
-        no_live_process_inside(reserve_target)
-        assert_not_held(data_dir)
-        _move_into_place(bundle_dir, install_root, version)
-        atomic_symlink_swap(install_root / "current", f"versions/{version}")
+        try:
+            no_live_process_inside(reserve_target)
+            assert_not_held(data_dir)
+            _target_dir, prior_dir = _move_into_place(bundle_dir, install_root, version)
+            atomic_symlink_swap(install_root / "current", f"versions/{version}")
+        except UpgradeError:
+            _restart_unit_best_effort(data_dir, why="post-stop abort: restoring the stopped service")
+            raise
         marker_path = write_upgrade_marker(
             data_dir,
             previous_version=previous_version,
@@ -1219,6 +1412,7 @@ def perform_upgrade(
         )
         _log.info("upgrade.marker_written path=%s", marker_path)
         boot_runner = boot or run_boot
+        prior_link_target = prior_dir.name if prior_dir is not None else None
         try:
             boot_runner(_bundled_boot_argv(install_root, version, data_dir), api_port=_api_port_of(data_dir))
         except UpgradeError as exc:
@@ -1229,8 +1423,10 @@ def perform_upgrade(
                     previous_version=previous_version,
                     install_root=install_root,
                     data_dir=data_dir,
+                    prior_link_target=prior_link_target,
                 )
             ) from exc
+        _restart_unit_best_effort(data_dir, why="healthy post-upgrade boot gate passed: restoring the service")
         pruned = prune_versions(install_root, current_target=reserve_target)
         pruned += sweep_upgrade_caches(install_root)
 
@@ -1241,6 +1437,57 @@ def perform_upgrade(
         marker_path=marker_path,
         pruned=pruned,
     )
+
+
+def _verify_release_stage(manifest_file: Path, signature_file: Path, tarball: Path, version: str) -> ReleaseManifest:
+    """Signature-verify the manifest + tarball sha256; assert the release tag.
+
+    A ManifestSecurityError (tampered/garbled/missing) surfaces as
+    :class:`UpgradeError` - the CLI's error handling turns THAT into a clean
+    ClickException, never a raw traceback. The manifest's release field must
+    equal the requested bundle tag (never sign one version and ship another).
+    """
+    expected_release = f"bundle-v{version}"
+    try:
+        release_manifest = manifest_module.verify_manifest(
+            manifest_file.read_bytes(), manifest_module.read_signature_file(signature_file)
+        )
+        expected_tarball_sha = release_manifest.checksum_for(tarball.name)
+        if release_manifest.release != expected_release:
+            raise UpgradeError(
+                f"the signed release manifest describes '{release_manifest.release}', not the "
+                f"requested bundle {expected_release} - refusing the cross-version mismatch"
+            )
+        tarball_sha = _sha256_file(tarball)
+    except ManifestSecurityError as exc:
+        raise UpgradeError(f"release manifest verification FAILED: {exc}") from exc
+    if tarball_sha != expected_tarball_sha:
+        raise UpgradeError(
+            f"the signed release manifest sha256 MISMATCH for {tarball.name}: expected "
+            f"{expected_tarball_sha}, got {tarball_sha} - do not use this download; report "
+            "it at https://github.com/farnalabs/modulo/issues"
+        )
+    return release_manifest
+
+
+def _verify_extracted_bundle_artifacts(bundle_dir: Path, release_manifest: ReleaseManifest, tarball_name: str) -> None:
+    """Post-extraction per-binary manifest gate.
+
+    The signed manifest covers the major bundled binaries (pg/postgres,
+    redis-server, ...) IN the bundle: after extraction every one is checked
+    in the real layout. The tarball entry is the pre-extraction check that
+    already ran - it is skipped here (the tarball is not a bundle member).
+    """
+    try:
+        bundle_side_manifest = replace(
+            release_manifest,
+            artifact_checksums={
+                name: entry for name, entry in release_manifest.artifact_checksums.items() if name != tarball_name
+            },
+        )
+        manifest_module.verify_artifacts(bundle_dir, bundle_side_manifest)
+    except manifest_module.ManifestSecurityError as exc:
+        raise UpgradeError(f"bundle-side manifest verification FAILED after extraction: {exc}") from exc
 
 
 if __name__ == "__main__":

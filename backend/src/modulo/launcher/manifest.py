@@ -20,20 +20,21 @@ Verification contract (locked by ``tests/unit/launcher/test_manifest.py``):
   releasing under the next key mid-rotation works before consumers update.
 
 **Key rotation procedure** (recorded per ADR 031 in the distribution ADR):
+the CURRENT and NEXT trust-store keys — both verify, so releasing under the
+next key mid-rotation works before consumers update.
 
 1. Generate the replacement keypair offline; publish its PUBLIC half by
    moving the next key's id/key into the current slot of the trust store
-   below (the released ``farnalabs-modulo`` wheel is the distribution point).
+   (_TRUST_ROWS below). The checked-in module is the distribution point.
 2. Flip release signing to the new key (CI secret ``BUNDLE_MANIFEST_SIGNING_KEY``).
 3. After one full release cycle under the new key, demote the old key to the
    next slot only if unwanted, then hard-remove it — every consumer older
    than one cycle stops verifying with it by design.
 
-**PROVISIONING (needs-human):** the keys in this module are DEV/TEST keys.
-Production keys are provisioned by Duncan as CI secrets (the repo-level
-secret ``BUNDLE_MANIFEST_SIGNING_KEY``; public halves are pasted HERE), a
-one-time task tracked alongside the single-install epic. Until provisioned
-the secret absent → the release workflow's signing step fails loudly.
+**PROVISIONING (needs-human):** this module SHIPS WITH AN EMPTY trust store
+and FAILS CLOSED — no `_TRUST_ROWS` entries means every verification refuses
+(no dev or experimental signing keys ship in the repo or wheel). See
+:const:`PROVISIONING_NOTE` for the exact fill-in targets.
 
 **--from-file escape hatch:** offline/corporate installs verify against a
 locally provided manifest + signature (:func:`verify_release_from_files`);
@@ -61,41 +62,52 @@ MANIFEST_SCHEMA_VERSION = 1
 _RELEASE = "modulo"
 
 # ---------------------------------------------------------------------------
-# Trust store (dev/test keys — see the PROVISIONING note in the docstring)
+# Trust store (FAIL-CLOSED until the owner provisions production keys)
 # ---------------------------------------------------------------------------
 
 _KEY_ID_CURRENT = "modulo-2026-a"
 _KEY_ID_NEXT = "modulo-2026-a-next"
 
-# DEV/TEST dev keys. NEVER a production trust store: production keys are
-# provisioned by Duncan via CI secrets and pasted here (needs-human).
-_TRUST_ROWS: dict[str, tuple[str, str]] = {
-    _KEY_ID_CURRENT: ("2026-a", "f2c4702958fb649e4114bec4c895b0ff908b0f463669b4cc1c50d42bf01ff734"),
-    _KEY_ID_NEXT: ("2026-a-next", "17df6bc9bc3f0e109040621a2c45f7320905f38317f91d29d6ed2fb0e7a2ae10"),
-}
+# The production trust store is EMPTY at ship time and must be PROVISIONED by
+# the repo owner (needs-human): paste the current + next ed25519 public hex
+# halves here as ``{key_id: (label, public_hex)}`` rows. With an empty store
+# every verification function REFUSES (fail-closed) — the module must never
+# ship a trust store that any key material found in a public repo can satisfy.
+# Test/CI keys are injected explicitly by the test suite (see
+# backend/tests/unit/launcher/conftest.py); signing never reads a key from
+# this module at all.
+_TRUST_ROWS: dict[str, tuple[str, str]] = {}
 
-# Dev/test PRIVATE signing keys (mirror CI secret BUNDLE_MANIFEST_SIGNING_KEY
-# for local signing tests). Production: absent locally by design.
-_SIGNING_KEYS: dict[str, str] = {
-    _KEY_ID_CURRENT: "101acdeda0cd35fdb51f4dae6eff9838b2d07c97641e41a09deb72a2a1a2254d",
-    _KEY_ID_NEXT: "f12a59a076a0adba5fd1962c3d99abec05b6ed9103be741b4fe7530145c342ac",
-}
+_NO_PROVISIONED_KEYS_MESSAGE = (
+    "no provisioned production signing keys - refusing to verify (provisioning: see PROVISIONING_NOTE)"
+)
+
+PROVISIONING_NOTE = (
+    "TRUST-STORE PROVISIONING (needs-human, ONE-TIME owner task). The shipped "
+    "trust store is EMPTY and verification FAILS CLOSED until provisioned. "
+    "Exactly two fill-in targets, both carrying the SAME keypair set:\n"
+    "  1. backend/src/modulo/launcher/manifest.py -> _TRUST_ROWS: one row per "
+    "key as {key_id: (label, ed25519 public hex)} for the current + next slots.\n"
+    "  2. scripts/install.sh -> TRUST_KEY_CURRENT_B64 / TRUST_KEY_NEXT_B64: "
+    "the same public keys as SPKI-DER base64.\n"
+    "The PRIVATE half is the CI secret BUNDLE_MANIFEST_SIGNING_KEY (ed25519 "
+    "hex, repo-level Actions secret) - never committed. When the secret is "
+    "absent the bundle-release workflow refuses to publish (the signing step "
+    "fails loudly on every tagged release). A unit test asserts the Python "
+    "trust rows and install.sh's embedded keys stay byte-equal (no drift)."
+)
 
 
 def _load_trust_store() -> dict[str, Ed25519PublicKey]:
+    """Build the shipped trust store from _TRUST_ROWS (empty -> fail-closed).
+
+    The caller (verify_signature) refuses on an empty store: verification
+    must never be shipped with "no key can pass" silently bridged over.
+    """
     store: dict[str, Ed25519PublicKey] = {}
     for key_id, (_label, public_hex) in _TRUST_ROWS.items():
         store[key_id] = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex))
     return store
-
-
-PROVISIONING_NOTE = (
-    "TRUST-STORE PROVISIONING: the keys above are dev/test keys. Production "
-    "keys are provisioned by Duncan as CI secrets (BUNDLE_MANIFEST_SIGNING_KEY "
-    "keys are provisioned by Duncan as CI secrets (BUNDLE_MANIFEST_SIGNING_KEY (ed25519 hex)); "
-    "_TRUST_ROWS here. Until that happens the bundle-release workflow's "
-    "signing step fails loudly on every tagged release (needs-human)."
-)
 
 
 class ManifestSecurityError(RuntimeError):
@@ -171,8 +183,16 @@ def verify_signature(
     *,
     trust_store: dict[str, Ed25519PublicKey] | None = None,
 ) -> str:
-    """Verify Ed25519 over *manifest_payload*; return the verified key's id."""
+    """Verify Ed25519 over *manifest_payload*; return the verified key's id.
+
+    FAIL-CLOSED: the shipped store holds NO keys until the owner provisions
+    production ones — an empty/falsy store refuses before any signature is
+    touch-checked (see PROVISIONING_NOTE). Tests inject their trust store
+    explicitly via ``trust_store=``.
+    """
     store = trust_store if trust_store is not None else _load_trust_store()
+    if not store:
+        raise ManifestSecurityError(_NO_PROVISIONED_KEYS_MESSAGE)
     if not isinstance(signature, dict) or {"key_id", "signature"} - set(signature):
         raise ManifestSecurityError("signature must be an object with key_id and signature")
     key_id = str(signature["key_id"])
@@ -258,10 +278,10 @@ def sign_release_manifest(manifest: dict[str, Any], *, key_id: str, private_key_
 
     The signed payload is the exact ``json.dumps(..., indent=2, sort_keys=True)``
     encoding; whatever writes the manifest file MUST write those same bytes.
+    The PRIVATE key travels ONLY as the explicit *private_key_hex* argument
+    (CI passes the secret). ``key_id`` is recorded verbatim in the .sig —
+    the caller MUST NOT emit a key-id the trust stores do not bless.
     """
-    secret = _SIGNING_KEYS.get(key_id)
-    if secret is None:
-        raise ManifestSecurityError(f"no local signing key for key-id '{key_id}'")
     payload = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
     signer = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
     raw_sig = signer.sign(payload)
@@ -296,9 +316,11 @@ def verify_release_from_files(
 ) -> ReleaseManifest:
     """The --from-file path: verify a locally provided manifest + signature.
 
-    Verifies the manifest's signature, verifies every artifact the manifest
-    covers (or just *artifact_names* — the pre-extraction tarball check) and
-    returns the parsed manifest.
+    Verifies the manifest's signature, verifies the *artifact_names* subset
+    (the pre-extraction tarball check) or every artifact the manifest
+    covers, and returns the parsed manifest. The trust store stays baked
+    in (the same fail-closed store re-run installs verify against) — an
+    offline admin never adds their own key.
     """
     payload = manifest_path.read_bytes()
     signature = read_signature_file(signature_path)

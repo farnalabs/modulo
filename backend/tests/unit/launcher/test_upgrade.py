@@ -556,7 +556,7 @@ def upgrade_plant(tmp_path, monkeypatch):
     )
 
 
-def test_perform_upgrade_full_flow(tmp_path, monkeypatch, upgrade_plant):
+def test_perform_upgrade_full_flow(upgrade_plant):
     """Fetch -> verify -> pre-flight -> dump -> stop -> swap -> marker -> boot."""
     boot_record = []
 
@@ -595,7 +595,7 @@ def test_perform_upgrade_full_flow(tmp_path, monkeypatch, upgrade_plant):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
-def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path, monkeypatch):
+def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path):
     """PG major (17 target) vs the data dir's PG_VERSION (16): HARD refusal."""
     from modulo.launcher import upgrade as upgrade_module
 
@@ -754,6 +754,7 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
         capture_output=True,
         text=True,
         env=run_env,
+        timeout=30,
         check=False,
     )
     assert captured.returncode == 0, captured.stderr
@@ -821,3 +822,319 @@ def test_repair_current_symlink_repairs_a_dangling_link(tmp_path):
     repaired = upgrade_module.repair_current_symlink(install_root)
     assert repaired == "1.1.0"
     assert current_link.resolve(strict=True) == (versions / "1.1.0").resolve(strict=True)
+
+
+# ---------------------------------------------------------------------------
+# FAR-675 QA-gate additions - the blocking findings, locked. Unit-level tests
+# run on ANY platform; /proc-buffer/symlink subjects keep their own skipif.
+# ---------------------------------------------------------------------------
+
+
+def _manifest_triple(staging, target_version="1.2.0", *, manifest_release=None):
+    """A tarball + SIGNED manifest + .sig triple for the verify-stage seam."""
+    import hashlib
+    import json as json_module
+    import tarfile as tarfile_module
+    from types import SimpleNamespace
+
+    from modulo.launcher import manifest as manifest_module
+
+    bundle_root = staging / f"modulo-{target_version}-linux-amd64"
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    (bundle_root / "SHA256SUMS").write_text("", encoding="utf-8")
+    tarball_path = staging / f"modulo-{target_version}-linux-amd64.tar.gz"
+    with tarfile_module.open(tarball_path, "w:gz") as archive:
+        archive.add(str(bundle_root), arcname=bundle_root.name)
+    manifest_body = {
+        "manifest_version": 1,
+        "release": manifest_release if manifest_release is not None else f"bundle-v{target_version}",
+        "platform": "linux-amd64",
+        "generated_at": "2026-09-10T00:00:00Z",
+        "components": {"postgres": "16.10.1"},
+        "artifacts": [
+            {
+                "name": tarball_path.name,
+                "sha256": hashlib.sha256(tarball_path.read_bytes()).hexdigest(),
+                "version": target_version,
+            }
+        ],
+    }
+    manifest_payload = json_module.dumps(manifest_body, indent=2, sort_keys=True).encode("utf-8")
+    manifest_path = staging / "RELEASE_MANIFEST.json"
+    manifest_path.write_bytes(manifest_payload)
+    signature = manifest_module.sign_release_bytes(
+        manifest_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX
+    )
+    signature_path = staging / (manifest_module.MANIFEST_NAME + manifest_module.SIGNATURE_SUFFIX)
+    signature_path.write_text(json_module.dumps(signature), encoding="utf-8")
+    return SimpleNamespace(tarball=tarball_path, manifest=manifest_path, signature=signature_path)
+
+
+def test_verify_release_stage_happy(tmp_path, patched_trust_store):
+    release = _manifest_triple(tmp_path)
+    manifest = upgrade_module._verify_release_stage(release.manifest, release.signature, release.tarball, "1.2.0")
+    assert manifest.release == "bundle-v1.2.0"
+
+
+def test_verify_release_stage_refuses_a_cross_version_manifest(tmp_path, patched_trust_store):
+    """15j: a manifest whose release field names another bundle never runs."""
+    release = _manifest_triple(tmp_path, target_version="1.2.0", manifest_release="bundle-v9.9.9")
+    with pytest.raises(upgrade_module.UpgradeError, match="cross-version mismatch"):
+        upgrade_module._verify_release_stage(release.manifest, release.signature, release.tarball, "1.2.0")
+
+
+def test_verify_release_stage_tampered_manifest_is_a_clean_upgrade_error(tmp_path, patched_trust_store):
+    """Finding 7: a tampered manifest NEVER escapes as ManifestSecurityError -
+    the CLI's error handling turns UpgradeError into a clean ClickException."""
+    from modulo.launcher.manifest import ManifestSecurityError
+
+    release = _manifest_triple(tmp_path)
+    original = release.manifest.read_bytes()
+    release.manifest.write_bytes(original.replace(b"1.2.0-l", b"9.9.9-l", 1))
+    with pytest.raises(upgrade_module.UpgradeError) as caught:
+        upgrade_module._verify_release_stage(release.manifest, release.signature, release.tarball, "1.2.0")
+    assert "release manifest verification FAILED" in str(caught.value)
+    assert not isinstance(caught.value, ManifestSecurityError)
+
+
+def test_verify_release_stage_refuses_a_tampered_tarball(tmp_path, patched_trust_store):
+    """The tarball sha256 is checked against the SIGNED manifest's entry."""
+    release = _manifest_triple(tmp_path)
+    release.tarball.write_bytes(release.tarball.read_bytes() + b"tampered tail bytes")
+    with pytest.raises(upgrade_module.UpgradeError, match="sha256 MISMATCH"):
+        upgrade_module._verify_release_stage(release.manifest, release.signature, release.tarball, "1.2.0")
+
+
+def test_check_no_downgrade_never_passes_unknown_through(tmp_path, monkeypatch):
+    """Finding 6: "unknown" db heads are NEVER pass-through - a blind check
+    refuses (no silent 'unknown == known' downgrade race)."""
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    with pytest.raises(upgrade_module.UpgradeError, match="cannot verify the database"):
+        upgrade_module.check_no_downgrade(["unknown"], None, bundle_dir)
+
+
+def test_check_no_downgrade_falls_back_to_the_snapshot_when_live_unknown(tmp_path, monkeypatch):
+    """The snapshot's recorded schema_versions answer when the live probe
+    reads "unknown"; with no snapshot at ALL the check refuses blind."""
+    import json as json_module
+
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    snapshot_dir = tmp_path / "pre-upgrade-dump-1"
+    snapshot_dir.mkdir()
+    (snapshot_dir / "backup-info.json").write_text(
+        json_module.dumps({"schema_versions": ["3ab2c1d"]}), encoding="utf-8"
+    )
+    upgrade_module.check_no_downgrade(["unknown"], snapshot_dir, bundle_dir)  # falls back: no refusal
+    with pytest.raises(upgrade_module.UpgradeError, match="cannot verify the database"):
+        upgrade_module.check_no_downgrade(["unknown"], None, bundle_dir)
+
+
+def test_cli_upgrade_surfaces_a_clean_click_exception(monkeypatch, tmp_path):
+    """Finding 7 (CLI level): a verification security error (even one
+    leaked past the internal conversion) is reported as `Error: ...` - never
+    a raw traceback."""
+    from click.testing import CliRunner
+
+    from modulo.cli.main import cli
+    from modulo.launcher import manifest as manifest_module
+
+    def _raise(_data_dir, **_kwargs):
+        raise manifest_module.ManifestSecurityError("signature FAILED to verify - tampered manifest")
+
+    monkeypatch.setattr(upgrade_module, "perform_upgrade", _raise)
+    monkeypatch.setattr(upgrade_module, "default_install_root", lambda: tmp_path / "install-root")
+    monkeypatch.setattr("modulo.cli.main._resolve_data_dir", lambda _override: tmp_path / "data")
+    result = CliRunner().invoke(cli, ["upgrade", "bundle-v1.2.0"])
+    assert result.exit_code == 1
+    assert "Error" in result.output
+    assert "tampered manifest" in result.output
+
+
+@pytest.mark.skipif(os.name != "posix", reason="/proc-based liveness scan (Linux-first, P1a)")
+def test_no_live_process_excludes_the_upgrading_process_itself(tmp_path, monkeypatch):
+    """Finding 3 (NO monkeypatching of the check). The upgrading CLI's own
+    cwd sits inside the scanned incumbent dir on every self-upgrade: without
+    the self-exclusion the flow aborts on ITSELF. A real child process with
+    cwd inside the scanned dir STILL refuses."""
+    import subprocess as subprocess_module
+
+    inside = tmp_path / "incumbent"
+    inside.mkdir()
+    live_child = subprocess_module.Popen(
+        ["/bin/sh", "-c", "sleep 5"],
+        cwd=str(inside),
+        stdout=subprocess_module.DEVNULL,
+        stderr=subprocess_module.DEVNULL,
+    )
+    try:
+        with pytest.raises(upgrade_module.UpgradeError, match="live processes remain inside"):
+            upgrade_module.no_live_process_inside(inside)
+    finally:
+        live_child.terminate()
+        live_child.wait(timeout=10)
+    # The self-exclusion: the UPGRADING process's own cwd inside the dir is
+    # NOT an offender.
+    monkeypatch.chdir(inside)
+    upgrade_module.no_live_process_inside(inside)  # would abort on its own cwd pre-fix
+
+
+def test_perform_upgrade_skip_backup_runs_no_dump(tmp_path, monkeypatch, patched_trust_store):
+    """Finding 6: --skip-backup falls back to the LIVE _alembic_heads()
+    probe and NEVER runs the dump again (a stopped stack cannot be dumped)."""
+    if os.name != "posix":
+        pytest.skip("posix symlinks only (TODO(P3) windows seam)")
+    monkeypatch.setattr(upgrade_module, "assert_upgrade_platform", lambda: None)
+    monkeypatch.setattr(upgrade_module, "stop_running_stack", lambda data_dir, **kwargs: None)
+    monkeypatch.setattr(upgrade_module, "no_live_process_inside", lambda _root: None)
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
+
+    def _dump_must_not_run(_data_dir, *, bin_dir=None):
+        raise AssertionError("skip_backup must NEVER call pre_upgrade_dump")
+
+    monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _dump_must_not_run)
+    monkeypatch.setattr(upgrade_module, "_alembic_heads", lambda: ["3ab2c1d"])
+
+    data_dir = tmp_path / "data"
+    install_root = tmp_path / "install-root"
+    _upgrade_seed_data_dir(data_dir)
+    _upgrade_seed_install_root(install_root, previous_version="1.2.0")
+    staging = tmp_path / "releases"
+    staging.mkdir()
+    release_fixture = _upgrade_release_fixture(staging)
+    result = upgrade_module.perform_upgrade(
+        data_dir,
+        install_root=install_root,
+        target_version="bundle-v1.2.0",
+        skip_backup=True,
+        fetch=_upgrade_fetch_seam(release_fixture),
+        boot=lambda boot_argv, *, api_port: 0,
+    )
+    assert result.snapshot is None
+    marker = json.loads((data_dir / upgrade_module.UPGRADE_MARKER_FILENAME).read_text(encoding="utf-8"))
+    assert marker["pre_upgrade_snapshot"] is None
+
+
+def test_skip_backup_with_unresolvable_heads_refuses_blind(tmp_path, monkeypatch, patched_trust_store):
+    """Finding 6: a skip-backup run whose live probe reads "unknown" REFUSES -
+    never a silent 'unknown == known' pass-through."""
+    if os.name != "posix":
+        pytest.skip("posix symlinks only (TODO(P3) windows seam)")
+    monkeypatch.setattr(upgrade_module, "assert_upgrade_platform", lambda: None)
+    monkeypatch.setattr(upgrade_module, "stop_running_stack", lambda data_dir, **kwargs: None)
+    monkeypatch.setattr(upgrade_module, "no_live_process_inside", lambda _root: None)
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
+    monkeypatch.setattr(upgrade_module, "_alembic_heads", lambda: ["unknown"])
+    data_dir = tmp_path / "data"
+    install_root = tmp_path / "install-root"
+    _upgrade_seed_data_dir(data_dir)
+    _upgrade_seed_install_root(install_root, previous_version="1.2.0")
+    staging = tmp_path / "releases"
+    staging.mkdir()
+    release_fixture = _upgrade_release_fixture(staging)
+    with pytest.raises(upgrade_module.UpgradeError, match="cannot verify the database"):
+        upgrade_module.perform_upgrade(
+            data_dir,
+            install_root=install_root,
+            target_version="bundle-v1.2.0",
+            skip_backup=True,
+            fetch=_upgrade_fetch_seam(release_fixture),
+            boot=lambda boot_argv, *, api_port: 0,
+        )
+
+
+def test_prune_versions_never_deletes_the_resolved_current_after_swap(tmp_path):
+    """Finding 9: post-swap, `current` is RE-RESOLVED at prune time and its
+    (new) target never deleted - even when the pre-swap bookkeeping names a
+    different dir AND the new target is old enough to fall outside retention."""
+    if os.name != "posix":
+        pytest.skip("posix symlinks only (TODO(P3) windows seam)")
+    install_root = tmp_path
+    versions = install_root / "versions"
+    versions.mkdir()
+    for name in ("1.0.0", "1.1.0", "1.2.0", "1.3.0", "0.9.9"):
+        (versions / name).mkdir()
+    stale_bookkeeping = versions / "1.0.0"  # PRE-swap incumbent (state.json heir)
+    current_link = install_root / "current"
+    current_link.symlink_to("versions/1.0.0")
+    # ...then the swap re-points it (exactly as perform_upgrade does) - the
+    # re-run/older-version dir sorts BELOW the retention bound:
+    current_link.unlink()
+    current_link.symlink_to("versions/0.9.9")
+    pruned = upgrade_module.prune_versions(install_root, current_target=stale_bookkeeping)
+    assert current_link.resolve(strict=True) == (versions / "0.9.9").resolve(strict=True)
+    assert (versions / "0.9.9").is_dir(), (
+        "retention must never delete the dir `current` now serves (post-swap resolution)"
+    )
+    assert "0.9.9" not in pruned
+    assert "1.0.0" not in pruned
+
+
+@pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
+def test_reupgrade_of_the_same_version_keeps_the_prior_bytes_for_restore(tmp_path, monkeypatch, patched_trust_store):
+    """Finding 13: a re-run over the SAME version keeps the old binary at
+    versions/<v>.prev-<ts>; the printed restore command then points at the
+    SURVIVING dir, never at the fresh copy."""
+    monkeypatch.setattr(upgrade_module, "assert_upgrade_platform", lambda: None)
+    monkeypatch.setattr(upgrade_module, "stop_running_stack", lambda data_dir, **kwargs: None)
+    monkeypatch.setattr(upgrade_module, "no_live_process_inside", lambda _root: None)
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
+
+    def _dump(data_dir, *, bin_dir=None):
+        return _upgrade_dump_seam(data_dir)(data_dir)
+
+    monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _dump)
+    data_dir = tmp_path / "data"
+    install_root = tmp_path / "install-root"
+    _upgrade_seed_data_dir(data_dir)
+    _upgrade_seed_install_root(install_root, previous_version="1.2.0")
+    staging = tmp_path / "releases"
+    staging.mkdir()
+    release_fixture = _upgrade_release_fixture(staging)
+
+    def _poisoned(boot_argv, *, api_port):
+        raise upgrade_module.UpgradeError("the re-run boot FAILED at the health gate")
+
+    with pytest.raises(upgrade_module.UpgradeError) as caught:
+        upgrade_module.perform_upgrade(
+            data_dir,
+            install_root=install_root,
+            target_version="bundle-v1.2.0",
+            fetch=_upgrade_fetch_seam(release_fixture),
+            boot=_poisoned,
+        )
+    refusal = str(caught.value)
+    survivors = [entry.name for entry in (install_root / "versions").iterdir() if ".prev-" in entry.name]
+    assert survivors, "the prior same-version bytes must survive the re-run"
+    restore_line = _upgrade_restore_head(refusal)
+    assert restore_line.startswith(f"ln -sfn versions/{survivors[0]}")
+    assert not restore_line.startswith("ln -sfn versions/1.2.0 ")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+def test_run_boot_timeout_kills_the_whole_process_group():
+    """Finding 11 (teardown half): a timed-out boot child is terminated
+    WITH its group - the bundled service children are never orphaned."""
+    import time as time_module
+
+    child_argv = ["/bin/sh", "-c", "sleep 1 & wait; exec sleep 30"]
+    started = time_module.monotonic()
+    with pytest.raises(upgrade_module.UpgradeError, match="health"):
+        upgrade_module.run_boot(child_argv, api_port=1, timeout=1.0, poll_interval=0.1)
+    elapsed = time_module.monotonic() - started
+    assert elapsed < 30, "the teardown must never hang on an undrained child"
+
+
+def test_run_boot_failing_child_reports_clean_upgrade_error(tmp_path):
+    """A child that exits immediately produces a clean UpgradeError (and
+    the group teardown tolerates an already-dead child)."""
+    if os.name != "posix":
+        pytest.skip("POSIX-only boot argv")
+    failing = tmp_path / "failing-launcher"
+    failing.write_text("#!/bin/sh\necho boom >&2\nexit 1\n", encoding="utf-8")
+    failing.chmod(0o755)
+    with pytest.raises(upgrade_module.UpgradeError, match="did not reach a healthy /healthz"):
+        upgrade_module.run_boot([str(failing), "start"], api_port=1, timeout=1.0, poll_interval=0.05)

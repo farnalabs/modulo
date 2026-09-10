@@ -258,9 +258,12 @@ jobs:
       # is signed with the ed25519 private key in the CI secret
       # BUNDLE_MANIFEST_SIGNING_KEY (hex). PROVISIONING (needs-human): adding
       # that secret + pasting the matching public half into
-      # backend/src/modulo/launcher/manifest.py's _TRUST_ROWS and
-      # scripts/install.sh's embedded DER keys is Duncan's ONE-TIME task. The
-      # rotation procedure is documented in the manifest module + the ADR.
+      # backend/src/modulo/launcher/manifest.py (_TRUST_ROWS) and
+      # scripts/install.sh (TRUST_KEY_CURRENT_B64/NEXT_B64) is Duncan's ONE-TIME
+      # task; both fill-in targets must carry the SAME keys (a unit test
+      # asserts store equality). The rotation procedure is documented in the
+      # manifest module + the ADR. NOTE: the shipped trust store is EMPTY and
+      # fails closed until that provisioning lands.
       - name: Generate and sign the SIGNED release manifest
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
@@ -268,7 +271,7 @@ jobs:
           set -euo pipefail
           if [ -z "${MANIFEST_SIGNING_KEY}" ]; then
             echo "::error::BUNDLE_MANIFEST_SIGNING_KEY is NOT set in this repo's Actions secrets - refusing to publish an UNSIGNED release manifest."
-            echo "::error::Provisioning is the ONE-TIME owner task (Duncan): generate an ed25519 keypair; add the private key's hex as the repo secret BUNDLE_MANIFEST_SIGNING_KEY; paste the public half into backend/src/modulo/launcher/manifest.py (_TRUST_ROWS) and scripts/install.sh (TRUST_KEY_CURRENT_B64). Rotation per ADR 031 Decision 3."
+            echo "::error::Provisioning is the ONE-TIME owner task (Duncan): generate an ed25519 keypair; add the private key's hex as the repo secret BUNDLE_MANIFEST_SIGNING_KEY; paste the public half into backend/src/modulo/launcher/manifest.py (_TRUST_ROWS) and scripts/install.sh (TRUST_KEY_CURRENT_B64/NEXT_B64). Rotation per ADR 031 Decision 3."
             exit 1
           fi
           cd backend
@@ -319,15 +322,21 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "release ${TAG} already exists - uploading artifacts with --clobber"
+            echo "::warning::release ${TAG} already exists - re-running a build for the same tag"
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "Modulo bundle ${TAG}" \
               --notes "Single-install bundle artifact. Verify with the SIGNED release manifest (RELEASE_MANIFEST.json + .sig) before install - scripts/install.sh enforces the signature + sha256 gate (FAR-675, ADR 031 Decision 3)."
           fi
-          gh release upload "$TAG" \
+          # NEVER --clobber an existing asset: a replaced release artifact
+          # invalidates every verify-against-the-manifest already downloaded.
+          # A conflicting asset FAILS the workflow loudly (re-tag or rename).
+          if ! gh release upload "$TAG" \
             "build/${TARBALL_NAME}" \
             "build/SHA256SUMS" \
             "build/RELEASE_MANIFEST.json" \
             "build/RELEASE_MANIFEST.json.sig" \
-            --repo "$GITHUB_REPOSITORY" --clobber
+            --repo "$GITHUB_REPOSITORY"; then
+            echo "::error::asset upload FAILED for ${TAG} - an asset with this name likely already exists on the release (clobbering is forbidden: release artifacts are immutable once published). Delete the release and re-tag, or accept the existing asset."
+            exit 1
+          fi
