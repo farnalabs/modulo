@@ -732,7 +732,7 @@ class TestGetCostExportRows:
         assert len(rows) == 1
         assert rows[0]["entity_id"] == "llm_tokens"
         assert rows[0]["entity_name"] == "LLM Tokens"
-        assert rows[0]["total_spend_usd"] == 9.99
+        assert rows[0]["total_spend_usd"] == pytest.approx(9.99)
         assert rows[0]["total_runs"] == 4
 
         sql = str(mock_session.execute.call_args_list[0].args[0])
