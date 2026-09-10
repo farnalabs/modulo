@@ -85,7 +85,7 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     # (0195, FAR-634): jsonb in the migration; generic JSON in the ORM for
     # SQLite/MariaDB parity — the same pattern as decision_payload below.
     "hitl_claims": frozenset({"decision_payload", "context_json", "gate_config_json"}),
-    "library_primitives": frozenset({"tags", "content_json"}),
+    "library_primitives": frozenset({"tags", "content_json", "manifest_pins", "trust_header"}),
     "library_sync_state": frozenset({"manifest_json", "catalog_json"}),
     "lifecycle_maps": frozenset({"content_json"}),
     "metrics_staging": frozenset({"payload"}),
