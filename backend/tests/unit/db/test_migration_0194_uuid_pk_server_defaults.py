@@ -23,7 +23,7 @@ _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _EXPECTED_COUNT = 83
 
 # Tables introduced by migrations AFTER 0194_uuid_pk_server_defaults own their own
-# uuid-PK server defaults (e.g. 0206_collection_install_tracking sets install_id's
+# uuid-PK server defaults (e.g. 0207_collection_install_tracking sets install_id's
 # default inline, and CollectionInstallEntity.entity_id is a supplied key with no
 # default). They are out of scope for this frozen migration's coverage contract —
 # including them would make the count drift on every table added after 0194.

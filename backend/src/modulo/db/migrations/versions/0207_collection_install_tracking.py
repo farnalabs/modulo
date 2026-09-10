@@ -1,7 +1,7 @@
 """collection_install / collection_install_entity tracking tables (FAR-761).
 
-Revision ID: 0206_collection_install_tracking
-Revises: 0205_library_collection_type
+Revision ID: 0207_collection_install_tracking
+Revises: 0206_deleted_defaults_signal_check
 Create Date: 2026-09-10
 
 Adds provenance for collection install/uninstall events. ``collection_install``
@@ -49,8 +49,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0206_collection_install_tracking"
-down_revision: str | None = "0205_library_collection_type"
+revision: str = "0207_collection_install_tracking"
+down_revision: str | None = "0206_deleted_defaults_signal_check"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -104,6 +104,27 @@ def _assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
         )
 
 
+def _apply_org_isolation(
+    bind: sa.Connection,
+    table: str,
+    scope: str,
+    app_role: bool,
+    system_role: bool,
+) -> None:
+    """Enable FORCE RLS with a strict fail-closed policy, then grant DML.
+
+    Extracted from ``upgrade`` so the ceremony lives in one place (keeps the
+    migration under SonarCloud's cognitive-complexity and duplication budgets).
+    """
+    op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+    op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+    op.execute(f"CREATE POLICY rls_org_isolation ON {table} USING ({scope})")
+    if app_role:
+        op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO {_APP_ROLE}")
+    if system_role:
+        op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO {_SYSTEM_ROLE}")
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     pg = _is_postgres(bind)
@@ -111,6 +132,7 @@ def upgrade() -> None:
     json_type: sa.types.TypeEngine[object] = sa.JSON().with_variant(JSONB(), "postgresql") if pg else sa.JSON()
     install_id_default = sa.text("gen_random_uuid()") if pg else None
 
+    migrate_role = app_role = system_role = False
     if pg:
         op.execute("SET search_path TO public")
         migrate_role = _role_exists(bind, _MIGRATE_ROLE)
@@ -122,8 +144,6 @@ def upgrade() -> None:
             # collection_install references library_primitives — grant REFERENCES so
             # the FK can be created under the migrate role.
             op.execute(f"GRANT REFERENCES ON TABLE public.library_primitives TO {_MIGRATE_ROLE}")
-    else:
-        migrate_role = app_role = system_role = False
 
     if pg and migrate_role:
         op.execute(f"SET ROLE {_MIGRATE_ROLE}")
@@ -211,31 +231,17 @@ def upgrade() -> None:
     )
 
     # 3. Provenance columns on the entity tables (idempotent).
-    op.execute("ALTER TABLE schemas ADD COLUMN IF NOT EXISTS collection_install_id UUID")
-    op.execute("ALTER TABLE agents ADD COLUMN IF NOT EXISTS collection_install_id UUID")
-    op.execute("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS collection_install_id UUID")
+    for _entity_table in ("schemas", "agents", "pipelines"):
+        op.execute(f"ALTER TABLE {_entity_table} ADD COLUMN IF NOT EXISTS collection_install_id UUID")
 
     if pg:
-        # RLS last: ENABLE + FORCE + strict fail-closed policy, then DML grants.
-        op.execute(f"ALTER TABLE {_COLLECTION_INSTALL} ENABLE ROW LEVEL SECURITY")
-        op.execute(f"ALTER TABLE {_COLLECTION_INSTALL} FORCE ROW LEVEL SECURITY")
-        op.execute(f"CREATE POLICY rls_org_isolation ON {_COLLECTION_INSTALL} USING ({_ORG_SCOPE})")
-        if app_role:
-            op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_COLLECTION_INSTALL} TO {_APP_ROLE}")
-        if system_role:
-            op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_COLLECTION_INSTALL} TO {_SYSTEM_ROLE}")
-
-        # collection_install_entity is the non-org child; the runtime app/system
-        # roles need DML grants or they cannot read the rows the parent JOIN
-        # resolves, and FORCE RLS with a parent-derived policy keeps it scoped to
-        # the caller's org (an unscoped child would otherwise leak cross-org rows).
-        op.execute(f"ALTER TABLE {_COLLECTION_INSTALL_ENTITY} ENABLE ROW LEVEL SECURITY")
-        op.execute(f"ALTER TABLE {_COLLECTION_INSTALL_ENTITY} FORCE ROW LEVEL SECURITY")
-        op.execute(f"CREATE POLICY rls_org_isolation ON {_COLLECTION_INSTALL_ENTITY} USING ({_ENTITY_ORG_SCOPE})")
-        if app_role:
-            op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_COLLECTION_INSTALL_ENTITY} TO {_APP_ROLE}")
-        if system_role:
-            op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_COLLECTION_INSTALL_ENTITY} TO {_SYSTEM_ROLE}")
+        # collection_install is the org-scoped parent; collection_install_entity
+        # is the non-org child — FORCE RLS with a parent-derived policy keeps it
+        # scoped to the caller's org (an unscoped child would otherwise leak
+        # cross-org rows), and the app/system roles need DML grants or they
+        # cannot read the rows the parent JOIN resolves.
+        _apply_org_isolation(bind, _COLLECTION_INSTALL, _ORG_SCOPE, app_role, system_role)
+        _apply_org_isolation(bind, _COLLECTION_INSTALL_ENTITY, _ENTITY_ORG_SCOPE, app_role, system_role)
 
 
 def downgrade() -> None:
