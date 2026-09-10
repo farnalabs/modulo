@@ -679,6 +679,54 @@ async def test_copy_to_adapt_native_tier_defaults():
     assert captured["tier"] == "native"
 
 
+async def test_copy_to_adapt_db_source_keeps_forked_from():
+    """A source read from the DB row is linked via forked_from (FAR-697)."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    source = _fake_primitive(visibility="org")
+    copied = _fake_primitive()
+
+    captured: dict = {}
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
+        patch(
+            "modulo.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
+        ),
+    ):
+        await copy_to_adapt(session, org_id, source.id)
+
+    assert captured["forked_from"] == source.id
+
+
+async def test_copy_to_adapt_builtin_source_nulls_forked_from():
+    """In-memory builtin sources have no DB row — forked_from must be NULL.
+
+    The FK on library_primitives.id would otherwise reject the insert and the
+    MCP copy_library_primitive tool returned a generic internal_error 500
+    (FAR-697).
+    """
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    builtin = _MODULO_PRIMITIVES[0]
+    copied = _fake_primitive()
+
+    captured: dict = {}
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch(
+            "modulo.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
+        ),
+    ):
+        result = await copy_to_adapt(session, org_id, builtin.id, created_by=uuid.uuid4(), via_mcp=False)
+
+    assert result is copied
+    assert captured["forked_from"] is None
+
+
 # ---------------------------------------------------------------------------
 # contribute_primitive
 # ---------------------------------------------------------------------------
