@@ -4,6 +4,7 @@ from modulo.db.models.agent_runner_binding import AgentRunnerBinding
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base, OrgScoped, TimestampMixin
+from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.connector_profile import ConnectorProfile
@@ -103,6 +104,8 @@ __all__ = [
     "Base",
     "ChatMessage",
     "ChatSession",
+    "CollectionInstall",
+    "CollectionInstallEntity",
     "CompositeTemplate",
     "ConnectorInstance",
     "ConnectorProfile",
