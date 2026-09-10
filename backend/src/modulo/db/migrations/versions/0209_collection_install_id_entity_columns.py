@@ -1,4 +1,4 @@
-"""Add the ORM-declared ``collection_install_id`` index on entity tables (FAR-762/FAR-761 drift).
+"""Add denormalised ``collection_install_id`` provenance columns (FAR-762/FAR-761 drift).
 
 Revision ID: 0209_collection_install_id_entity_columns
 Revises: 0208_notification_indexes_and_constraint
@@ -9,35 +9,34 @@ every entity a collection install writes — see
 ``core/library_service/install.py::_stamp_install_id`` (schemas, agents,
 pipelines) and ``uninstall.py`` which reads/clears the same column. The ORM
 models declare ``collection_install_id`` on ``Schema``, ``Agent`` and
-``Pipeline`` (nullable UUID, indexed). The COLUMN itself is created by
-``0207_collection_install_tracking`` (idempotently, via
-``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` — matching prod, where 0207 first
-landed with these columns present). What 0207 does NOT create is the INDEX the
-ORM declares (``index=True``), so queries relying on it scan full tables.
+``Pipeline`` (nullable UUID, indexed). On a fresh DB, migration
+``0207_collection_install_tracking`` already creates this column (with
+``IF NOT EXISTS``) on the entity tables; on a prod DB whose ``0207`` predates
+that column add the column is still absent. Either way the column must exist and
+carry the index the ORM declares for the ORM↔DB schema to stay in sync.
 
-This migration closes that remaining gap by creating the index on
-``schemas``, ``agents`` and ``pipelines`` — it does NOT re-add the column
-(0207 already owns it; re-adding it under a plain ``ADD COLUMN`` crashes a
-fresh DB with ``column <table>.collection_install_id already exists``). The
-column is nullable: an entity may or may not belong to a collection install,
-and the audit history already exists in ``collection_install_entity`` (no
-backfill is required — every row simply starts NULL, the same as a fresh
-install never performed).
+This migration closes the gap idempotently: it adds the nullable UUID column
+only when missing (so it does not collide with ``0207`` on a fresh DB) and
+creates the ORM-declared index ``ix_<table>_collection_install_id``. The column
+is nullable: an entity may or may not belong to a collection install, and the
+audit history already exists in ``collection_install_entity`` (no backfill is
+required — every row simply starts NULL, the same as a fresh install never
+performed).
 
 ROLE WIRING (the 0134 ceremony, verbatim in spirit from 0066): migrations run
 as the ``DATABASE_ADMIN_URL`` superuser, but the org-scoped entity tables are
 owned by ``modulo_migrate``. We ``SET ROLE modulo_migrate`` before the
-``CREATE INDEX`` only where the table is already owned by that
+``ALTER TABLE ... ADD COLUMN`` only where the table is already owned by that
 role (production, where bootstrap ran before alembic) so ownership stays
 consistent; on a fresh DB where the migration caller owns the tables the
-ceremony is skipped and the index is created by the caller. The step is
+ceremony is skipped and the column is added by the caller. The step is
 unconditional on the role merely existing — ``SET ROLE`` to a non-owner would
-fail the DDL.
+fail the ALTER.
 
-Postgres-only concern: the index is plain DDL with no RLS/policy
+Postgres-only concern: the column/index are plain DDL with no RLS/policy
 change (the tables already carry org-isolation RLS + DML grants), so no RLS
 step runs. SQLite (used by unit tests via ``Base.metadata.create_all``) has no
-role machinery — ``CREATE INDEX IF NOT EXISTS`` runs directly there.
+role machinery — ``op.add_column`` / ``op.create_index`` run directly there.
 """
 
 from __future__ import annotations
@@ -46,6 +45,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 from modulo.db.migrations._rls_ceremony import (
     assert_owner_is_migrate as _assert_owner_is_migrate,
@@ -84,7 +84,21 @@ def upgrade() -> None:
     else:
         migrate_role = False
 
+    insp = inspect(bind)
+
     for table in _ENTITY_TABLES:
+        # Migration 0207_collection_install_tracking already creates this column
+        # (with IF NOT EXISTS) on a fresh DB, so re-adding it here would fail the
+        # whole chain with "column <table>.collection_install_id already exists"
+        # during ``alembic upgrade head`` (seen on the pre-deploy integration-test
+        # run). On a prod DB whose 0207 predates the column add, the column is
+        # still absent and must be created here. Idempotent existence checks keep
+        # the migration correct for both a fresh and an already-applied DB.
+        existing_cols = {c["name"] for c in insp.get_columns(table)}
+        column_present = _COLUMN in existing_cols
+        existing_indexes = {i["name"] for i in insp.get_indexes(table)}
+        index_present = f"ix_{table}_{_COLUMN}" in existing_indexes
+
         # The SET ROLE ownership ceremony only applies where the table is already
         # owned by ``modulo_migrate`` (prod DBs whose earlier migrations ran under
         # the migrate role). On a fresh DB where the migration caller owns the
@@ -95,14 +109,13 @@ def upgrade() -> None:
         if migrate_owns_table:
             op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-        # The denormalised ``collection_install_id`` column is created (idempotently,
-        # via ``ADD COLUMN IF NOT EXISTS``) by 0207_collection_install_tracking — do
-        # NOT re-add it here or the migration crashes with
-        # "column <table>.collection_install_id already exists". This migration only
-        # adds the index the ORM model declares (``index=True``), which 0207 does
-        # not create. Guarding the index with IF NOT EXISTS keeps the step safe to
-        # re-run.
-        op.execute(f"CREATE INDEX IF NOT EXISTS ix_{table}_{_COLUMN} ON {table} ({_COLUMN})")
+        if not column_present:
+            op.add_column(
+                table,
+                sa.Column(_COLUMN, sa.Uuid(), nullable=True),
+            )
+        if not index_present:
+            op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
 
         if pg and migrate_owns_table:
             op.execute("RESET ROLE")
@@ -117,7 +130,5 @@ def downgrade() -> None:
         op.execute("SET search_path TO public")
 
     for table in reversed(_ENTITY_TABLES):
-        # Only drop the index owned by this migration. The ``collection_install_id``
-        # column itself is added/dropped by 0207_collection_install_tracking — dropping
-        # it here too would fail with "column does not exist" during downgrade.
         op.drop_index(f"ix_{table}_{_COLUMN}", table_name=table)
+        op.drop_column(table, _COLUMN)
