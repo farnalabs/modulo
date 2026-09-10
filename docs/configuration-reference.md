@@ -187,14 +187,33 @@ Client sync for the hosted community library of pipeline primitives.
 | `SAQ_TEST_PAUSE` | TEST-ONLY | `false` | Test-only pause flag; refused outside test/staging (`DEBUG=true`) |
 | `SAQ_NODE_DEFAULT_TIMEOUT_SECONDS` | No | `1200` | Default node execution timeout when graph node has no explicit timeout |
 | `SAQ_NODELESS_REDISPATCH_BUDGET` | No | `2` | Max re-dispatch cycles for claimed-but-nodeless SAQ zombies |
+| `SAQ_CAPACITY_RETRY_BUDGET` | No | `3` | Per-run capacity-retry budget: a claimed run past this many total claims is terminal-failed regardless of TTL (min 0, max 20) |
+| `HITL_GATE_CANCEL_GRACE_SECONDS` | No | `3600` | Seconds after an open HITL gate expires unanswered before the gate is auto-cancelled (min 60, max 604800) |
 | `SLOT_RECONCILE_STALE_SECONDS` | No | `1800` | Stale heartbeat window for slot reconciliation sweep (force-releases leaked slots) |
 | `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` | No | `3600` | Max age (seconds) for pending runs before trigger backpressure kicks in |
+| `DISPATCHER_RECONCILE_BUDGET_SECONDS` | No | `95` | Per-tick time budget (seconds) for the dispatcher reconcile loop (min 10, max 119) |
+| `DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile terminalizer SQL (min 1, max 1000) |
+| `DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile daily-facts compensator SQL (min 1, max 1000) |
 | `HITL_PARK_GRACE_SECONDS` | No | `86400` | Seconds after an open HITL gate expires unanswered before the run is parked to `hitl_parked` (non-terminal, releases pipeline capacity). Min 60, max 604800 |
 
 `SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
 only dispatch path, so the readiness gate is always active. The deploy-time
 `SAQ_HOLD` gate (deploy.yml `hold-check` job) was retired 2026-08-05 – no
 deploy hold remains; `SAQ_HARD_GATE` is the only gate.
+
+---
+
+## Runner Capacity Gate
+
+Controls runner-slot reservation for sandbox-agent dispatches (FAR-594 D8).
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `RUNNER_CAPACITY_GATE_ENABLED` | No | `false` | Enable the runner capacity gate. When ON, sandbox-agent dispatches reserve a runner slot through an atomic transaction. Tier-scoped default: when the org key is absent, the Docker-tier default gates Docker+Local dispatches only (E2B carries its own platform-side quota). |
+| `RUNNER_CAPACITY_LOCK_TIMEOUT_MS` | No | `2000` | Lock timeout in milliseconds for the runner capacity gate transaction. SQLSTATE 55P03 degrades to a retryable capacity denial. Min 100, max 30000. |
+| `RUNNER_MARKER_STALE_SECONDS` | No | `90000` | Stale threshold for runner dispatch markers (marker `written_at`, legacy tier-less fall back to `runs.updated_at`). Markers older than this are cleared by the reconciliation sweep. Min 3600, max 604800. |
+| `RUNNER_RECONCILER_DESTROY_ENABLED` | No | `false` | Enable the runner workspace orphan reconciler destroy path. When OFF (default), the reconciler runs in log-only soak mode and does not destroy orphaned workspace containers. |
+| `MODULO_RUNNER_MACHINE_ID` | No | `""` | Deployment-identity label for the runner workspace reconciler. When empty, falls back to the machine hostname. Used to scope container orphan sweeps to a single deployment. |
 
 ---
 
@@ -248,6 +267,8 @@ Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to
 | `MODULO_MAX_LOCAL_CONCURRENCY` | No | `2` | Max concurrent local agents (LocalRuntimeProvider) |
 | `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate. |
 | `RUN_API_KEY_DEFAULT_TTL_SECONDS` | No | `900` | Per-run agent runtime API key TTL floor (min 300, max 86400) |
+| `SANDBOX_PROVISIONING_TIMEOUT_SECONDS` | No | `90` | Timeout for sandbox workspace provisioning (min 15, max 600) |
+| `SANDBOX_BINDING_RESOLVE_TIMEOUT_SECONDS` | No | `30` | Timeout for resolving runner bindings (decrypting referenced model-backend credentials) during dispatch (min 5, max 120) |
 
 ---
 
@@ -258,7 +279,7 @@ Settings load (fail-fast) – a bad env value blocks boot with a recovery messag
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_MAX_REPORTABLE_USD_MIN` | No | `0.000001` | The floor: a self-reported `model_cost_usd` below this is NOT a report (closes the spend-evasion hole) — except an EXACT `0` that the producer proves is genuine (all-zero `token_usage`, FAR-653), which IS a real report rendering `$0.00` with no warning. Sub-floor non-zero values stay rejected. `ge=0.000001` – a sub-floor knob is rejected. |
+| `MODULO_MAX_REPORTABLE_USD_MIN` | No | `0.000001` | The floor: a self-reported `model_cost_usd` below this is NOT a report (closes the spend-evasion hole), except an EXACT `0` that the producer proves is genuine (all-zero `token_usage`, FAR-653), which IS a real report rendering `$0.00` with no warning. Sub-floor non-zero values stay rejected. `ge=0.000001` – a sub-floor knob is rejected. |
 | `MODULO_MAX_SELF_REPORTED_USD` | No | `10000.0` | The per-node clamp for an absurd single-node report. The write-path effective value is min-capped at `99999999.999999` (the run column cap), so a `1e9` env value cannot silently disable the clamp. `ge=0.000001`. |
 | `MODULO_MAX_REPORTABLE_BAND_USD` | No | `50.0` | The band ceiling – the trust boundary for self-reported model cost at the backend extraction boundary. Any producer is clamped here; a value above the band carries the `model_cost_out_of_band_high` marker. Must be `<= MODULO_MAX_SELF_REPORTED_USD` (else boot-fatal). |
 | `MODULO_MAX_RATE_USD` | No | `100000.0` | Dynamic upper bound for a component's `rate_usd` on writes. The write-path effective value is min-capped at `999999999999.999999` (the rate column cap). Lowering it does NOT affect existing components – the knob moves the write-path boundary only; existing rows are still evaluated at finalization at their stored rate. |
