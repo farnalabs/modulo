@@ -27,11 +27,13 @@ silently.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import subprocess  # nosec B404 — the only exec is a fully argv-pinned pg_dump invocation below (never shell=True)
 import sys
+import urllib.parse
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,6 +47,10 @@ _log = logging.getLogger(__name__)
 SNAPSHOT_PREFIX = "pre-upgrade-dump-"
 SNAPSHOT_MANIFEST_NAME = "manifest.json"
 SNAPSHOT_MANIFEST_VERSION = 1
+# The restore-side manifest: `modulo restore` hard-requires backup-info.json
+# (shape-validated, checksum-verified). The snapshot carries BOTH manifest
+# files so the installer's printed command works verbatim.
+_RESTORE_MANIFEST_NAME = "backup-info.json"
 _DUMP_NAME = "database.sql"
 _PGDATA_DIRNAME = "pgdata"
 _PG_VERSION_FILE = "PG_VERSION"
@@ -54,6 +60,7 @@ _SECRETS_FILENAME = "secrets.json"
 _STATE_FILENAME = "state.json"
 _DUMP_TIMEOUT_SECONDS = 1800
 _PRIVATE_MODE = 0o600
+_DIR_PRIVATE_MODE = 0o700
 
 # The launcher-owned public surface (consumed by install.sh via the bundled
 # runtime; vulture's dead-code gate special-cases __all__).
@@ -70,6 +77,30 @@ __all__ = [
 
 class UpgradeError(RuntimeError):
     """Raised when the enforced pre-upgrade dump cannot be produced safely."""
+
+
+def _decredential_url(raw_url: str) -> tuple[str, str | None]:
+    """Split the password out of the dump URL (never bare in /proc cmdline)."""
+    parsed = urllib.parse.urlsplit(raw_url)
+    password = parsed.password
+    if password is None:
+        return raw_url, None
+    userinfo = ""
+    if parsed.username:
+        userinfo = urllib.parse.quote(parsed.username, safe="") + "@"
+    netloc = f"{userinfo}{parsed.hostname or ''}"
+    if parsed.port is not None:
+        netloc += f":{parsed.port}"
+    return urllib.parse.urlunsplit(parsed._replace(netloc=netloc)), urllib.parse.unquote(password)
+
+
+def _pg_child_env(password: str | None) -> dict[str, str]:
+    """Child-scoped env: the password ONLY as PGPASSWORD (never in argv)."""
+    env = dict(os.environ)
+    env.pop("PGPASSWORD", None)
+    if password is not None:
+        env["PGPASSWORD"] = password
+    return env
 
 
 @dataclass(frozen=True)
@@ -136,7 +167,8 @@ def pre_upgrade_dump(
     """
     import shutil
 
-    from modulo.launcher.secrets_file import SecretsFileError, load_or_create
+    from modulo.launcher.env_safety import scrub_os_environment
+    from modulo.launcher.secrets_file import SecretsFileError, _load_existing
     from modulo.launcher.state import load_state
 
     # FIRST ACTION — the dump must never inherit a launcher-hostile PG*
@@ -151,16 +183,33 @@ def pre_upgrade_dump(
     if not (pgdata / _PG_VERSION_FILE).exists():
         raise UpgradeError(f"No initialised bundled cluster at {pgdata} — nothing to dump; upgrade aborted")
 
+    secrets_path = data_dir / _SECRETS_FILENAME
+    if not secrets_path.exists():
+        # Load-ONLY: a dump helper that could GENERATE credentials would, on
+        # a missing file, silently mint a fresh secrets.json and then fail on
+        # state.json HMAC verification — leaving an orphan secrets file that
+        # bricks the next boot. Refuse with the remedial message instead.
+        raise UpgradeError(
+            f"Refusing to dump: the secrets file {secrets_path} is MISSING — the pre-upgrade dump "
+            "must never generate credentials. If this data dir was restored from an archive, use the "
+            "archive's include-secrets bundle; otherwise the data dir is not bootstrapped. "
+            "Do NOT create a secrets.json by hand."
+        )
     try:
-        secrets = load_or_create(data_dir / _SECRETS_FILENAME)
+        secrets = _load_existing(secrets_path)
     except SecretsFileError as exc:
-        raise UpgradeError(f"secrets unavailable for the pre-upgrade dump: {exc}") from exc
+        raise UpgradeError(
+            f"secrets file cannot be READ for the pre-upgrade dump (never generated here): {exc}"
+        ) from exc
     try:
         state = load_state(state_path, secrets.state_hmac_key)
     except Exception as exc:
         raise UpgradeError(f"state.json at {state_path} cannot be verified: {exc}") from exc
 
-    dump_url = f"postgresql://modulo:{secrets.postgres_password}@{_POSTGRES_HOST}:{state.postgres_port}/{_APP_DB_NAME}"
+    url_with_password = (
+        f"postgresql://modulo:{secrets.postgres_password}@{_POSTGRES_HOST}:{state.postgres_port}/{_APP_DB_NAME}"
+    )
+    dump_url, postgres_password = _decredential_url(url_with_password)
 
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     parent = output_dir if output_dir is not None else data_dir
@@ -183,7 +232,7 @@ def pre_upgrade_dump(
         dump_url,
     ]
     try:
-        _run_dump(argv, dump_path)
+        _run_dump(argv, dump_path, child_env=_pg_child_env(postgres_password))
     except UpgradeError as exc:
         # A failed dump never leaves a half-written snapshot masquerading
         # as one, and the installer never sees a directory to trust.
@@ -207,10 +256,18 @@ def pre_upgrade_dump(
         "postgres_port": state.postgres_port,
     }
     (snapshot_dir / SNAPSHOT_MANIFEST_NAME).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    _write_restore_manifest(snapshot_dir, created_at=created_at)
     if os.name == "posix":
         # TODO(P3): Windows ACL hardening (chmod is a silent no-op there).
-        for path in (snapshot_dir, dump_path):
-            path.chmod(_PRIVATE_MODE)
+        # DIRECTORIES get 0700 — the e(xecute) bit is the DIRECTORY search
+        # bit: at 0600 the snapshot dir is unsearchable and even the dump
+        # (written moments earlier) can no longer be RESOLVED to read it.
+        try:
+            snapshot_dir.chmod(_DIR_PRIVATE_MODE)
+            for entry in (dump_path, snapshot_dir / SNAPSHOT_MANIFEST_NAME, snapshot_dir / _RESTORE_MANIFEST_NAME):
+                entry.chmod(_PRIVATE_MODE)
+        except OSError as exc:
+            _log.warning("upgrade.snapshot_mode_failed path=%s error=%s", snapshot_dir, exc)
     snapshot = PreUpgradeSnapshot(
         directory=snapshot_dir,
         dump_path=dump_path,
@@ -231,22 +288,74 @@ def _resolve_pg_bin_dir(bin_dir: Path | None) -> Path:
     return Path(sys.prefix) / "bundled" / "bin"
 
 
-def _run_dump(argv: list[str], dump_path: Path) -> None:
+def _alembic_heads() -> list[str]:
+    """The OLD runtime's current alembic head(s) (unknown → placeholder)."""
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        backend_dir = Path(__file__).resolve().parents[3]  # backend/
+        alembic_ini = backend_dir / "alembic.ini"
+        if not alembic_ini.exists():
+            return ["unknown"]
+        script = ScriptDirectory.from_config(Config(str(alembic_ini)))
+        return sorted(script.get_heads())
+    except Exception as exc:
+        _log.warning("upgrade.alembic_heads_unresolved error=%s", exc)
+        return ["unknown"]
+
+
+def _write_restore_manifest(snapshot_dir: Path, *, created_at: str) -> None:
+    """Write the restore-compatible manifest the installer's printed command needs.
+
+    ``modulo restore`` hard-requires ``backup-info.json`` (shape-validated +
+    checksum-verified). Without it the installer's "restore later with" hint
+    refuses immediately. The snapshot is written as a legacy-shaped archive
+    (no ``manifest_version`` -> accepted) carrying the dump checksum and the
+    schema version at backup time (so restore's downgrade guard can warn or
+    refuse). ``fernet_key_hash`` is intentionally absent: re-encryption only
+    engages when ``credentials_references.json`` exists, which the snapshot
+    does not carry (the full pre-restore DB lives in the SQL dump).
+    """
+    checksum = hashlib.sha256((snapshot_dir / _DUMP_NAME).read_bytes()).hexdigest()
+    restore_manifest = {
+        "snapshot_for_upgrade": True,
+        "manifest_version": SNAPSHOT_MANIFEST_VERSION,
+        "backup_type": "pre-upgrade-snapshot",
+        "timestamp": created_at,
+        "schema_versions": _alembic_heads(),
+        "db_version": "unknown",
+        "dump_name": _DUMP_NAME,
+        "dump_bytes": (snapshot_dir / _DUMP_NAME).stat().st_size,
+        "file_checksums": {_DUMP_NAME: checksum},
+    }
+    # 0600 fd creation: the manifest is never briefly exposed at umask mode.
+    fd = os.open(str(snapshot_dir / _RESTORE_MANIFEST_NAME), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _PRIVATE_MODE)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(restore_manifest, f, indent=2, sort_keys=True)
+
+
+def _run_dump(argv: list[str], dump_path: Path, *, child_env: dict[str, str] | None = None) -> None:
     """Run one fully-pinned argv pg_dump with output captured to *dump_path*.
 
     Never shell=True, never operator-controlled input: the dump URL is
     composed from the launcher-owned secrets file the same first boot
-    generated. A non-zero exit / timeout becomes :class:`UpgradeError`.
+    generated, with the password OUT OF ARGV (world-readable /proc cmdline)
+    and inside the child-scoped env dict instead. The dump file is CREATED
+    0600 so a mid-dump SIGKILL never leaves it readable at umask mode. A
+    non-zero exit / timeout becomes :class:`UpgradeError`.
     TODO(P3): Windows seam (the bundled runtime is Linux-first).
     """
+    fd = os.open(str(dump_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _PRIVATE_MODE)
     try:
-        with dump_path.open("wb") as out:
+        with os.fdopen(fd, "wb") as out:
             completed = subprocess.run(  # nosec B603 —— pinned argv, trusted synthesized input  # noqa: S603
                 argv,
                 stdout=out,
                 stderr=subprocess.PIPE,
                 check=False,
                 timeout=_DUMP_TIMEOUT_SECONDS,
+                env=child_env if child_env is not None else dict(os.environ),
             )
     except subprocess.TimeoutExpired as exc:
         raise UpgradeError(f"pg_dump timed out after {_DUMP_TIMEOUT_SECONDS}s") from exc

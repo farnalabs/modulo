@@ -180,21 +180,31 @@ lock_holder_pid() {
   printf '%s' "${pid}"
 }
 
+# lock_holder_mode — the holder's recorded lock mode (backup/restore/serve),
+# for the refusal transcript. Empty when the record lacks a mode field.
+lock_holder_mode() {
+  [ -f "${LOCK_FILE}" ] || return 1
+  grep -o '"mode": *"[^"]*"' "${LOCK_FILE}" 2>/dev/null | head -n 1 | sed 's/"mode": *//' || true
+}
+
 # refuse_when_locked — the swap phase NEVER races a live launcher.
 # Linux-first (P1a): liveness = /proc/<pid>. On a non-Linux host /proc/<pid>
 # never matches, so a record would read as stale — but this installer refuses
 # non-Linux platforms in preflight() anyway, so that branch is unreachable.
+# The holder PID is RE-READ after the /proc check: a lock can change hands
+# between the grep and the /proc check, and the die/info text must describe
+# the record that is actually on disk now.
 refuse_when_locked() {
-  local holder_pid
-  if holder_pid="$(lock_holder_pid)"; then
-    :
-  else
-    return 0
-  fi
+  local holder_pid holder_mode
+  holder_pid="$(lock_holder_pid)" || return 0
+  [ -n "${holder_pid}" ] || return 0
+  holder_mode="$(lock_holder_mode)"
   if [ -d "/proc/${holder_pid}" ]; then
-    die "Refusing: the data dir is locked by another launcher (holder PID ${holder_pid}).\nStop it first:  modulo stop\nThen re-run this installer. The enforced pre-upgrade snapshot already on disk is reused when you pass --skip-backup:\n  bash modulo-install.sh --skip-backup"
+    holder_pid="$(lock_holder_pid)" || return 0
+    holder_mode="$(lock_holder_mode)"
+    die "Refusing: the data dir is locked by another launcher (holder PID ${holder_pid}${holder_mode:+, mode ${holder_mode}}).\nStop it first:  modulo stop\nThen re-run this installer. The enforced pre-upgrade snapshot already on disk is reused when you pass --skip-backup:\n  bash modulo-install.sh --skip-backup"
   fi
-  info "INFO: stale lock record (holder PID ${holder_pid} is gone) — the kernel released the lock; proceeding."
+  info "INFO: stale lock record (holder PID ${holder_pid}${holder_mode:+, mode ${holder_mode}} is gone) — the kernel released the lock; proceeding."
 }
 
 # run_pre_upgrade_dump — the INSTALLER-ENFORCED pre-upgrade pg_dump (ADR 031
@@ -217,7 +227,7 @@ run_pre_upgrade_dump() {
     :
   else
     rc=$?
-    die "pre-upgrade pg_dump FAILED (exit ${rc}) — upgrade ABORTED, no binary swap was made. The installer aborted BEFORE installing anything; fix the dump failure and re-run."
+    die "pre-upgrade pg_dump FAILED (exit ${rc}) — upgrade ABORTED, no binary swap was made. The installer aborted BEFORE installing anything; fix the dump failure and re-run. If a verified snapshot ALREADY exists in ${DATA_DIR} and the bundled stack is stopped (a stopped stack cannot be dumped), re-run with --skip-backup:\n  bash modulo-install.sh --skip-backup"
   fi
   [ -d "${snapshot_path}" ] || die "pre-upgrade pg_dump succeeded but the snapshot path is missing: '${snapshot_path}'"
   UPGRADE_SNAPSHOT_PATH="${snapshot_path}"
@@ -356,17 +366,33 @@ info "bundle internal SHA256SUMS verified"
 # this installer) boots its data dir as-is; `current` is created fresh over
 # an empty versions/ tree, so the swap below is inert in that case.
 
+# newest pre-upgrade snapshot in the data dir (mtime order), for the
+# --skip-backup path: the operator must KNOW which snapshot is authoritative.
+newest_pre_upgrade_snapshot() {
+  ls -1dt "${DATA_DIR}"/pre-upgrade-dump-* 2>/dev/null | head -n 1
+}
+
 UPGRADE_SNAPSHOT_PATH=""
-if [ -f "${DATA_DIR}/state.json" ] && [ -f "${INSTALL_ROOT}/current/runtime/bin/python3" ]; then
-  if [ "${SKIP_BACKUP}" -eq 1 ]; then
-    printf 'WARNING: --skip-backup: installing WITHOUT creating a new pre-upgrade snapshot.\nYou (the operator) passed the loud explicit flag: confirm a verified snapshot already\nexists in %s and that the bundled stack is stopped (a stopped stack cannot be dumped;\nthe previous installer run printed its snapshot path and left it in the data dir).\n' "${DATA_DIR}" >&2
-  else
-    run_pre_upgrade_dump
+if [ -f "${DATA_DIR}/state.json" ]; then
+  if [ -f "${INSTALL_ROOT}/current/runtime/bin/python3" ]; then
+    if [ "${SKIP_BACKUP}" -eq 1 ]; then
+      printf 'WARNING: --skip-backup: installing WITHOUT creating a new pre-upgrade snapshot.\nYou (the operator) passed the loud explicit flag: confirm a verified snapshot already\nexists in %s and that the bundled stack is stopped (a stopped stack cannot be dumped;\nthe previous installer run printed its snapshot path and left it in the data dir).\n' "${DATA_DIR}" >&2
+      newest_snapshot="$(newest_pre_upgrade_snapshot)"
+      if [ -n "${newest_snapshot}" ]; then
+        UPGRADE_SNAPSHOT_PATH="${newest_snapshot}"
+        info "Newest pre-upgrade snapshot found in ${DATA_DIR}: ${UPGRADE_SNAPSHOT_PATH}"
+        info "Restore later with: modulo restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
+      else
+        info "No pre-upgrade snapshot directory found in ${DATA_DIR} — verify manually that a snapshot exists before continuing."
+      fi
+    else
+      run_pre_upgrade_dump
+    fi
   fi
-  # The swap phase NEVER runs under a live launcher's lock — regardless of
-  # the skip-backup flag. On this first pass the dump just succeeded with
-  # the launcher still running, so a healthy flow abstains here and the
-  # operator re-runs after 'modulo stop' (with --skip-backup).
+  # The swap phase NEVER races a live launcher's data-dir lock — whenever a
+  # bootstrapped data dir exists, whether or not this run produced a dump and
+  # whether or not a prior native install existed. (The dump branch NEEDS
+  # the running stack, so the refusal sits AFTER the dump, before the swap.)
   refuse_when_locked
   if [ -n "${UPGRADE_SNAPSHOT_PATH}" ]; then
     info "Upgrade snapshot requirement satisfied (snapshot: ${UPGRADE_SNAPSHOT_PATH})"

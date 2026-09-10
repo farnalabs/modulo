@@ -30,6 +30,8 @@ from modulo.launcher.upgrade import (
     pre_upgrade_dump,
 )
 
+_RESTORE_MANIFEST_NAME = "backup-info.json"
+
 _HMAC_KEY = bytes(range(32))
 
 
@@ -187,3 +189,158 @@ def test_main_prints_the_snapshot_path(tmp_path: Path, monkeypatch: pytest.Monke
     assert Path(printed).exists()
     state = load_state(data_dir / "state.json", _HMAC_KEY)
     assert state.postgres_port == 15432
+
+
+def test_snapshot_carries_the_restore_compatible_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`modulo restore` hard-requires backup-info.json: the snapshot carries
+    BOTH manifests so the installer's printed command works verbatim."""
+    _allow_windows_secrets(monkeypatch)
+    data_dir = _seed_data_dir(tmp_path)
+    with contextlib.ExitStack() as stack:
+        _enter_fake_run(stack)
+        snapshot = pre_upgrade_dump(data_dir)
+    restore_manifest = json.loads((snapshot.directory / _RESTORE_MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert SNAPSHOT_MANIFEST_NAME in {entry.name for entry in snapshot.directory.iterdir()}
+    assert "file_checksums" in restore_manifest
+    checksum = restore_manifest["file_checksums"]["database.sql"]
+    assert len(checksum) == 64
+    assert isinstance(restore_manifest["schema_versions"], list)
+
+
+def test_missing_secrets_file_refuses_and_generates_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dump helper is load-ONLY: a missing secrets file refuses — it must
+    never GENERATE one (an orphan secrets.json bricks the next boot)."""
+    _allow_windows_secrets(monkeypatch)
+    data_dir = _seed_data_dir(tmp_path)
+    (data_dir / "secrets.json").unlink()
+    with contextlib.ExitStack() as stack:
+        _enter_fake_run(stack)
+        with pytest.raises(UpgradeError, match="must never generate credentials"):
+            pre_upgrade_dump(data_dir)
+    assert not (data_dir / "secrets.json").exists(), "a generated orphan must never be left behind"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="directory modes are POSIX-only")
+def test_snapshot_directory_gets_the_search_bit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The snapshot DIR is 0700 (0600 strips the directory search bit and
+    makes the dump inside unresolvable)."""
+    _allow_windows_secrets(monkeypatch)
+    data_dir = _seed_data_dir(tmp_path)
+    with contextlib.ExitStack() as stack:
+        _enter_fake_run(stack)
+        snapshot = pre_upgrade_dump(data_dir)
+    assert (snapshot.directory.stat().st_mode & 0o777) == 0o700
+    assert (snapshot.dump_path.stat().st_mode & 0o777) == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="creation-mode guarantee is POSIX-only")
+def test_dump_file_is_born_private(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dump file is CREATED 0600 — a mid-dump SIGKILL never leaves it at
+    umask mode."""
+    _allow_windows_secrets(monkeypatch)
+    data_dir = _seed_data_dir(tmp_path)
+    with contextlib.ExitStack() as stack:
+        _enter_fake_run(stack)
+        snapshot = pre_upgrade_dump(data_dir)
+    assert (snapshot.dump_path.stat().st_mode & 0o777) == 0o600
+
+
+def test_dump_password_is_never_in_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The postgres password travels ONLY as child-env PGPASSWORD — never in
+    the world-readable /proc/<pid>/cmdline argv."""
+    _allow_windows_secrets(monkeypatch)
+    data_dir = _seed_data_dir(tmp_path)
+    seen: dict[str, Any] = {}
+
+    def _capture(argv: list[str], stdout: Any = None, **kwargs: Any) -> MagicMock:
+        seen["argv"] = argv
+        seen["env"] = kwargs.get("env")
+        if stdout is not None:
+            stdout.write(b"-- pg_dump output\n")
+        return MagicMock(returncode=0)
+
+    with patch("modulo.launcher.upgrade.subprocess.run", new=_capture):
+        pre_upgrade_dump(data_dir)
+    joined = " ".join(str(a) for a in seen["argv"])
+    assert "pw" not in joined
+    assert seen["argv"][-1] == "postgresql://modulo@127.0.0.1:15432/modulo"
+    assert seen["env"]["PGPASSWORD"] == "pw"
+
+
+def test_state_with_last_backup_stamps_v2(tmp_path: Path) -> None:
+    """FAR-672 forward-compat: the optional field stamps v2 so an OLD
+    launcher refuses via the DESIGNED version gate (a clear "written by a
+    NEWER launcher" refusal) — not an "unknown field(s)" integrity error."""
+    from modulo.launcher.state import (
+        SCHEMA_VERSION,
+        SCHEMA_VERSION_WITH_LAST_BACKUP,
+        StateVersionError,
+        _mac_for,
+        load_state,
+        save_state,
+    )
+
+    marked = LauncherState(postgres_port=15432, redis_port=16379, api_port=18000, last_backup_at="t")
+    payload = marked.to_payload()
+    assert payload["schema_version"] == SCHEMA_VERSION_WITH_LAST_BACKUP
+
+    # The v2-shaped file still loads on THIS reader (the field is optional).
+    state_path = tmp_path / "state.json"
+    save_state(marked, state_path, bytes(range(32)))
+    assert load_state(state_path, bytes(range(32))).last_backup_at == "t"
+
+    # A file stamped by an EVEN NEWER writer refuses with the clean version message.
+    newer_payload = payload | {"schema_version": SCHEMA_VERSION + 999}
+    envelope = {"payload": newer_payload, "mac": _mac_for(newer_payload, bytes(range(32)))}
+    newer_path = tmp_path / "newer.json"
+    newer_path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(StateVersionError, match="NEWER launcher"):
+        load_state(newer_path, bytes(range(32)))
+
+    # A v1 payload WITHOUT the field loads unchanged (byte-level compat).
+    v1_payload = {"schema_version": SCHEMA_VERSION, "postgres_port": 15432, "redis_port": 16379, "api_port": 18000}
+    v1_envelope = {"payload": v1_payload, "mac": _mac_for(v1_payload, bytes(range(32)))}
+    v1_path = tmp_path / "v1.json"
+    v1_path.write_text(json.dumps(v1_envelope), encoding="utf-8")
+    loaded = load_state(v1_path, bytes(range(32)))
+    assert loaded.postgres_port == 15432
+    assert loaded.last_backup_at is None
+
+
+def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """E2E: pre_upgrade_dump -> `modulo restore <snapshot> --yes` succeeds,
+    exactly as the installer's printed hint advertises."""
+    from click.testing import CliRunner
+
+    from modulo.cli.backup import cli as backup_cli
+
+    _allow_windows_secrets(monkeypatch)
+    data_dir = _seed_data_dir(tmp_path)
+    with contextlib.ExitStack() as stack:
+        _enter_fake_run(stack)
+        snapshot = pre_upgrade_dump(data_dir)
+    restore_manifest = json.loads((snapshot.directory / "backup-info.json").read_text(encoding="utf-8"))
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(
+            patch("modulo.cli.backup.get_settings", **{"return_value.fernet_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+        )
+        stack.enter_context(
+            patch("modulo.cli.backup._get_schema_versions", return_value=restore_manifest["schema_versions"])
+        )
+        stack.enter_context(patch("modulo.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
+        stack.enter_context(
+            patch(
+                "modulo.cli.backup._run_pg_dump",
+                side_effect=lambda _url, output, timeout=300: Path(output).write_text(
+                    "-- safety dump", encoding="utf-8"
+                ),
+            )
+        )
+        stack.enter_context(patch("modulo.cli.backup._run_psql"))
+        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture"))
+        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        result = CliRunner().invoke(backup_cli, ["restore", str(snapshot.directory), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Restore complete" in result.output
+    assert "Database restored from SQL dump" in result.output

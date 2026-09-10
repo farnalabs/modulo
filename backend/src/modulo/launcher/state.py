@@ -15,9 +15,12 @@ Contract, all locked by tests:
   no migration shims in v1.
 * ``last_backup_at`` is an OPTIONAL forward-compatible field (FAR-672):
   files without it (every pre-FAR-672 writer) load unchanged, and it is only
-  written into the payload when a timestamp exists. The slice-1 v1 key set
-  stays intact for credential-free payloads — the field is a timestamp, not
-  a credential.
+  written into the payload when a timestamp exists. Because ``last_backup_at``
+  is an UNKNOWN FIELD to every pre-FAR-672 reader, a payload carrying it is
+  stamped ``schema_version`` 2 (:data:`SCHEMA_VERSION_WITH_LAST_BACKUP`) so
+  an old launcher hits the DESIGNED version gate — its clean "written by a
+  NEWER launcher" refusal — instead of an "unknown field(s)" integrity error
+  that reads like tampering. Payloads without the field keep the v1 stamp.
 * Ports are NON-DEFAULT high ports (bundled services must never collide with
   a developer's own Postgres/Redis), scanned for availability at first boot
   and persisted, with earlier allocations excluded from later scans so the
@@ -40,6 +43,12 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
+# A payload carrying the optional ``last_backup_at`` stamp is version 2: it is
+# unreadable by pre-FAR-672 launchers (their ``_ALLOWED_PAYLOAD_KEYS`` refuses
+# the unknown field), so it must hit the version gate instead — a clean,
+# actionable "written by a NEWER launcher" refusal rather than an error that
+# reads like tampering.
+SCHEMA_VERSION_WITH_LAST_BACKUP = SCHEMA_VERSION + 1
 STATE_FILENAME = "state.json"
 DEFAULT_POSTGRES_PORT = 15432
 DEFAULT_REDIS_PORT = 16379
@@ -59,6 +68,7 @@ __all__ = [
     "DEFAULT_POSTGRES_PORT",
     "DEFAULT_REDIS_PORT",
     "SCHEMA_VERSION",
+    "SCHEMA_VERSION_WITH_LAST_BACKUP",
     "STATE_FILENAME",
     "LauncherState",
     "StateIntegrityError",
@@ -99,6 +109,10 @@ class LauncherState:
         # the pre-FAR-672 payload shape byte-for-byte (forward compatibility).
         if self.last_backup_at is not None:
             payload["last_backup_at"] = self.last_backup_at
+            # FAR-672: the field is UNKNOWN to old readers — stamp v2 so an
+            # old launcher refuses via the designed version gate, not via an
+            # "unknown field(s)" integrity error that reads like tampering.
+            payload["schema_version"] = SCHEMA_VERSION_WITH_LAST_BACKUP
         return payload
 
     @classmethod
@@ -216,12 +230,16 @@ def load_state(path: Path, hmac_key: bytes) -> LauncherState:
     version = payload.get("schema_version")
     if not isinstance(version, int) or isinstance(version, bool):
         raise StateVersionError(f"state.json schema_version missing or invalid: {version!r}")
-    if version > SCHEMA_VERSION:
+    stamp_2 = SCHEMA_VERSION_WITH_LAST_BACKUP
+    if version > stamp_2 or (version == stamp_2 and "last_backup_at" not in payload):
+        # The v2 stamp is reserved for backup-marked payloads (the field the
+        # old readers cannot parse): anything else at v2 was written by a
+        # launcher this one cannot safely adopt — the designed version gate.
         raise StateVersionError(
             f"Downgrade refused: state.json schema_version {version} was written by a NEWER launcher "
             f"(this launcher speaks {SCHEMA_VERSION}). Restore the matching binary or reset the data dir."
         )
-    if version < SCHEMA_VERSION:
+    if version < 1:
         raise StateVersionError(
             f"state.json schema_version {version} predates this launcher's schema ({SCHEMA_VERSION}); "
             "no migration path exists — restore a matching binary or reset the data dir."
