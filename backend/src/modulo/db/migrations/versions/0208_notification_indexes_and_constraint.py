@@ -22,9 +22,8 @@ All operations are additive / constraint-replace on existing tables.
 No new tables, columns, or relationships.
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0208_notification_indexes_and_constraint"
 down_revision = "0207_collection_install_tracking"
@@ -67,8 +66,7 @@ def upgrade() -> None:
 
     op.execute(
         sa.text(
-            "ALTER TABLE public.notification_delivery_log "
-            "DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
+            "ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
         )
     )
     op.execute(
@@ -89,8 +87,7 @@ def downgrade() -> None:
     # Restore the original ARRAY-form CHECK constraint from migration 0144
     op.execute(
         sa.text(
-            "ALTER TABLE public.notification_delivery_log "
-            "DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
+            "ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
         )
     )
     op.execute(
