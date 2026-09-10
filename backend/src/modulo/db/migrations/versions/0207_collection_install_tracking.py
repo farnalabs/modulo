@@ -37,8 +37,11 @@ types and no ceremony/RLS runs.
 ``ON DELETE RESTRICT`` on ``collection_id`` is INTENTIONAL: a collection that
 has ever been installed leaves provenance history that must survive collection
 deletion (the install row is the audit record). Per-entity provenance is recorded
-in ``collection_install_entity`` (one row per written schema/agent/pipeline), so
-no denormalised ``collection_install_id`` column is added to the entity tables.
+in ``collection_install_entity`` (one row per written schema/agent/pipeline) AND
+mirrored as a denormalised ``collection_install_id`` column on the entity tables
+(the ORM models ``Pipeline``/``Agent``/``Schema`` declare this column, and
+``install_service``/``uninstall_service`` stamp/clear it), so the column MUST be
+created by this migration or the ORM metadata drifts from the migrated schema.
 """
 
 from __future__ import annotations
@@ -214,9 +217,13 @@ def upgrade() -> None:
         ["entity_type", "entity_id"],
     )
 
-    # Provenance is recorded by collection_install_entity (one row per
-    # schema/agent/pipeline an install wrote), so no denormalised
-    # collection_install_id column is added to the entity tables.
+    # 3. Provenance columns on the entity tables (idempotent). The ORM models
+    #    (Pipeline/Agent/Schema) declare ``collection_install_id`` and
+    #    install_service/uninstall_service stamp/clear it, so the migration must
+    #    create the column — ``IF NOT EXISTS`` keeps the migration safe to re-run
+    #    (and matches prod, where 0207 first landed with these columns present).
+    for _entity_table in ("schemas", "agents", "pipelines"):
+        op.execute(f"ALTER TABLE {_entity_table} ADD COLUMN IF NOT EXISTS collection_install_id UUID")
 
     if pg:
         # collection_install is the org-scoped parent; collection_install_entity
@@ -245,3 +252,7 @@ def downgrade() -> None:
 
     op.drop_table(_COLLECTION_INSTALL_ENTITY)
     op.drop_table(_COLLECTION_INSTALL)
+
+    op.execute("ALTER TABLE pipelines DROP COLUMN IF EXISTS collection_install_id")
+    op.execute("ALTER TABLE agents DROP COLUMN IF EXISTS collection_install_id")
+    op.execute("ALTER TABLE schemas DROP COLUMN IF EXISTS collection_install_id")
