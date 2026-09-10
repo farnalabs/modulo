@@ -1276,6 +1276,18 @@ elements:
       - testid: model-backends-preview-section
         type: element
         dynamic_testid: false
+      - testid: admin-model-backends-back-to-presets
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-manual-entry-toggle
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-preset-clear
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-preset-docs-link
+        type: link
+        dynamic_testid: false
     /admin/my-profile:
       - testid: my-profile-my-teams-retry
         type: button
@@ -2048,6 +2060,41 @@ elements:
       - testid: library-view-details
         type: button
         dynamic_testid: false
+      - testid: library-section-collections
+        type: button
+        dynamic_testid: false
+      - testid: library-collections-error
+        type: element
+        dynamic_testid: false
+      - testid: library-create-collection
+        type: button
+        dynamic_testid: false
+    /library/collections/new:
+      - testid: collection-name
+        type: input
+        dynamic_testid: false
+      - testid: collection-slug
+        type: input
+        dynamic_testid: false
+      - testid: collection-description
+        type: textarea
+        dynamic_testid: false
+      - testid: collection-visibility
+        type: select
+        dynamic_testid: false
+      - testid: collection-add-pin
+        type: button
+        dynamic_testid: false
+      - testid: collection-remove-pin
+        type: button
+        dynamic_testid: false
+      - testid: collection-create-submit
+        type: button
+        dynamic_testid: false
+    /library/collections/:id:
+      - testid: collection-publish
+        type: button
+        dynamic_testid: false
     /library/:id/create-pipeline:
       - testid: library-wizard-back
         type: button
@@ -2116,6 +2163,21 @@ elements:
         dynamic_testid: false
       - testid: lifecycle-map-journeys-load-more
         type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-controls
+        type: element
+        dynamic_testid: false
+      - testid: lifecycle-map-show-work-items
+        type: checkbox
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-period
+        type: select
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-status
+        type: select
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-pagination
+        type: element
         dynamic_testid: false
     /notifications:
       - testid: notifications-apply-filters

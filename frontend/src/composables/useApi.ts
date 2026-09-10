@@ -2,7 +2,7 @@ import {
   getAuthHeaders,
   attemptTokenRefresh,
   clearAccessToken,
-  redirectToLogin,
+  exitToLogin,
 } from '../lib/api/auth'
 import { formatApiError } from '../lib/api/formatError'
 
@@ -46,7 +46,7 @@ async function request<T>(method: string, path: string, body?: unknown, options?
     }
     if (!refreshed || res.status === 401) {
       clearAccessToken()
-      redirectToLogin()
+      exitToLogin()
       throw new Error('Session expired. Please log in again.')
     }
   }

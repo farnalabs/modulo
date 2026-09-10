@@ -44,6 +44,7 @@ __all__ = [
     "check_and_record_spend",
     "check_pipeline_circuit_breaker",
     "created_at_day_start",
+    "get_cost_export_rows",
     "get_cost_report",
     "get_or_create_daily_count",
     "reset_pipeline_circuit_breaker",
@@ -137,6 +138,74 @@ WHERE organisation_id = :org_id
   AND started_at >= :since
   AND total_cost_usd IS NOT NULL
   AND (cost_breakdown IS NULL OR jsonb_typeof(cost_breakdown::jsonb) = 'null')
+"""
+
+
+# Per-pipeline export aggregation (``runs`` table — the terminal-cost source,
+# same table ``sum_pipeline_monthly_spend`` reads). Binds only ``:org_id`` /
+# ``:since``; ``total_cost_usd`` is the per-run cost recorded at terminalization.
+_SQL_EXPORT_PIPELINE = """
+SELECT
+    r.pipeline_id AS pipeline_id,
+    SUM(r.total_cost_usd) AS total_spend_usd,
+    COUNT(*) AS total_runs
+FROM runs AS r
+WHERE r.organisation_id = :org_id
+  AND r.started_at IS NOT NULL
+  AND r.started_at >= :since
+GROUP BY r.pipeline_id
+"""
+
+# Per-model-component export aggregation over the runs' ``cost_breakdown``.
+# ``self_reported`` cost components are the model/LLM spend sources (they consume
+# the node-reported ``model_cost_usd`` via their ``report_key``); a breakdown
+# entry carries ``source`` (``self_reported`` / ``calculated``), ``component``
+# (the stable slug) and ``display_name``. Marker-bearing runs (any element with
+# the JSON-boolean-true ``total_clamped``) are EXCLUDED wholesale, matching the
+# ``_SQL_COST_COMPONENT_BUCKETS`` rule, so a clamped run's unusable breakdown
+# never feeds the export. The amount CASE mirrors the bucket parse; the
+# ``runs`` count is DISTINCT per run (a run contributes to each of its
+# self_reported components). Grouping is by ``component`` ONLY (the stable
+# slug that becomes ``entity_id`` in the export) — NOT ``(component,
+# display_name)``: a component whose ``display_name`` changes mid-window would
+# otherwise yield two CSV rows sharing one ``entity_id`` and double-count for
+# consumers aggregating per ``entity_id``. ``MAX`` collapses the display_name
+# to a single value per component (the sibling bucket SQL groups by component
+# only, so this matches that surface).
+_SQL_EXPORT_MODEL = """
+SELECT
+    elem->>'component' AS component,
+    MAX(elem->>'display_name') AS display_name,
+    SUM(
+        CASE
+            WHEN jsonb_typeof(elem->'amount_usd') = 'number'
+                THEN (elem->>'amount_usd')::numeric
+            WHEN jsonb_typeof(elem->'amount_usd') = 'string'
+                 AND elem->>'amount_usd' ~ :pattern
+                 THEN (elem->>'amount_usd')::numeric
+            ELSE 0
+        END
+    ) AS amount_usd,
+    COUNT(DISTINCT r.id) AS total_runs
+FROM (
+    SELECT id, cost_breakdown
+    FROM runs
+    WHERE organisation_id = :org_id
+      AND started_at IS NOT NULL
+      AND started_at >= :since
+      AND cost_breakdown IS NOT NULL
+      AND jsonb_typeof(cost_breakdown::jsonb) = 'array'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(cost_breakdown::jsonb) AS marker
+          WHERE marker->'total_clamped' = 'true'::jsonb
+      )
+) AS r
+CROSS JOIN LATERAL jsonb_array_elements(r.cost_breakdown::jsonb) AS elem
+WHERE elem->>'source' = 'self_reported'
+  AND jsonb_typeof(elem->'component') = 'string'
+  AND elem->>'component' <> ''
+GROUP BY elem->>'component'
 """
 
 
@@ -733,6 +802,98 @@ async def get_cost_report(
             "total_spend_usd": org_spend,
             "total_runs": org_runs,
         }
+    ]
+
+
+async def get_cost_export_rows(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    group_by: str,
+    period: str = "month",
+) -> list[dict[str, Any]]:
+    """Export rows for the ``GET /export`` granularities (team | pipeline | model).
+
+    ``team`` delegates to ``get_cost_report`` (the daily-ledger grouping — the
+    historical export shape). ``pipeline`` and ``model`` are runs-table /
+    cost-component aggregations:
+
+    - ``pipeline``: ``Σ total_cost_usd`` over the org's scoped runs grouped by
+      ``pipeline_id`` (the terminal-cost source — the pipeline's spend is
+      recorded per run, not on the org/team ledger), counting runs per pipeline.
+      A pipeline that ran in the window but whose runs carry no cost is
+      included with a 0 total. Legacy and component-attribute rows both count
+      through ``total_cost_usd``, so this matches the pipeline monthly-spend
+      surface (``sum_pipeline_monthly_spend``).
+    - ``model``: per ``self_reported`` cost-component aggregation over the runs'
+      ``cost_breakdown`` (the component is the org's named model/LLM spend
+      source; ``source = 'self_reported'`` entries consume the node-reported
+      ``model_cost_usd``). Each row is one cost component, named by its
+      ``display_name`` fallback.
+
+    Returns rows with keys ``entity_id``, ``entity_name``, ``total_spend_usd``
+    (float), ``total_runs`` (int). Unknown groupings raise ``ValueError``.
+    """
+    if group_by == "team":
+        return await get_cost_report(session, org_id=org_id, group_by="team", period=period)
+
+    valid_periods = frozenset({"day", "week", "month", "year"})
+    if period not in valid_periods:
+        raise ValueError(f"Unknown period '{period}'. Expected one of: {', '.join(sorted(valid_periods))}")
+    if group_by not in ("pipeline", "model"):
+        raise ValueError(f"Unknown group_by '{group_by}'. Expected 'team', 'pipeline' or 'model'.")
+
+    since = _report_since(datetime.now(UTC).date(), period)
+    if group_by == "pipeline":
+        return await _cost_export_by_pipeline(session, org_id=org_id, since=since)
+    return await _cost_export_by_model(session, org_id=org_id, since=since)
+
+
+async def _cost_export_by_pipeline(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    since: date,
+) -> list[dict[str, Any]]:
+    """Per-pipeline export rows from the runs table (Runs-table aggregation)."""
+    result = await session.execute(text(_SQL_EXPORT_PIPELINE), {"org_id": org_id, "since": since})
+    rows = result.all()
+    pipeline_ids = [row.pipeline_id for row in rows if row.pipeline_id is not None]
+    name_by_id: dict[uuid.UUID, str] = {}
+    if pipeline_ids:
+        name_result = await session.execute(select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids)))
+        name_by_id = {pipeline_id: name for pipeline_id, name in name_result.all() if name is not None}
+    return [
+        {
+            "entity_id": str(row.pipeline_id),
+            "entity_name": name_by_id.get(row.pipeline_id, "Unknown"),
+            "total_spend_usd": _safe_float(row.total_spend_usd),
+            "total_runs": _safe_int(row.total_runs),
+        }
+        for row in rows
+        if row.pipeline_id is not None
+    ]
+
+
+async def _cost_export_by_model(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    since: date,
+) -> list[dict[str, Any]]:
+    """Per-model-component export rows from the runs' ``cost_breakdown``."""
+    result = await session.execute(
+        text(_SQL_EXPORT_MODEL),
+        {"org_id": org_id, "since": since, "pattern": _NUMERIC_STRING_RE},
+    )
+    return [
+        {
+            "entity_id": row.component,
+            "entity_name": row.display_name or row.component,
+            "total_spend_usd": float(row.amount_usd) if row.amount_usd is not None else 0.0,
+            "total_runs": _safe_int(row.total_runs),
+        }
+        for row in result.all()
     ]
 
 

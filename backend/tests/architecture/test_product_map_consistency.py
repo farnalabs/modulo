@@ -325,6 +325,11 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/settings/email": "frontend/src/views/SettingsEmailView.vue",
         "/settings/hitl-review": "frontend/src/views/SettingsHitlReviewView.vue",
         "/settings/mcp": "frontend/src/views/SettingsMcpView.vue",
+        "/admin/model-backends": "frontend/src/views/AdminModelBackendsView.vue",
+        "/library": "frontend/src/views/LibraryView.vue",
+        "/library/collections/new": "frontend/src/views/CollectionCreateView.vue",
+        "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
+        "/lifecycle-maps/:id": "frontend/src/views/lifecycle-map/LifecycleMapView.vue",
     }
     elements = _load_elements()
     for route, view_rel in owned_pages.items():

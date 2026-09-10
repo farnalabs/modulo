@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   attemptTokenRefresh,
   clearAccessToken,
+  exitToLogin,
   getAccessToken,
   getAuthHeaders,
   getRefreshToken,
@@ -211,5 +212,42 @@ describe('redirectToLogin', () => {
     redirectToLogin()
 
     expect(location.href).toBe('http://localhost/dashboard')
+  })
+})
+
+describe('exitToLogin', () => {
+  function fakeLocation(pathname: string, href: string): Location {
+    return {
+      pathname,
+      href,
+    } as unknown as Location
+  }
+
+  it('redirects to /login when on another route', () => {
+    const location = fakeLocation('/dashboard', 'http://localhost/dashboard')
+    vi.stubGlobal('location', location)
+
+    exitToLogin()
+
+    expect(location.href).toBe('/login')
+  })
+
+  it('does not redirect when already on /login', () => {
+    const location = fakeLocation('/login', 'http://localhost/login')
+    vi.stubGlobal('location', location)
+
+    exitToLogin()
+
+    expect(location.href).toBe('http://localhost/login')
+  })
+
+  it('redirects to /login even when auto-login is configured', () => {
+    window.__MODULO_CONFIG__ = { autoLogin: { username: 'demo', password: 'demo' } }
+    const location = fakeLocation('/dashboard', 'http://localhost/dashboard')
+    vi.stubGlobal('location', location)
+
+    exitToLogin()
+
+    expect(location.href).toBe('/login')
   })
 })

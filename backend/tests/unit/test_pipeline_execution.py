@@ -1360,7 +1360,8 @@ class TestSaqWorkerSettings:
         # retention, webhook-dedup, stale recovery) + the cost probe (PR A2)
         # + the hourly missed-fire alert cron (retro item 4)
         # + the hitl_overdue notification sweep
-        # + the FAR-604 sweeps (slot reconciliation, HITL park-on-expiry).
+        # + the FAR-604 sweeps (slot reconciliation, HITL park-on-expiry)
+        # + memory_monitor_cron (FAR-776) — advisory guest-memory telemetry cron.
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
@@ -1382,6 +1383,7 @@ class TestSaqWorkerSettings:
             "journey_reconcile",
             "metrics_dump",
             "library_sync",
+            "memory_monitor_cron",
             "runner_marker_sweep",
             "runner_health_probe",
         }

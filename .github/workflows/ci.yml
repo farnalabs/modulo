@@ -5,6 +5,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # NOTE (FAR-773): the weekly Bundled Runner backstop cron deliberately does
+  # NOT live here. A schedule trigger fires the ENTIRE fast-validation suite;
+  # the backstop only needs the one harness job, so it now lives in
+  # runner-ci-backstop.yml (weekly cron -> the shared reusable
+  # runner-ci-harness.yml with force=true).
 
 env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
@@ -274,6 +279,18 @@ jobs:
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+
+  runner-ci-harness:
+    # Bundled Runner CI harness (FAR-773): boots the deploy/compose/
+    # runner-ci.yml rig (socket-proxy + dind + workspace network) and runs
+    # the docker-marked harness suite against it. The job body lives in the
+    # reusable runner-ci-harness.yml so the weekly drift backstop
+    # (runner-ci-backstop.yml) runs the exact same steps with
+    # force=true instead of a schedule trigger here re-firing this ENTIRE
+    # fast-validation suite just to reach one job.
+    name: Bundled Runner harness (compose + socket-proxy + dind)
+    uses: ./.github/workflows/runner-ci-harness.yml
+    secrets: inherit
 
   frontend:
     name: Frontend and WCAG

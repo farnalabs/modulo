@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from modulo.core.cost_controller import (
     build_cost_report_buckets,
     check_and_record_spend,
+    get_cost_export_rows,
     get_cost_report,
     get_or_create_daily_count,
 )
@@ -643,6 +644,125 @@ class TestGetCostReport:
     async def test_invalid_group_by_raises(self, mock_session: AsyncMock) -> None:
         with pytest.raises(ValueError, match="Unknown group_by"):
             await get_cost_report(mock_session, org_id=_ORG_ID, group_by="department", period="month")
+
+
+# ---------------------------------------------------------------------------
+# get_cost_export_rows
+# ---------------------------------------------------------------------------
+
+
+class TestGetCostExportRows:
+    async def test_group_by_team_delegates_to_get_cost_report(
+        self, mock_session: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        team_rows = [
+            {
+                "entity_id": str(_TEAM_ID),
+                "entity_name": "Alpha Team",
+                "total_spend_usd": 5.0,
+                "total_runs": 2,
+            }
+        ]
+        delegated = AsyncMock(return_value=team_rows)
+        monkeypatch.setattr("modulo.core.cost_controller.get_cost_report", delegated)
+
+        rows = await get_cost_export_rows(mock_session, org_id=_ORG_ID, group_by="team", period="month")
+
+        assert rows == team_rows
+        delegated.assert_awaited_once_with(mock_session, org_id=_ORG_ID, group_by="team", period="month")
+
+    async def test_group_by_pipeline_aggregates_runs(self, mock_session: AsyncMock) -> None:
+        pipeline_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+        row = MagicMock()
+        row.pipeline_id = pipeline_id
+        row.total_spend_usd = Decimal("42.5")
+        row.total_runs = 3
+
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(all=MagicMock(return_value=[row])),
+                MagicMock(all=MagicMock(return_value=[(pipeline_id, "Ship Pipeline")])),
+            ]
+        )
+
+        rows = await get_cost_export_rows(mock_session, org_id=_ORG_ID, group_by="pipeline", period="month")
+
+        assert len(rows) == 1
+        assert rows[0]["entity_id"] == str(pipeline_id)
+        assert rows[0]["entity_name"] == "Ship Pipeline"
+        assert rows[0]["total_spend_usd"] == 42.5
+        assert rows[0]["total_runs"] == 3
+
+        # The aggregation is runs-table SQL bound to org + period window.
+        sql = str(mock_session.execute.await_args_list[0].args[0])
+        params = mock_session.execute.await_args_list[0].args[1]
+        assert "FROM runs" in sql
+        assert "GROUP BY r.pipeline_id" in sql
+        assert params["org_id"] == _ORG_ID
+
+    async def test_group_by_pipeline_unknown_name(self, mock_session: AsyncMock) -> None:
+        row = MagicMock()
+        row.pipeline_id = _TEAM_ID
+        row.total_spend_usd = Decimal(7)
+        row.total_runs = 1
+
+        empty_rows = MagicMock(all=MagicMock(return_value=[]))
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(all=MagicMock(return_value=[row])),
+                empty_rows,
+            ]
+        )
+
+        rows = await get_cost_export_rows(mock_session, org_id=_ORG_ID, group_by="pipeline", period="month")
+
+        assert rows[0]["entity_name"] == "Unknown"
+
+    async def test_group_by_model_aggregates_self_reported_components(self, mock_session: AsyncMock) -> None:
+        row = MagicMock()
+        row.component = "llm_tokens"
+        row.display_name = "LLM Tokens"
+        row.amount_usd = Decimal("9.99")
+        row.total_runs = 4
+
+        mock_session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[row])))
+
+        rows = await get_cost_export_rows(mock_session, org_id=_ORG_ID, group_by="model", period="month")
+
+        assert len(rows) == 1
+        assert rows[0]["entity_id"] == "llm_tokens"
+        assert rows[0]["entity_name"] == "LLM Tokens"
+        assert rows[0]["total_spend_usd"] == pytest.approx(9.99)
+        assert rows[0]["total_runs"] == 4
+
+        sql = str(mock_session.execute.call_args_list[0].args[0])
+        params = mock_session.execute.call_args_list[0].args[1]
+        assert "jsonb_typeof(elem->'component') = 'string'" in sql
+        assert "self_reported" in sql
+        assert params["org_id"] == _ORG_ID
+        assert "pattern" in params
+
+    async def test_group_by_model_falls_back_to_component_name(self, mock_session: AsyncMock) -> None:
+        row = MagicMock()
+        row.component = "llm_tokens"
+        row.display_name = None
+        row.amount_usd = Decimal(3)
+        row.total_runs = 1
+
+        mock_session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[row])))
+
+        rows = await get_cost_export_rows(mock_session, org_id=_ORG_ID, group_by="model", period="week")
+
+        assert rows[0]["entity_name"] == "llm_tokens"
+
+    @pytest.mark.parametrize("group_by", ["pipeline", "model"])
+    async def test_invalid_period_raises(self, mock_session: AsyncMock, group_by: str) -> None:
+        with pytest.raises(ValueError, match="Unknown period"):
+            await get_cost_export_rows(mock_session, org_id=_ORG_ID, group_by=group_by, period="century")
+
+    async def test_invalid_group_by_raises(self, mock_session: AsyncMock) -> None:
+        with pytest.raises(ValueError, match="Unknown group_by"):
+            await get_cost_export_rows(mock_session, org_id=_ORG_ID, group_by="department", period="month")
 
 
 # ---------------------------------------------------------------------------

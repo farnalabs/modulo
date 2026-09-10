@@ -844,7 +844,7 @@ def test_single_migration_head() -> None:
     assert [_basename(p) for p in chaining_off_0205] == ["0206_deleted_defaults_signal_check.py"]
     chaining_off_0206 = [p for p in revisions if parents[p] == "0206_deleted_defaults_signal_check"]
     assert [_basename(p) for p in chaining_off_0206] == ["0207_collection_install_tracking.py"]
-    # 0208_notification_indexes_and_constraint chains off 0207.
+    # 0208_notification_indexes_and_constraint (PR #337) chains off 0207.
     chaining_off_0207 = [p for p in revisions if parents[p] == "0207_collection_install_tracking"]
     assert [_basename(p) for p in chaining_off_0207] == ["0208_notification_indexes_and_constraint.py"]
     # 0209_variant_batch_state (FAR-775) chains off 0208_notification_indexes_and_constraint,
