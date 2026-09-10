@@ -5,12 +5,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-  # Weekly backstop (FAR-773): the Bundled Runner CI harness runs
-  # unconditionally every Monday 03:23 UTC (off the :00 cron pileup) so
-  # drift in the compose rig / proxy image / runner topology is caught even
-  # when no path-filtered change triggers it.
-  schedule:
-    - cron: "23 3 * * 1"
+  # NOTE (FAR-773): the weekly Bundled Runner backstop cron deliberately does
+  # NOT live here. A schedule trigger fires the ENTIRE fast-validation suite;
+  # the backstop only needs the one harness job, so it now lives in
+  # runner-ci-backstop.yml (weekly cron -> the shared reusable
+  # runner-ci-harness.yml with force=true).
 
 env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
@@ -284,120 +283,14 @@ jobs:
   runner-ci-harness:
     # Bundled Runner CI harness (FAR-773): boots the deploy/compose/
     # runner-ci.yml rig (socket-proxy + dind + workspace network) and runs
-    # the docker-marked harness suite against it. Path-filtered to the
-    # Bundled Runner surface; the weekly schedule trigger runs it
-    # unconditionally as a drift backstop.
+    # the docker-marked harness suite against it. The job body lives in the
+    # reusable runner-ci-harness.yml so the weekly drift backstop
+    # (runner-ci-backstop.yml) runs the exact same steps with
+    # force=true instead of a schedule trigger here re-firing this ENTIRE
+    # fast-validation suite just to reach one job.
     name: Bundled Runner harness (compose + socket-proxy + dind)
-    runs-on: ubicloud-standard-2
-    # Wall-clock budget: ~5 min cold / ~3 min warm measured locally
-    # (deploy/compose/README-runner-ci.md); 15 min = ~1.5x headroom for the
-    # 2-vCPU hosted runner. Revisit after the first CI run.
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
-        with:
-          python-version: "3.12"
-          enable-cache: true
-      - name: Detect Bundled Runner surface changes
-        id: changed
-        shell: bash
-        # Path filter mirroring the runner topology (FAR-773 scope): the
-        # runtime provider + bundled runner + dispatch/exec surface, the
-        # runner overlay(s), and this harness suite. The weekly schedule
-        # run skips this filter and always executes.
-        working-directory: .
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Weekly schedule backstop - running unconditionally."
-            exit 0
-          fi
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            if git rev-parse -q --verify "HEAD^2" >/dev/null 2>&1; then
-              BASE="HEAD^"
-            else
-              BASE="origin/$GITHUB_BASE_REF"
-            fi
-          else
-            BASE="HEAD^"
-          fi
-          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/integration/test_bundled_runner_harness.py"
-          CHANGED="$(git diff --name-only "$BASE" HEAD -- $PATHS || true)"
-          if [ -n "$CHANGED" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Bundled Runner surface changed:"
-            echo "$CHANGED"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No Bundled Runner surface changes - skipping harness."
-          fi
-      - name: Boot the runner-ci compose rig
-        if: steps.changed.outputs.changed == 'true'
-        shell: bash
-        working-directory: .
-        run: |
-          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci up -d
-          PROXY_PORT="$(docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port docker-socket-proxy 2375 | awk -F: '{print $NF}')"
-          DIND_PORT="$(docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port dind 2375 | awk -F: '{print $NF}')"
-          echo "PROXY_PORT=${PROXY_PORT}" >> "$GITHUB_ENV"
-          echo "DIND_PORT=${DIND_PORT}" >> "$GITHUB_ENV"
-          for i in $(seq 1 40); do
-            if curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:${PROXY_PORT}/_ping"; then
-              echo "socket-proxy ready on 127.0.0.1:${PROXY_PORT}"
-              break
-            fi
-            if [ "$i" = "40" ]; then
-              echo "::error::socket-proxy did not become ready"
-              docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs docker-socket-proxy || true
-              exit 1
-            fi
-            sleep 2
-          done
-          for i in $(seq 1 60); do
-            if curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:${DIND_PORT}/_ping"; then
-              echo "dind engine ready on 127.0.0.1:${DIND_PORT}"
-              break
-            fi
-            if [ "$i" = "60" ]; then
-              echo "::error::dind engine did not become ready"
-              docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs dind || true
-              exit 1
-            fi
-            sleep 2
-          done
-      - name: Sync backend deps
-        if: steps.changed.outputs.changed == 'true'
-        run: uv sync --frozen
-      - name: Run the docker-marked harness suite
-        if: steps.changed.outputs.changed == 'true'
-        shell: bash
-        env:
-          MODULO_RUNNER_HARNESS_PROXY_HOST: "127.0.0.1:${{ env.PROXY_PORT }}"
-          MODULO_RUNNER_HARNESS_DIND_HOST: "tcp://127.0.0.1:${{ env.DIND_PORT }}"
-          MODULO_RUNNER_HARNESS_NETWORK: "runner-ci-workspace"
-        run: |
-          uv run --no-build --no-sync pytest tests/integration/test_bundled_runner_harness.py -m docker --tb=short -q --timeout=600 -p no:warnings
-      - name: Proxy log completeness dump (always)
-        if: always() && steps.changed.outputs.changed == 'true'
-        shell: bash
-        working-directory: .
-        # Keep the proxy's per-request log in the job output: a failed
-        # completeness assertion names its 403/PR-- lines, and this dump
-        # preserves the full request trail for triage.
-        run: |
-          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs docker-socket-proxy || true
-      - name: Tear down the compose rig
-        if: always() && steps.changed.outputs.changed == 'true'
-        shell: bash
-        working-directory: .
-        run: |
-          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci down -v --remove-orphans
+    uses: ./.github/workflows/runner-ci-harness.yml
+    secrets: inherit
 
   frontend:
     name: Frontend and WCAG

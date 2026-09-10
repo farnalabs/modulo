@@ -72,7 +72,7 @@ fails on ANY request the allowlist rejects.
 | `IMAGES=1` | `^/images/*` — inspect/list/create (pull) | Provision pulls; also serves the deprecated shell connector's `python:3.12-slim` default — its surface is inside the completeness assertion so enabling the overlay cannot silently re-home the connector |
 | `PING=1` / `VERSION=1` / `INFO=1` | `^/_ping`, `^/version`, `^/info` | Health + engine-shape probes |
 | `POST=1` | all non-GET methods, globally | Create/start/exec/destroy need it. NOTE: DELETE also passes when `POST=1` (the method gate is "GET or POST-flag", not per-method) — container destroy needs it; every other DELETE is residual-only because the volumes/networks/swarm categories stay closed |
-| `ALLOW_ARCHIVE=0` etc. | linuxserver deny-refinements | archive/export/logs/top/change denied even with `CONTAINERS=1` |
+| `ALLOW_ARCHIVE=0` etc. | linuxserver deny-refinements | archive/export/logs/top/change denied even with `CONTAINERS=1` — the denial (403 + the `PR--` proxy-reject flag in the proxy log) is asserted by the docker-marked harness matrix probes on a real running container, so widening `ALLOW_LOGS` (etc.) in production FAILS CI |
 
 No `networks/*` endpoints are needed: the workspace network is
 compose-defined and containers attach to it at create-time via
@@ -122,7 +122,11 @@ opens an issue; off-cycle rebuild for critical CVEs). The digest-drift guard
 (the release job asserts the seed/docs digest constant matches the latest
 `released-<minor>` tag) is a GA/CI item; until it exists, digest advances are
 manual and the pinned digests in `deploy/compose/runner.yml` +
-`modulo/db/bundled_runner_template.py` are the source of truth.
+`modulo/db/bundled_runner_template.py` are the source of truth. The CI
+rig's proxy pin in `deploy/compose/runner-ci.yml` is ALIGNED to production's
+digest — digest bumps must move the two compose files together, asserted by
+the harness composition guard
+(`test_overlay_matches_prod_proxy_config`).
 
 ## Registration env matrix
 
