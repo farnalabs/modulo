@@ -147,7 +147,12 @@ async def test_every_uuid_pk_has_gen_random_uuid_default(fresh_migration_db) -> 
     finally:
         await engine.dispose()
 
-    missing = sorted(f"{t}.{c}" for t, c in _uuid_pk_pairs() if rows.get((t, c)) != "gen_random_uuid()")
+    # Only check uuid-PK columns for tables the migration chain up to _HEAD
+    # actually created. ORM metadata also lists tables added by LATER migrations
+    # (e.g. runner_probe_cache in 0204), which this test does not build — those
+    # are out of scope here and verified by their own migrations.
+    present = {(t, c) for (t, c) in _uuid_pk_pairs() if (t, c) in rows}
+    missing = sorted(f"{t}.{c}" for t, c in present if rows.get((t, c)) != "gen_random_uuid()")
     assert not missing, f"uuid PKs without gen_random_uuid() default: {missing}"
 
     # Selectivity: the default must NOT blanket-apply to non-uuid PKs or to the
@@ -193,8 +198,7 @@ async def test_downgrade_drops_defaults_and_reupgrade_restores(fresh_migration_d
     engine = create_async_engine(db_url, poolclass=NullPool)
     config = _alembic_config(db_url)
 
-    async def _count_defaults() -> int:
-        pairs = _uuid_pk_pairs()
+    async def _snapshot() -> dict[tuple[str, str], str]:
         async with engine.connect() as conn:
             result = await conn.execute(
                 text(
@@ -202,8 +206,15 @@ async def test_downgrade_drops_defaults_and_reupgrade_restores(fresh_migration_d
                     "WHERE table_schema = 'public'"
                 )
             )
-            rows = {(r[0], r[1]): r[2] for r in result.fetchall()}
-        return sum(1 for t, c in pairs if rows.get((t, c)) == "gen_random_uuid()")
+            return {(r[0], r[1]): r[2] for r in result.fetchall()}
+
+    pairs = _uuid_pk_pairs()
+
+    def _count_defaults(rows: dict[tuple[str, str], str]) -> int:
+        # Only count uuid-PK columns for tables the chain up to _HEAD created;
+        # tables added by later migrations are out of scope (see test above).
+        present = {p for p in pairs if p in rows}
+        return sum(1 for t, c in present if rows.get((t, c)) == "gen_random_uuid()")
 
     try:
         # Programmatic command.downgrade() leaves cmd_opts unset, and env.py's
@@ -215,9 +226,12 @@ async def test_downgrade_drops_defaults_and_reupgrade_restores(fresh_migration_d
         command.downgrade(config, _PRE_HEAD)
         del config.cmd_opts  # type: ignore[attr-defined]
 
-        assert await _count_defaults() == 0, "downgrade must drop every uuid-PK default"
+        rows = await _snapshot()
+        assert _count_defaults(rows) == 0, "downgrade must drop every uuid-PK default"
 
         command.upgrade(config, _HEAD)
-        assert await _count_defaults() == len(_uuid_pk_pairs()), "re-upgrade must restore every default"
+        rows = await _snapshot()
+        present = {p for p in pairs if p in rows}
+        assert _count_defaults(rows) == len(present), "re-upgrade must restore every default"
     finally:
         await engine.dispose()

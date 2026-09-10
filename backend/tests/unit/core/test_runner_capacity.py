@@ -551,16 +551,19 @@ def caplog_at_level_warning() -> Any:
         def emit(self, record: logging.LogRecord) -> None:
             messages.append(record.getMessage())
 
+    _logger = logging.getLogger("modulo.core.runner_capacity")
+    _prev_level = _logger.level
     handler = _Handler(level=logging.WARNING)
-    logging.getLogger("modulo.core.runner_capacity").addHandler(handler)
-    logging.getLogger("modulo.core.runner_capacity").setLevel(logging.WARNING)
+    _logger.addHandler(handler)
+    _logger.setLevel(logging.WARNING)
 
     class _CM:
         def __enter__(self) -> _CaplogCtx:
             return _CaplogCtx(messages)
 
         def __exit__(self, *_a: object) -> None:
-            logging.getLogger("modulo.core.runner_capacity").removeHandler(handler)
+            _logger.removeHandler(handler)
+            _logger.setLevel(_prev_level)
 
     return _CM()
 
@@ -572,16 +575,19 @@ def caplog_at_level_error() -> Any:
         def emit(self, record: logging.LogRecord) -> None:
             messages.append(record.getMessage())
 
+    _logger = logging.getLogger("modulo.core.runner_capacity")
+    _prev_level = _logger.level
     handler = _Handler(level=logging.ERROR)
-    logging.getLogger("modulo.core.runner_capacity").addHandler(handler)
-    logging.getLogger("modulo.core.runner_capacity").setLevel(logging.ERROR)
+    _logger.addHandler(handler)
+    _logger.setLevel(logging.ERROR)
 
     class _CM:
         def __enter__(self) -> _CaplogCtx:
             return _CaplogCtx(messages)
 
         def __exit__(self, *_a: object) -> None:
-            logging.getLogger("modulo.core.runner_capacity").removeHandler(handler)
+            _logger.removeHandler(handler)
+            _logger.setLevel(_prev_level)
 
     return _CM()
 
@@ -1183,7 +1189,7 @@ async def test_sweep_acquires_marker_lock_on_dedicated_connection(
     assert stale_awaiting.id in parent_factory.cleared
 
 
-async def test_sweep_fails_open_when_dedup_lock_unavailable(
+async def test_sweep_proceeds_when_advisory_lock_not_acquired(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A dedup lock that can never be acquired (``pg_try_advisory_lock`` returns
@@ -1205,18 +1211,18 @@ async def test_sweep_fails_open_when_dedup_lock_unavailable(
     monkeypatch.setattr(rc, "get_settings", lambda: _S())
     monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
     monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+    # Simulate the dedup lock NOT being acquired — exercise the fail-open proceed path.
+    monkeypatch.setattr(rc, "_acquire_sweep_dedup_lock", AsyncMock(return_value=(False, None)))
 
-    lock_engine = _FakeLockEngine(try_lock_returns=False)
     stale_marker = json.dumps(
         {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
     )
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
-    factory = _FakeSweepFactory([stale_awaiting])
-    factory.kw["bind"] = lock_engine  # type: ignore[attr-defined]
 
-    # Patch the poll interval to near-zero so the bounded poll budget returns fast.
-    monkeypatch.setattr(rc, "_SWEEP_LOCK_POLL_ATTEMPTS", 3)
-    monkeypatch.setattr(rc, "_SWEEP_LOCK_POLL_INTERVAL", 0.0)
+    factory = _FakeSweepFactory([stale_awaiting])
+
+    with caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"):
+        result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
 
     caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
     result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
