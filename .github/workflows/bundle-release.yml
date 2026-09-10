@@ -1,8 +1,8 @@
 name: "Bundle: single-install artifact (bundle-v*)"
 
-# FAR-670 — P1a bundle pipeline for the single-install native distribution
+# FAR-670 â€” P1a bundle pipeline for the single-install native distribution
 # (ADR 031). Tag `bundle-v*` and this workflow builds the linux-amd64
-# tar.gz artifact, attaches it (plus its SHA256SUMS — the P1a checksums page)
+# tar.gz artifact, attaches it (plus its SHA256SUMS â€” the P1a checksums page)
 # to the GitHub release, and asserts the pinned bundled-service majors still
 # match docker-compose.yml (the CI mirror of the shared version constants in
 # scripts/bundle-versions.env).
@@ -44,7 +44,7 @@ jobs:
     # Shared-constants rule (ADR 031, Decision 3/11): the bundle's pinned
     # majors must match the docker-compose.yml image tags. This is the CI
     # assertion over scripts/bundle-versions.env; a later ticket also asserts
-    # it from the compose side. Fail loudly on drift — never warn.
+    # it from the compose side. Fail loudly on drift â€” never warn.
     name: Assert bundle versions match docker-compose
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -149,7 +149,7 @@ jobs:
             want="${spec#*:}"
             got="$(dpkg-deb -f "downloads/${deb}" Version)"
             if [ "$got" != "$want" ]; then
-              echo "::error::${deb} Version field is '${got}' but the pin is '${want}' — refusing to ship a mismatched package"
+              echo "::error::${deb} Version field is '${got}' but the pin is '${want}' â€” refusing to ship a mismatched package"
               exit 1
             fi
           done
@@ -161,7 +161,7 @@ jobs:
           BUNDLE="build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/runtime" "$BUNDLE/pg" "$BUNDLE/redis"
 
-          # CPython runtime (glibc build — x86_64/aarch64-unknown-linux-gnu).
+          # CPython runtime (glibc build â€” x86_64/aarch64-unknown-linux-gnu).
           # Strip the top-level `python/` dir so runtime/ IS the interpreter
           # tree: runtime/bin/python3.12, runtime/lib/...
           tar -xzf "downloads/${PBS_TARBALL}" -C "$BUNDLE/runtime" --strip-components=1
@@ -182,13 +182,13 @@ jobs:
           cp -a debx/redis-server/usr/bin/redis-server "$BUNDLE/redis/"
           cp -a debx/redis-tools/usr/bin/. "$BUNDLE/redis/"
 
-          # Launcher placeholder — the real launcher binary is FAR-671.
+          # Launcher placeholder â€” the real launcher binary is FAR-671.
           # TODO(FAR-671): replace with the actual launcher (process
           # supervision, env scrub, boot contract per ADR 031 Decisions 1-2),
           # plus PG share-dir relocation and venv rewiring to runtime/.
           {
             echo '#!/bin/sh'
-            echo '# PLACEHOLDER — the Modulo launcher is implemented in FAR-671.'
+            echo '# PLACEHOLDER â€” the Modulo launcher is implemented in FAR-671.'
             echo '# The bundle layout is complete; the launcher wires it together.'
             echo 'echo "Modulo bundle layout is present, but the launcher is not implemented yet (tracked as FAR-671)." >&2'
             echo 'exit 1'
@@ -252,17 +252,82 @@ jobs:
           cat SHA256SUMS
           ls -lh "${TARBALL_NAME}"
 
-      - name: Attach tar.gz + SHA256SUMS to the bundle release
+      # FAR-675 (ADR 031 Decision 3, P1b): build -> SIGN the release manifest ->
+      # publish (the chain of custody). The manifest covers every shipped
+      # artifact (the tarball + the major bundled binaries' sha256+version) and
+      # is signed with the ed25519 private key in the CI secret
+      # BUNDLE_MANIFEST_SIGNING_KEY (hex). PROVISIONING (needs-human): adding
+      # that secret + pasting the matching public half into
+      # backend/src/modulo/launcher/manifest.py's _TRUST_ROWS and
+      # scripts/install.sh's embedded DER keys is Duncan's ONE-TIME task. The
+      # rotation procedure is documented in the manifest module + the ADR.
+      - name: Generate and sign the SIGNED release manifest
+        env:
+          MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MANIFEST_SIGNING_KEY}" ]; then
+            echo "::error::BUNDLE_MANIFEST_SIGNING_KEY is NOT set in this repo's Actions secrets - refusing to publish an UNSIGNED release manifest."
+            echo "::error::Provisioning is the ONE-TIME owner task (Duncan): generate an ed25519 keypair; add the private key's hex as the repo secret BUNDLE_MANIFEST_SIGNING_KEY; paste the public half into backend/src/modulo/launcher/manifest.py (_TRUST_ROWS) and scripts/install.sh (TRUST_KEY_CURRENT_B64). Rotation per ADR 031 Decision 3."
+            exit 1
+          fi
+          cd backend
+          uv run --no-sync python - <<'PYEOF'
+          import hashlib, json, os, sys
+
+          sys.path.insert(0, "src")
+          from modulo.launcher import manifest as manifest_module
+
+          version = os.environ["VERSION_NUM"]
+          arch = os.environ["ARCH"]
+          tarball_name = os.environ["TARBALL_NAME"]
+          bundle_dirname = os.environ["BUNDLE_ROOT"]
+          build_root = os.path.join("..", "build")
+          pg_version = os.environ.get("PG_DEB_VERSION", "unknown").split("+")[0]
+          redis_version = os.environ.get("REDIS_DEB_VERSION", "unknown").split("+")[0]
+
+          def digest_for(path):
+              with open(path, "rb") as handle:
+                  return hashlib.sha256(handle.read()).hexdigest()
+
+          artifacts = [{"name": tarball_name, "sha256": digest_for(os.path.join(build_root, tarball_name)), "version": version}]
+          for shipped, component in (("pg/bin/postgres", pg_version), ("pg/bin/pg_dump", pg_version), ("redis/redis-server", redis_version)):
+              shipped_path = os.path.join(build_root, bundle_dirname, shipped)
+              if os.path.isfile(shipped_path):
+                  artifacts.append({"name": shipped, "sha256": digest_for(shipped_path), "version": component})
+          manifest = manifest_module.build_release_manifest(
+              release=f"bundle-v{version}",
+              platform=f"linux-{arch}",
+              generated_at=os.environ.get("GITHUB_SHA", ""),
+              components={"postgres": pg_version, "redis": redis_version, "python": "3.12"},
+              artifacts=artifacts,
+          )
+          payload = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
+          signature = manifest_module.sign_release_bytes(
+              payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=os.environ["MANIFEST_SIGNING_KEY"]
+          )
+          with open(os.path.join(build_root, "RELEASE_MANIFEST.json"), "wb") as handle:
+              handle.write(payload)
+          with open(os.path.join(build_root, "RELEASE_MANIFEST.json.sig"), "w", encoding="utf-8") as handle:
+              handle.write(json.dumps(signature))
+          PYEOF
+
+      - name: Attach tarball + SHA256SUMS + the SIGNED manifest to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "release ${TAG} already exists — uploading artifacts with --clobber"
+            echo "release ${TAG} already exists - uploading artifacts with --clobber"
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "Modulo bundle ${TAG}" \
-              --notes "Single-install bundle artifact (P1a). Verify with SHA256SUMS before install — see scripts/install.sh. P1a ships checksums only; signed manifests land in P1b (FAR-675)."
+              --notes "Single-install bundle artifact. Verify with the SIGNED release manifest (RELEASE_MANIFEST.json + .sig) before install - scripts/install.sh enforces the signature + sha256 gate (FAR-675, ADR 031 Decision 3)."
           fi
-          gh release upload "$TAG" "build/${TARBALL_NAME}" "build/SHA256SUMS" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" \
+            "build/${TARBALL_NAME}" \
+            "build/SHA256SUMS" \
+            "build/RELEASE_MANIFEST.json" \
+            "build/RELEASE_MANIFEST.json.sig" \
+            --repo "$GITHUB_REPOSITORY" --clobber

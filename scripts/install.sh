@@ -328,22 +328,98 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
-# --- download and verify the tarball BEFORE extraction ----------------------
+# --- signed release manifest (FAR-675, ADR 031 Decision 3 P1b) ---------------
+#
+# The release ships an ed25519 SIGNED manifest (RELEASE_MANIFEST.json + .sig);
+# its artifacts carry every shipped file's sha256 + version. Locked order:
+#   1. verify the ed25519 signature over the manifest's EXACT bytes against
+#      the embedded current+next trust store (below);
+#   2. verify the tarball's sha256 against the manifest BEFORE extraction
+#      (replacing the P1a checksums-page flow as the primary gate).
+# --from-file (offline/corporate): the operator supplies manifest + .sig
+# beside the tarball; the SAME trust store verifies (no operator-added keys).
+
+# The embedded ed25519 trust store (SPKI DER, base64) - current + next.
+# These are the DEV/TEST keys; production keys are provisioned by the repo
+# owner (Duncan) as CI secrets and pasted into the MATCHING Python trust
+# store (backend/src/modulo/launcher/manifest.py). Rotation per ADR 031.
+TRUST_KEY_CURRENT_B64="MCowBQYDK2VwAyEA8sRwKVj7ZJ5hGU7EzJJ9z+CA2TI3ZmrMxMWEQr4B+XQ="
+TRUST_KEY_NEXT_B64="MCowBQYDK2VwAyEAF99rybwTwBB4ksqRJ3LDkvkJ1tbrY8lDHOftxDHObtF94XS4="
+
+hex_to_bin() {
+  # hex_to_bin <hex> -> binary on stdout (the ed25519 signature input).
+  local hex="$1" out="" pair
+  while [ ${#hex} -ge 2 ]; do
+    pair="${hex%${hex#??}}"
+    hex="${hex#??}"
+    out="${out}\x${pair}"
+  done
+  printf '%b' "${out}"
+}
+
+b64_to_der() {
+  # b64_to_der <b64> <output>: decode the trust-store SPKI DER key file.
+  [ -n "$1" ] || die "b64_to_der: empty key body"
+  printf '%s' "$1" | base64 -d > "$2" 2>/dev/null || die "base64 decode of the trust-store key failed (coreutils base64 required)"
+}
+
+verify_shipped_manifest() {
+  # verify_shipped_manifest <manifest-path> <signature-path> <tarball-path>
+  local manifest_file="$1" signature_file="$2" tarball_file="$3" key_file sig_file sig_hex
+  command -v openssl >/dev/null 2>&1 || die "openssl is required to verify the SIGNED release manifest (e.g. 'apt install openssl')"
+  command -v base64 >/dev/null 2>&1 || die "coreutils base64 is required to decode the trust-store keys"
+  [ -f "${manifest_file}" ] || die "the signed release manifest is missing: ${manifest_file}"
+  [ -f "${signature_file}" ] || die "the signature file is missing: ${signature_file}"
+  key_file="$(mktemp)"
+  sig_file="$(mktemp)"
+  b64_to_der "${TRUST_KEY_CURRENT_B64}" "${key_file}"
+  sig_hex="$(sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]\{128\}\)".*/\1/p' "${signature_file}" | head -n 1)"
+  [ -n "${sig_hex}" ] || die "the signature file's 'signature' field is malformed (expected 128 hex chars)"
+  hex_to_bin "${sig_hex}" > "${sig_file}"
+  if openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" >/dev/null 2>&1; then
+    info "release-manifest signature verified (embedded current trust store)"
+  else
+    die "release-manifest signature FAILED to verify - do not use this download; report it at https://github.com/farnalabs/modulo/issues"
+  fi
+  rm -f "${key_file}" "${sig_file}"
+  expected="$(python3 - "$manifest_file" "$tarball_name" <<'PYEOF'
+import json, sys
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+listing = sys.argv[2]
+for artifact in body.get("artifacts", []):
+    if artifact.get("name") == listing:
+        print(artifact["sha256"])
+        break
+else:
+    sys.exit(1)
+PYEOF
+)" || die "cannot read the signed manifest (python3 is required at install time)"
+  [ -n "${expected}" ] || die "${tarball_name} is not covered by the SIGNED release manifest - refusing to install an unlisted artifact"
+  actual="$(sha256_of "${tarball_file}")"
+  [ "${actual}" = "${expected}" ] || die "sha256 mismatch for ${tarball_name} (signed manifest): expected ${expected}, got ${actual}"
+  info "sha256 verified against the SIGNED manifest: ${actual}"
+}
+
 
 if [ -n "${FROM_FILE}" ]; then
   info "Offline install from ${FROM_FILE}"
-  info "Note: the release-page checksum cannot be checked for offline installs; the bundle's internal SHA256SUMS is still verified after extraction. Signed manifests (minisign) land in P1b — see ADR 031."
+  manifest_file="${FROM_FILE%/*}/RELEASE_MANIFEST.json"
+  signature_file="${manifest_file}.sig"
+  if [ -f "${manifest_file}" ] && [ -f "${signature_file}" ]; then
+    verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}"
+  else
+    info "Note: no locally provided manifest beside the tarball (${manifest_file} + .sig); the bundle's internal SHA256SUMS is still verified after extraction. Per ADR 031 the SIGNED manifest is the offline escape hatch - place it beside the tarball for the full gate."
+  fi
   cp -- "${FROM_FILE}" "${tmp}/${tarball_name}"
 else
   info "Installing Modulo bundle ${RELEASE_TAG} (linux-${ARCH})"
-  fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/SHA256SUMS" "${tmp}/SHA256SUMS"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/${tarball_name}" "${tmp}/${tarball_name}"
-
-  expected="$(awk -v f="${tarball_name}" '$2 == f {print $1}' "${tmp}/SHA256SUMS")"
-  [ -n "${expected}" ] || die "${tarball_name} is not listed in the release SHA256SUMS — refusing to install an unlisted artifact"
-  actual="$(sha256_of "${tmp}/${tarball_name}")"
-  [ "${actual}" = "${expected}" ] || die "sha256 mismatch for ${tarball_name}: expected ${expected}, got ${actual}. Do not use this download — report it at https://github.com/${REPO}/issues"
-  info "sha256 verified: ${actual}"
+  fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json" "${tmp}/RELEASE_MANIFEST.json"
+  fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json.sig" "${tmp}/RELEASE_MANIFEST.json.sig"
+  # The SIGNED manifest is the primary gate: signature verify FIRST, then the
+  # tarball's sha256 against the manifest's entry - BEFORE extraction.
+  verify_shipped_manifest "${tmp}/RELEASE_MANIFEST.json" "${tmp}/RELEASE_MANIFEST.json.sig" "${tmp}/${tarball_name}"
+  info "sha256 verified against the SIGNED manifest: $(sha256_of "${tmp}/${tarball_name}")"
 fi
 
 # --- extract and verify the bundle's internal checksums ---------------------
