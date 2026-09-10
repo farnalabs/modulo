@@ -24,10 +24,17 @@ documented.
 A workspace container is created attached to the dedicated
 `modulo-runner-workspace` bridge ONLY. It never joins the compose/backend
 network, and the Docker endpoint (socket proxy) exists only on the backend
-network — a workspace resolves no `docker-socket-proxy` DNS name and bridge
-isolation rules block cross-network IP reachability (asserted by the
-docker-marked suite and verified in the phase-0 spike: name-blocked AND
-IP-blocked).
+network — a workspace resolves no `docker-socket-proxy` DNS name
+(engine-guaranteed, hard-asserted). Cross-network IP reachability
+additionally relies on the ENGINE's bridge isolation rules: verified in the
+phase-0 spike (name-blocked AND IP-blocked), and re-asserted by the
+docker-marked harness suite — but the IP leg is engine-dependent. The
+harness runs a control experiment first and skips it with an explicit
+notice when an engine demonstrably permits cross-bridge traffic (observed
+2026-09-10 on Docker Desktop engine 29.7.2, which no longer installs the
+DOCKER-ISOLATION ruleset). Operators on engines without bridge isolation
+must firewall the proxy endpoint (or the workspace subnet) at the host for
+the containment claim to hold.
 
 **Egress default: permitted.** The tier's purpose is an agent with network
 access (git, package registries, model APIs). A per-profile opt-in sets
