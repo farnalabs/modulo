@@ -1995,9 +1995,7 @@ async def write_run_outputs_from_run(
       caller-captured PRE-WRITE legacy dicts (qa M19) so inherited
       ``__``-prefixed keys are filtered from the store write instead of
       raising (kept on the legacy column — which only pre-B1 data carries
-      until B2a's sweep heals it into the new table); the number of filtered
-      keys is wired into the dedicated
-      ``outputs_dual_write_sentinel_filtered`` counter.
+      until B2b's repair migrates it).
     * On store failure: ONE bounded in-session retry for the retryable
       SQLSTATEs (statement timeout only — see
       ``_DUAL_WRITE_RETRYABLE_SQLSTATES``); a transaction-aborting or hard
@@ -2013,19 +2011,17 @@ async def write_run_outputs_from_run(
       wrapped as ``DualWriteError(..., origin='rls_precheck')`` (carrying both
       orgs in the message) so every chokepoint failure shape flows through the
       SAME catch/rollback/orchestrate contract — an un-orchestrated
-      ``OutputsRlsMismatch`` escape (no terminalize, no event, no counter)
-      would violate the guard obligation below. The raw
+      ``OutputsRlsMismatch`` escape (no terminalize, no event) would violate
+      the guard obligation below. The raw
       :class:`OutputsRlsMismatch` is chained as ``__cause__`` for diagnostics.
-    * The kill-switch check is REMOVED (it dies with the legacy writes at
-      B2a) — per the B1 design there is no emergency OFF for this write: the
-      fallback readers still serve pre-B1 legacy rows so a genuinely broken
-      store write surfaces through the loud abort, and the sweep heals
-      self-healable stragglers within one tick.
+    * The kill-switch is GONE (removed with its machinery at B2a): per the B1
+      design there is no emergency OFF for this write — the fallback readers
+      still serve pre-B1 legacy rows so a genuinely broken store write
+      surfaces through the loud abort, and B2b's repair migrates
+      self-healable stragglers.
     """
     if outputs is None and telemetry is None:
         return
-
-    from modulo.core.run_outputs_dualwrite import bump_dual_write_counter, note_dual_write_retry
 
     session_org = await read_rls_org(session)
     # qa iteration 1 (Major 1): the org-context precheck failures are wrapped
@@ -2065,7 +2061,7 @@ async def write_run_outputs_from_run(
         savepoint = session.begin_nested()
         try:
             async with savepoint:
-                replace_result = await replace_run_node_outputs(
+                await replace_run_node_outputs(
                     session,
                     run_id=run_id,
                     organisation_id=organisation_id,
@@ -2074,16 +2070,12 @@ async def write_run_outputs_from_run(
                     inherited_outputs=inherited_outputs,
                     inherited_telemetry=inherited_telemetry,
                 )
-            filtered = int(replace_result.get("outputs_dual_write_sentinel_filtered", 0))
-            if filtered:
-                await bump_dual_write_counter("outputs_dual_write_sentinel_filtered", filtered)
             return
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             state = _sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
             if attempt == 1 and state in _DUAL_WRITE_RETRYABLE_SQLSTATES:
-                await note_dual_write_retry(run_id, state)
                 continue
             raise DualWriteError(
                 f"run_node_outputs store write failed (origin={origin}, sqlstate={state}): {exc}",
@@ -2143,7 +2135,7 @@ async def update_run_status(
     ``executor`` claim/capacity/ceiling writes, ``api.routes.hitl.claim_gate``,
     ``finalize._write_empty_terminal``) cannot raise DualWriteError and need
     no guard. A new blobs-passing call site added without the guard aborts
-    un-orchestrated (no terminalize, no event, no counter) — the
+    un-orchestrated (no terminalize, no event) — the
     ``test_run_outputs_gate`` architecture pin fails it.
     """
     if status not in RUN_STATUS_WHITELIST:
@@ -2187,7 +2179,7 @@ async def update_run_status(
     # FAR-583 qa-M19: capture the PRE-WRITE legacy blob dicts BEFORE the
     # assignments below — the primary store write filters inherited
     # ``__``-prefixed keys against exactly these (kept on the legacy column,
-    # which only pre-B1 data still carries until B2a's sweep heals it) so a
+    # which only pre-B1 data still carries until B2b's repair) so a
     # legacy-carried sentinel id can never wedge the run's terminalization.
     # B1: the capture reads the legacy columns via the raw parameterised SQL
     # reader (the ORM mapping is cut) — one extra SELECT, only when the

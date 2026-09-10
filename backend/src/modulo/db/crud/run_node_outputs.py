@@ -19,16 +19,12 @@ module. It provides:
   server-side ``ORDER BY length(key), key COLLATE "C"`` is PG-only, so the
   ordering happens in Python — dialect-neutral);
 * EMPTY/MISMATCH read-fallback helpers: a raw parameterised SELECT of the
-  legacy ``runs`` columns, served per the DIRECTION-AWARE subset rule
-  (see :func:`read_run_blobs_with_fallback`); removed at B2b together with
-  the columns. B1 (design-doc addendum) cut the legacy columns' ORM mapping
-  first — every legacy-column access here (and the fenced markers reader's
-  joined legacy leg, and the marker dual-write's legacy leg) runs through
-  the raw Core table :data:`RUNS_LEGACY_TABLE`.
-
-The catch-up SWEEP body (``backfill_run_node_outputs_batch`` and its
-selection predicates / quarantine + census helpers) lives in the sibling
-:mod:`modulo.db.crud.run_node_outputs_backfill` module (B1 SRP split).
+   legacy ``runs`` columns, served per the DIRECTION-AWARE subset rule
+   (see :func:`read_run_blobs_with_fallback`); removed at B2b together with
+   the columns. B1 (design-doc addendum) cut the legacy columns' ORM mapping
+   first — every legacy-column access here (and the fenced markers reader's
+   joined legacy leg, and the marker dual-write's legacy leg) runs through
+   the raw Core table :data:`RUNS_LEGACY_TABLE`.
 
 Representation invariants (the lossless mapping):
 
@@ -105,10 +101,9 @@ __all__ = [
     "DualWriteError",
     "OutputsSentinelViolation",
     "RunBlobs",
-    # The sanctioned internal seam between this storage module and its sibling
-    # sweep module (run_node_outputs_backfill): dialect/organisation/upsert
-    # primitives the sweep reuses. Not underscore-private — they are the
-    # de-facto internal API across the two sibling modules.
+    # Dialect/organisation write primitives shared by the module's own write
+    # paths (upserts + the legacy-table writers). Normal public names of the
+    # storage module.
     "assert_write_org",
     "dialect_insert",
     "parse_marker_node_id",
@@ -295,11 +290,10 @@ def dialect_insert(dialect: str) -> Any:
 
 # The quarantine side table (migration 0192) as a CORE-ONLY Table —
 # deliberately NOT an ORM model (ops/remediation surface: written by the
-# migration + this sweep body, read by ops SQL only). Column set matches
-# migration 0192's DDL exactly (JSONB on Postgres via the variant, generic
-# JSON elsewhere).
-# NOTE: remove this Core table (and the sweep's quarantine legs + the
-# retention purge's delete) when the quarantine table itself drops (B2b+).
+# migration, read by ops SQL only). Column set matches migration 0192's DDL
+# exactly (JSONB on Postgres via the variant, generic JSON elsewhere).
+# NOTE: remove this Core table (and the retention purge's delete) when the
+# quarantine table itself drops (B2b+).
 _QUARANTINE_METADATA = MetaData()
 QUARANTINE_TABLE = Table(
     "run_node_outputs_quarantine",
@@ -317,8 +311,8 @@ QUARANTINE_TABLE = Table(
 # ORM mapping of ``outputs_json`` / ``node_telemetry_json`` /
 # ``raw_output_markers`` was CUT from :class:`modulo.db.models.run.Run` in B1,
 # but the columns EXIST IN THE DATABASE until migration 0194 (B2b), so the
-# EMPTY/MISMATCH fallback readers, the fenced markers read, the catch-up
-# sweep's selection, and the marker dual-write's legacy read-merge-write leg
+# EMPTY/MISMATCH fallback readers, the fenced markers read, and the marker
+# dual-write's legacy read-merge-write leg
 # select/patch them through this table. Statement-shaped parameterised SQL
 # with the same ``Uuid``/``JSON``-variant types the ORM mapping carried —
 # SQLAlchemy's type-aware binding keeps every dialect's UUID/JSON
@@ -797,8 +791,8 @@ async def read_run_node_outputs_raw(
 ) -> RunBlobs:
     """Reassemble the legacy dict shapes from the new table — NO fallback.
 
-    Used by callers that must see exactly what the new table holds (sweep
-    parity checks). Raises :class:`OutputsRlsMismatch` when the session org
+    Used by callers that must see exactly what the new table holds (parity
+    checks). Raises :class:`OutputsRlsMismatch` when the session org
     disagrees with the rows' org; a session with no org context skips the
     check (the callers' RLS scope governs).
     """
@@ -932,7 +926,6 @@ def _direction_aware_side(
     *,
     side: str,
     run_id: uuid.UUID,
-    legacy_tiebreak_on_equal_mismatch: bool = False,
     meta_row_exists: bool | None = None,
 ) -> dict[str, Any] | None:
     """DIRECTION-AWARE legacy fallback decision for one blob side (qa M2/M3).
@@ -940,28 +933,17 @@ def _direction_aware_side(
     Compares the LEGACY key set with the REASSEMBLED key set:
 
     * legacy ⊆ new (incl. equal, incl. legacy empty) → serve NEW — the legacy
-      column is a stale subset (kill-switch-OFF write to an already-
-      represented run is NOT shadowed; legacy is only ever behind) — WITH the
-      qa-iteration-2 tiebreak exceptions below;
+      column is a stale subset (legacy is only ever behind, since the legacy
+      writes stopped at B1), so an already-represented run is NOT shadowed;
     * new ⊂ legacy (proper) → serve LEGACY — the truncation guard: the new
-      table is missing rows the legacy column has (partial sweep / partial
-      write), legacy is the more complete store;
+      table is missing rows the legacy column has (pre-B1 straggler rows),
+      legacy is the more complete store;
     * divergent (neither subset) → serve NEW + a warning log (neither store
       is a superset; the new table is the forward-looking authority and the
       divergence is reported for remediation);
     * legacy empty + new non-empty → serve NEW (the existing truncation-hole
       guard: an empty legacy column carries no truth to fall back to) —
       EXCEPT the shrink case below.
-
-    Tiebreak (qa iteration 2, Major 1 — *legacy_tiebreak_on_equal_mismatch*):
-    EQUAL key sets with DIVERGENT values while the kill-switch is OFF can only
-    come from a legacy-only value rewrite (e.g. ``delivery_done=true`` stamped
-    on an existing attempt key) or corruption — value inequality means the
-    legacy column moved AFTER the new table was fed, so LEGACY is the fresher
-    store and is served. Callers that read the kill-switch (the node_runner
-    gate + connector readers) pass ``not is_dual_write_enabled()``; general
-    readers (UI/analytics) keep the default ``False`` — they tolerate ≤1
-    sweep interval of staleness and the B2b repair is the backstop.
 
     Shrink case (qa iteration 2, Major 1 — *meta_row_exists* is not None):
     when the metadata row is ABSENT (``False``) and the LEGACY side is exactly
@@ -987,14 +969,6 @@ def _direction_aware_side(
             return legacy_value
         return new_value
     if legacy_keys <= new_keys:
-        if legacy_tiebreak_on_equal_mismatch and legacy_keys == new_keys and legacy_value != new_value:
-            _log.info(
-                "run_node_outputs fallback: %s served from the legacy column (equal key sets, "
-                "divergent values — kill-switch-OFF legacy-only rewrite) run=%s",
-                side,
-                run_id,
-            )
-            return legacy_value
         return new_value
     if new_keys < legacy_keys:
         _log.info(
@@ -1019,30 +993,24 @@ async def read_run_blobs_with_fallback(
     *,
     run_id: uuid.UUID,
     organisation_id: uuid.UUID | None = None,
-    legacy_tiebreak_on_equal_mismatch: bool = False,
 ) -> RunBlobs:
     """Reassemble with the DIRECTION-AWARE legacy fallback applied (qa M2/M3).
 
     Per side: when the new table holds NO representation for the side at all
     (no node rows AND no metadata row) the legacy column is served verbatim
-    (pre-sweep stragglers / kill-switch-off mode). When the new table DOES
-    represent the side, the subset-direction rule
-    (:func:`_direction_aware_side`) decides between the reassembled dict and
-    the legacy column by key-set containment — legacy ⊆ new serves NEW (a
-    kill-switch-OFF legacy-only write to an already-represented run is NOT
-    shadowed forever), new ⊂ legacy serves LEGACY (truncation guard), a
-    divergent key set serves NEW with a warning.
+    (pre-B1 straggler rows). When the new table DOES represent the side, the
+    subset-direction rule (:func:`_direction_aware_side`) decides between the
+    reassembled dict and the legacy column by key-set containment —
+    legacy ⊆ new serves NEW (legacy is only ever behind post-B1), new ⊂
+    legacy serves LEGACY (truncation guard), a divergent key set serves NEW
+    with a warning.
 
-    *legacy_tiebreak_on_equal_mismatch* (qa iteration 2, Major 1): when True
-    (the kill-switch-OFF readers), EQUAL key sets with DIVERGENT values
-    tiebreak to LEGACY — see :func:`_direction_aware_side`. Default False:
-    UI/analytics readers tolerate ≤1 sweep interval and keep the new table
-    authoritative. The shrink blind spot (metadata row absent + legacy ``{}``
-    + new non-empty → LEGACY) is applied UNCONDITIONALLY for the
-    outputs/telemetry sides — it is deterministic, not switch-dependent.
+    The shrink blind spot (metadata row absent + legacy ``{}`` + new
+    non-empty → LEGACY) is applied UNCONDITIONALLY for the outputs/telemetry
+    sides — it is deterministic (qa iteration 2, Major 1).
 
-    (When the metadata row exists, the backfill/writer invariants guarantee
-    the reassembled value already matches the legacy column, including the
+    (When the metadata row exists, the writer invariants guarantee the
+    reassembled value already matches the legacy column, including the
     ``{}``-vs-``None`` distinction.) The legacy read is one extra
     parameterised SELECT per call; B2b removes it together with the columns.
     """
@@ -1056,10 +1024,10 @@ async def read_run_blobs_with_fallback(
         _assert_read_org(session_org, organisation_id, run_id)
 
     # No new-table representation for a side -> serve the legacy column
-    # verbatim (pre-sweep stragglers / kill-switch-off mode); a represented
-    # side goes through the subset-direction rule. meta_exists drives the
-    # shrink blind spot (outputs/telemetry only — markers have no metadata
-    # row, so the marker call passes None).
+    # verbatim (pre-B1 straggler rows); a represented side goes through the
+    # subset-direction rule. meta_exists drives the shrink blind spot
+    # (outputs/telemetry only — markers have no metadata row, so the marker
+    # call passes None).
     outputs = legacy.outputs
     telemetry = legacy.telemetry
     if info.out_present or info.meta_exists:
@@ -1068,7 +1036,6 @@ async def read_run_blobs_with_fallback(
             legacy.outputs,
             side="outputs",
             run_id=run_id,
-            legacy_tiebreak_on_equal_mismatch=legacy_tiebreak_on_equal_mismatch,
             meta_row_exists=info.meta_exists,
         )
     if info.telemetry_present or info.meta_exists:
@@ -1077,7 +1044,6 @@ async def read_run_blobs_with_fallback(
             legacy.telemetry,
             side="telemetry",
             run_id=run_id,
-            legacy_tiebreak_on_equal_mismatch=legacy_tiebreak_on_equal_mismatch,
             meta_row_exists=info.meta_exists,
         )
 
@@ -1089,7 +1055,6 @@ async def read_run_blobs_with_fallback(
             legacy.markers,
             side="markers",
             run_id=run_id,
-            legacy_tiebreak_on_equal_mismatch=legacy_tiebreak_on_equal_mismatch,
         )
 
     return RunBlobs(outputs=outputs, telemetry=telemetry, markers=markers)
@@ -1136,7 +1101,6 @@ async def read_run_markers_fenced(
     claim_token: str | None,
     for_update: bool = False,
     fence_status: bool = True,
-    legacy_tiebreak_on_equal_mismatch: bool = False,
 ) -> dict[str, Any] | None:
     """Fenced, single-statement markers read (qa M4/M5).
 
@@ -1172,13 +1136,6 @@ async def read_run_markers_fenced(
     read therefore re-checks the fence by construction (a fence-miss can never
     serve legacy markers either). Reassembly uses the same
     subset-direction rule as :func:`read_run_blobs_with_fallback`.
-
-    *legacy_tiebreak_on_equal_mismatch* (qa iteration 2, Major 1): when True
-    (the kill-switch-OFF gate/connector readers), EQUAL key sets with
-    DIVERGENT values tiebreak to LEGACY — a kill-switch-OFF ``delivery_done``
-    rewrite on an existing attempt key is otherwise served from a stale
-    new-table row and the connector write duplicates. Default False
-    (UI/analytics tolerate ≤1 sweep interval; B2b repair is the backstop).
 
     ``claim_token=None`` skips the token predicate (the ``:tok IS NULL OR
     claim_token = :tok`` fence idiom) — a caller that fences by other means
@@ -1230,7 +1187,6 @@ async def read_run_markers_fenced(
         legacy,
         side="markers",
         run_id=run_id,
-        legacy_tiebreak_on_equal_mismatch=legacy_tiebreak_on_equal_mismatch,
     )
 
 

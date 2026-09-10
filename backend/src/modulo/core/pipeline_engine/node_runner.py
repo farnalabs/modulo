@@ -1287,7 +1287,7 @@ async def _persist_raw_output_marker(
 # (deadlock 40P01, admin shutdown 57P01, crash shutdown 57P02, connection-loss
 # 08xxx classes — 08000/08001/08003/08004/08006/08007). A marker-savepoint
 # failure with one of these has ALSO lost the legacy marker write (the outer
-# transaction rolls back), so the "legacy survives, sweep heals" claim is
+# transaction rolls back), so the "legacy survives, repair migrates" claim is
 # false — the failure logs ``legacy_marker_also_lost``.
 #
 # B1 (FAR-583): the vocabulary lives ONLY in the shared leaf
@@ -1391,75 +1391,54 @@ async def _write_raw_output_marker(
             # SAVEPOINT. The MERGED dict is stored (prior pr_url preserved,
             # delivery_done monotone) — one row per attempt key, delete-absent.
             # A savepoint-SCOPED failure rolls back ONLY the new-table insert;
-            # the legacy write above still commits. Log + counter, never raise
-            # (the persist's never-raise contract is preserved); the sweep +
-            # the 0177 repair heal the missing row. THE EXCEPTION is a
-            # transaction-aborting failure (deadlock / shutdown / connection
-            # loss, classified below): that poisons the WHOLE transaction, so
-            # the legacy write is rolled back too — claimed loudly as
-            # ``legacy_marker_also_lost``.
-            #
-            # qa M7: the new-table leg is KILL-SWITCH-GATED like every other
-            # chokepoint — with the switch OFF the write is legacy-only (the
-            # contract promises it), noted edge-triggered via
-            # note_dual_write_disabled.
-            from modulo.core.run_outputs_dualwrite import is_dual_write_enabled, note_dual_write_disabled
-
-            try:
-                dual_write_on = await is_dual_write_enabled()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # Fail-closed: a switch-read failure must not disable the leg.
-                _log.exception("sandbox_agent.raw_output_marker_switch_read_failed")
-                dual_write_on = True
-            if not dual_write_on:
-                await note_dual_write_disabled(run_id, org_uuid)
-            else:
+            # the legacy write above still commits. Log, never raise (the
+            # persist's never-raise contract is preserved); B2b's repair
+            # migrates the missing row. THE EXCEPTION is a transaction-aborting
+            # failure (deadlock / shutdown / connection loss, classified
+            # below): that poisons the WHOLE transaction, so the legacy write
+            # is rolled back too — claimed loudly as ``legacy_marker_also_lost``.
+            if org_uuid is None:
                 # qa rider e: an explicit guard instead of `assert` — asserts
                 # vanish under -O and the failure mode would be an opaque
                 # None-org write into the repo gate.
-                if org_uuid is None:
-                    raise RuntimeError(
-                        "raw-output marker persist requires a parsed organisation id for the run_node_outputs leg"
+                raise RuntimeError(
+                    "raw-output marker persist requires a parsed organisation id for the run_node_outputs leg"
+                )
+            try:
+                async with session.begin_nested():
+                    await write_run_markers(
+                        session,
+                        run_id=run.id,
+                        organisation_id=org_uuid,
+                        markers=markers,
                     )
-                try:
-                    async with session.begin_nested():
-                        await write_run_markers(
-                            session,
-                            run_id=run.id,
-                            organisation_id=org_uuid,
-                            markers=markers,
-                        )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    from sqlalchemy.exc import SQLAlchemyError
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                from sqlalchemy.exc import SQLAlchemyError
 
-                    from modulo.core.run_outputs_dualwrite import note_dual_write_marker_failure
-                    from modulo.db.sqlstates import sqlstate_of
+                from modulo.db.sqlstates import sqlstate_of
 
-                    # qa Major 2: sqlstate_of walks __context__, so the
-                    # savepoint's 25P02 rollback-wrapper failure (raised by the
-                    # __aexit__ of an already-aborted savepoint) does NOT mask
-                    # the ORIGINAL transaction-aborting state (40P01 etc.).
-                    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                    if sqlstate in MARKER_TXN_ABORTING_SQLSTATES:
-                        # qa rider f: a transaction-aborting failure (deadlock,
-                        # admin shutdown, connection loss) poisons the WHOLE
-                        # transaction — the legacy marker write above is rolled
-                        # back with it, so "legacy survives, sweep heals" is
-                        # FALSE here. The outer handler logs the lost persist;
-                        # the claim must be loud.
-                        _log.exception(
-                            "sandbox_agent.raw_output_marker_legacy_marker_also_lost "
-                            "run=%s node_id=%s attempt_key=%s sqlstate=%s",
-                            run_id,
-                            node_id,
-                            key,
-                            sqlstate,
-                        )
-                    await note_dual_write_marker_failure(run_id, node_id, key)
+                # qa Major 2: sqlstate_of walks __context__, so the
+                # savepoint's 25P02 rollback-wrapper failure (raised by the
+                # __aexit__ of an already-aborted savepoint) does NOT mask
+                # the ORIGINAL transaction-aborting state (40P01 etc.).
+                sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+                if sqlstate in MARKER_TXN_ABORTING_SQLSTATES:
+                    # qa rider f: a transaction-aborting failure (deadlock,
+                    # admin shutdown, connection loss) poisons the WHOLE
+                    # transaction — the legacy marker write above is rolled
+                    # back with it, so "legacy survives, repair migrates" is
+                    # FALSE here. The outer handler logs the lost persist;
+                    # the claim must be loud.
+                    _log.exception(
+                        "sandbox_agent.raw_output_marker_legacy_marker_also_lost "
+                        "run=%s node_id=%s attempt_key=%s sqlstate=%s",
+                        run_id,
+                        node_id,
+                        key,
+                        sqlstate,
+                    )
             _log.info(
                 "sandbox_agent.raw_output_marker_persisted",
                 extra={
@@ -1620,7 +1599,6 @@ async def _read_run_raw_output_markers_for_gate(
         org_uuid = None
     if org_uuid is None:
         return None
-    from modulo.core.run_outputs_dualwrite import is_dual_write_enabled
     from modulo.db.crud.run_node_outputs import read_run_markers_fenced
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
@@ -1631,21 +1609,12 @@ async def _read_run_raw_output_markers_for_gate(
             # Storage re-point (FAR-583 qa M4/M5): ONE fenced statement — the
             # run-row predicate SELECT above is gone; the fence lives inside
             # the repo reader.
-            #
-            # qa iteration 2 (Major 1): with the kill-switch OFF, EQUAL key
-            # sets with DIVERGENT values can only be a legacy-only rewrite (or
-            # corruption) — the legacy column is fresher, so the gate's
-            # delivery_done suppression must tiebreak to LEGACY or a
-            # kill-switch-OFF delivery_done rewrite is missed and the
-            # connector write duplicates. Switch ON → no tiebreak (the
-            # forward-looking new table governs).
             return await read_run_markers_fenced(
                 session,
                 run_id=uuid.UUID(run_id),
                 organisation_id=org_uuid,
                 claim_token=claim_lease,
                 for_update=False,
-                legacy_tiebreak_on_equal_mismatch=not await is_dual_write_enabled(),
             )
 
     try:
@@ -1719,7 +1688,6 @@ async def _read_connector_idempotency_gate_state(
         return None, None
     from sqlalchemy import text as _sql_text
 
-    from modulo.core.run_outputs_dualwrite import is_dual_write_enabled
     from modulo.db.crud.run_node_outputs import read_run_markers_fenced
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
@@ -1749,9 +1717,6 @@ async def _read_connector_idempotency_gate_state(
             # Marker VALUES reassemble via the repo's SINGLE fenced
             # markers-scoped reader, on the SAME locked transaction so the
             # gate decision cannot read past an in-progress concurrent stamp.
-            # qa iteration 2 (Major 1): kill-switch-OFF equal-key-set value
-            # rewrites tiebreak to LEGACY (delivery_done suppression must not
-            # miss a legacy-only rewrite) — see the gate reader above.
             markers_dict = await read_run_markers_fenced(
                 session,
                 run_id=uuid.UUID(run_id),
@@ -1759,7 +1724,6 @@ async def _read_connector_idempotency_gate_state(
                 claim_token=None,
                 for_update=True,
                 fence_status=False,
-                legacy_tiebreak_on_equal_mismatch=not await is_dual_write_enabled(),
             )
             persisted_key = row[1]
             return markers_dict, (str(persisted_key) if persisted_key else None)

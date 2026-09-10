@@ -1106,7 +1106,7 @@ async def _delete_quarantine_rows(session: AsyncSession, run_ids: list[Any]) -> 
     are explicit on Postgres (qa iteration 2, Major 5 — migration 0192 grants
     ``SELECT, DELETE`` to ``modulo_app``, the role this purge runs on via the
     admin run-retention route; ``SELECT, INSERT, DELETE`` to the system role
-    the catch-up sweep runs on) and it has no ORM mapping, so the delete
+    the B2b-era sweep ran on) and it has no ORM mapping, so the delete
     still mirrors the :func:`_delete_checkpoints` best-effort pattern rather
     than the hard ``_delete_run_id_rows`` one: it runs in its OWN savepoint,
     and a missing-table / ungranted-env failure is logged and swallowed —
