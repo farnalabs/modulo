@@ -794,9 +794,7 @@ def _exit_recipe(code: int, tmp_path: Path) -> int:
         ),
     ],
 )
-def test_documented_exit_codes_are_exhaustive(
-    code: int, recipe_name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_documented_exit_codes_are_exhaustive(code: int, recipe_name: str, tmp_path: Path) -> None:
     assert code in {EXIT_HEALTHY, EXIT_UNHEALTHY, EXIT_DEGRADED, EXIT_UNINITIALIZED}
     assert run_exit_code_recipe(code, tmp_path) == code
 
@@ -817,7 +815,7 @@ REAL_MACHINE_ONLY_RECIPES: dict[int, str] = {}
 def test_exit_code_table_backed_by_recipe_registry() -> None:
     """Every documented doctor code has a recipe annotation (test lives IN
     this suite so the exhaustiveness is enforced whenever the table moves)."""
-    assert DETERMINISTIC_RECIPES.keys() == {
+    assert set(DETERMINISTIC_RECIPES.keys()) == {
         EXIT_HEALTHY,
         EXIT_UNHEALTHY,
         EXIT_DEGRADED,

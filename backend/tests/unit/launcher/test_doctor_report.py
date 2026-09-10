@@ -120,7 +120,7 @@ def test_report_marks_absent_logs(tmp_path: Path) -> None:
     """A data dir with no logs still builds an empty-tail report."""
     out_path = build_report(tmp_path, tmp_path / "report.zip", doctor_output="uninitialized")
     with zipfile.ZipFile(out_path) as archive:
-        assert archive.read("logs/app.log.tail").decode() == ""
+        assert not archive.read("logs/app.log.tail").decode()
 
 
 def test_build_failure_secrets_unreadable_still_redacts_structurally(tmp_path: Path) -> None:
