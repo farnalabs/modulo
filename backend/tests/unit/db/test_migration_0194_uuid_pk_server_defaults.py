@@ -22,6 +22,13 @@ _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 _EXPECTED_COUNT = 84
 
+# Tables introduced by migrations AFTER 0194_uuid_pk_server_defaults own their own
+# uuid-PK server defaults (e.g. 0207_collection_install_tracking sets install_id's
+# default inline, and CollectionInstallEntity.entity_id is a supplied key with no
+# default). They are out of scope for this frozen migration's coverage contract —
+# including them would make the count drift on every table added after 0194.
+_POST_0194_TABLES = frozenset({"collection_install", "collection_install_entity"})
+
 
 def _load_migration() -> ModuleType:
     assert _MIGRATION_PATH.exists(), f"Migration file missing: {_MIGRATION_PATH}"
@@ -56,6 +63,8 @@ def _metadata_uuid_pk_pairs() -> set[tuple[str, str]]:
     """(table, column) for every uuid primary key that is not a foreign-key parent."""
     pairs: set[tuple[str, str]] = set()
     for table in Base.metadata.sorted_tables:
+        if table.name in _POST_0194_TABLES:
+            continue
         fk_parents = {fk.parent.name for fk in table.foreign_keys}
         for column in table.columns:
             if column.primary_key and isinstance(column.type, (Uuid, POSTGRES_UUID)) and column.name not in fk_parents:
