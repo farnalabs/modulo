@@ -20,7 +20,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0194_uuid_pk_server_defaults"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
-_EXPECTED_COUNT = 83
+_EXPECTED_COUNT = 84
 
 # Tables introduced by migrations AFTER 0194_uuid_pk_server_defaults own their own
 # uuid-PK server defaults (e.g. 0207_collection_install_tracking sets install_id's
@@ -127,5 +127,7 @@ def test_selectivity_excludes_non_uuid_and_fk_pks() -> None:
     assert ("tier_catalog", "name") not in metadata_pairs
     assert ("oauth_authorization_codes", "code") not in metadata_pairs
     # Composite-PK columns that are also FK parents (run_evidence) are excluded.
+    # run_evidence.node_id is no longer an FK parent (FAR-644 stripped the
+    # deprecated nodes.id FK), so it is now a covered uuid-PK and must NOT be
+    # excluded here.
     assert ("run_evidence", "run_id") not in metadata_pairs
-    assert ("run_evidence", "node_id") not in metadata_pairs
