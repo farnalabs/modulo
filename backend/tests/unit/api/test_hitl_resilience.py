@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -683,7 +683,11 @@ def _override_principal(via_api_key: bool, client_kind: str = "browser") -> None
 class TestHumanOnlyRestEnforcement:
     """FAR-610: human_only gates deny API-key principals on the resume routes
     (approve / approve-with-modification / deliver-manual / submit-manual);
-    browser JWTs pass. reject stays allowed for every client."""
+    browser JWTs pass. reject itself has no human_only guard, but since
+    FAR-609 a non-browser principal cannot CLAIM a default-human_only gate,
+    so it can never reach reject on one — reject works only for a
+    claim-holder (browser JWT, or credentials holding a claim minted
+    before gate became human_only)."""
 
     @pytest.fixture(autouse=True)
     def _no_real_audit_db(self) -> Generator[None, None, None]:
@@ -896,8 +900,12 @@ class TestHumanOnlyRestEnforcement:
         approve.assert_awaited_once()
 
     def test_reject_human_only_api_key_still_allowed(self, client: TestClient) -> None:
-        """reject is the safe direction — allowed for every client, even with
-        a human_only gate."""
+        """reject is mechanically exempt (no human_only guard) and this test
+        proves the pass-through: an EXPLICITLY OPTED-OUT gate (human_only:
+        false in config) accepts an api_key reject — a claim-holder path. A
+        default-human_only gate is different: non-browser principals can no
+        longer CLAIM one, so they can never reach reject on it (intended
+        policy, not an escape hatch)."""
         reject = AsyncMock()
         with (
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
@@ -913,6 +921,204 @@ class TestHumanOnlyRestEnforcement:
 
         assert resp.status_code == 200
         reject.assert_awaited_once()
+
+
+class TestHumanOnlyClaimEnforcement:
+    """FAR-609: claim is human_only — a non-browser credential can neither
+    CLAIM nor decide a human_only gate. The REST claim route runs the same
+    fail-closed policy as the decision routes; the denial carries the
+    ``hitl.human_only_denied`` audit event (action="claim")."""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_audit_db(self) -> Generator[None, None, None]:
+        with patch(
+            "modulo.api.routes.hitl.get_or_create_engine",
+            side_effect=RuntimeError("no db in unit tests"),
+        ):
+            yield
+
+    @staticmethod
+    def _install_session(
+        run: MagicMock,
+        snapshot: object = None,
+        edge: object = None,
+        pipeline_nodes: object = None,
+        claim_row: object = None,
+    ) -> None:
+        mock_session = _hitl_session(
+            run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row
+        )
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+    @staticmethod
+    def _gate_claim_mock() -> MagicMock:
+        gate = MagicMock()
+        gate.run_id = _RUN_ID
+        gate.gate_id = _GATE_ID
+        gate.claim_token = "tok-claim"
+        gate.expires_at = datetime.now(UTC) + timedelta(minutes=15)
+        return gate
+
+    @staticmethod
+    def _untagged_config_snapshot() -> MagicMock:
+        """A snapshot whose gate config has NO explicit ``human_only`` key."""
+        snapshot = MagicMock()
+        snapshot.graph_json = {
+            "nodes": [],
+            "edges": [
+                {
+                    "source": str(_SRC_ID),
+                    "target": str(_TGT_ID),
+                    "hitl_gate_config": {"label": "Legacy gate"},
+                }
+            ],
+        }
+        return snapshot
+
+    def test_claim_human_only_api_key_returns_403(self, client: TestClient) -> None:
+        claim = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock()),
+        ):
+            mgr_cls.return_value.claim = claim
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        claim.assert_not_called()
+
+    def test_claim_missing_human_only_key_defaults_true_api_key_returns_403(self, client: TestClient) -> None:
+        """FAR-609 default flip: a gate config WITHOUT ``human_only`` is
+        human-only, so an API-key claim is denied."""
+        claim = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock()),
+        ):
+            mgr_cls.return_value.claim = claim
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=self._untagged_config_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _HUMAN_ONLY_DETAIL
+        claim.assert_not_called()
+
+    def test_claim_human_only_api_key_emits_audit_event(self, client: TestClient) -> None:
+        emit = AsyncMock()
+        claim = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl._emit_human_only_denial_audit", new=emit),
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock()),
+        ):
+            mgr_cls.return_value.claim = claim
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 403
+        emit.assert_awaited_once()
+        denied = emit.await_args.args[0]
+        assert denied.action == "claim"
+        assert denied.gate_id == _GATE_ID
+        claim.assert_not_called()
+
+    def test_claim_human_only_browser_jwt_allowed(self, client: TestClient) -> None:
+        """Browser JWTs claim human_only gates — the UI is their surface."""
+        claim = AsyncMock(return_value=self._gate_claim_mock())
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
+        ):
+            mgr_cls.return_value.claim = claim
+            _override_principal(via_api_key=False)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["claim_token"] == "tok-claim"
+        claim.assert_awaited_once()
+
+    def test_claim_opt_out_api_key_allowed(self, client: TestClient) -> None:
+        """``human_only: false`` opts the gate out — API-key claims work."""
+        claim = AsyncMock(return_value=self._gate_claim_mock())
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
+        ):
+            mgr_cls.return_value.claim = claim
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot(human_only=False))
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 200
+        claim.assert_awaited_once()
+
+    def test_claim_opt_out_gate_programmatic_jwt_records_client_type_programmatic(self, client: TestClient) -> None:
+        """FAR-609 rider: the claim-call ``client_type`` audit enrichment
+        records the principal's ACTUAL credential class, not the legacy
+        'browser for every JWT' fallback — a programmatic JWT claiming an
+        explicitly opted-out gate is audited as 'programmatic' (the legacy
+        labelling corrupted the FAR-611 sweep-alarm input)."""
+        claim = AsyncMock(return_value=self._gate_claim_mock())
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock(return_value=True)),
+        ):
+            mgr_cls.return_value.claim = claim
+            _override_principal(via_api_key=False, client_kind="programmatic")
+            self._install_session(_make_hitl_run(), snapshot=_human_only_snapshot(human_only=False))
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 200
+        claim.assert_awaited_once()
+        assert claim.await_args.kwargs["client_type"] == "programmatic"
+
+    def test_claim_unresolvable_fired_gate_api_key_returns_403(self, client: TestClient) -> None:
+        """Fail closed (FAR-610 review, applied to claim): the gate FIRED but
+        its config is unresolvable — the API-key claim is denied."""
+        claim = AsyncMock()
+        with (
+            patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,
+            patch("modulo.api.routes.hitl.transition_run", new=AsyncMock()),
+        ):
+            mgr_cls.return_value.claim = claim
+            _override_principal(via_api_key=True)
+            self._install_session(_make_hitl_run(snapshot_id=None), snapshot=None, edge=None, claim_row=MagicMock())
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/hitl/{_GATE_ID}/claim",
+                json={"expiry_minutes": 15},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _UNRESOLVABLE_DETAIL
+        claim.assert_not_called()
 
 
 class TestHumanOnlyClientKindEnforcement:
@@ -1072,7 +1278,10 @@ class TestHumanOnlyClientKindEnforcement:
         deliver.assert_not_called()
 
     def test_reject_programmatic_client_kind_still_allowed(self, client: TestClient) -> None:
-        """reject is the safe direction for every credential class."""
+        """reject is mechanically exempt (no human_only guard) — the pass
+        through stays for the claim-holder path; non-browser principals can
+        no longer reach it on default-human_only gates because claim is
+        denied (intended policy)."""
         reject = AsyncMock()
         with (
             patch("modulo.api.routes.hitl.HITLManager") as mgr_cls,

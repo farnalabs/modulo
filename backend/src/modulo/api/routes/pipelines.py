@@ -1063,7 +1063,10 @@ class HitlGateConfig(BaseModel):
         "compiler currently kicks a rejection back to reject_target).",
     )
     claim_expiry_minutes: int = Field(gt=0, le=1440)
-    human_only: bool
+    # FAR-609: every HITL gate defaults to human_only — a graph save that
+    # omits the field gets the fail-safe security posture; opting out requires
+    # an explicit ``human_only: false``.
+    human_only: bool = True
     required_team_id: uuid.UUID | None = None
     condition: str | None = Field(
         default=None,

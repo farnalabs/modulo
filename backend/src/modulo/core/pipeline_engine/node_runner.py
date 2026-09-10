@@ -27,6 +27,7 @@ Autonomy integration:
                                     no interrupt is raised.
   - ``fully_autonomous``:           gate is silently skipped.
   - ``human_only`` on gate config:  overrides autonomy —  always interrupts.
+    Defaults to True (FAR-609) when the config omits the field.
 
 Conditional gating ((Section 8.17):
   - ``condition`` on ``hitl_gate_config``:  JMESPath expression evaluated
@@ -113,6 +114,7 @@ from modulo.core.run_context.autonomy import (
     should_skip_hitl_gate,
 )
 from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
+from modulo.db.crud.hitl_gate_config import human_only_effective
 from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.sqlstates import MARKER_TXN_ABORTING_SQLSTATES
@@ -3788,7 +3790,10 @@ def make_hitl_gate_fn(
     It then returns artifacts reflecting the human's decision.
     """
     gate_id: str = hitl_gate_config.get("gate_id", "gate")
-    human_only: bool = hitl_gate_config.get("human_only", False)
+    # FAR-609: the human_only default lives in the shared resolver module — a
+    # gate config that omits the flag is human-only (every HITL gate defaults
+    # to human_only: true; opting out requires an explicit false).
+    human_only: bool = human_only_effective(hitl_gate_config)
     condition_expr: str | None = hitl_gate_config.get("condition")
     eval_condition_raw: dict[str, Any] | None = hitl_gate_config.get("eval_condition")
     required_team_id: str | None = _normalize_required_team_id(gate_id, hitl_gate_config.get("required_team_id"))

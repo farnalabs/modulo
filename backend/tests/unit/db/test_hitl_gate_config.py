@@ -18,6 +18,7 @@ from modulo.db.crud.hitl_gate_config import (
     edge_source_or_target,
     hitl_gate_exists_but_unresolved,
     human_only_denial,
+    human_only_effective,
     make_gate_id,
     normalize_gate_description,
     parse_hitl_gate_id,
@@ -532,6 +533,34 @@ class TestHumanOnlyDenial:
     def test_unresolvable_not_fired_allows(self) -> None:
         verdict = human_only_denial(None, non_browser_credential=True, gate_fired=False)
         assert verdict is None
+
+    def test_default_flip_applies_regardless_of_fired_state(self) -> None:
+        """FAR-609 default flip: a RESOLVED config WITHOUT ``human_only`` is
+        human-only whether or not the gate fired; only the unresolved verdict
+        branches on ``gate_fired``."""
+        for gate_fired in (True, False):
+            verdict = human_only_denial({"label": "Legacy gate"}, non_browser_credential=True, gate_fired=gate_fired)
+            assert verdict == MSG_HUMAN_ONLY_DENY
+
+
+class TestHumanOnlyEffective:
+    """FAR-609: the shared fail-safe default — every gate is human-only
+    unless its config explicitly says otherwise."""
+
+    def test_none_config_defaults_true(self) -> None:
+        assert human_only_effective(None) is True
+
+    def test_empty_config_defaults_true(self) -> None:
+        assert human_only_effective({}) is True
+
+    def test_missing_key_defaults_true(self) -> None:
+        assert human_only_effective({"label": "Legacy gate"}) is True
+
+    def test_explicit_false_opts_out(self) -> None:
+        assert human_only_effective({"human_only": False}) is False
+
+    def test_explicit_true(self) -> None:
+        assert human_only_effective({"human_only": True}) is True
 
 
 class TestSnapshotGateConfigMap:

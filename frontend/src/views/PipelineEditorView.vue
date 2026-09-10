@@ -1671,7 +1671,8 @@ const defaultEdgeForm = {
   label: '',
   description: '',
   claim_expiry_minutes: 15,
-  human_only: false,
+  // FAR-609: every HITL gate defaults to human_only; the checkbox opts out.
+  human_only: true,
   condition_type: 'none',
   condition: '',
   eval_name: '',
@@ -2154,7 +2155,9 @@ function populateEdgeForm(edge: any) {
     edgeForm.label = hc.label || ''
     edgeForm.description = hc.description || ''
     edgeForm.claim_expiry_minutes = hc.claim_expiry_minutes || 15
-    edgeForm.human_only = hc.human_only || false
+    // FAR-609: an existing config without the key is human-only now —
+    // only an explicit `false` loads the checkbox unticked.
+    edgeForm.human_only = hc.human_only !== false
     if (hc.condition) {
       edgeForm.condition_type = 'jmespath'
       edgeForm.condition = hc.condition

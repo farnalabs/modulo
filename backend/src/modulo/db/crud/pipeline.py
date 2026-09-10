@@ -916,12 +916,18 @@ async def replace_pipeline_graph(
         edges,
         is_privileged=effective_privileged,
         caller_type=caller_type,
+        # FAR-609 review: node-level gate weakening (FAR-402 hitl_config) is
+        # detected in the same guard pass — the node lists are deep-copied
+        # before any write (same defense in depth as old_edges).
+        old_nodes=copy.deepcopy(list(pipeline.graph_nodes_json or [])),
+        new_nodes=copy.deepcopy(nodes),
     )
+    all_weakened = (*diff.weakened_edges, *diff.weakened_nodes)
     if diff.denied:
         raise HitlGateWeakeningDenied(
             reason_code=diff.reason_code or "insufficient-role",
-            correlation_keys=[w.correlation_key for w in diff.weakened_edges],
-            weakening_types=sorted({t for w in diff.weakened_edges for t in w.weakening_types}),
+            correlation_keys=[w.correlation_key for w in all_weakened],
+            weakening_types=sorted({t for w in all_weakened for t in w.weakening_types}),
             detail=denial_detail(diff),
             payload_json=build_gate_diff_payload(diff, caller_type),
         )
