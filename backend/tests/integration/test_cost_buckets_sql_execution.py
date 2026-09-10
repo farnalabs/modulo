@@ -2,13 +2,14 @@
 
 The parity unit tests
 (``tests/unit/core/cost_controller/test_cost_buckets_sql_aggregation.py``) pin
-a hand-written Python transliteration of the two static statements inside
-``build_cost_report_buckets`` against a MOCKED session — nothing executed the
-actual SQL text, so a typo'd cast, alias, regex, or window predicate in those
-literals would ship silently (empty buckets or a 503). This module runs the
-REAL ``build_cost_report_buckets`` (and both statement literals directly)
-against a migrated testcontainer Postgres over a representative run fixture,
-pinning every output to a hand-computed literal.
+a hand-written Python transliteration of the static statements against a MOCKED
+session — nothing executed the actual SQL text, so a typo'd cast, alias, regex,
+or window predicate in those literals would ship silently (empty buckets or a
+503). This module runs the REAL ``build_cost_report_buckets`` AND the four
+statement literals directly (``_SQL_COST_COMPONENT_BUCKETS``,
+``_SQL_COST_LEGACY_TOTAL``, ``_SQL_EXPORT_PIPELINE``,
+``_SQL_EXPORT_MODEL``) against a migrated testcontainer Postgres over a
+representative run fixture, pinning every output to a hand-computed literal.
 
 The window anchors are date-immune: every in-window run carries a far-future
 ``started_at`` (>= ``:since`` for ANY period) and every out-of-window run a
@@ -30,9 +31,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.cost_controller import (
+    _NUMERIC_STRING_RE,
     _SQL_COST_COMPONENT_BUCKETS,
     _SQL_COST_LEGACY_TOTAL,
+    _SQL_EXPORT_MODEL,
+    _SQL_EXPORT_PIPELINE,
     _report_since,
+    _safe_float,
+    _safe_int,
     build_cost_report_buckets,
 )
 from modulo.db.crud.team import create_team
@@ -274,3 +280,156 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
     # no ledger rows were written for this fixture org
     assert not buckets["annotations_by_team"]
     assert buckets["org_run_count"] == 0
+
+    # --- export-sql execution coverage (FAR-657 extension) ------------------
+    # The two ``GET /export`` literals (``_SQL_EXPORT_PIPELINE`` /
+    # ``_SQL_EXPORT_MODEL``) are executed directly against live Postgres so a
+    # typo'd cast, alias, regex, ``:pattern`` binding, ``COUNT(DISTINCT ...)``,
+    # or the ``source='self_reported'`` predicate cannot ship silently (the
+    # mocked-session unit tests pin only SQL string fragments). A SEPARATE org
+    # isolates these runs from the bucket fixture above (which carries its own
+    # dangling pipeline_ids that would otherwise pollute the pipeline export).
+    export_org_id = uuid.uuid4()
+    export_account_id = uuid.uuid4()
+    await db_session.execute(
+        text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
+        {"id": str(export_org_id), "name": "Cost Export Org", "slug": f"cost-export-{export_org_id.hex[:8]}"},
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
+            "VALUES (:id, :email, :name, 'hash', 'local', true)"
+        ),
+        {
+            "id": str(export_account_id),
+            "email": f"cost-export-{export_account_id.hex[:8]}@integration.test",
+            "name": "Cost Export User",
+        },
+    )
+    await db_session.execute(
+        text("SELECT set_config('app.organisation_id', :oid, true)"),
+        {"oid": str(export_org_id)},
+    )
+    await db_session.flush()
+
+    pipeline_one = uuid.uuid4()
+    pipeline_two = uuid.uuid4()
+    pipeline_three = uuid.uuid4()
+
+    # One row per run: (pipeline_id, total_cost_usd, cost_breakdown JSON text or
+    # None, started_at). Covers: in/out-of-window, NULL total_cost_usd (a
+    # pipeline with runs but no cost must appear with a 0 total — the
+    # ``_SQL_EXPORT_PIPELINE`` predicate was dropped for exactly this), the
+    # ``:pattern``-parsed 6dp string amounts, ``COUNT(DISTINCT r.id)`` across a
+    # run that carries the same component twice, a mid-window display_name
+    # change (must NOT split the ``entity_id``), and the ``source`` filter
+    # (``calculated`` is excluded).
+    export_runs: list[tuple[uuid.UUID, Decimal | None, str | None, datetime | None]] = [
+        # pipeline_one: 1.25 + 2.75 + NULL(0) = 4.00, COUNT 3
+        (pipeline_one, Decimal("1.250000"), None, _STARTED_IN),
+        (pipeline_one, Decimal("2.750000"), None, _STARTED_IN),
+        (pipeline_one, None, None, _STARTED_IN),
+        # pipeline_two: 3.00 in-window + 5.00 out-of-window (excluded) = 3.00, COUNT 1
+        (pipeline_two, Decimal("3.000000"), None, _STARTED_IN),
+        (pipeline_two, Decimal("5.000000"), None, _STARTED_OUT),
+        # pipeline_three: only NULL-cost in-window runs → included with a 0 total, COUNT 1
+        (pipeline_three, None, None, _STARTED_IN),
+        # self_reported model components (pipeline_one) — gpt4 across two runs
+        # (one run carries gpt4 twice) = 3.50 distinct runs 2; m2 changes the
+        # display_name mid-window and must NOT split the component row.
+        (
+            pipeline_one,
+            Decimal("1.000000"),
+            '[{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", '
+            '"amount_usd": "1.000000"}, '
+            '{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", '
+            '"amount_usd": "2.000000"}]',
+            _STARTED_IN,
+        ),
+        (
+            pipeline_one,
+            Decimal("0.500000"),
+            '[{"component": "gpt4", "display_name": "GPT-4o", "source": "self_reported", "amount_usd": "0.500000"}]',
+            _STARTED_IN,
+        ),
+        # out-of-window self_reported gpt4 — excluded from the window
+        (
+            pipeline_one,
+            Decimal("10.000000"),
+            '[{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", "amount_usd": "10.000000"}]',
+            _STARTED_OUT,
+        ),
+        # claude self_reported (pipeline_two) = 4.00 distinct runs 1
+        (
+            pipeline_two,
+            Decimal("4.000000"),
+            '[{"component": "claude", "display_name": "Claude", "source": "self_reported", "amount_usd": "4.000000"}]',
+            _STARTED_IN,
+        ),
+        # gpt4 with source='calculated' — EXCLUDED by the source filter
+        (
+            pipeline_two,
+            Decimal("99.000000"),
+            '[{"component": "gpt4", "display_name": "GPT-4", "source": "calculated", "amount_usd": "99.000000"}]',
+            _STARTED_IN,
+        ),
+    ]
+
+    await db_session.execute(text("SET session_replication_role = replica"))
+    for export_run_number, (pid, total, breakdown, started) in enumerate(export_runs, start=1):
+        await db_session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
+                "langgraph_thread_id, run_number, input_hash, total_cost_usd, cost_breakdown, "
+                "started_at) "
+                "VALUES (:id, :oid, :pid, :sid, 'manual', :thread, :num, :hash, :total, "
+                ":breakdown, :started)"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(export_org_id),
+                "pid": str(pid),
+                "sid": str(uuid.uuid4()),
+                "thread": f"cost-export-{export_run_number}",
+                "num": export_run_number,
+                "hash": "0" * 64,
+                "total": total,
+                "breakdown": breakdown,
+                "started": started,
+            },
+        )
+    await db_session.execute(text("SET session_replication_role = DEFAULT"))
+
+    export_since = _report_since(datetime.now(UTC).date(), "month")
+
+    # --- _SQL_EXPORT_PIPELINE directly --------------------------------------
+    pipeline_rows = (
+        await db_session.execute(text(_SQL_EXPORT_PIPELINE), {"org_id": export_org_id, "since": export_since})
+    ).all()
+    pipeline_export = {
+        (str(row.pipeline_id), _safe_float(row.total_spend_usd), _safe_int(row.total_runs)) for row in pipeline_rows
+    }
+    # pipeline_one: 1.25 + 2.75 (NULL ignored by SUM) = 4.00, COUNT(*) 3
+    # pipeline_two: 3.00 only (5.00 out-of-window excluded), COUNT 1
+    # pipeline_three: only NULL-cost runs → 0.0 total, COUNT 1
+    assert pipeline_export == {
+        (str(pipeline_one), 4.0, 3),
+        (str(pipeline_two), 3.0, 1),
+        (str(pipeline_three), 0.0, 1),
+    }
+
+    # --- _SQL_EXPORT_MODEL directly (exercises :pattern + COUNT(DISTINCT)) ---
+    model_rows = (
+        await db_session.execute(
+            text(_SQL_EXPORT_MODEL),
+            {"org_id": export_org_id, "since": export_since, "pattern": _NUMERIC_STRING_RE},
+        )
+    ).all()
+    model_export = {row.component: (float(row.amount_usd), _safe_int(row.total_runs)) for row in model_rows}
+    # gpt4: 1.00 + 2.00 (run1) + 0.50 (run2, display_name changed) = 3.50 across
+    # 2 DISTINCT runs; claude: 4.00 across 1 run. The calculated-source gpt4 and
+    # the out-of-window gpt4 are both excluded.
+    assert model_export == {
+        "gpt4": (pytest.approx(3.50), 2),
+        "claude": (pytest.approx(4.00), 1),
+    }

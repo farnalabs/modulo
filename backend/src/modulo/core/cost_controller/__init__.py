@@ -153,7 +153,6 @@ FROM runs AS r
 WHERE r.organisation_id = :org_id
   AND r.started_at IS NOT NULL
   AND r.started_at >= :since
-  AND r.total_cost_usd IS NOT NULL
 GROUP BY r.pipeline_id
 """
 
@@ -166,18 +165,24 @@ GROUP BY r.pipeline_id
 # ``_SQL_COST_COMPONENT_BUCKETS`` rule, so a clamped run's unusable breakdown
 # never feeds the export. The amount CASE mirrors the bucket parse; the
 # ``runs`` count is DISTINCT per run (a run contributes to each of its
-# self_reported components).
+# self_reported components). Grouping is by ``component`` ONLY (the stable
+# slug that becomes ``entity_id`` in the export) — NOT ``(component,
+# display_name)``: a component whose ``display_name`` changes mid-window would
+# otherwise yield two CSV rows sharing one ``entity_id`` and double-count for
+# consumers aggregating per ``entity_id``. ``MAX`` collapses the display_name
+# to a single value per component (the sibling bucket SQL groups by component
+# only, so this matches that surface).
 _SQL_EXPORT_MODEL = """
 SELECT
     elem->>'component' AS component,
-    elem->>'display_name' AS display_name,
+    MAX(elem->>'display_name') AS display_name,
     SUM(
         CASE
             WHEN jsonb_typeof(elem->'amount_usd') = 'number'
                 THEN (elem->>'amount_usd')::numeric
             WHEN jsonb_typeof(elem->'amount_usd') = 'string'
                  AND elem->>'amount_usd' ~ :pattern
-                THEN (elem->>'amount_usd')::numeric
+                 THEN (elem->>'amount_usd')::numeric
             ELSE 0
         END
     ) AS amount_usd,
@@ -200,7 +205,7 @@ CROSS JOIN LATERAL jsonb_array_elements(r.cost_breakdown::jsonb) AS elem
 WHERE elem->>'source' = 'self_reported'
   AND jsonb_typeof(elem->'component') = 'string'
   AND elem->>'component' <> ''
-GROUP BY elem->>'component', elem->>'display_name'
+GROUP BY elem->>'component'
 """
 
 
