@@ -99,6 +99,7 @@ from pathlib import Path
 from typing import Any
 
 from modulo.launcher.entry import PGDATA_DIRNAME
+from modulo.launcher.state import STATE_FILENAME
 
 _log = logging.getLogger(__name__)
 
@@ -518,7 +519,14 @@ def _host_port_from_database_url(url: str) -> tuple[str, int | None]:
     except ValueError:
         return "unparseable", None
     host = parsed.hostname or "unknown"
-    port = parsed.port if parsed.port is not None else (5432 if host not in LOOPBACK_HOSTS else None)
+    try:
+        port = parsed.port
+    except ValueError:
+        # A malformed ambient DATABASE_URL (e.g. port 99999) raises here — report
+        # an honest skip instead of surfacing as a crashed check.
+        return host, None
+    if port is None:
+        port = 5432 if host not in LOOPBACK_HOSTS else None
     return host, port
 
 
@@ -796,7 +804,7 @@ def check_stale_backup(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Ch
         return CheckResult(
             "stale-backup",
             True,
-            "no last-backup timestamp recorded (state.json schema v1 does not record one yet) — skipped",
+            "no last-backup timestamp recorded yet (modulo backup stamps state.json on success) — skipped",
         )
     import time
 
@@ -916,7 +924,36 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
     def _listening_on(port: int) -> list[str]:
         if sys.platform != "linux":
             return []  # /proc absent; TODO(P3) Windows/macOS external-bind inspection
-        return _parse_listeners_from_proc(port)
+        return sorted({host for host, _ in _parse_listeners_from_proc(port)})
+
+    def _port_owner_description(port: int) -> str | None:
+        if sys.platform != "linux":
+            # TODO(P3): Windows/macOS process-owner lookup (ss -ltnp equivalent).
+            return None
+        inode = _listening_socket_inode(port)
+        if inode is None:
+            return None  # nothing is listening on the port -> no collision
+        owner_pid = _owner_pid_for_inode(inode)
+        if owner_pid is None:
+            return f"an unknown process listening on port {port}"
+        # The launcher (and its bundled postgres/redis children) legitimately own
+        # their ports; exclude the launcher process tree so it never self-flags.
+        launcher_pid = _launcher_pid(data_dir)
+        if launcher_pid is not None and (owner_pid == launcher_pid or _parent_pid(owner_pid) == launcher_pid):
+            return None
+        try:
+            comm = (Path("/proc") / str(owner_pid) / "comm").read_text(encoding="ascii", errors="replace").strip()
+        except OSError:
+            comm = "?"
+        return f"{comm} (pid {owner_pid}) on port {port}"
+
+    def _last_backup_at() -> float | None:
+        if state is None:
+            return None
+        stamp = getattr(state, "last_backup_at", None)
+        if not stamp:
+            return None
+        return _iso_to_epoch(stamp)
 
     def _probe_postgres() -> None:
         admin_url = composed.get("DATABASE_ADMIN_URL") or ""
@@ -1149,6 +1186,8 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         bundle_pg_version=__probe_bundle_pg_version,
         installed_bundle_pg_version=__probe_installed_bundle_pg_version,
         bundled_binaries=__probe_bundled_binaries,
+        port_owner_description=_port_owner_description,
+        last_backup_at=_last_backup_at,
         cloud_sync_hit=__probe_cloud_sync_hit,
         modulo_on_path=__probe_modulo_on_path,
         install_root=__probe_install_root,
@@ -1171,10 +1210,14 @@ def _cwd_env_file() -> Path | None:
     return candidate if candidate.exists() else None
 
 
-def _parse_listeners_from_proc(port: int) -> list[str]:
-    """LISTEN sockets on *port* from /proc/net{,6}/tcp (Linux only)."""
+def _parse_listeners_from_proc(port: int) -> list[tuple[str, int]]:
+    """LISTEN sockets on *port* from /proc/net{,6}/tcp (Linux only).
 
-    hosts: set[str] = set()
+    Returns ``(host, inode)`` pairs so callers can both report the bound hosts
+    and attribute the owning process via the socket inode.
+    """
+
+    found: list[tuple[str, int]] = []
     for proc_path, family in ((Path("/proc/net/tcp"), socket.AF_INET), (Path("/proc/net/tcp6"), socket.AF_INET6)):
         try:
             lines = proc_path.read_text(encoding="ascii").splitlines()[1:]
@@ -1182,16 +1225,106 @@ def _parse_listeners_from_proc(port: int) -> list[str]:
             continue
         for line in lines:
             fields = line.split()
-            if len(fields) < 4 or fields[3] != "0A":  # 0A = LISTEN
+            if len(fields) < 10 or fields[3] != "0A":  # 0A = LISTEN
                 continue
             host_hex, port_hex = fields[1].split(":")
             if int(port_hex, 16) != port:
                 continue
             try:
-                hosts.add(_decode_proc_address(host_hex, family))
+                host = _decode_proc_address(host_hex, family)
             except (ValueError, OSError):
                 continue
-    return sorted(hosts)
+            try:
+                inode = int(fields[9])
+            except ValueError:
+                continue
+            found.append((host, inode))
+    return found
+
+
+def _listening_socket_inode(port: int) -> int | None:
+    """The inode of a LISTEN socket bound to *port* (any interface), else None (Linux)."""
+
+    sockets = _parse_listeners_from_proc(port)
+    return sockets[0][1] if sockets else None
+
+
+def _owner_pid_for_inode(inode: int) -> int | None:
+    """PID of the process holding the socket *inode* open (Linux /proc scan), else None."""
+
+    proc_root = Path("/proc")
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return None
+    for proc in entries:
+        if not proc.name.isdigit():
+            continue
+        fd_dir = proc / "fd"
+        try:
+            links = list(fd_dir.iterdir())
+        except OSError:
+            continue
+        for link in links:
+            try:
+                target = str(link.readlink())
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target.endswith("]"):
+                try:
+                    if int(target[8:-1]) == inode:
+                        return int(proc.name)
+                except ValueError:
+                    continue
+    return None
+
+
+def _parent_pid(pid: int) -> int | None:
+    """Parent PID of *pid* from /proc/<pid>/stat, else None (Linux)."""
+
+    try:
+        stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="ascii")
+    except OSError:
+        return None
+    # comm may contain spaces/parens; the ppid is the field right after the
+    # closing ')' — the only ')' guaranteed to close the (comm) group.
+    rparen = stat.rfind(")")
+    if rparen == -1:
+        return None
+    fields = stat[rparen + 1 :].split()
+    if len(fields) < 2:
+        return None
+    try:
+        return int(fields[1])
+    except ValueError:
+        return None
+
+
+def _launcher_pid(data_dir: Path) -> int | None:
+    """The live launcher PID recorded in the data dir's lock, else None."""
+
+    from modulo.launcher.supervisor import LOCK_SUFFIX, _read_lock_holder
+
+    lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
+    holder = _read_lock_holder(lock_path)
+    return holder.pid if holder is not None else None
+
+
+def _iso_to_epoch(value: str) -> float | None:
+    """Parse an ISO-8601 timestamp to epoch seconds (None when unparseable)."""
+
+    import datetime
+
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.UTC)
+    return dt.timestamp()
 
 
 def _decode_proc_address(host_hex: str, family: int) -> str:
@@ -1243,6 +1376,8 @@ def _state_problem_kind(data_dir: Path, state_error: str | None) -> str | None:
         return "secrets-unreadable"
     if not (data_dir / "secrets.json").exists():
         return "missing"
+    if f"no {STATE_FILENAME} in" in state_error:
+        return "state-missing"
     if "HMAC verification" in state_error:
         return "hmac-mismatch"
     if "schema_version" in state_error:
@@ -1349,6 +1484,11 @@ def _state_integrity_detail(state_error: str, kind: str | None) -> str:
         return (
             "state.json is CORRUPT (torn write or not an HMAC envelope) — restore from backup or "
             f"reset the data dir. {state_error}"
+        )
+    if kind == "state-missing":
+        return (
+            "state.json is ABSENT (but a secrets file is present) — the launcher cannot verify the data "
+            f"dir; recreate it with `modulo start` or restore from backup. {state_error}"
         )
     return state_error
 

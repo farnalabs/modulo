@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher import doctor as doctor_module  # noqa: F401 — re-exported for fault injection in recipes
+from modulo.launcher import doctor as doctor_module
 from modulo.launcher.doctor import (
     EXIT_DEGRADED,
     EXIT_HEALTHY,
@@ -47,7 +47,7 @@ from modulo.launcher.doctor import (
     run_doctor,
 )
 from modulo.launcher.secrets_file import LauncherSecrets, _parse
-from modulo.launcher.state import LauncherState, load_state, save_state
+from modulo.launcher.state import STATE_FILENAME, LauncherState, load_state, save_state
 
 
 def _probes(**overrides: object) -> DoctorProbes:
@@ -677,16 +677,81 @@ def test_stale_backup_warn_old(tmp_path: Path) -> None:
 
 
 def test_stale_backup_fail_missing(tmp_path: Path) -> None:
-    """No last_backup_at ever recorded -> honest skip (schema v1)."""
+    """No last_backup_at ever recorded -> honest skip (no false schema claim)."""
     result = check_stale_backup(tmp_path, None, _probes(last_backup_at=lambda: None))
     assert result.ok is True
-    assert "schema v1" in result.detail
+    assert "no last-backup timestamp recorded yet" in result.detail
+    assert "schema v1" not in result.detail
 
 
 def test_stale_backup_pass_recent(tmp_path: Path) -> None:
     result = check_stale_backup(tmp_path, None, _probes())
     assert result.ok is True
     assert result.warning is False
+
+
+def test_stale_backup_wired_probe_fires_from_state(tmp_path: Path) -> None:
+    """default_probes wires last_backup_at from state.json -> the check can fire."""
+
+    state = LauncherState(
+        postgres_port=15432,
+        redis_port=16379,
+        api_port=18000,
+        last_backup_at="2000-01-01T00:00:00+00:00",
+    )
+    probes = doctor_module.default_probes(tmp_path, state)
+    epoch = probes.last_backup_at()
+    assert epoch is not None
+    result = check_stale_backup(tmp_path, state, probes)
+    assert result.ok is True
+    assert result.warning is True  # 2000 is far older than the 7d stale window
+
+
+def test_port_collisions_wired_probe_detects_foreign_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """default_probes wires a real port_owner_description -> foreign owner is flagged."""
+
+    state = _state()
+    probes = doctor_module.default_probes(tmp_path, state)
+    probes.launcher_running = lambda: True  # the collision check only runs when live
+    # Simulate a foreign process (not the launcher tree) owning the postgres port.
+    monkeypatch.setattr(doctor_module, "_listening_socket_inode", lambda _port: 12345)
+    monkeypatch.setattr(doctor_module, "_owner_pid_for_inode", lambda _inode: 9999)
+    monkeypatch.setattr(doctor_module, "_parent_pid", lambda _pid: 1)
+    monkeypatch.setattr(doctor_module, "_launcher_pid", lambda _data_dir: 4242)
+    result = check_port_collisions(tmp_path, state, probes)
+    assert result.ok is False
+    assert "9999" in result.detail
+
+
+def test_port_collisions_wired_probe_excludes_launcher_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A listener owned by the launcher (or its child) is NOT a collision."""
+
+    state = _state()
+    probes = doctor_module.default_probes(tmp_path, state)
+    probes.launcher_running = lambda: True  # the collision check only runs when live
+    monkeypatch.setattr(doctor_module, "_listening_socket_inode", lambda _port: 12345)
+    monkeypatch.setattr(doctor_module, "_owner_pid_for_inode", lambda _inode: 4243)  # launcher child
+    monkeypatch.setattr(doctor_module, "_parent_pid", lambda _pid: 4242)
+    monkeypatch.setattr(doctor_module, "_launcher_pid", lambda _data_dir: 4242)
+    result = check_port_collisions(tmp_path, state, probes)
+    assert result.ok is True
+
+
+def test_host_port_from_database_url_malformed_port_is_honest() -> None:
+    from modulo.launcher.doctor import _host_port_from_database_url
+
+    host, port = _host_port_from_database_url("postgresql://host:99999/db")
+    assert host == "host"
+    assert port is None  # not a crashed check
+
+
+def test_state_problem_kind_missing_state_not_corrupt(tmp_path: Path) -> None:
+    from modulo.launcher.doctor import _state_problem_kind
+
+    secrets = {"postgres_password": "p", "redis_password": "r", "state_hmac_key": "0" * 64}
+    (tmp_path / "secrets.json").write_text(json.dumps(secrets), encoding="utf-8")
+    err = f"no {STATE_FILENAME} in {tmp_path} — run `modulo start` first"
+    assert _state_problem_kind(tmp_path, err) == "state-missing"
 
 
 # ---------------------------------------------------------------------------

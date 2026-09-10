@@ -443,11 +443,27 @@ def logs(
     if rotate:
         if component != "app":
             click.echo("rotation applies to the app log only")
-        rotated = rotate_log(path)
-        if rotated:
-            click.echo(f"rotated: {path} -> {path.with_suffix(path.suffix + '.1')}")
         else:
-            click.echo("no rotation (absent or below the size threshold)")
+            from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
+
+            # rotate_log's docstring requires that no process holds the file open
+            # for appending; a live launcher redirects its writes into the
+            # rotated-away inode. Refuse (with a non-zero exit) while the
+            # launcher is attached to this data dir.
+            holder = _read_lock_holder(resolved.parent / (resolved.name + LOCK_SUFFIX))
+            if holder is not None and _pid_alive(holder.pid):
+                click.echo(
+                    f"refusing to rotate: the launcher is running (pid {holder.pid}) — rotating "
+                    "launcher.log under a live launcher redirects its writes into the rotated-away "
+                    "file. Stop the launcher first (`modulo stop`), then rotate.",
+                    err=True,
+                )
+                raise SystemExit(2)
+            rotated = rotate_log(path)
+            if rotated:
+                click.echo(f"rotated: {path} -> {path.with_suffix(path.suffix + '.1')}")
+            else:
+                click.echo("no rotation (absent or below the size threshold)")
         return
     if not path.is_file():
         click.echo(

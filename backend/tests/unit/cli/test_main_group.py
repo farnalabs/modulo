@@ -580,3 +580,21 @@ def test_logs_rotate_when_stopped_rotates(tmp_path: Path, monkeypatch: pytest.Mo
     assert result.exit_code == 0
     assert big.with_name("launcher.log.1").is_file()
     assert "rotated" in result.output
+
+
+def test_logs_rotate_refuses_when_launcher_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.launcher.supervisor as supervisor_module
+
+    big = tmp_path / "launcher.log"
+    big.write_text("x" * 2048, encoding="utf-8")
+    monkeypatch.setattr(supervisor_module, "ROTATE_DEFAULT_MAX_BYTES", 1024)
+    monkeypatch.setattr(
+        supervisor_module,
+        "_read_lock_holder",
+        lambda _path: supervisor_module.LockHolder(pid=4242, mode="serve", acquired_at=0.0),
+    )
+    monkeypatch.setattr(supervisor_module, "_pid_alive", lambda _pid: True)
+    result = CliRunner().invoke(cli_main.cli, ["logs", "--data-dir", str(tmp_path), "--rotate"])
+    assert result.exit_code == 2
+    assert "refusing to rotate" in result.output
+    assert not big.with_name("launcher.log.1").is_file()
