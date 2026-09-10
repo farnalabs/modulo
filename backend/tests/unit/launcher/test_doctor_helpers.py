@@ -87,6 +87,7 @@ def test_parse_listeners_from_proc_closed_port_is_empty() -> None:
     assert not _parse_listeners_from_proc(1)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="/proc listener inspection is POSIX-only (TODO(P3))")
 def test_parse_listeners_from_proc_detects_loopback_listener() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -148,6 +149,7 @@ def test_load_state_readonly_integrity_error(tmp_path: Path, monkeypatch: pytest
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="effective_uid + /proc-backed probes are POSIX-only (TODO(P3))")
 def test_default_probes_state_none_exercises_all_probes(tmp_path: Path) -> None:
     """With no state, composed is empty so the service probes raise their
     honest 'no composed URL' errors and the light probes run for real."""
