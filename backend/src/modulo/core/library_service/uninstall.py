@@ -19,10 +19,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.agent import Agent
-from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.schema import Schema
+from modulo.db.models import Agent, CollectionInstall, CollectionInstallEntity, Pipeline, Schema
 
 __all__ = ["uninstall_collection"]
 
@@ -75,20 +72,20 @@ async def _check_unmodified(
     matches); False if the user already detached it.
     """
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
+        entity = await session.scalar(select(Schema).where(Schema.id == entity_id))
         if entity is None:
             return False
         return entity.collection_install_id == install_id
     if entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
+        entity = await session.scalar(select(Agent).where(Agent.id == entity_id))
         if entity is None:
             return False
-        return entity.collection_install_id == install_id
+        return bool(entity.collection_install_id == install_id)
     if entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
+        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
         if entity is None:
             return False
-        return entity.collection_install_id == install_id
+        return bool(entity.collection_install_id == install_id)
     return False
 
 
@@ -99,15 +96,15 @@ async def _delete_entity(
 ) -> None:
     """Delete an unmodified entity."""
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
+        entity = await session.scalar(select(Schema).where(Schema.id == entity_id))
         if entity is not None:
             await session.delete(entity)
     elif entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
+        entity = await session.scalar(select(Agent).where(Agent.id == entity_id))
         if entity is not None:
             await session.delete(entity)
     elif entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
+        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
         if entity is not None:
             await session.delete(entity)
 
@@ -119,15 +116,15 @@ async def _detach_entity(
 ) -> None:
     """Detach provenance from a modified entity (set collection_install_id = None)."""
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
+        entity = await session.scalar(select(Schema).where(Schema.id == entity_id))
         if entity is not None:
             entity.collection_install_id = None
     elif entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
+        entity = await session.scalar(select(Agent).where(Agent.id == entity_id))
         if entity is not None:
             entity.collection_install_id = None
     elif entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
+        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
         if entity is not None:
             entity.collection_install_id = None
 

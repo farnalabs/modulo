@@ -616,7 +616,7 @@ class TestValidateManifestPins:
                 return await _validate_manifest_pins([{"slug": "my-schema", "version": "1.0"}], MagicMock(), _ORG_ID)
 
         errors = asyncio.run(run())
-        assert errors == []
+        assert not errors
 
 
 # ---------------------------------------------------------------------------
@@ -766,8 +766,8 @@ class TestUninstallCollectionEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["install_id"] == str(install_id)
-        assert data["deleted"] == []
-        assert data["detached"] == []
+        assert not data["deleted"]
+        assert not data["detached"]
 
     def test_uninstall_not_found(self, client: TestClient) -> None:
         from modulo.core.library_service.uninstall import InstallNotFoundError
