@@ -9,6 +9,7 @@ branches not exercised elsewhere.
 """
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -158,8 +159,11 @@ async def _fake_asyncpg_connect(*_a: object, **_k: object) -> _FakeConn:
 
 
 class _FakeRedis:
+    instances: ClassVar[list["_FakeRedis"]] = []
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._kwargs = kwargs
+        _FakeRedis.instances.append(self)
 
     def ping(self) -> bool:
         return True
@@ -234,7 +238,12 @@ def test_default_probes_redis_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)
     monkeypatch.setattr(redis, "Redis", _FakeRedis)
+    _FakeRedis.instances.clear()
     probes.probe_redis()  # must not raise (ping returns True)
+    # a client was constructed against the composed loopback redis port
+    assert _FakeRedis.instances, "redis probe did not instantiate a client"
+    assert _FakeRedis.instances[0]._kwargs.get("port") == state.redis_port
+    assert _FakeRedis.instances[0].ping() is True
 
 
 def test_default_probes_redis_probe_no_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
