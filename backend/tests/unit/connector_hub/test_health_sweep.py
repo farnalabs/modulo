@@ -78,7 +78,7 @@ async def sweep(tmp_path):
                 async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
             )
 
-        async def _seed(instances: list[ConnectorInstance]) -> None:
+        async def _seeder(instances: list[ConnectorInstance]) -> None:
             maker = async_sessionmaker(engine, expire_on_commit=False)
             async with maker() as session, session.begin():
                 for ci in instances:
@@ -90,13 +90,13 @@ async def sweep(tmp_path):
                 result = await session.execute(select(ConnectorInstance).order_by(ConnectorInstance.name))
                 return list(result.scalars().all())
 
-        yield _run, _seed, _rows
+        yield _run, _seeder, _rows
     await engine.dispose()
 
 
 async def test_sweep_stamps_last_check_on_every_active_instance(sweep, tmp_path) -> None:
-    run, seed, rows = sweep
-    await seed([_instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)})])
+    run, seeder, rows = sweep
+    await seeder([_instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)})])
 
     result = await run()
 
@@ -108,8 +108,8 @@ async def test_sweep_stamps_last_check_on_every_active_instance(sweep, tmp_path)
 
 
 async def test_sweep_isolates_poisoned_instance(sweep, tmp_path) -> None:
-    run, seed, rows = sweep
-    await seed(
+    run, seeder, rows = sweep
+    await seeder(
         [
             _instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)}),
             _instance(connector_type_id="shell"),
@@ -132,8 +132,8 @@ async def test_sweep_isolates_poisoned_instance(sweep, tmp_path) -> None:
 
 
 async def test_sweep_skips_disabled_instances(sweep) -> None:
-    run, seed, rows = sweep
-    await seed([_instance(connector_type_id="shell", status="disabled")])
+    run, seeder, rows = sweep
+    await seeder([_instance(connector_type_id="shell", status="disabled")])
 
     result = await run()
 
@@ -143,9 +143,9 @@ async def test_sweep_skips_disabled_instances(sweep) -> None:
 
 
 async def test_sweep_does_not_mutate_org_data(sweep, tmp_path) -> None:
-    run, seed, rows = sweep
+    run, seeder, rows = sweep
     original = _instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)})
-    await seed([original])
+    await seeder([original])
     (seeded,) = await rows()
     snapshot: dict[str, Any] = {
         "name": seeded.name,
