@@ -18,6 +18,12 @@ role — an app-owned RLS-FORCED table would let the app bypass its own RLS),
 ``rls_org_isolation`` and grants DML to ``modulo_app``/``modulo_system``. The
 ceremony is role-existence guarded (fresh dev/BDD DBs have no custom roles).
 
+The non-org child ``collection_install_entity`` also gets FORCE RLS with a
+parent-derived ``rls_org_isolation`` policy (scope = parent install's org) plus
+the same DML grants — without the grants the app role cannot read the rows the
+parent JOIN resolves, and without the policy a non-org table would expose
+cross-org rows.
+
 Naming: ``organisation_id`` (repo convention, matches the shared
 ``app.organisation_id`` RLS predicate — NOT ``org_id``). Indexes use the
 ``ix_<table>_<col>`` convention. The PRIMARY KEY already yields a unique index
@@ -56,6 +62,16 @@ _ORG_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', tr
 
 _COLLECTION_INSTALL = "collection_install"
 _COLLECTION_INSTALL_ENTITY = "collection_install_entity"
+
+# Parent-derived org isolation for the non-org child table: a row is visible to
+# the caller's org only when its parent install belongs to that org. The child
+# carries no organisation_id of its own — access is always via the org-scoped
+# parent's install_id. Plain literal (no interpolation) so the SQL-injection
+# linter does not trip on the constant table name.
+_ENTITY_ORG_SCOPE = (
+    "install_id IN (SELECT install_id FROM collection_install "
+    "WHERE organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)"
+)
 
 # Read by tests/unit/db/test_rls_coverage.py (style 2: module-level tuple of
 # strings) to confirm the org-scoped table has an RLS-enabling migration.
@@ -209,6 +225,18 @@ def upgrade() -> None:
         if system_role:
             op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_COLLECTION_INSTALL} TO {_SYSTEM_ROLE}")
 
+        # collection_install_entity is the non-org child; the runtime app/system
+        # roles need DML grants or they cannot read the rows the parent JOIN
+        # resolves, and FORCE RLS with a parent-derived policy keeps it scoped to
+        # the caller's org (an unscoped child would otherwise leak cross-org rows).
+        op.execute(f"ALTER TABLE {_COLLECTION_INSTALL_ENTITY} ENABLE ROW LEVEL SECURITY")
+        op.execute(f"ALTER TABLE {_COLLECTION_INSTALL_ENTITY} FORCE ROW LEVEL SECURITY")
+        op.execute(f"CREATE POLICY rls_org_isolation ON {_COLLECTION_INSTALL_ENTITY} USING ({_ENTITY_ORG_SCOPE})")
+        if app_role:
+            op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_COLLECTION_INSTALL_ENTITY} TO {_APP_ROLE}")
+        if system_role:
+            op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {_COLLECTION_INSTALL_ENTITY} TO {_SYSTEM_ROLE}")
+
 
 def downgrade() -> None:
     bind = op.get_bind()
@@ -216,6 +244,8 @@ def downgrade() -> None:
 
     if pg:
         op.execute("SET search_path TO public")
+        op.execute(f"DROP POLICY IF EXISTS rls_org_isolation ON {_COLLECTION_INSTALL_ENTITY}")
+        op.execute(f"ALTER TABLE {_COLLECTION_INSTALL_ENTITY} DISABLE ROW LEVEL SECURITY")
         op.execute(f"DROP POLICY IF EXISTS rls_org_isolation ON {_COLLECTION_INSTALL}")
         op.execute(f"ALTER TABLE {_COLLECTION_INSTALL} DISABLE ROW LEVEL SECURITY")
 

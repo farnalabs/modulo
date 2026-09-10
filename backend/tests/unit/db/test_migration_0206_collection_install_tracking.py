@@ -23,6 +23,8 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+from modulo.db.models import CollectionInstall, CollectionInstallEntity
+
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0206_collection_install_tracking"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
@@ -163,3 +165,27 @@ class TestPostgresCeremony:
             migration.upgrade()
         # Asserted for both created tables (collection_install + entity).
         assert assert_mock.call_count >= 1
+
+
+class TestOrmMigrationConformance:
+    """Pin the ORM metadata to the migration's schema so model/migration drift
+    cannot silently pass the mocked unit tests (the class of bug the PR-review
+    loop kept re-finding on this migration)."""
+
+    def test_collection_install_pk_is_install_id_not_id(self) -> None:
+        pk_cols = {c.name for c in CollectionInstall.__table__.primary_key.columns}
+        assert pk_cols == {"install_id"}, f"collection_install PK drift: {pk_cols}"
+
+    def test_collection_install_has_no_updated_at(self) -> None:
+        cols = set(CollectionInstall.__table__.columns.keys())
+        assert "install_id" in cols
+        assert "organisation_id" in cols
+        assert "created_at" in cols
+        assert "updated_at" not in cols, "migration 0206 has no updated_at column"
+
+    def test_collection_install_entity_fk_targets_install_id(self) -> None:
+        fk_targets = {(fk.column.table.name, fk.column.name) for fk in CollectionInstallEntity.__table__.foreign_keys}
+        assert (
+            "collection_install",
+            "install_id",
+        ) in fk_targets, f"entity FK must target collection_install.install_id: {fk_targets}"
