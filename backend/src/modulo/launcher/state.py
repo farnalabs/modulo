@@ -13,6 +13,11 @@ Contract, all locked by tests:
 * ``schema_version`` stamped in the payload; loading a state written by a
   NEWER launcher (downgrade) or an unknown OLDER one is refused — there are
   no migration shims in v1.
+* ``last_backup_at`` is an OPTIONAL forward-compatible field (FAR-672):
+  files without it (every pre-FAR-672 writer) load unchanged, and it is only
+  written into the payload when a timestamp exists. The slice-1 v1 key set
+  stays intact for credential-free payloads — the field is a timestamp, not
+  a credential.
 * Ports are NON-DEFAULT high ports (bundled services must never collide with
   a developer's own Postgres/Redis), scanned for availability at first boot
   and persisted, with earlier allocations excluded from later scans so the
@@ -41,7 +46,8 @@ DEFAULT_REDIS_PORT = 16379
 DEFAULT_API_PORT = 18000
 _MIN_PORT = 1024
 _MAX_PORT = 65535
-_ALLOWED_PAYLOAD_KEYS = frozenset({"schema_version", "postgres_port", "redis_port", "api_port"})
+_ALLOWED_PAYLOAD_KEYS = frozenset({"schema_version", "postgres_port", "redis_port", "api_port", "last_backup_at"})
+_REQUIRED_PAYLOAD_KEYS = _ALLOWED_PAYLOAD_KEYS - {"last_backup_at"}
 
 _ENVELOPE_PAYLOAD_KEY = "payload"
 _ENVELOPE_MAC_KEY = "mac"
@@ -80,23 +86,32 @@ class LauncherState:
     redis_port: int
     api_port: int
     schema_version: int = SCHEMA_VERSION
+    last_backup_at: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "postgres_port": self.postgres_port,
             "redis_port": self.redis_port,
             "api_port": self.api_port,
         }
+        # Written ONLY when set: a state that has never seen a backup keeps
+        # the pre-FAR-672 payload shape byte-for-byte (forward compatibility).
+        if self.last_backup_at is not None:
+            payload["last_backup_at"] = self.last_backup_at
+        return payload
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "LauncherState":
         unknown = set(payload) - _ALLOWED_PAYLOAD_KEYS
         if unknown:
             raise StateIntegrityError(f"state.json payload has unknown field(s): {sorted(unknown)}")
-        missing = _ALLOWED_PAYLOAD_KEYS - set(payload)
+        missing = _REQUIRED_PAYLOAD_KEYS - set(payload)
         if missing:
             raise StateIntegrityError(f"state.json payload is missing field(s): {sorted(missing)}")
+        last_backup_at = payload.get("last_backup_at")
+        if last_backup_at is not None and (not isinstance(last_backup_at, str) or not last_backup_at):
+            raise StateIntegrityError(f"state.json field last_backup_at is not a valid timestamp: {last_backup_at!r}")
         for key in ("postgres_port", "redis_port", "api_port"):
             value = payload[key]
             if not isinstance(value, int) or isinstance(value, bool) or not _MIN_PORT <= value <= _MAX_PORT:
@@ -109,6 +124,7 @@ class LauncherState:
             redis_port=payload["redis_port"],
             api_port=payload["api_port"],
             schema_version=version,
+            last_backup_at=last_backup_at,
         )
 
 
