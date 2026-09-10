@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.workflow_import_export import materialize_import
+from modulo.core.workflow_import_export import BUNDLE_FORMAT_VERSION, materialize_import
 from modulo.db.models.agent import Agent
 from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
@@ -124,8 +124,7 @@ async def _build_bundle_from_pins(
                 }
             )
         elif pin.primitive_type == "workflow":
-            bundle = content.get("bundle")
-            workflow_content = bundle if bundle is not None else content
+            workflow_content = content.get("bundle") or content
             pipeline_info = workflow_content.get("pipeline", {})
             pipeline_graph_nodes = pipeline_info.get("graph_nodes_json", [])
             graph_nodes.extend(pipeline_graph_nodes)
@@ -133,6 +132,7 @@ async def _build_bundle_from_pins(
             schemas.extend(workflow_content.get("schemas", []))
 
     return {
+        "format_version": BUNDLE_FORMAT_VERSION,
         "pipeline": {
             "name": "Collection Install",
             "description": "Entities installed from a library collection",
@@ -273,21 +273,14 @@ async def install_collection(
     # 3. Build the materialize_import bundle
     bundle = await _build_bundle_from_pins(resolved_pins)
 
-    # 4. Refuse re-install when an install already exists for this collection.
-    # A single install per collection is enforced by a unique constraint, and
-    # re-running materialize_import would create a second full set of entities
-    # while orphaning the previously stamped ones. Callers must uninstall
-    # before installing again.
+    # 4. Refuse if the collection is already installed in this organisation
     existing_stmt = select(CollectionInstall).where(
         CollectionInstall.organisation_id == org_id,
         CollectionInstall.collection_id == collection_id,
     )
     existing = (await session.execute(existing_stmt)).scalar_one_or_none()
     if existing is not None:
-        raise CollectionInstallError(
-            f"Collection '{collection.name}' is already installed "
-            f"(install {existing.install_id}). Uninstall it before installing again."
-        )
+        raise CollectionInstallError(f"Collection '{collection.name}' is already installed in this organisation")
     install_id = uuid.uuid4()
 
     # 5. Call materialize_import (all-or-nothing transaction)
@@ -317,7 +310,12 @@ async def install_collection(
     # 8. Build connector checklist
     connector_checklist = _build_connector_checklist(resolved_pins)
 
-    # 9. Create the CollectionInstall provenance record
+    # 9. Determine community provenance (ADR 032 D2).
+    # Community-sourced or registry-sourced collections restrict agent tool/
+    # connector access until an operator explicitly grants access.
+    community_sourced = collection.source in ("community", "registry")
+
+    # 10. Create the CollectionInstall provenance record
     session.add(
         CollectionInstall(
             install_id=install_id,
@@ -325,6 +323,7 @@ async def install_collection(
             collection_version=collection.version,
             organisation_id=org_id,
             status="installed",
+            community_sourced=community_sourced,
             resolved_manifest={
                 "schemas": result.get("schemas", {}),
                 "agents": result.get("agents", {}),

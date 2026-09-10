@@ -2999,6 +2999,28 @@ def make_node_fn(
         agent_id_raw = node_def.get("agent_id")
         agent_id = _parse_uuid_opt(agent_id_raw)
         await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id)
+
+        # FAR-764: community execution gate (ADR 032 D2).  Community-sourced
+        # agents that have not been granted by the operator are restricted to
+        # read-only / no-tool scope.  The gated agent set is seeded into state
+        # by the executor at run start.  A gated node returns a stub artifact
+        # instead of invoking the model — the agent cannot execute until the
+        # operator grants access.
+        gated = state.get("_community_gated_agents") or set()
+        # Compare the canonicalised UUID form, not the raw snapshot string — a
+        # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+        # id would otherwise slip past the gate and fail it open.
+        if agent_id is not None and str(agent_id) in gated:
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "blocked",
+                        "reason": "community_sourced_not_granted",
+                    }
+                ]
+            }
+
         run_context: dict[str, Any] = state.get("run_context") or {}
         raw_input = run_context.get("input", {})
 
@@ -7765,6 +7787,24 @@ def make_sandbox_agent_fn(
         role="sandbox_agent",
     )
     async def _sandbox_agent(state: dict[str, Any]) -> dict[str, Any]:
+        # FAR-764: community execution gate — community-sourced sandbox agents
+        # that have not been granted are blocked from executing.
+        agent_id_raw = node_def.get("agent_id")
+        gated = state.get("_community_gated_agents") or set()
+        # Compare the canonicalised UUID form, not the raw snapshot string — a
+        # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+        # id would otherwise slip past the gate and fail it open.
+        agent_id = _parse_uuid_opt(agent_id_raw)
+        if agent_id is not None and str(agent_id) in gated:
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "blocked",
+                        "reason": "community_sourced_not_granted",
+                    }
+                ]
+            }
         return await _sandbox_agent_impl(state, config=config)
 
     _sandbox_agent.__name__ = f"sandbox_agent_{node_id}"

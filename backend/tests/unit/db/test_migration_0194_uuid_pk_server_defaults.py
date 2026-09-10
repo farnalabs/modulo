@@ -29,6 +29,13 @@ _EXPECTED_COUNT = 84
 # including them would make the count drift on every table added after 0194.
 _POST_0194_TABLES = frozenset({"collection_install", "collection_install_entity", "variant_batch_state"})
 
+# Tables introduced by migrations AFTER 0194_uuid_pk_server_defaults own their own
+# uuid-PK server defaults (e.g. 0207_collection_install_tracking sets install_id's
+# default inline, and CollectionInstallEntity.entity_id is a supplied key with no
+# default). They are out of scope for this frozen migration's coverage contract —
+# including them would make the count drift on every table added after 0194.
+_POST_0194_TABLES = frozenset({"collection_install", "collection_install_entity"})
+
 
 def _load_migration() -> ModuleType:
     assert _MIGRATION_PATH.exists(), f"Migration file missing: {_MIGRATION_PATH}"

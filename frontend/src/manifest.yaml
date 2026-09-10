@@ -90,7 +90,7 @@ routes:
         name: library-collection-create
         breadcrumb: New Collection
         parent: /library
-        product_map: [feat-library]
+        product_map: [feat-library, feat-library-collections]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -101,7 +101,7 @@ routes:
         name: library-collection-detail
         breadcrumb: Collection
         parent: /library
-        product_map: [feat-library]
+        product_map: [feat-library, feat-library-collections]
         sidebar_group:
         sidebar_order:
         type: page
@@ -910,6 +910,16 @@ elements:
         dynamic_testid: false
       - testid: stat-no-baseline
         type: element
+        dynamic_testid: false
+    /library/collections/:id:
+      - testid: collection-publish
+        type: button
+        dynamic_testid: false
+      - testid: collection-grant-agents
+        type: button
+        dynamic_testid: false
+      - testid: collection-create-connector
+        type: button
         dynamic_testid: false
     /accept-invite:
       - testid: accept-invite-missing-token
@@ -2146,10 +2156,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: collection-create-submit
-        type: button
-        dynamic_testid: false
-    /library/collections/:id:
-      - testid: collection-publish
         type: button
         dynamic_testid: false
     /library/:id/create-pipeline:
@@ -3787,6 +3793,24 @@ features:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
     feat-library:
         description: Reusable pipeline templates and the template library
+    feat-library-collections:
+        description: Install, uninstall, and manage library collection installs
+        status: covered
+        behaviours:
+            # Collection authoring (FAR-760)
+            - "[x] Collections are library_collection primitives with manifest_pins listing slug+version references to schemas, agents, and workflows in the org library; pins are validated on publish (non-empty slug+version, known visible primitive, allowed pin type, no duplicates, max 25 pins)"
+            - "[x] Draft collections can be created (POST /libraries/collections), updated (PATCH), and published (POST /publish); published collections cannot be edited"
+            # Install / Uninstall (FAR-762)
+            - "[x] Install resolves manifest pins to visible primitives, materialises entities via materialize_import, stamps collection_install_id on all created entities (schemas, agents, pipelines), and creates a CollectionInstall provenance record with status=installed"
+            - "[x] Uninstall deletes unmodified entities (collection_install_id matches) and detaches provenance from modified entities (collection_install_id already cleared); the CollectionInstall record and entity tracking rows are deleted"
+            - "[x] Re-install of the same version is idempotent: missing entities are re-added via materialize_import without duplicating existing ones"
+            # Runnability (FAR-762)
+            - "[x] compute_runnable is a pure read-time check: returns True when all connector_checklist entries are configured+bound and the org has at least one active model backend; returns False otherwise"
+            # Community trust gate (FAR-764 / ADR 032 D2)
+            - "[x] Community-sourced or registry-sourced collections restrict agent tool/connector access until an operator explicitly grants access via grant_collection_agents (sets agents_granted=True, idempotent)"
+            - "[x] Non-community-sourced collections (source=local) are not subject to the grant gate and agents are immediately usable"
+            # Connector checklist
+            - "[x] Each unique connector_type_id referenced by any agent in the collection gets a checklist entry with status=pending; the runnability check verifies all entries are configured+bound"
     feat-license:
         description: Feature licensing and plan tiers
     feat-lifecycle-maps:
