@@ -199,7 +199,7 @@ describe('LibraryView', () => {
 
     let lastCall = getMock.mock.calls.at(-1)!
     let opts = lastCall[1] as { params: { query: Record<string, unknown> } }
-    expect(opts.params.query.page).toBe('2')
+    expect(opts.params.query.page).toBe(2)
 
     const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
     expect(searchInput.exists()).toBe(true)
@@ -221,7 +221,7 @@ describe('LibraryView', () => {
     lastCall = getMock.mock.calls.at(-1)!
     opts = lastCall[1] as { params: { query: Record<string, unknown> } }
     expect(opts.params.query.search).toBe('foo')
-    expect(opts.params.query.page).toBe('1')
+    expect(opts.params.query.page).toBe(1)
     wrapper.unmount()
   })
 
