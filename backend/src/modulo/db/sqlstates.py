@@ -47,7 +47,7 @@ DUAL_WRITE_RETRYABLE_SQLSTATES = frozenset({"57014"})
 # 40P01, admin shutdown 57P01, crash shutdown 57P02, connection-loss 08xxx
 # classes — 08000/08001/08003/08004/08006/08007). A marker-savepoint failure
 # with one of these has ALSO lost the legacy marker write (the outer
-# transaction rolls back), so the "legacy survives, sweep heals" claim is
+# transaction rolls back), so the "legacy survives, repair migrates" claim is
 # false and the failure must be claimed loudly.
 MARKER_TXN_ABORTING_SQLSTATES = frozenset(
     {"40P01", "57P01", "57P02", "08000", "08001", "08003", "08004", "08006", "08007"}
