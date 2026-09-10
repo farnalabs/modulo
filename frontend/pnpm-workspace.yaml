@@ -92,3 +92,4 @@ minimumReleaseAgeExclude:
   - 'playwright@1.63.0'
   - 'eslint-plugin-vue@10.11.0'
   - 'vue-echarts@8.3.0'
+  - 'magic-string@1.3.1'
