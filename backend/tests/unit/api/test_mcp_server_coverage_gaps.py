@@ -1326,6 +1326,50 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await create_model_backend(name="n", display_name="d", provider="openai", model_id="m")
         assert result["error"] == "internal_error"
 
+    async def test_create_model_backend_stub_provider_rejected_with_validation_error(self) -> None:
+        """The stub provider is a test double: 500 DB-constraint errors replaced by a 4xx-style envelope."""
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "db_create_model_backend") as mock_db_create,
+        ):
+            result = await create_model_backend(name="n", display_name="d", provider="stub", model_id="stub")
+        assert result["error"] == "validation_error"
+        assert result["field"] == "provider"
+        assert "stub" in result["detail"]
+        assert "not supported via MCP" in result["detail"]
+        mock_db_create.assert_not_called()
+
+    async def test_create_model_backend_unknown_provider_rejected_with_validation_error(self) -> None:
+        """Unknown providers fail validation up-front instead of 500ing on the DB check constraint."""
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "db_create_model_backend") as mock_db_create,
+        ):
+            result = await create_model_backend(name="n", display_name="d", provider="not-a-provider", model_id="m")
+        assert result["error"] == "validation_error"
+        assert "Unknown model backend provider" in result["detail"]
+        mock_db_create.assert_not_called()
+
+    async def test_create_model_backend_plugin_provider_passes_validation(self) -> None:
+        """A valid built-in provider passes validation and proceeds to DB creation."""
+        mb = MagicMock()
+        mb.id = uuid.uuid4()
+        mb.name = "n"
+        mb.display_name = "d"
+        mb.provider = "openai"
+        mb.model_id = "m"
+        mb.visibility = "org"
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "db_create_model_backend", new=AsyncMock(return_value=mb)),
+            patch("modulo.core.mcp_setup_handoff.create_handoff", new=AsyncMock(return_value={})),
+            patch.object(ms, "_session"),
+            patch("modulo.api.mcp_server._ctx_org_id_val", return_value=uuid.uuid4()),
+            patch("modulo.api.mcp_server._ctx_user_id_val", return_value=uuid.uuid4()),
+        ):
+            result = await create_model_backend(name="n", display_name="d", provider="openai", model_id="m")
+        assert result["status"] == "pending_setup"
+
     async def test_delete_pipeline_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
