@@ -1222,6 +1222,7 @@ class TestBackupCli:
 
 
 class TestRestoreCli:
+    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
@@ -1236,6 +1237,7 @@ class TestRestoreCli:
         mock_re_encrypt: MagicMock,
         mock_restore_cp: MagicMock,
         mock_restore_cw: MagicMock,
+        mock_safety_dump: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1319,6 +1321,7 @@ class TestRestoreCli:
         assert "No database.sql found" in result.output
         mock_psql.assert_not_called()
 
+    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
@@ -1333,6 +1336,7 @@ class TestRestoreCli:
         mock_re_encrypt: MagicMock,
         mock_restore_cp: MagicMock,
         mock_restore_cw: MagicMock,
+        mock_safety_dump: MagicMock,
         tmp_path: Path,
     ) -> None:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1361,6 +1365,7 @@ class TestRestoreCli:
         assert result.exit_code != 0
         assert "--previous-fernet-key" in result.output
 
+    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
@@ -1375,6 +1380,7 @@ class TestRestoreCli:
         mock_re_encrypt: MagicMock,
         mock_restore_cp: MagicMock,
         mock_restore_cw: MagicMock,
+        mock_safety_dump: MagicMock,
         tmp_path: Path,
     ) -> None:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1421,6 +1427,7 @@ class TestRestoreCli:
         assert args[2] == old_fernet_key  # previous ferret key
         assert args[3] == new_fernet_key  # current ferret key
 
+    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
@@ -1435,6 +1442,7 @@ class TestRestoreCli:
         mock_re_encrypt: MagicMock,
         mock_restore_cp: MagicMock,
         mock_restore_cw: MagicMock,
+        mock_safety_dump: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1463,6 +1471,7 @@ class TestRestoreCli:
         assert "FERNET_KEY unchanged" in result.output
         mock_re_encrypt.assert_not_called()
 
+    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
@@ -1477,6 +1486,7 @@ class TestRestoreCli:
         mock_re_encrypt: MagicMock,
         mock_restore_cp: MagicMock,
         mock_restore_cw: MagicMock,
+        mock_safety_dump: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1516,6 +1526,7 @@ class TestRestoreCli:
 
         assert result.exit_code != 0
 
+    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
@@ -1530,6 +1541,7 @@ class TestRestoreCli:
         mock_re_encrypt: MagicMock,
         mock_restore_cp: MagicMock,
         mock_restore_cw: MagicMock,
+        mock_safety_dump: MagicMock,
         tmp_path: Path,
     ) -> None:
         new_fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1589,6 +1601,7 @@ class TestFileChecksum:
 
 
 class TestRestoreIntegrity:
+    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
@@ -1603,6 +1616,7 @@ class TestRestoreIntegrity:
         mock_re_encrypt: MagicMock,
         mock_restore_cp: MagicMock,
         mock_restore_cw: MagicMock,
+        mock_safety_dump: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1693,6 +1707,7 @@ class TestRestoreIntegrity:
         assert result.exit_code != 0
         assert "not found on disk" in result.output
 
+    @patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake"))
     @patch("modulo.cli.backup._restore_checkpoint_writes_sync")
     @patch("modulo.cli.backup._restore_checkpoints_sync")
     @patch("modulo.cli.backup._re_encrypt_credentials_sync")
@@ -1707,6 +1722,7 @@ class TestRestoreIntegrity:
         mock_re_encrypt: MagicMock,
         mock_restore_cp: MagicMock,
         mock_restore_cw: MagicMock,
+        mock_safety_dump: MagicMock,
         tmp_path: Path,
     ) -> None:
         fernet_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
