@@ -72,6 +72,11 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     ),
     "audit_events": frozenset({"payload_json"}),
     "chat_messages": frozenset({"tool_calls_json", "tool_results_json"}),
+    # collection_install: migration 0207 creates these three blob columns as
+    # JSONB on Postgres; the ORM models them as generic JSON for SQLite/MariaDB
+    # parity (repo-wide multi-backend convention). permanent (documented repo
+    # divergence).
+    "collection_install": frozenset({"resolved_manifest", "connector_checklist", "installed_entities"}),
     "composite_templates": frozenset({"sub_pipeline_graph_json", "parameter_ports_json"}),
     "connector_instances": frozenset({"config_json", "allowed_operations"}),
     "environment_profiles": frozenset({"capabilities_json", "config_json", "secret_refs_json"}),
@@ -260,6 +265,19 @@ _AUDIT_CHAIN_FK_COLUMNS: dict[str, frozenset[str]] = {
     "scheduled_reports": frozenset({"created_by", "updated_by", "deleted_by"}),
 }
 
+# Migration-managed provenance columns (FAR-761, migration 0207) that exist in
+# the DB but are intentionally NOT declared on the ORM: ``collection_install_id``
+# is added to the entity tables to record which install wrote each
+# schema/agent/pipeline. The app resolves installs via the org-scoped parent
+# (``collection_install_entity``), never through the ORM, so these columns are
+# deliberately DB-owned (the same "DB owns an audit/provenance column" pattern as
+# the audit-chain columns above). permanent (documented repo divergence)
+_MIGRATION_OWNED_COLUMNS: dict[str, frozenset[str]] = {
+    "agents": frozenset({"collection_install_id"}),
+    "pipelines": frozenset({"collection_install_id"}),
+    "schemas": frozenset({"collection_install_id"}),
+}
+
 
 def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
     """Classify ONE compare_metadata diff against the reasoned entries above.
@@ -296,6 +314,15 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
     if kind == "remove_column":
         # Audit-chain columns the DB triggers own (0108) — per-table entries.
         if inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]:
+            return True
+        # Migration-managed provenance columns that exist in the DB but are
+        # intentionally NOT declared on the ORM (FAR-761, migration 0207):
+        # ``collection_install_id`` is added to the entity tables to record which
+        # install wrote each schema/agent/pipeline. The app resolves installs via
+        # the org-scoped parent (``collection_install_entity``), never through the
+        # ORM, so these columns are deliberately DB-owned.
+        # permanent (documented repo divergence)
+        if inner[2] in _MIGRATION_OWNED_COLUMNS and inner[3].name in _MIGRATION_OWNED_COLUMNS[inner[2]]:
             return True
         # The legacy ``runs`` blob columns (FAR-583 B1): the ORM mapping was
         # CUT while the DB keeps the columns until migration 0194 (B2b), so

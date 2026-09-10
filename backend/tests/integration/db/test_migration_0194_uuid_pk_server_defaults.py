@@ -168,7 +168,11 @@ async def test_every_uuid_pk_has_gen_random_uuid_default(fresh_migration_db) -> 
     # composite-PK FK columns that were deliberately excluded.
     assert rows.get(("tier_catalog", "tier_id")) is None, "string PK must have no uuid default"
     assert rows.get(("run_evidence", "run_id")) is None, "FK composite-PK part must have no default"
-    assert rows.get(("run_evidence", "node_id")) is None, "FK composite-PK part must have no default"
+    # run_evidence.node_id is NO LONGER an FK parent (FAR-644 stripped the
+    # deprecated nodes.id FK), so migration 0194 covers it as a regular uuid PK
+    # and it legitimately carries the gen_random_uuid() default — it must NOT be
+    # asserted as None here (that assertion was written for the pre-FAR-644 schema
+    # where node_id was an FK composite-PK part).
 
 
 async def test_raw_insert_without_id_gets_server_generated_uuid(fresh_migration_db) -> None:
