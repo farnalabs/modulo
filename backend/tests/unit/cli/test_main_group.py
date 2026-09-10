@@ -337,6 +337,37 @@ def test_status_on_uninitialized_dir_does_not_crash(tmp_path: Path) -> None:
     assert "initialized: False" in result.output
 
 
+def test_doctor_command_invokes_run_doctor_and_propagates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.cli.main as cli_main_module
+    import modulo.launcher.doctor as doctor_module
+
+    calls: list[tuple[Path, bool]] = []
+
+    def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+        calls.append((data_dir, as_json))
+        return 1
+
+    monkeypatch.setattr(doctor_module, "run_doctor", fake_run_doctor)
+    result = CliRunner().invoke(cli_main_module.cli, ["doctor", "--data-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 1
+    assert calls == [(tmp_path, True)]
+
+
+def test_doctor_command_render_runtime_error_as_click_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import modulo.cli.main as cli_main_module
+    import modulo.launcher.doctor as doctor_module
+
+    def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+        raise RuntimeError("data dir is not initialized")
+
+    monkeypatch.setattr(doctor_module, "run_doctor", fake_run_doctor)
+    result = CliRunner().invoke(cli_main_module.cli, ["doctor", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "data dir is not initialized" in result.output
+
+
 def test_platform_guard_failure_degrades_status(tmp_path: Path) -> None:
     """On Windows (no launcher support) status still renders, without raising."""
     if sys.platform != "win32":
