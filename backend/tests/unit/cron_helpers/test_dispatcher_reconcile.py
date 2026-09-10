@@ -2741,7 +2741,6 @@ class TestDispatcherReconcileFactsBatchCap:
             stack.enter_context(patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=[facts_org]))
             stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=_five_terminalized))
             stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
-            stack.enter_context(patch.object(ch, "_overlay_dual_write_counters", new_callable=AsyncMock))
             stack.enter_context(patch.object(ch, "_update_reconcile_telemetry", new_callable=AsyncMock))
             record_facts = stack.enter_context(
                 patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)
@@ -2797,7 +2796,6 @@ class TestDispatcherReconcileFactsBatchCap:
             stack.enter_context(patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=[facts_org]))
             stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=_two_terminalized))
             stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
-            stack.enter_context(patch.object(ch, "_overlay_dual_write_counters", new_callable=AsyncMock))
             stack.enter_context(patch.object(ch, "_update_reconcile_telemetry", new_callable=AsyncMock))
             record_facts = stack.enter_context(
                 patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)

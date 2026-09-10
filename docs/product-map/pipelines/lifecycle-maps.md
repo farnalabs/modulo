@@ -69,6 +69,10 @@ edges representing transitions between stages.
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — registered the lifecycle
+  map-journey detail-view testids (`lifecycle-map-journeys-*`, `lifecycle-map-show-work-items`)
+  in the manifest `elements:` inventory and added `LifecycleMapView.vue` to the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`).
 - 2026-09-07: **improve-architecture (product-map walk)** — added this
   behaviour-tracker for `feat-lifecycle-maps`, which previously had no
   `docs/product-map/` entry. Behaviours verified against

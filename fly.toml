@@ -170,3 +170,9 @@ primary_region = 'lhr'
   memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
+  # 1024 MB swap: applied manually 2026-09-10 to both live worker machines
+  # (flyctl machine update --swap-size 1024) after cgroup v1 near-miss
+  # (Committed_AS ~1.25GB > CommitLimit 0.96GB, no swap, ~755MB available at
+  # peak). [[vm]] settings apply to NEW machines only — live machines were
+  # updated via `flyctl machine update`.
+  swap_size_mb = 1024

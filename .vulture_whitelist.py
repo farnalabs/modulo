@@ -295,18 +295,6 @@ __all__ = [
     #     round-trip cases) so the two parsers cannot drift. vulture scans src/
     #     only so it cannot see the test call sites.
     "_parse_marker_node_id",
-    # --- FAR-583: the ops runbook's fleet-visible dual-write kill-switch flip.
-    #     No in-repo caller by design: an operator invokes it via a maintenance
-    #     REPL / script during a dual-write incident (writes the Redis key every
-    #     process reads per call). Tests exercise it; vulture scans src/ only.
-    "set_dual_write_enabled",
-    # --- FAR-583 qa iteration 2: the switch-read isolation reset. No
-    #     production caller (set_dual_write_enabled latches + invalidates
-    #     inline now); it exists for test isolation (the autouse fixture and
-    #     the switch tests reset the cache + latch + degraded-note maps +
-    #     single-flight lock between tests). vulture scans src/ only, so it
-    #     cannot see the test call sites.
-    "_reset_switch_read_cache",
     # --- HITL manager dynamic dispatch (FAR-686). approve_with_modification is
     #     invoked via _run_hitl_manager(mgr_method="approve_with_modification")
     #     in api/routes/hitl.py — a string-keyed dispatch vulture cannot see a

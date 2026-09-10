@@ -84,6 +84,17 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — registered the
+  `library-collection-badge` testid of `LibraryPrimitiveCard.vue` in the `/library`
+  manifest `elements:` inventory, so the collection-membership badge on library
+  cards is no longer invisible to Remy's docs indexer / `/api/v1/manifest`.
+- 2026-09-10: **improve-architecture (product-map walk)** — registered the collection
+  authoring/detail and collections-tab testids (`collection-*`,
+  `library-section-collections`, `library-create-collection`, `library-collections-error`)
+  in the manifest `elements:` inventory and added `LibraryView.vue`,
+  `CollectionCreateView.vue` and `CollectionDetailView.vue` to the reverse testid-coverage
+  guard (`test_mapped_route_elements_cover_owning_view_testids`), so the FAR-760 collection
+  surface can no longer ship controls invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **improve-architecture (product-map walk)** — added the FAR-760 library
   collections behaviour (flag-gated draft → publish lifecycle) and cited the collection
   unit test and frontend views; the graph-root registry index now lists the collection

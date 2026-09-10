@@ -58,12 +58,6 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
     "AWS_REGION": _KeyConfig(default="us-east-1"),
     "MODULO_SCIM_TOKEN": _KeyConfig(default="", hot_reloadable=True),
     "MODULO_SCIM_DEFAULT_ORG_ID": _KeyConfig(default="", hot_reloadable=True),
-    # FAR-583 qa Major 2: the run_node_outputs dual-write kill-switch is
-    # deliberately NOT a known runtime-config key. The switch reads the
-    # FLEET-VISIBLE Redis key (``saq:run_outputs:dual_write_enabled``) →
-    # default ON; a per-process runtime-config entry would let the admin
-    # runtime-config API create a web-process-only partial flip that the SAQ
-    # worker machines never see. See core.run_outputs_dualwrite.
 }
 
 KNOWN_KEYS: tuple[str, ...] = tuple(_KEY_CONFIG.keys())
