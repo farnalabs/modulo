@@ -207,28 +207,16 @@ _ORM_CHECK_DIVERGENCE: frozenset[tuple[str, str]] = frozenset(
         # migration's strict jsonb_typeof shape (repo parity rule).
         # permanent (documented repo divergence)
         ("run_node_outputs", "ck_run_node_outputs_meta_present"),
-        # deleted_defaults: the ORM declares this signal guard but NO
-        # migration has created it — genuine drift, known gap.
-        # tracked: FAR-583 follow-up
-        ("deleted_defaults", "ck_deleted_defaults_signal_nonempty"),
     }
 )
+# The ``deleted_defaults`` signal guard (FAR-644) is NO LONGER listed here:
+# migration 0205 creates it at the DB level, so the ORM declaration and the
+# migrated schema now agree — the entry was removed with the drift it tracked.
 
-# ORM-declared graph-consistency FKs to nodes.id that no migration has
-# created yet — genuine drift, KNOWN GAP (pre-existing; the ORM is stricter
-# than the migrated schema).
-# tracked: FAR-583 follow-up
-_NODES_ID_FK_KNOWN_GAPS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("eval_definitions", "node_id"),
-        ("eval_results", "node_id"),
-        ("node_observations", "node_id"),
-        ("pipeline_edges", "source_node_id"),
-        ("pipeline_edges", "target_node_id"),
-        ("run_evidence", "node_id"),
-        ("snapshot_schema_pins", "node_id"),
-    }
-)
+# ORM-declared FKs to nodes.id were REMOVED from the models (FAR-644): the
+# deprecated ``nodes`` table never holds JSON-graph node ids, so no migration
+# should create these constraints (see migration 0170's correction). Any new
+# add_fk diff now FAILS the test — the old KNOWN-GAP wheel is gone.
 
 # Tables that exist in the DB but deliberately have NO ORM model.
 # permanent (documented repo divergence)
@@ -312,13 +300,10 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
             {col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]
         )
     if kind == "add_fk":
-        # Graph-consistency FKs to nodes.id the ORM declares but no migration
-        # has created yet — per-(table, column) KNOWN GAP entries.
-        table = inner[1].table.name
-        col_names = {col.name for col in inner[1].columns}
-        return any(
-            known_table == table and col_names == {known_col} for (known_table, known_col) in _NODES_ID_FK_KNOWN_GAPS
-        )
+        # ANY ORM-declared FK the migrated schema lacks is real drift (the
+        # far-644 nodes.id KNOWN-GAP wheel was closed with the drift itself;
+        # a stale wheel would keep hiding new FK drift).
+        return False
     if kind == "remove_constraint":
         # CHECK guards that exist ONLY in migrations (0157/0165/0192) —
         # per-(table, constraint) entries.
@@ -370,11 +355,11 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
       convention (JSONB in migrations / generic JSON in the ORM) or
       DB-trigger-maintained columns.
 
-    GENUINE drift that stays listed as a KNOWN GAP (tracked, not silently
-    ignored): ORM-declared graph-consistency FKs to ``nodes.id`` and the
-    ``deleted_defaults`` CHECK that no migration has created yet
-    (``# tracked: FAR-583 follow-up`` — raised with the Conductor). Anything
-    NOT listed fails the test.
+    The former GENUINE drift entries (ORM-declared FKs to ``nodes.id`` and the
+    ``deleted_defaults`` CHECK, both ``# tracked: FAR-583 follow-up``) were
+    closed with the drift itself in FAR-644: the ORM FKs were stripped (the
+    deprecated ``nodes`` table never holds JSON-graph node ids) and migration
+    0205 creates the CHECK. Anything NOT listed fails the test.
     """
     async with db_engine.connect() as connection:
         differences = await connection.run_sync(
@@ -545,14 +530,17 @@ class TestParityIgnoreListClassify:
         assert _is_benign_migration_managed(
             ("remove_table", Table("run_node_outputs_quarantine", MetaData(), Column("run_id", Integer)))
         )
-        # Known gap: nodes.id FK the ORM declares, no migration created.
-        assert _is_benign_migration_managed(("add_fk", self._fk("pipeline_edges", "source_node_id", "nodes.id")))
-        # Known gap / strict-twin divergence: ORM CHECK add side.
-        assert _is_benign_migration_managed(
-            ("add_constraint", self._check("deleted_defaults", "ck_deleted_defaults_signal_nonempty"))
-        )
+        # A known-gap wheel that was CLOSED (FAR-644) must NOT stay silent:
+        # nodes.id FKs were stripped from the ORM, so any add_fk is real drift.
+        assert not _is_benign_migration_managed(("add_fk", self._fk("pipeline_edges", "source_node_id", "nodes.id")))
+        # Strict-twin divergence: ORM CHECK add side (run_node_outputs only —
+        # deleted_defaults is now created by migration 0205, so its former
+        # wheel must fail like the others).
         assert _is_benign_migration_managed(
             ("add_constraint", self._check("run_node_outputs", "ck_run_node_outputs_meta_present"))
+        )
+        assert not _is_benign_migration_managed(
+            ("add_constraint", self._check("deleted_defaults", "ck_deleted_defaults_signal_nonempty"))
         )
         # B2b-expiring legacy column still listed while the columns exist.
         assert _is_benign_migration_managed(("modify_type", None, "runs", "outputs_json", {}, JSONB(), JSON()))
