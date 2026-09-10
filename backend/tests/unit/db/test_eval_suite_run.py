@@ -841,7 +841,6 @@ def test_single_migration_head() -> None:
     # 0207_collection_install_tracking (FAR-761) chains off 0206_deleted_defaults_signal_check.
     chaining_off_0205 = [p for p in revisions if parents[p] == "0205_library_collection_type"]
     assert [_basename(p) for p in chaining_off_0205] == ["0206_deleted_defaults_signal_check.py"]
-    # 0207_collection_install_tracking (FAR-761) chains off 0206_deleted_defaults_signal_check.
     chaining_off_0206 = [p for p in revisions if parents[p] == "0206_deleted_defaults_signal_check"]
     assert [_basename(p) for p in chaining_off_0206] == ["0207_collection_install_tracking.py"]
     # Nothing chains off 0207 -> it is the single head.
