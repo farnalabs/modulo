@@ -1,4 +1,4 @@
-"""Add the ORM-declared ``collection_install_id`` index on entity tables (FAR-762/FAR-761 drift).
+"""Add denormalised ``collection_install_id`` provenance columns (FAR-762/FAR-761 drift).
 
 Revision ID: 0209_collection_install_id_entity_columns
 Revises: 0208_notification_indexes_and_constraint
@@ -9,16 +9,19 @@ every entity a collection install writes — see
 ``core/library_service/install.py::_stamp_install_id`` (schemas, agents,
 pipelines) and ``uninstall.py`` which reads/clears the same column. The ORM
 models declare ``collection_install_id`` on ``Schema``, ``Agent`` and
-``Pipeline`` (nullable UUID, indexed). Migration ``0207_collection_install_tracking``
-already adds the *column* (idempotently, ``ADD COLUMN IF NOT EXISTS``) to those
-entity tables, but never creates the *index* the ORM declares on it — that is
-what this migration is responsible for.
+``Pipeline`` (nullable UUID, indexed). On a fresh DB, migration
+``0207_collection_install_tracking`` already creates this column (with
+``IF NOT EXISTS``) on the entity tables; on a prod DB whose ``0207`` predates
+that column add the column is still absent. Either way the column must exist and
+carry the index the ORM declares for the ORM↔DB schema to stay in sync.
 
-Because ``0207`` may have already created the column (and because this migration
-must be safe to re-run), both the column add and the index create are guarded
-by existence checks: the column is only added when genuinely absent, and the
-index is only created when it does not yet exist. On a database that has applied
-``0207`` the column step is a no-op and only the index is added.
+This migration closes the gap idempotently: it adds the nullable UUID column
+only when missing (so it does not collide with ``0207`` on a fresh DB) and
+creates the ORM-declared index ``ix_<table>_collection_install_id``. The column
+is nullable: an entity may or may not belong to a collection install, and the
+audit history already exists in ``collection_install_entity`` (no backfill is
+required — every row simply starts NULL, the same as a fresh install never
+performed).
 
 ROLE WIRING (the 0134 ceremony, verbatim in spirit from 0066): migrations run
 as the ``DATABASE_ADMIN_URL`` superuser, but the org-scoped entity tables are
@@ -42,6 +45,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 from modulo.db.migrations._rls_ceremony import (
     assert_owner_is_migrate as _assert_owner_is_migrate,
@@ -70,37 +74,6 @@ def _table_owner(bind, table: str) -> str | None:
     ).scalar_one_or_none()
 
 
-def _column_exists(bind, table: str, column: str, pg: bool) -> bool:
-    """Return True if ``column`` already exists on ``table`` (Postgres + SQLite)."""
-    if pg:
-        return (
-            bind.execute(
-                sa.text(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = :t AND column_name = :c"
-                ),
-                {"t": table, "c": column},
-            ).first()
-            is not None
-        )
-    rows = bind.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
-    return any(r[1] == column for r in rows)
-
-
-def _index_exists(bind, table: str, index: str, pg: bool) -> bool:
-    """Return True if ``index`` already exists on ``table`` (Postgres + SQLite)."""
-    if pg:
-        return (
-            bind.execute(
-                sa.text("SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND tablename = :t AND indexname = :i"),
-                {"t": table, "i": index},
-            ).first()
-            is not None
-        )
-    rows = bind.execute(sa.text(f"PRAGMA index_list({table})")).fetchall()
-    return any(r[1] == index for r in rows)
-
-
 def upgrade() -> None:
     bind = op.get_bind()
     pg = _is_postgres(bind)
@@ -111,7 +84,21 @@ def upgrade() -> None:
     else:
         migrate_role = False
 
+    insp = inspect(bind)
+
     for table in _ENTITY_TABLES:
+        # Migration 0207_collection_install_tracking already creates this column
+        # (with IF NOT EXISTS) on a fresh DB, so re-adding it here would fail the
+        # whole chain with "column <table>.collection_install_id already exists"
+        # during ``alembic upgrade head`` (seen on the pre-deploy integration-test
+        # run). On a prod DB whose 0207 predates the column add, the column is
+        # still absent and must be created here. Idempotent existence checks keep
+        # the migration correct for both a fresh and an already-applied DB.
+        existing_cols = {c["name"] for c in insp.get_columns(table)}
+        column_present = _COLUMN in existing_cols
+        existing_indexes = {i["name"] for i in insp.get_indexes(table)}
+        index_present = f"ix_{table}_{_COLUMN}" in existing_indexes
+
         # The SET ROLE ownership ceremony only applies where the table is already
         # owned by ``modulo_migrate`` (prod DBs whose earlier migrations ran under
         # the migrate role). On a fresh DB where the migration caller owns the
@@ -122,17 +109,12 @@ def upgrade() -> None:
         if migrate_owns_table:
             op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-        # Migration 0207_collection_install_tracking already adds this column
-        # (idempotently) to the entity tables. Only add it here if it is genuinely
-        # absent, otherwise the upgrade crashes with "column already exists" on a
-        # database that has already applied 0207 (the same applies to the index
-        # that only this migration is responsible for).
-        if not _column_exists(bind, table, _COLUMN, pg):
+        if not column_present:
             op.add_column(
                 table,
                 sa.Column(_COLUMN, sa.Uuid(), nullable=True),
             )
-        if not _index_exists(bind, table, f"ix_{table}_{_COLUMN}", pg):
+        if not index_present:
             op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
 
         if pg and migrate_owns_table:
@@ -148,7 +130,5 @@ def downgrade() -> None:
         op.execute("SET search_path TO public")
 
     for table in reversed(_ENTITY_TABLES):
-        if _index_exists(bind, table, f"ix_{table}_{_COLUMN}", pg):
-            op.drop_index(f"ix_{table}_{_COLUMN}", table_name=table)
-        if _column_exists(bind, table, _COLUMN, pg):
-            op.drop_column(table, _COLUMN)
+        op.drop_index(f"ix_{table}_{_COLUMN}", table_name=table)
+        op.drop_column(table, _COLUMN)
