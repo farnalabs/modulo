@@ -1367,6 +1367,7 @@ class TestSaqWorkerSettings:
             "fire_due_triggers",
             "dispatcher_reconcile",
             "claim_expiry",
+            "connector_health_checks",
             "hitl_overdue",
             "retention_cleanup",
             "webhook_dedup_cleanup",
