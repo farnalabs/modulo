@@ -36,9 +36,9 @@ types and no ceremony/RLS runs.
 
 ``ON DELETE RESTRICT`` on ``collection_id`` is INTENTIONAL: a collection that
 has ever been installed leaves provenance history that must survive collection
-deletion (the install row is the audit record). Provenance columns
-(``collection_install_id``) are added to the entity tables with ``IF NOT EXISTS``
-so the migration is idempotent and safe to re-run.
+deletion (the install row is the audit record). Per-entity provenance is recorded
+in ``collection_install_entity`` (one row per written schema/agent/pipeline), so
+no denormalised ``collection_install_id`` column is added to the entity tables.
 """
 
 from __future__ import annotations
@@ -214,9 +214,9 @@ def upgrade() -> None:
         ["entity_type", "entity_id"],
     )
 
-    # 3. Provenance columns on the entity tables (idempotent).
-    for _entity_table in ("schemas", "agents", "pipelines"):
-        op.execute(f"ALTER TABLE {_entity_table} ADD COLUMN IF NOT EXISTS collection_install_id UUID")
+    # Provenance is recorded by collection_install_entity (one row per
+    # schema/agent/pipeline an install wrote), so no denormalised
+    # collection_install_id column is added to the entity tables.
 
     if pg:
         # collection_install is the org-scoped parent; collection_install_entity
@@ -245,7 +245,3 @@ def downgrade() -> None:
 
     op.drop_table(_COLLECTION_INSTALL_ENTITY)
     op.drop_table(_COLLECTION_INSTALL)
-
-    op.execute("ALTER TABLE pipelines DROP COLUMN IF EXISTS collection_install_id")
-    op.execute("ALTER TABLE agents DROP COLUMN IF EXISTS collection_install_id")
-    op.execute("ALTER TABLE schemas DROP COLUMN IF EXISTS collection_install_id")
