@@ -1,4 +1,4 @@
-"""Structural + round-trip unit tests for migration 0206_collection_install_tracking (FAR-761).
+"""Structural + round-trip unit tests for migration 0207_collection_install_tracking (FAR-761).
 
 These run WITHOUT a database. They pin the migration's contract against the
 review-blockers raised on PR #308:
@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 from modulo.db.models import CollectionInstall, CollectionInstallEntity
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0206_collection_install_tracking"
+_MIGRATION_NAME = "0207_collection_install_tracking"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
 

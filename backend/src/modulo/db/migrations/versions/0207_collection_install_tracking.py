@@ -1,7 +1,7 @@
 """collection_install / collection_install_entity tracking tables (FAR-761).
 
-Revision ID: 0206_collection_install_tracking
-Revises: 0205_library_collection_type
+Revision ID: 0207_collection_install_tracking
+Revises: 0206_deleted_defaults_signal_check
 Create Date: 2026-09-10
 
 Adds provenance for collection install/uninstall events. ``collection_install``
@@ -49,8 +49,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0206_collection_install_tracking"
-down_revision: str | None = "0205_library_collection_type"
+revision: str = "0207_collection_install_tracking"
+down_revision: str | None = "0206_deleted_defaults_signal_check"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

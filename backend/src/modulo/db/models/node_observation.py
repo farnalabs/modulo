@@ -14,7 +14,11 @@ class NodeObservation(OrgScoped):
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("nodes.id", ondelete="RESTRICT"), nullable=False)
+    # FAR-644: no FK to nodes.id — ``nodes`` is the deprecated composite-template
+    # store; this node id is a JSON-graph id (pipelines.graph_nodes_json) that
+    # never materialises as a ``nodes`` row (see migration 0170's correction),
+    # so an enforced FK would reject every legitimate write.
+    node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
     )
