@@ -26,8 +26,9 @@ at authoring time and is committed here as explicit literals. The migration
 MUST NOT inspect metadata at runtime (a runtime-enumerated list would silently
 change on future model edits). Excluded deliberately: non-uuid primary keys
 (``tier_catalog``, ``oauth_authorization_codes``/``oauth_tokens`` string keys),
-composite-PK columns that are also foreign keys (``run_evidence.run_id`` /
-``run_evidence.node_id``), and ``alembic_version``.
+composite-PK columns that are also foreign keys (``run_evidence.run_id`` — note
+``run_evidence.node_id`` is a uuid PK with no FK and IS covered), and
+``alembic_version``.
 
 Downgrade mirrors the list exactly, dropping every default (restoring the
 pre-0194 state where raw inserts without id fail again).

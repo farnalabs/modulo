@@ -1782,13 +1782,13 @@ async def finalize_cost(
     except asyncio.CancelledError:
         raise
     except DualWriteError:
-        # FAR-583 fail-closed abort: the new-table dual-write leg failed after
-        # its bounded retry. The guard already rolled back the transaction and
-        # orchestrated the terminalize (``dual_write_failed``) + event +
-        # counters. Do NOT fall through to the legacy fallback — it would hit
-        # the same broken new-table leg and double-terminalize; let the abort
-        # propagate so the caller's ``session.begin()`` completes its rollback
-        # cleanly.
+        # FAR-583 fail-closed abort: the new-table store-write leg failed
+        # after its bounded retry. The guard already rolled back the
+        # transaction and orchestrated the terminalize (``dual_write_failed``)
+        # + error event. Do NOT fall through to the legacy fallback - it
+        # would hit the same broken new-table leg and double-terminalize;
+        # let the abort propagate so the caller's ``session.begin()``
+        # completes its rollback cleanly.
         raise
     except Exception:
         await _fallback_finalize(

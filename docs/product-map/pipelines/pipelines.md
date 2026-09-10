@@ -118,6 +118,12 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — registered the
+  editor's runner-binding (`AgentRunnerBindings.vue`) and snapshot-timeline
+  (`PipelineSnapshotTimeline.vue`) static testids (`pipeline-editor-runner-binding-*`,
+  `pipeline-editor-runner-bindings*`, `snapshot-timeline-*`) in the
+  `/pipelines/:id/editor` manifest `elements:` inventory, so those two panels no
+  longer ship controls invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-09-08: **improve-architecture (product-map walk)** — closed the
   "no executing BDD surface for `run_lifecycle.feature` / `run_sequential.feature`"
   gap: both files are now registered in `steps/test_pipelines.py` and the missing

@@ -90,7 +90,7 @@ routes:
         name: library-collection-create
         breadcrumb: New Collection
         parent: /library
-        product_map: [feat-library]
+        product_map: [feat-library, feat-library-collections]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -101,7 +101,7 @@ routes:
         name: library-collection-detail
         breadcrumb: Collection
         parent: /library
-        product_map: [feat-library]
+        product_map: [feat-library, feat-library-collections]
         sidebar_group:
         sidebar_order:
         type: page
@@ -911,6 +911,16 @@ elements:
       - testid: stat-no-baseline
         type: element
         dynamic_testid: false
+    /library/collections/:id:
+      - testid: collection-publish
+        type: button
+        dynamic_testid: false
+      - testid: collection-grant-agents
+        type: button
+        dynamic_testid: false
+      - testid: collection-create-connector
+        type: button
+        dynamic_testid: false
     /accept-invite:
       - testid: accept-invite-missing-token
         type: element
@@ -1012,6 +1022,57 @@ elements:
         dynamic_testid: false
       - testid: connectors-preview-section
         type: element
+        dynamic_testid: false
+      - testid: rest-connector-base-url
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-method
+        type: select
+        dynamic_testid: false
+      - testid: rest-connector-timeout
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-verify-tls
+        type: checkbox
+        dynamic_testid: false
+      - testid: rest-connector-on-unknown
+        type: select
+        dynamic_testid: false
+      - testid: rest-connector-records-path
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-allowed-hosts
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-legacy-auth-hint
+        type: element
+        dynamic_testid: false
+      - testid: rest-connector-auth-mode
+        type: select
+        dynamic_testid: false
+      - testid: rest-connector-token
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-username
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-password
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-api-key
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-api-key-in
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-header-name
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-query-param
+        type: input
+        dynamic_testid: false
+      - testid: rest-connector-advanced-json
+        type: textarea
         dynamic_testid: false
     /admin/costs:
       - testid: cost-total-spend
@@ -1275,6 +1336,18 @@ elements:
         dynamic_testid: false
       - testid: model-backends-preview-section
         type: element
+        dynamic_testid: false
+      - testid: admin-model-backends-back-to-presets
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-manual-entry-toggle
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-preset-clear
+        type: button
+        dynamic_testid: false
+      - testid: admin-model-backends-preset-docs-link
+        type: link
         dynamic_testid: false
     /admin/my-profile:
       - testid: my-profile-my-teams-retry
@@ -1856,6 +1929,9 @@ elements:
       - testid: envprofile-test-dismiss
         type: button
         dynamic_testid: false
+      - testid: runner-status-error
+        type: element
+        dynamic_testid: false
     /admin/runners/profiles/:id/edit:
       - testid: envprofile-form-back
         type: button
@@ -2048,6 +2124,40 @@ elements:
       - testid: library-view-details
         type: button
         dynamic_testid: false
+      - testid: library-collection-badge
+        type: element
+        dynamic_testid: false
+      - testid: library-section-collections
+        type: button
+        dynamic_testid: false
+      - testid: library-collections-error
+        type: element
+        dynamic_testid: false
+      - testid: library-create-collection
+        type: button
+        dynamic_testid: false
+    /library/collections/new:
+      - testid: collection-name
+        type: input
+        dynamic_testid: false
+      - testid: collection-slug
+        type: input
+        dynamic_testid: false
+      - testid: collection-description
+        type: textarea
+        dynamic_testid: false
+      - testid: collection-visibility
+        type: select
+        dynamic_testid: false
+      - testid: collection-add-pin
+        type: button
+        dynamic_testid: false
+      - testid: collection-remove-pin
+        type: button
+        dynamic_testid: false
+      - testid: collection-create-submit
+        type: button
+        dynamic_testid: false
     /library/:id/create-pipeline:
       - testid: library-wizard-back
         type: button
@@ -2116,6 +2226,21 @@ elements:
         dynamic_testid: false
       - testid: lifecycle-map-journeys-load-more
         type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-controls
+        type: element
+        dynamic_testid: false
+      - testid: lifecycle-map-show-work-items
+        type: checkbox
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-period
+        type: select
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-status
+        type: select
+        dynamic_testid: false
+      - testid: lifecycle-map-journeys-pagination
+        type: element
         dynamic_testid: false
     /notifications:
       - testid: notifications-apply-filters
@@ -2430,6 +2555,45 @@ elements:
         dynamic_testid: false
       - testid: pipeline-editor-node-commands-readonly
         type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-runner-bindings
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-runner-bindings-label
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-runner-bindings-rows
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-runner-binding-backend
+        type: select
+        dynamic_testid: false
+      - testid: pipeline-editor-runner-binding-target-input
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-runner-binding-source-input
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-runner-binding-add
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-runner-binding-save
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-close
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-compare
+        type: select
+        dynamic_testid: false
+      - testid: snapshot-timeline-diff
+        type: button
+        dynamic_testid: false
+      - testid: snapshot-timeline-diff-result
+        type: element
+        dynamic_testid: false
+      - testid: snapshot-timeline-rollback
+        type: button
         dynamic_testid: false
     /pipelines/copy:
       - testid: copy-wizard-visibility-filter
@@ -2955,6 +3119,12 @@ elements:
         dynamic_testid: false
       - testid: hitl-review-claim-failure-banner
         type: element
+        dynamic_testid: false
+      - testid: hitl-review-fetch-error
+        type: element
+        dynamic_testid: false
+      - testid: hitl-review-retry
+        type: button
         dynamic_testid: false
       - testid: hitl-review-prev-page
         type: button
@@ -3623,6 +3793,24 @@ features:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
     feat-library:
         description: Reusable pipeline templates and the template library
+    feat-library-collections:
+        description: Install, uninstall, and manage library collection installs
+        status: covered
+        behaviours:
+            # Collection authoring (FAR-760)
+            - "[x] Collections are library_collection primitives with manifest_pins listing slug+version references to schemas, agents, and workflows in the org library; pins are validated on publish (non-empty slug+version, known visible primitive, allowed pin type, no duplicates, max 25 pins)"
+            - "[x] Draft collections can be created (POST /libraries/collections), updated (PATCH), and published (POST /publish); published collections cannot be edited"
+            # Install / Uninstall (FAR-762)
+            - "[x] Install resolves manifest pins to visible primitives, materialises entities via materialize_import, stamps collection_install_id on all created entities (schemas, agents, pipelines), and creates a CollectionInstall provenance record with status=installed"
+            - "[x] Uninstall deletes unmodified entities (collection_install_id matches) and detaches provenance from modified entities (collection_install_id already cleared); the CollectionInstall record and entity tracking rows are deleted"
+            - "[x] Re-install of the same version is idempotent: missing entities are re-added via materialize_import without duplicating existing ones"
+            # Runnability (FAR-762)
+            - "[x] compute_runnable is a pure read-time check: returns True when all connector_checklist entries are configured+bound and the org has at least one active model backend; returns False otherwise"
+            # Community trust gate (FAR-764 / ADR 032 D2)
+            - "[x] Community-sourced or registry-sourced collections restrict agent tool/connector access until an operator explicitly grants access via grant_collection_agents (sets agents_granted=True, idempotent)"
+            - "[x] Non-community-sourced collections (source=local) are not subject to the grant gate and agents are immediately usable"
+            # Connector checklist
+            - "[x] Each unique connector_type_id referenced by any agent in the collection gets a checklist entry with status=pending; the runnability check verifies all entries are configured+bound"
     feat-license:
         description: Feature licensing and plan tiers
     feat-lifecycle-maps:

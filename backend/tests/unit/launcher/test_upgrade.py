@@ -72,6 +72,16 @@ def _enter_fake_run(stack: contextlib.ExitStack, **kwargs: Any) -> MagicMock:
     return stack.enter_context(runner)
 
 
+def _settings_env_ready() -> bool:
+    """The restore e2e imports ``modulo.cli.backup``; the ``modulo.cli`` package
+    transitively imports ``modulo.db.session``, which builds its module-global
+    engine from ``Settings`` at import time. ``Settings`` requires
+    ``DATABASE_URL`` / ``SECRET_KEY`` / ``FERNET_KEY`` — the CI test jobs export
+    them, but a bare developer checkout may not — so probe the env instead of
+    letting the in-test import crash."""
+    return all(os.environ.get(name) for name in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY"))
+
+
 def test_pre_upgrade_dump_reports_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _allow_windows_secrets(monkeypatch)
     data_dir = _seed_data_dir(tmp_path)
@@ -307,6 +317,10 @@ def test_state_with_last_backup_stamps_v2(tmp_path: Path) -> None:
     assert loaded.last_backup_at is None
 
 
+@pytest.mark.skipif(
+    not _settings_env_ready(),
+    reason="modulo.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import — exported by CI",
+)
 def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """E2E: pre_upgrade_dump -> `modulo restore <snapshot> --yes` succeeds,
     exactly as the installer's printed hint advertises."""

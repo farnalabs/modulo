@@ -382,7 +382,7 @@ def test_doctor_command_invokes_run_doctor_and_propagates(monkeypatch: pytest.Mo
 
     calls: list[tuple[Path, bool]] = []
 
-    def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+    def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None, fix: bool = False, sink=None) -> int:
         calls.append((data_dir, as_json))
         return 1
 
@@ -398,7 +398,7 @@ def test_doctor_command_render_runtime_error_as_click_exception(
     import modulo.cli.main as cli_main_module
     import modulo.launcher.doctor as doctor_module
 
-    def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+    def fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None, fix: bool = False, sink=None) -> int:
         raise RuntimeError("data dir is not initialized")
 
     monkeypatch.setattr(doctor_module, "run_doctor", fake_run_doctor)
@@ -416,6 +416,49 @@ def test_platform_guard_failure_degrades_status(tmp_path: Path) -> None:
     assert "initialized: False" in result.output
 
 
+def test_logs_rotate_refuses_while_launcher_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`logs --rotate` must refuse when the launcher still holds the log open,
+    not silently rotate into a live inode (FAR-676 review finding)."""
+    import modulo.launcher.supervisor as supervisor
+
+    class _Holder:
+        pid = 4242
+
+    monkeypatch.setattr(supervisor, "_read_lock_holder", lambda _p: _Holder())
+    monkeypatch.setattr(supervisor, "_pid_alive", lambda _pid: True)
+    result = CliRunner().invoke(cli_main.cli, ["logs", "--rotate", "--data-dir", str(tmp_path), "app"])
+    assert result.exit_code == 1
+    assert "refused" in result.output
+
+
+def test_logs_rotate_proceeds_when_launcher_stopped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """With no live launcher the rotation guard is a no-op and rotation runs."""
+    import modulo.launcher.supervisor as supervisor
+
+    monkeypatch.setattr(supervisor, "_read_lock_holder", lambda _p: None)
+    monkeypatch.setattr(supervisor, "_pid_alive", lambda _pid: False)
+    result = CliRunner().invoke(cli_main.cli, ["logs", "--rotate", "--data-dir", str(tmp_path), "app"])
+    # no rotation happened (absent/below threshold) -> still exit 0
+    assert result.exit_code == 0
+    assert "no rotation" in result.output
+
+
+def test_logs_rotate_child_component_is_not_rotated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`logs postgres --rotate` / `logs redis --rotate` must NOT rotate the child
+    log, even though it prints 'rotation applies to the app log only' (FAR-676
+    review finding — the rotate call previously sat outside the app-only guard).
+    """
+    import modulo.launcher.supervisor as supervisor
+
+    rotated_calls: list[str] = []
+    monkeypatch.setattr(supervisor, "rotate_log", lambda path: rotated_calls.append(str(path)) is None)
+    for component in ("postgres", "redis"):
+        result = CliRunner().invoke(cli_main.cli, ["logs", "--rotate", "--data-dir", str(tmp_path), component])
+        assert result.exit_code == 0
+        assert "rotation applies to the app log only" in result.output
+    assert rotated_calls == [], f"child rotation must not run, but rotate_log was called on: {rotated_calls}"
+
+
 def test_doctor_command_invokes_run_doctor_and_propagates_exit_code(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -423,7 +466,7 @@ def test_doctor_command_invokes_run_doctor_and_propagates_exit_code(
 
     captured: dict[str, object] = {}
 
-    def _fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+    def _fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None, fix: bool = False, sink=None) -> int:
         captured["data_dir"] = data_dir
         captured["as_json"] = as_json
         return 1
@@ -441,7 +484,7 @@ def test_doctor_command_json_flag_passed_through(monkeypatch: pytest.MonkeyPatch
 
     captured: dict[str, object] = {}
 
-    def _fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None) -> int:
+    def _fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None, fix: bool = False, sink=None) -> int:
         captured["as_json"] = as_json
         return 0
 
@@ -458,6 +501,167 @@ def test_doctor_command_help_lists_options() -> None:
     assert result.exit_code == 0
     assert "--data-dir" in result.output
     assert "--json" in result.output
+
+
+# ---------------------------------------------------------------------------
+# FAR-676: doctor --report / --fix, exit-code table in help, env --raw, logs
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_help_documents_exit_codes_and_flags() -> None:
+    result = CliRunner().invoke(cli_main.cli, ["doctor", "--help"])
+    assert result.exit_code == 0
+    assert "--report" in result.output
+    assert "--fix" in result.output
+    assert "3 uninitialized" in result.output
+
+
+def test_doctor_fix_flag_passed_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.doctor as doctor_module
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None, fix: bool = False, sink=None) -> int:
+        captured["fix"] = fix
+        return 0
+
+    monkeypatch.setattr(doctor_module, "run_doctor", _fake_run_doctor)
+    monkeypatch.setattr(cli_main, "_resolve_data_dir", lambda data_dir: tmp_path)
+
+    result = CliRunner().invoke(cli_main.cli, ["doctor", "--data-dir", str(tmp_path), "--fix"])
+    assert result.exit_code == 0
+    assert captured["fix"] is True
+
+
+def test_doctor_report_writes_redacted_zip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import zipfile
+
+    import modulo.launcher.doctor as doctor_module
+
+    pg_password = "real-looking-report-pg-secret"
+    redis_password = "real-looking-report-redis-secret"
+
+    def _fake_run_doctor(data_dir: Path, *, as_json: bool = False, probes=None, fix: bool = False, sink=None) -> int:
+        # The sink contract: run_doctor CALLS sink(text) per output line.
+        assert sink is not None
+        sink(f"passwords in play: {pg_password} {redis_password}\n")
+        return 0
+
+    monkeypatch.setattr(doctor_module, "run_doctor", _fake_run_doctor)
+    monkeypatch.setattr(cli_main, "_resolve_data_dir", lambda data_dir: tmp_path)
+
+    # Seed the secrets file: the report's redaction map is seeded with the
+    # ACTUAL generated credential values.
+    (tmp_path / "secrets.json").write_text(
+        json.dumps(
+            {
+                "postgres_password": pg_password,
+                "redis_password": redis_password,
+                "state_hmac_key": "c0ffee00" * 8,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "launcher.log").write_text(
+        f"boot log mentioning {pg_password} and {redis_password}",
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "shopsupport.zip"
+    result = CliRunner().invoke(cli_main.cli, ["doctor", "--data-dir", str(tmp_path), "--report", str(report_path)])
+    assert result.exit_code == 0
+    assert report_path.is_file()
+    with zipfile.ZipFile(report_path) as archive:
+        text = "".join(archive.read(member).decode("utf-8", errors="replace") for member in archive.namelist())
+    assert pg_password not in text
+    assert redis_password not in text
+    assert "<redacted>" in text
+
+
+def test_env_raw_prints_unredacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
+    result = CliRunner().invoke(cli_main.cli, ["env", "--raw"])
+    assert result.exit_code == 0
+    assert SECRET_KEY in result.output
+    assert "super-secret" in result.output
+
+
+def test_env_raw_with_json_still_raw(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
+    result = CliRunner().invoke(cli_main.cli, ["env", "--raw", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["secret_key"] == SECRET_KEY
+
+
+def test_env_redacted_by_default_still_redacts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
+    result = CliRunner().invoke(cli_main.cli, ["env"])
+    assert result.exit_code == 0
+    assert SECRET_KEY not in result.output
+
+
+def test_status_json_carries_state_and_remediation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.supervisor as supervisor_module
+
+    payload = {
+        "data_dir": str(tmp_path),
+        "initialized": True,
+        "postgres_port": 15432,
+        "components": {"postgres": {"pid": None, "alive": False, "port": 15432}},
+    }
+
+    def fake_collect_status(data_dir: Path) -> dict[str, object]:
+        return payload
+
+    monkeypatch.setattr(supervisor_module, "collect_status", fake_collect_status)
+    result = CliRunner().invoke(cli_main.cli, ["status", "--data-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["components"]["postgres"]["port"] == 15432
+
+
+def test_logs_command_prints_app_log(tmp_path: Path) -> None:
+    (tmp_path / "launcher.log").write_text("2026-09-10 reboot ok\ncrash backtrace: boom\n", encoding="utf-8")
+    result = CliRunner().invoke(cli_main.cli, ["logs", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "2026-09-10 reboot ok" in result.output
+    assert "boom" in result.output
+    assert "# modulo " in result.output  # version-stamped log header
+
+
+def test_logs_command_child_component(tmp_path: Path) -> None:
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "postgres.log").write_text("FATAL: role does not exist\n", encoding="utf-8")
+    result = CliRunner().invoke(cli_main.cli, ["logs", "--data-dir", str(tmp_path), "postgres"])
+    assert result.exit_code == 0
+    assert "FATAL" in result.output
+
+
+def test_logs_command_missing_log_is_honest(tmp_path: Path) -> None:
+    result = CliRunner().invoke(cli_main.cli, ["logs", "--data-dir", str(tmp_path), "redis"])
+    assert result.exit_code == 1
+    assert "no redis log file" in result.output
+
+
+def test_logs_help_lists_components() -> None:
+    result = CliRunner().invoke(cli_main.cli, ["logs", "--help"])
+    assert result.exit_code == 0
+    for component in ("app", "postgres", "redis"):
+        assert component in result.output
+
+
+def test_logs_rotate_when_stopped_rotates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.launcher.supervisor as supervisor_module
+
+    big = tmp_path / "launcher.log"
+    big.write_text("x" * 2048, encoding="utf-8")
+    monkeypatch.setattr(supervisor_module, "ROTATE_DEFAULT_MAX_BYTES", 1024)
+    result = CliRunner().invoke(cli_main.cli, ["logs", "--data-dir", str(tmp_path), "--rotate"])
+    assert result.exit_code == 0
+    assert big.with_name("launcher.log.1").is_file()
+    assert "rotated" in result.output
 
 
 # ---------------------------------------------------------------------------

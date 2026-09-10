@@ -8,6 +8,7 @@ real-runtime probe closures exercised via dependency injection), the
 branches not exercised elsewhere.
 """
 
+import sys
 from pathlib import Path
 from typing import ClassVar
 
@@ -95,6 +96,7 @@ class _FakeProcPath:
         return self._real.read_text(encoding=encoding)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="/proc listener inspection is POSIX-only (TODO(P3))")
 def test_parse_listeners_from_proc_reads_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     real_path = doctor_module.Path
 
@@ -174,6 +176,7 @@ class _FakeEngine:
         return None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="effective_uid + /proc-backed probes are POSIX-only (TODO(P3))")
 def test_default_probes_builds_and_exercises_testable_closures(tmp_path: Path) -> None:
     state = _write_state_secrets(tmp_path)
     probes = default_probes(tmp_path, state)

@@ -20,7 +20,12 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_INTERNAL_SERVER_
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report, reset_pipeline_circuit_breaker
+from modulo.core.cost_controller import (
+    build_cost_report_buckets,
+    get_cost_export_rows,
+    get_cost_report,
+    reset_pipeline_circuit_breaker,
+)
 from modulo.core.cost_settings import (
     COST_CONTROLS_KEY,
     DEFAULT_ALERT_THRESHOLDS,
@@ -842,29 +847,13 @@ async def export_costs(
         "90d": "year",
     }
 
-    # The exposed ``group_by`` enum (team|pipeline|model) outlives the
-    # implemented ledger grouping: ``get_cost_report`` builds team/org rows only
-    # and this export is team-granularity. Previously ``model`` silently re-ran
-    # the team report (a CSV of team rows a caller would read as per-model
-    # spend) and ``pipeline`` fell through to ``get_cost_report``'s
-    # ``ValueError`` -> generic 500. Fail explicitly instead: the only real
-    # grouping for the CSV export is ``team``, so the unimplemented
-    # granularities get a precise 422 rather than mislabelled data or an
-    # internal error.
-    if group_by != "team":
-        detail = (
-            f"group_by={group_by!r} is not implemented for cost export; "
-            "the CSV export supports team-level grouping only"
-        )
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
-
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            rows = await get_cost_report(
+            rows = await get_cost_export_rows(
                 session,
                 org_id=current_user.organisation_id,
-                group_by="team",
+                group_by=group_by,
                 period=period_map.get(period, "month"),
             )
     except ProgrammingError:

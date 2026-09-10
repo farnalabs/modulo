@@ -515,8 +515,8 @@ async def _seed_demo_pipeline_and_runs(session: AsyncSession, org: Organisation,
                 # live seeder for the new table. Best-effort scoped to its own
                 # savepoint: the seeder must never break boot
                 # (commit-then-error ordering — the run row is already
-                # written; the catch-up sweep in dispatcher_reconcile heals
-                # the new table within one tick if this write fails).
+                # written; the B2b repair migration migrates any missing
+                # new-table rows if this write fails).
                 try:
                     from modulo.db.crud.run_node_outputs import replace_run_node_outputs
 
