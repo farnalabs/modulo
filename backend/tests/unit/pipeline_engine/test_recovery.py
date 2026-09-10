@@ -260,7 +260,13 @@ async def test_recovery_audit_without_actor_resolves_to_system():
 
     with (
         patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        # Two binding points consume the reader: the module-level import in
+        # recover_node and the in-function import in _apply_recovery_markers
+        # (same shape as test_recover_node_with_valid_input).
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
         patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write({})),
     ):
         pipeline_result = MagicMock()
         pipeline_result.scalar_one.return_value = MagicMock()
