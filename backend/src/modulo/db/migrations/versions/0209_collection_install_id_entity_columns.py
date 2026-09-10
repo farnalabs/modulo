@@ -1,4 +1,4 @@
-"""Add denormalised ``collection_install_id`` provenance columns (FAR-762/FAR-761 drift).
+"""Add the ORM-declared ``collection_install_id`` index on entity tables (FAR-762/FAR-761 drift).
 
 Revision ID: 0209_collection_install_id_entity_columns
 Revises: 0208_notification_indexes_and_constraint
@@ -9,35 +9,35 @@ every entity a collection install writes — see
 ``core/library_service/install.py::_stamp_install_id`` (schemas, agents,
 pipelines) and ``uninstall.py`` which reads/clears the same column. The ORM
 models declare ``collection_install_id`` on ``Schema``, ``Agent`` and
-``Pipeline`` (nullable UUID, indexed), but no migration ever added the columns
-to the database. Migration ``0207_collection_install_tracking`` deliberately
-adds the ``collection_install`` / ``collection_install_entity`` audit tables but
-explicitly does NOT add a denormalised column to the entity tables — that left
-the ORM↔DB schema out of sync, so every query that selects an entity row
-(including unrelated integration tests) failed with
-``column <table>.collection_install_id does not exist``.
+``Pipeline`` (nullable UUID, indexed). The COLUMN itself is created by
+``0207_collection_install_tracking`` (idempotently, via
+``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` — matching prod, where 0207 first
+landed with these columns present). What 0207 does NOT create is the INDEX the
+ORM declares (``index=True``), so queries relying on it scan full tables.
 
-This migration closes the gap by adding the nullable UUID column (plus the
-index the ORM declares) to ``schemas``, ``agents`` and ``pipelines``, matching
-the model declarations exactly. The column is nullable: an entity may or may
-not belong to a collection install, and the audit history already exists in
-``collection_install_entity`` (no backfill is required — every row simply starts
-NULL, the same as a fresh install never performed).
+This migration closes that remaining gap by creating the index on
+``schemas``, ``agents`` and ``pipelines`` — it does NOT re-add the column
+(0207 already owns it; re-adding it under a plain ``ADD COLUMN`` crashes a
+fresh DB with ``column <table>.collection_install_id already exists``). The
+column is nullable: an entity may or may not belong to a collection install,
+and the audit history already exists in ``collection_install_entity`` (no
+backfill is required — every row simply starts NULL, the same as a fresh
+install never performed).
 
 ROLE WIRING (the 0134 ceremony, verbatim in spirit from 0066): migrations run
 as the ``DATABASE_ADMIN_URL`` superuser, but the org-scoped entity tables are
 owned by ``modulo_migrate``. We ``SET ROLE modulo_migrate`` before the
-``ALTER TABLE ... ADD COLUMN`` only where the table is already owned by that
+``CREATE INDEX`` only where the table is already owned by that
 role (production, where bootstrap ran before alembic) so ownership stays
 consistent; on a fresh DB where the migration caller owns the tables the
-ceremony is skipped and the column is added by the caller. The step is
+ceremony is skipped and the index is created by the caller. The step is
 unconditional on the role merely existing — ``SET ROLE`` to a non-owner would
-fail the ALTER.
+fail the DDL.
 
-Postgres-only concern: the column/index are plain DDL with no RLS/policy
+Postgres-only concern: the index is plain DDL with no RLS/policy
 change (the tables already carry org-isolation RLS + DML grants), so no RLS
 step runs. SQLite (used by unit tests via ``Base.metadata.create_all``) has no
-role machinery — ``op.add_column`` / ``op.create_index`` run directly there.
+role machinery — ``CREATE INDEX IF NOT EXISTS`` runs directly there.
 """
 
 from __future__ import annotations
