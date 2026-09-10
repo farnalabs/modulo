@@ -462,7 +462,8 @@ async def test_engine_kill_via_dind_fails_client_never_success() -> None:
                 if process is not None:
                     break
                 await asyncio.sleep(2.0)
-        assert process is not None and ref is not None, "workspace/exec could not be established inside dind"
+        assert ref is not None, "workspace could not be provisioned inside dind"
+        assert process is not None, "exec stream could not be established inside dind"
 
         count = 0
 
