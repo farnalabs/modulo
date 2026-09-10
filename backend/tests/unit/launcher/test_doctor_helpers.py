@@ -25,9 +25,11 @@ from modulo.launcher.doctor import (
     DoctorProbes,
     _cwd_env_file,
     _decode_proc_address,
+    _host_port_from_database_url,
     _load_state_readonly,
     _parse_listeners_from_proc,
     _password_from_url,
+    _state_problem_kind,
     check_cwd_env_influence,
     check_migrations,
     check_postgres,
@@ -87,6 +89,7 @@ def test_parse_listeners_from_proc_closed_port_is_empty() -> None:
     assert not _parse_listeners_from_proc(1)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="/proc listener inspection is POSIX-only (TODO(P3))")
 def test_parse_listeners_from_proc_detects_loopback_listener() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -148,6 +151,7 @@ def test_load_state_readonly_integrity_error(tmp_path: Path, monkeypatch: pytest
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="effective_uid + /proc-backed probes are POSIX-only (TODO(P3))")
 def test_default_probes_state_none_exercises_all_probes(tmp_path: Path) -> None:
     """With no state, composed is empty so the service probes raise their
     honest 'no composed URL' errors and the light probes run for real."""
@@ -229,6 +233,76 @@ def test_default_probes_service_probes_connect_with_mocks(tmp_path: Path, monkey
     assert not probes.role_violations()  # connect -> audit -> []
     probes.probe_redis()  # ping -> True
     assert probes.migrations_at_head() is True  # engine -> at head
+
+
+# ---------------------------------------------------------------------------
+# FAR-676 review fixes: wired probes + honest-skip helpers
+# ---------------------------------------------------------------------------
+
+
+def test_host_port_from_database_url_out_of_range_port_is_untyped_skip() -> None:
+    """A malformed ambient DATABASE_URL (port 99999) must degrade to an honest
+    ('unknown', None) skip, not crash the settings-source check (exit 1)."""
+    host, port = _host_port_from_database_url("postgres://user:pass@127.0.0.1:99999/app")
+    assert host == "unknown"
+    assert port is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="/proc listener inspection is POSIX-only (TODO(P3))")
+def test_default_probes_port_owner_no_foreign_is_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.launcher.doctor as doctor_module
+
+    monkeypatch.setattr(doctor_module, "_port_owner_descriptions", lambda _port: [])
+    probes = default_probes(tmp_path, _state())
+    assert probes.port_owner_description(15432) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="/proc listener inspection is POSIX-only (TODO(P3))")
+def test_default_probes_port_owner_describes_foreign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.launcher.doctor as doctor_module
+
+    monkeypatch.setattr(
+        doctor_module,
+        "_port_owner_descriptions",
+        lambda _port: ["dockerd (pid 4242) bound to 0.0.0.0"],
+    )
+    probes = default_probes(tmp_path, _state())
+    assert probes.port_owner_description(15432) == "dockerd (pid 4242) bound to 0.0.0.0"
+
+
+def test_default_probes_last_backup_at_wired(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    state = LauncherState(
+        postgres_port=15432,
+        redis_port=16379,
+        api_port=18000,
+        last_backup_at=datetime.now(UTC).isoformat(),
+    )
+    probes = default_probes(tmp_path, state)
+    stamp = probes.last_backup_at()
+    assert isinstance(stamp, float)
+    # within the last minute of now
+    assert abs(stamp - datetime.now(UTC).timestamp()) < 60
+
+
+def test_default_probes_last_backup_at_none_when_unset(tmp_path: Path) -> None:
+    probes = default_probes(tmp_path, _state())
+    assert probes.last_backup_at() is None
+
+
+def test_default_probes_tls_expiry_none_without_tls_dir(tmp_path: Path) -> None:
+    probes = default_probes(tmp_path, _state())
+    assert probes.tls_expiry() is None
+
+
+def test_state_problem_kind_missing_when_secrets_present_but_state_absent(tmp_path: Path) -> None:
+    """secrets.json present + no state.json must classify as 'missing'
+    (uninitialized), never the misleading 'corrupt' (torn write) language."""
+    _write_secrets(tmp_path)
+    _, state_error = _load_state_readonly(tmp_path)
+    assert state_error is not None
+    assert _state_problem_kind(tmp_path, state_error) == "missing"
 
 
 # ---------------------------------------------------------------------------

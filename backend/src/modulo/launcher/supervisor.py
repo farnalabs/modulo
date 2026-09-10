@@ -143,11 +143,27 @@ _PRIORITY_REDIS = policy.TEARDOWN_PRIORITY_REDIS
 
 # /proc helpers — exposed for the orphan-reconciliation tests (they import
 # the private names directly).
+# Read-only access helpers for doctor/status (FAR-676): the supervisor
+# persists a degraded reason (and a crash-incident marker) next to the
+# child-PID manifest when it degrades, and exposes pure readers so
+# ``modulo status`` / ``modulo doctor`` can surface the degraded flag and
+# crash backtraces (from the launcher/app log tail) READ-ONLY.
+DEFAULT_LOG_TAIL_BYTES = 256 * 1024
+ROTATE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024
+ROTATE_DEFAULT_KEEP = 5
+LAUNCHER_LOG_FILENAME = "launcher.log"
+LOGS_DIRNAME = "logs"
+APP_LOG_NAME = "app"
+CHILD_LOG_NAMES = ("postgres", "redis")
+
 __all__ = [
+    "DEFAULT_LOG_TAIL_BYTES",
     "DEGRADED_FILENAME",
     "DEGRADED_SCHEMA_VERSION",
     "GATE_SUPERVISOR_PRE_TEARDOWN",
     "REDIS_CONF_PREFIX",
+    "ROTATE_DEFAULT_KEEP",
+    "ROTATE_DEFAULT_MAX_BYTES",
     "RUNTIME_FILENAME",
     "UPGRADE_MARKER_FILENAME",
     "ChildSpec",
@@ -164,12 +180,16 @@ __all__ = [
     "clear_degraded_record",
     "collect_status",
     "knobs_from_env",
+    "log_paths",
+    "read_degraded_reason",
     "read_degraded_record",
+    "read_log_tail",
     "read_proc_starttime",
     "read_runtime_manifest",
     "read_upgrade_marker",
     "reconcile_orphans",
     "request_stop",
+    "rotate_log",
     "write_degraded_record",
     "write_runtime_manifest",
 ]
@@ -924,6 +944,12 @@ class Supervisor:
         self._stop_event = threading.Event()
         self._degraded_reason: str | None = None
         self._monitor_thread: threading.Thread | None = None
+        # Bundled postgres version, resolved once at boot (best effort) and
+        # persisted into the runtime manifest so doctor's
+        # `installed_bundle_pg_version` axis can detect a downgrade/upgrade
+        # against the cluster's last-run version. None until `start()` runs
+        # (or the binary is unresolvable).
+        self._installed_bundle_pg_version: str | None = None
         self._crash_records: deque[CrashRecord] = deque(maxlen=policy.DEGRADED_BACKTRACE_RING)
 
     # -- registration / lifecycle -------------------------------------------
@@ -944,6 +970,7 @@ class Supervisor:
 
     def start(self, *, start_monitor: bool = True) -> None:
         """Spawn immediately-ready children and (optionally) the monitor thread."""
+        self._installed_bundle_pg_version = _resolve_bundled_postgres_version()
         self.tick()
         if start_monitor:
             thread = threading.Thread(target=self.monitor_loop, name="modulo-supervisor", daemon=True)
@@ -1169,6 +1196,7 @@ class Supervisor:
     def _degrade_locked(self, reason: str) -> None:
         self._degraded_reason = reason
         _log.error("supervisor.crash_cap_tripped reason=%s", reason)
+        self._record_runtime_locked()
         if self._pause_hook is not None:
             self._pause_hook(GATE_SUPERVISOR_PRE_TEARDOWN)
         else:
@@ -1290,7 +1318,113 @@ class Supervisor:
     def _record_runtime_locked(self) -> None:
         if self._runtime_path is None:
             return
-        write_runtime_manifest(self._runtime_path, self.child_pids())
+        extra: dict[str, Any] = {}
+        if self._degraded_reason is not None:
+            extra["degraded_reason"] = self._degraded_reason
+        if self._installed_bundle_pg_version is not None:
+            extra["installed_bundle_pg_version"] = self._installed_bundle_pg_version
+        try:
+            write_runtime_manifest(self._runtime_path, self.child_pids(), extra=extra or None)
+        except OSError:
+            _log.exception("supervisor.runtime_manifest_write_failed path=%s", self._runtime_path)
+
+
+# ---------------------------------------------------------------------------
+# Read-only helpers for doctor/status (FAR-676): log paths, log tails,
+# size-based rotation, degraded reason. NEVER mutate data-dir state.
+# ---------------------------------------------------------------------------
+
+
+def log_paths(data_dir: Path) -> dict[str, Path]:
+    """Map log component name -> path inside the data dir (no files created).
+
+    ``app`` is the launcher/supervisor log (launcher.log); ``postgres`` and
+    ``redis`` are the bundled children's logs under ``logs/``.
+    """
+    return {
+        APP_LOG_NAME: data_dir / LAUNCHER_LOG_FILENAME,
+        "postgres": data_dir / LOGS_DIRNAME / "postgres.log",
+        "redis": data_dir / LOGS_DIRNAME / "redis.log",
+    }
+
+
+def read_log_tail(path: Path, *, max_bytes: int = DEFAULT_LOG_TAIL_BYTES) -> str:
+    """Return at most *max_bytes* of the tail of *path* (decode-tolerant)."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes))
+            return handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def rotate_log(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    keep: int | None = None,
+) -> bool:
+    """Shift-size rotation: rotate *path* to ``<name>.1`` when over *max_bytes*.
+
+    Defaults to the module constants (resolved at CALL time so the operator
+    seam stays monkeypatchable). At most *keep* retained numeric generations
+    (``.1`` .. ``.keep``), the oldest is dropped. Returns True when a
+    rotation happened; False when the file is absent or below the threshold.
+    Safe ONLY while no process holds the file open for appending (an
+    attached fd keeps writing after the rename); callers must guarantee
+    that (e.g. the launcher is stopped).
+    """
+    effective_max = max_bytes if max_bytes is not None else ROTATE_DEFAULT_MAX_BYTES
+    effective_keep = keep if keep is not None else ROTATE_DEFAULT_KEEP
+    if effective_keep < 1:
+        raise ValueError("keep must be >= 1")
+    try:
+        if not path.is_file() or path.stat().st_size < effective_max:
+            return False
+        oldest = path.with_name(f"{path.name}.{effective_keep}")
+        if oldest.exists():
+            oldest.unlink()
+        for generation in range(effective_keep - 1, 0, -1):
+            src = path.with_name(f"{path.name}.{generation}")
+            if src.exists():
+                src.replace(path.with_name(f"{path.name}.{generation + 1}"))
+        path.replace(path.with_name(f"{path.name}.1"))
+        return True
+    except OSError:
+        _log.warning("supervisor.log_rotation_failed path=%s", path)
+        return False
+
+
+def _resolve_bundled_postgres_version() -> str | None:
+    """Best-effort bundled postgres version (``postgres --version`` output).
+
+    Used at supervisor boot to persist ``installed_bundle_pg_version`` into the
+    runtime manifest so doctor can detect a bundled-binary downgrade/upgrade
+    against the cluster's last-run version. Returns None when the binary is
+    missing or unresolvable (the doctor axis then honestly skips).
+    """
+    from modulo.launcher.entry import resolve_bin_dir
+
+    bin_dir = resolve_bin_dir()
+    binary = bin_dir / ("postgres.exe" if sys.platform == "win32" else "postgres")
+    if not binary.is_file():
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603 — argv fully pinned
+            [str(binary), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for token in result.stdout.split():
+        if token and token[0].isdigit() and "." in token:
+            return token
+    return None
 
 
 def _default_spawner(argv: list[str], env: dict[str, str] | None) -> ChildProcess:
@@ -1443,18 +1577,24 @@ def _is_postgres_process(pid: int) -> bool | None:
 # ---------------------------------------------------------------------------
 
 
-def write_runtime_manifest(path: Path, pids: dict[str, int]) -> None:
+def write_runtime_manifest(path: Path, pids: dict[str, int], *, extra: dict[str, Any] | None = None) -> None:
     """Persist supervisor child PIDs next to state.json (atomic, 0o600).
 
     state.json's v1 payload is frozen (slice-1 HMAC contract + its tests),
     so the child PIDs live in this sibling manifest until a schema-2 bump
-    can fold them in. Credential-free by construction.
+    can fold them in. Credential-free by construction. ``extra`` lets the
+    supervisor persist one-off bookkeeping beside the PIDs (the degraded
+    reason when it degrades); extra values must themselves be
+    credential-free and JSON-serialisable.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {"children": pids}
+    if extra:
+        payload["extra"] = extra
     tmp_path = path.parent / f"{path.name}.tmp-{os.getpid()}"
     fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, json.dumps({"children": pids}, sort_keys=True).encode())
+        os.write(fd, json.dumps(payload, sort_keys=True).encode())
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -1463,14 +1603,29 @@ def write_runtime_manifest(path: Path, pids: dict[str, int]) -> None:
 
 def read_runtime_manifest(path: Path) -> dict[str, int]:
     """Read the child-PID manifest (missing/corrupt = no children known)."""
+    children = _read_manifest_fields(path).get("children", {})
+    if not isinstance(children, dict):
+        return {}
+    return {name: pid for name, pid in children.items() if isinstance(pid, int)}
+
+
+def read_degraded_reason(path: Path) -> str | None:
+    """Read the persisted degraded reason (None = not degraded / no manifest)."""
+    extra = _read_manifest_fields(path).get("extra")
+    if not isinstance(extra, dict):
+        return None
+    reason = extra.get("degraded_reason")
+    return reason if isinstance(reason, str) else None
+
+
+def _read_manifest_fields(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    children = payload.get("children") if isinstance(payload, dict) else None
-    if not isinstance(children, dict):
+    if not isinstance(payload, dict):
         return {}
-    return {name: pid for name, pid in children.items() if isinstance(pid, int)}
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -1625,13 +1780,23 @@ def collect_status(data_dir: Path) -> dict[str, Any]:
     status["postgres_port"] = state.postgres_port
     status["redis_port"] = state.redis_port
     status["api_port"] = state.api_port
+    runtime_path = data_dir / RUNTIME_FILENAME
     holder = _read_lock_holder(data_dir.parent / (data_dir.name + LOCK_SUFFIX))
-    pids = read_runtime_manifest(data_dir / RUNTIME_FILENAME)
+    pids = read_runtime_manifest(runtime_path)
+    degraded_reason = read_degraded_reason(runtime_path)
     if holder is not None:
         status["launcher"] = {
             "pid": holder.pid,
             "mode": holder.mode,
             "alive": _pid_alive(holder.pid),
+        }
+    if degraded_reason is not None:
+        status["degraded"] = {
+            "reason": degraded_reason,
+            "remediation": (
+                "the supervisor trip is terminal — restart `modulo start` once the underlying "
+                "fault is cleared, and inspect the app log (`modulo logs`) for crash backtraces"
+            ),
         }
     for name, port in (
         ("postgres", state.postgres_port),
@@ -1644,13 +1809,38 @@ def collect_status(data_dir: Path) -> dict[str, Any]:
             "pid": pid,
             "alive": _pid_alive(pid) if pid is not None else False,
             "port": port,
+            "state": _component_state(pid, port),
+            "remediation": _component_remediation(name, pid, port),
         }
+    api_pid = holder.pid if holder is not None else None
     status["components"]["api"] = {
-        "pid": holder.pid if holder is not None else None,
-        "alive": bool(holder is not None and _pid_alive(holder.pid)),
+        "pid": api_pid,
+        "alive": bool(api_pid is not None and _pid_alive(api_pid)),
         "port": state.api_port,
+        "state": _component_state(api_pid, state.api_port),
+        "remediation": _component_remediation("api", api_pid, state.api_port),
     }
     return status
+
+
+def _component_state(pid: int | None, port: int | None) -> str:
+    """One-word per-component state (``modulo status --json`` enrichment)."""
+    if pid is not None and _pid_alive(pid):
+        return "healthy"
+    return "stopped"
+
+
+def _component_remediation(name: str, pid: int | None, port: int | None) -> str | None:
+    """A short operator hint when the component is NOT healthy."""
+    if pid is not None and _pid_alive(pid):
+        return None
+    if name == "postgres":
+        return f"postgres is not running on 127.0.0.1:{port} — restart `modulo start`"
+    if name == "redis":
+        return f"redis is not running on 127.0.0.1:{port} — restart `modulo start`"
+    if name == "api":
+        return "the api process owns the data-dir lock while serving; restart `modulo start`"
+    return f"{name} worker is not running — restart `modulo start`"
 
 
 def _shim_cli_entry(argv: list[str]) -> int:  # pragma: no cover - __main__ only
