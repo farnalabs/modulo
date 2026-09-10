@@ -225,6 +225,12 @@ def _redacted_settings_dump(settings: Any) -> dict[str, str]:
     help="Fork to the background (POSIX only); logs land in the data dir.",
 )
 @click.option(
+    "--clear-degraded",
+    is_flag=True,
+    default=False,
+    help="Clear a persisted terminal-degraded state before boot (the resume path).",
+)
+@click.option(
     "--bin-dir",
     type=click.Path(path_type=Path),
     default=None,
@@ -232,13 +238,13 @@ def _redacted_settings_dump(settings: Any) -> dict[str, str]:
     help="Bundled-binaries dir override (packaging seam).",
 )
 @click.pass_context
-def start(ctx: click.Context, data_dir: Path | None, detach: bool, bin_dir: Path | None) -> None:
+def start(ctx: click.Context, data_dir: Path | None, detach: bool, clear_degraded: bool, bin_dir: Path | None) -> None:
     """Boot the single-install stack: bundled Postgres/Redis, SAQ, and the API."""
     _scrub_for_launcher_command()
     from modulo.launcher.entry import run_start
 
     try:
-        code = run_start(data_dir, detach=detach, bin_dir=bin_dir)
+        code = run_start(data_dir, detach=detach, bin_dir=bin_dir, clear_degraded=clear_degraded)
     except KeyboardInterrupt:
         ctx.exit(0)
     except (RuntimeError, OSError) as exc:
@@ -287,6 +293,10 @@ def status(data_dir: Path | None, as_json: bool) -> None:
     click.echo(f"data dir: {payload.get('data_dir', '?')}")
     if payload.get("error"):
         click.echo(f"error: {payload['error']}")
+    degraded = payload.get("degraded")
+    if isinstance(degraded, dict):
+        click.echo(f"DEGRADED: {degraded.get('reason')}")
+        click.echo("resume with: modulo start --clear-degraded")
     click.echo(f"initialized: {payload.get('initialized', False)}")
     launcher = payload.get("launcher")
     if isinstance(launcher, dict):
@@ -354,3 +364,111 @@ def env_cmd(as_json: bool) -> None:
         return
     for key in sorted(dump):
         click.echo(f"{key}={dump[key]}")
+
+
+# ---------------------------------------------------------------------------
+# Service management (FAR-674 — systemd user unit, Linux only)
+# ---------------------------------------------------------------------------
+
+
+@cli.group("service")
+def service() -> None:
+    """Manage the OS service (a systemd USER unit; Linux + systemd only)."""
+    _scrub_for_launcher_command()
+
+
+def _service_install_callback() -> None:
+    """Install, enable + start the modulo.service user unit (and linger)."""
+    _scrub_for_launcher_command()
+    from modulo.launcher import service as service_module
+
+    try:
+        result = service_module.install()
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"installed {result.unit_path} (exec: {result.executable})")
+    click.echo(f"unit enabled: {str(result.enabled).lower()}; started: {str(result.started).lower()}")
+    click.echo(f"linger: {str(result.linger_enabled).lower()}")
+    for warning in result.warnings:
+        click.echo(f"warning: {warning}")
+
+
+def _service_uninstall_callback() -> None:
+    """Stop, disable and remove the modulo.service user unit (best-effort)."""
+    _scrub_for_launcher_command()
+    from modulo.launcher import service as service_module
+
+    try:
+        result = service_module.uninstall()
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        "uninstalled modulo.service "
+        f"(removed: {str(result.unit_removed).lower()}, "
+        f"stopped: {str(result.stopped).lower()}, disabled: {str(result.disabled).lower()}, "
+        f"linger disabled: {str(result.linger_disabled).lower()})"
+    )
+    for warning in result.warnings:
+        click.echo(f"warning: {warning}")
+
+
+# Assignment form: registering the subcommand consumes the callback through
+# click's register machinery, which the dead-code gate cannot see; the module
+# slot is an unused-variable finding (non-blocking per run_vulture.py).
+service_install = service.command("install")(_service_install_callback)
+service_uninstall = service.command("uninstall")(_service_uninstall_callback)
+
+
+@service.command("status")
+@click.option(
+    "--data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Data dir override for the launcher-health section.",
+)
+def service_status(data_dir: Path | None) -> None:
+    """Show unit state, linger state and launcher health."""
+    _scrub_for_launcher_command()
+    from modulo.launcher import service as service_module
+
+    try:
+        payload = service_module.status(data_dir=data_dir)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"unit: {payload.get('unit')} ({payload.get('unit_path')})")
+    click.echo(f"enabled: {payload.get('enabled')}")
+    click.echo(f"active: {payload.get('active')}")
+    click.echo(f"linger: {payload.get('linger')}")
+    launcher = payload.get("launcher")
+    if isinstance(launcher, dict):
+        if launcher.get("error"):
+            click.echo(f"launcher: {launcher['error']}")
+        else:
+            holder = launcher.get("launcher") or {}
+            click.echo(
+                f"launcher: alive={str(bool(holder.get('alive'))).lower()} "
+                f"pid={holder.get('pid')} initialized={str(bool(launcher.get('initialized'))).lower()}"
+            )
+
+
+@cli.command("clear-degraded")
+@click.option(
+    "--data-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Data dir override (default: the per-OS launcher root).",
+)
+def clear_degraded_cmd(data_dir: Path | None) -> None:
+    """Clear a persisted terminal-degraded state so `modulo start` can resume."""
+    _scrub_for_launcher_command()
+    from modulo.launcher.supervisor import DEGRADED_FILENAME, clear_degraded_record
+
+    path = _resolve_data_dir(data_dir) / DEGRADED_FILENAME
+    try:
+        removed = clear_degraded_record(path)
+    except OSError as exc:
+        raise click.ClickException(f"could not clear the degraded state: {exc}") from exc
+    if removed:
+        click.echo(f"terminal-degraded state cleared ({path}) — `modulo start` can resume")
+    else:
+        click.echo("no terminal-degraded state present")

@@ -67,6 +67,19 @@ and per-destination rate limiting.
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — registered the
+  `RestConnectorConfigForm.vue` static testids (`rest-connector-base-url`,
+  `rest-connector-method`, `rest-connector-timeout`, `rest-connector-verify-tls`,
+  `rest-connector-on-unknown`, `rest-connector-records-path`,
+  `rest-connector-allowed-hosts`, `rest-connector-legacy-auth-hint`,
+  `rest-connector-auth-mode`, `rest-connector-token`, `rest-connector-username`,
+  `rest-connector-password`, `rest-connector-api-key`, `rest-connector-api-key-in`,
+  `rest-connector-header-name`, `rest-connector-query-param`,
+  `rest-connector-advanced-json`) in the `/admin/connectors` manifest `elements:`
+  inventory and added `AdminConnectorsView.vue` to the reverse testid-coverage
+  guard (`test_mapped_route_elements_cover_owning_view_testids`) — the structured
+  Generic REST connector form shipped on the page was previously invisible to
+  Remy's docs indexer / `/api/v1/manifest`.
 - 2026-09-07: **improve-architecture (product-map walk)** — added this
   behaviour-tracker for `feat-connectors`, which previously had behaviours only
   in `manifest.yaml` inline. Behaviours verified against `routes/connectors.py`,

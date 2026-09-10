@@ -353,9 +353,13 @@ def test_ambient_url_refusal_precedes_any_bootstrap_artefact(monkeypatch: pytest
     assert not created
 
 
-def test_degraded_boot_exits_nonzero_with_status_hint(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def _install_degrade_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock the boot path down to children that immediately exit nonzero.
+
+    The supervisor's crash cap (3 within a 2s window, tick 0.01) trips
+    terminal degraded moments after boot, driving the degraded exit path
+    end-to-end with a real Supervisor (no threads beyond its own monitor).
+    """
     import modulo.launcher.config_source as config_source_module
     import modulo.launcher.initdb as initdb_module
     import modulo.launcher.supervisor as supervisor_mod
@@ -440,16 +444,75 @@ def test_degraded_boot_exits_nonzero_with_status_hint(
     )
     monkeypatch.setattr(entry_module, "_add_saq_children", lambda supervisor, settings, composed: None)
 
+
+def test_degraded_boot_exits_nonzero_with_status_hint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from modulo.launcher import policy as policy_module
+    from modulo.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
+
+    _install_degrade_mocks(monkeypatch)
+
     def serve(host: str, port: int, stop_event: threading.Event) -> None:
         assert stop_event.wait(timeout=10)
 
     code = run_start(tmp_path / "data", serve=serve)
     captured = capsys.readouterr()
-    assert code == 1
+    assert code == policy_module.DEGRADED_EXIT_CODE
+    assert code not in (0, 1)
     assert "launcher degraded" in captured.err
     assert "modulo doctor" in captured.err
     assert "modulo status" in captured.err
     assert "launcher.log" in captured.err
+    assert "--clear-degraded" in captured.err
+    # The degrade is PERSISTED (FAR-674): reason + crash ring land on disk.
+    record = read_degraded_record(tmp_path / "data" / DEGRADED_FILENAME)
+    assert record is not None
+    assert "postgres" in str(record.get("reason"))
+    assert isinstance(record.get("crashes"), list)
+    assert len(record["crashes"]) >= 3
+    assert all(crash.get("exit_code") == 7 for crash in record["crashes"])
+    # The persisted exit code is the service-mode contract: the unit lists it
+    # in SuccessExitStatus so systemd leaves a degraded service STOPPED.
+    from modulo.launcher.service import UNIT_FILENAME, render_unit
+
+    unit = render_unit(Path("modulo"))
+    assert f"SuccessExitStatus={policy_module.DEGRADED_EXIT_CODE}" in unit
+    assert UNIT_FILENAME == "modulo.service"
+
+
+def test_degrade_within_the_upgrade_window_persists_post_upgrade_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A crash-cap trip shortly after an upgrade boot carries restore guidance."""
+    import time as time_module
+
+    from modulo.launcher import policy as policy_module
+    from modulo.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
+
+    _install_degrade_mocks(monkeypatch)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    now = time_module.time()
+    upgraded_at = f"{now - 60.0}"
+    (data_dir / "upgrade.json").write_text(
+        '{"upgraded_at": ' + upgraded_at + ', "pre_upgrade_snapshot": "/backups/pre-upgrade"}',
+        encoding="utf-8",
+    )
+
+    def serve(host: str, port: int, stop_event: threading.Event) -> None:
+        assert stop_event.wait(timeout=10)
+
+    code = run_start(data_dir, serve=serve)
+    captured = capsys.readouterr()
+    assert code == policy_module.DEGRADED_EXIT_CODE
+    record = read_degraded_record(data_dir / DEGRADED_FILENAME)
+    assert record is not None
+    assert record.get("post_upgrade") is True
+    assert record.get("pre_upgrade_snapshot") == "/backups/pre-upgrade"
+    assert "upgrade watch window" in captured.err
+    assert "/backups/pre-upgrade" in captured.err
+    assert "modulo restore" in captured.err
 
 
 def test_saq_children_gated_on_migration_head(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -675,7 +738,12 @@ def test_detach_forks_twice_and_setsid(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setattr(entry_module, "_redirect_stdio", lambda log: redirected.append(log))
 
     def fake_run_foreground(
-        data_dir: Path, *, bin_dir: Path | None = None, serve=None, ready_fd: int | None = None
+        data_dir: Path,
+        *,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+        serve=None,
+        ready_fd: int | None = None,
     ) -> int:
         return 7
 
@@ -702,7 +770,12 @@ def test_detach_failure_is_signalled_through_the_handshake(
     monkeypatch.setattr(entry_module, "_redirect_stdio", lambda log: None)
 
     def failing_run_foreground(
-        data_dir: Path, *, bin_dir: Path | None = None, serve=None, ready_fd: int | None = None
+        data_dir: Path,
+        *,
+        bin_dir: Path | None = None,
+        clear_degraded: bool = False,
+        serve=None,
+        ready_fd: int | None = None,
     ) -> int:
         raise BootError("bundled binaries not found at /nowhere - pass --bin-dir")
 
@@ -802,3 +875,121 @@ def test_redis_conf_is_swept_with_sigkill_debris(tmp_path: Path) -> None:
     reconcile_orphans(pgdata)
     stale_conf = [p for p in tmp_path.iterdir() if p.name.startswith(REDIS_CONF_PREFIX)]
     assert not stale_conf
+
+
+# ---------------------------------------------------------------------------
+# Terminal degraded gate: refusal, resume, post-upgrade context (FAR-674)
+# ---------------------------------------------------------------------------
+
+
+def _write_degraded_record(
+    data_dir: Path,
+    *,
+    reason: str = "child 'postgres' crashed 5 times",
+    post_upgrade: bool = False,
+    pre_upgrade_snapshot: str | None = None,
+) -> Path:
+    from modulo.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    degraded_path = data_dir / DEGRADED_FILENAME
+    record: dict[str, object] = {
+        "schema_version": 1,
+        "degraded_at": 1720000000.0,
+        "reason": reason,
+        "crashes": [{"child": "postgres", "exit_code": 7, "at": 1720000000.0, "backtrace": "Traceback..."}],
+    }
+    if post_upgrade:
+        record["post_upgrade"] = True
+    if pre_upgrade_snapshot is not None:
+        record["pre_upgrade_snapshot"] = pre_upgrade_snapshot
+    write_degraded_record(degraded_path, record)
+    return degraded_path
+
+
+def test_terminal_degraded_refuses_a_normal_start(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A normal start refuses with the persisted reason + the resume path."""
+    import modulo.launcher.supervisor as supervisor_mod
+
+    class FakeLock:
+        def __init__(self, data_dir: Path, mode: str = "serve") -> None:
+            pass
+
+        def acquire(self) -> None:
+            pass
+
+        def release(self) -> None:
+            pass
+
+    monkeypatch.setattr(supervisor_mod, "DataDirLock", FakeLock)
+    data_dir = tmp_path / "data"
+    _write_degraded_record(data_dir)
+    with pytest.raises(BootError, match="TERMINAL DEGRADED") as excinfo:
+        run_start(data_dir)
+    message = str(excinfo.value)
+    assert "postgres" in message
+    assert "--clear-degraded" in message
+    assert "modulo clear-degraded" in message
+
+
+def test_post_upgrade_degraded_refusal_carries_snapshot_guidance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import modulo.launcher.supervisor as supervisor_mod
+
+    class FakeLock:
+        def __init__(self, data_dir: Path, mode: str = "serve") -> None:
+            pass
+
+        def acquire(self) -> None:
+            pass
+
+        def release(self) -> None:
+            pass
+
+    monkeypatch.setattr(supervisor_mod, "DataDirLock", FakeLock)
+    data_dir = tmp_path / "data"
+    # The degrade happened within the upgrade window: the persisted record
+    # carries the post-upgrade context (attached at degrade time).
+    _write_degraded_record(data_dir, post_upgrade=True, pre_upgrade_snapshot="/backups/pre-upgrade")
+    with pytest.raises(BootError) as excinfo:
+        run_start(data_dir)
+    message = str(excinfo.value)
+    assert "upgrade watch window" in message
+    assert "/backups/pre-upgrade" in message
+    assert "modulo restore" in message
+
+
+def test_clear_degraded_resumes_the_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`--clear-degraded` removes the record and the boot proceeds normally."""
+    from modulo.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
+
+    order: list[str] = []
+    _install_boot_mocks(monkeypatch, order)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    data_dir = tmp_path / "data"
+    _write_degraded_record(data_dir)
+    code = run_start(data_dir, clear_degraded=True, serve=lambda host, port, ev: None)
+    assert code == 0
+    assert read_degraded_record(data_dir / DEGRADED_FILENAME) is None
+    assert "lock-acquired" in order
+
+
+def test_upgrade_context_provider_attaches_fields_inside_the_window(
+    tmp_path: Path,
+) -> None:
+
+    marker_path = tmp_path / "upgrade.json"
+    no_marker = entry_module._upgrade_context_provider(marker_path, lambda: 10_000.0, window_seconds=600.0)
+    assert not no_marker()
+
+    marker_path.write_text('{"upgraded_at": 9500.0, "pre_upgrade_snapshot": "/snap"}', encoding="utf-8")
+    provider = entry_module._upgrade_context_provider(marker_path, lambda: 10_000.0, window_seconds=600.0)
+    assert provider() == {"post_upgrade": True, "pre_upgrade_snapshot": "/snap"}
+
+    outside = entry_module._upgrade_context_provider(marker_path, lambda: 10_500.0, window_seconds=600.0)
+    assert not outside()
+
+    marker_path.write_text('{"no_timestamp": true}', encoding="utf-8")
+    assert not provider()
