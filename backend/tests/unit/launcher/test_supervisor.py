@@ -17,11 +17,13 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 import modulo.launcher.secrets_file as secrets_file_module
+from modulo.launcher import policy as policy_module
 from modulo.launcher.secrets_file import load_or_create
 from modulo.launcher.state import LauncherState, save_state
 from modulo.launcher.supervisor import (
@@ -141,7 +143,15 @@ class AliveProc:
 class Harness:
     """Manual-clock supervisor with recorded spawns/hooks (no threads)."""
 
-    def __init__(self, knobs: SupervisorKnobs | None = None, spec: ChildSpec | None = None) -> None:
+    def __init__(
+        self,
+        knobs: SupervisorKnobs | None = None,
+        spec: ChildSpec | None = None,
+        *,
+        degraded_path: Path | None = None,
+        degraded_context: Callable[[], dict[str, object]] | None = None,
+        wall_clock: Callable[[], float] | None = None,
+    ) -> None:
         self.clock = FakeClock()
         self.spawned_argv: list[list[str]] = []
         self.processes: list[FakeProc] = []
@@ -156,6 +166,9 @@ class Harness:
             sleep=lambda _seconds: None,
             crash_hook=self._crash,
             on_degraded=self._degraded,
+            degraded_path=degraded_path,
+            degraded_context=degraded_context,
+            wall_clock=wall_clock if wall_clock is not None else (lambda: 1720000000.0),
         )
         self.supervisor.add(
             spec if spec is not None else ChildSpec(name="postgres", argv_builder=lambda: ["postgres-child"])
@@ -994,3 +1007,270 @@ def test_shim_kills_service_when_parent_starttime_missing() -> None:
     # the failure signal for a broken watchdog.
     result = subprocess.run(shim_argv, timeout=30, capture_output=True, check=False)  # noqa: S603 — test driver
     assert result.returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# Terminal degraded persistence (FAR-674)
+# ---------------------------------------------------------------------------
+
+
+class TailedProc(FakeProc):
+    """FakeProc exposing a captured stderr tail (like _TailProcess)."""
+
+    def __init__(self, *, exit_code: int = 7, tail: str | None = None) -> None:
+        super().__init__(exit_code=exit_code)
+        self._tail = tail
+
+    def stderr_tail(self) -> str | None:
+        return self._tail
+
+
+def _trip_the_cap(harness: Harness, *, cap: int = 3) -> None:
+    """Drive spawn/crash cycles until the crash cap trips."""
+    for _ in range(cap):
+        harness.clock.advance(0.02)
+        harness.supervisor.tick()  # spawn
+        harness.supervisor.tick()  # crash
+
+
+def test_crash_cap_degrade_persists_a_record(tmp_path: Path) -> None:
+    """Teardown still runs AND the degrade (reason + crash ring) is persisted."""
+    degraded_path = tmp_path / "data" / "degraded.json"
+    degraded_path.parent.mkdir(parents=True)
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            tick_seconds=0.01,
+            restart_backoff_initial=0.001,
+            restart_backoff_max=0.003,
+            crash_window_seconds=100.0,
+            crash_cap=3,
+        ),
+        degraded_path=degraded_path,
+        degraded_context=lambda: {"post_upgrade": True},
+    )
+    _trip_the_cap(harness)
+    assert harness.supervisor.degraded_reason is not None
+    assert len(harness.degraded) == 1
+    persisted = json.loads(degraded_path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == 1
+    assert "postgres" in persisted["reason"]
+    assert persisted["post_upgrade"] is True
+    crashes = persisted["crashes"]
+    assert len(crashes) == 3
+    assert all(crash["child"] == "postgres" and crash["exit_code"] == 7 for crash in crashes)
+
+
+def test_crash_cap_degrade_without_a_path_skips_persistence(tmp_path: Path) -> None:
+    """degraded_path=None (the pre-FAR-674 contract) writes nothing."""
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            tick_seconds=0.01,
+            restart_backoff_initial=0.001,
+            restart_backoff_max=0.003,
+            crash_window_seconds=100.0,
+            crash_cap=2,
+        )
+    )
+    _trip_the_cap(harness, cap=2)
+    assert harness.supervisor.degraded_reason is not None
+    assert not (tmp_path / "degraded.json").exists()
+
+
+def test_stderr_tail_is_captured_in_the_crash_record(tmp_path: Path) -> None:
+    """A crash record carries the child's captured stderr (the traceback)."""
+    degraded_path = tmp_path / "data" / "degraded.json"
+    degraded_path.parent.mkdir(parents=True)
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            tick_seconds=0.01,
+            restart_backoff_initial=0.001,
+            restart_backoff_max=0.003,
+            crash_window_seconds=100.0,
+            crash_cap=2,
+        ),
+        degraded_path=degraded_path,
+    )
+
+    class TraceProc(TailedProc):
+        def __init__(self) -> None:
+            super().__init__(exit_code=7, tail="Traceback (most recent call last): boom")
+
+    harness.supervisor._spawner = lambda argv, env: TraceProc()  # type: ignore[method-assign]
+    _trip_the_cap(harness, cap=2)
+    persisted = json.loads(degraded_path.read_text(encoding="utf-8"))
+    assert all("Traceback" in crash["backtrace"] for crash in persisted["crashes"])
+
+
+def test_crash_ring_is_bounded_to_the_policy_size(tmp_path: Path) -> None:
+    """Only the last DEGRADED_BACKTRACE_RING records land in the record."""
+    degraded_path = tmp_path / "data" / "degraded.json"
+    degraded_path.parent.mkdir(parents=True)
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            tick_seconds=0.01,
+            restart_backoff_initial=0.001,
+            restart_backoff_max=0.002,
+            crash_window_seconds=10_000.0,
+            crash_cap=1_000,
+        ),
+        degraded_path=degraded_path,
+    )
+    harness.supervisor.tick()  # spawn #1
+    for _ in range(20):
+        harness.clock.advance(0.02)
+        harness.supervisor.tick()  # record crash
+        harness.supervisor.tick()  # respawn (cap 1000 far away)
+    assert len(harness.supervisor._crash_records) == policy_module.DEGRADED_BACKTRACE_RING
+    harness.supervisor._degrade_locked("forced")
+    persisted = json.loads(degraded_path.read_text(encoding="utf-8"))
+    assert len(persisted["crashes"]) == policy_module.DEGRADED_BACKTRACE_RING
+
+
+def test_supervisor_internal_exception_lands_in_the_ring(tmp_path: Path) -> None:
+    """An argv-builder failure is a recorded supervisor-side crash (traceback)."""
+    degraded_path = tmp_path / "data" / "degraded.json"
+    degraded_path.parent.mkdir(parents=True)
+
+    def exploding_argv() -> list[str]:
+        raise RuntimeError("spawn mechanism broken")
+
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            tick_seconds=0.01,
+            restart_backoff_initial=0.01,
+            restart_backoff_max=0.02,
+            crash_window_seconds=100.0,
+            crash_cap=2,
+        ),
+        spec=ChildSpec(name="postgres", argv_builder=exploding_argv),
+        degraded_path=degraded_path,
+    )
+    harness.supervisor.tick()  # argv_builder raised → ring record, no spawn
+    assert not harness.spawned_argv
+    harness.supervisor._degrade_locked("forced")
+    persisted = json.loads(degraded_path.read_text(encoding="utf-8"))
+    assert any(crash["backtrace"] and "spawn mechanism broken" in crash["backtrace"] for crash in persisted["crashes"])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_degraded_record_is_written_0600(tmp_path: Path) -> None:
+    degraded_path = tmp_path / "data" / "degraded.json"
+    degraded_path.parent.mkdir(parents=True)
+    harness = Harness(
+        knobs=SupervisorKnobs(
+            tick_seconds=0.01,
+            restart_backoff_initial=0.001,
+            restart_backoff_max=0.003,
+            crash_window_seconds=100.0,
+            crash_cap=1,
+        ),
+        degraded_path=degraded_path,
+    )
+    harness.supervisor.tick()
+    harness.clock.advance(0.02)
+    harness.supervisor.tick()  # crash 1 == cap → degrade + persist
+    mode = degraded_path.stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_degraded_record_readers_are_tolerant(tmp_path: Path) -> None:
+    from modulo.launcher.supervisor import (
+        clear_degraded_record,
+        read_degraded_record,
+        write_degraded_record,
+    )
+
+    path = tmp_path / "degraded.json"
+    assert read_degraded_record(path) is None  # missing = not degraded
+    assert clear_degraded_record(path) is False  # nothing to clear
+    write_degraded_record(path, {"schema_version": 1, "degraded_at": 1.0, "reason": "cap"})
+    assert read_degraded_record(path) == {"schema_version": 1, "degraded_at": 1.0, "reason": "cap"}
+    path.write_text("{corrupt", encoding="utf-8")
+    assert read_degraded_record(path) is None  # torn file must never wedge boot
+    path.write_text('{"schema_version": 1, "future_field": [1]}', encoding="utf-8")
+    assert read_degraded_record(path) is None  # no reason -> not a degrade record
+    assert clear_degraded_record(path) is True
+
+
+def test_collect_status_surfaces_the_degraded_record(tmp_path: Path) -> None:
+    from modulo.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_degraded_record(
+        data_dir / DEGRADED_FILENAME,
+        {"schema_version": 1, "degraded_at": 5.0, "reason": "cap", "crashes": [{"child": "redis"}]},
+    )
+    status = collect_status(data_dir)
+    assert status["degraded"]["reason"] == "cap"
+    assert status["degraded"]["crashes"] == [{"child": "redis"}]
+
+
+# ---------------------------------------------------------------------------
+# Policy single-sourcing (FAR-674)
+# ---------------------------------------------------------------------------
+
+
+def test_supervisor_knob_defaults_are_the_policy_constants() -> None:
+    """SupervisorKnobs must bind the policy constants, not restate copies."""
+    defaults = SupervisorKnobs()
+    assert defaults.tick_seconds == policy_module.TICK_SECONDS
+    assert defaults.restart_backoff_initial == policy_module.RESTART_BACKOFF_INITIAL
+    assert defaults.restart_backoff_max == policy_module.RESTART_BACKOFF_MAX
+    assert defaults.crash_window_seconds == policy_module.CRASH_WINDOW_SECONDS
+    assert defaults.crash_cap == policy_module.CRASH_CAP
+    assert defaults.pg_fast_shutdown_timeout == policy_module.PG_FAST_SHUTDOWN_TIMEOUT
+    assert defaults.shutdown_grace_seconds == policy_module.SHUTDOWN_GRACE_SECONDS
+    assert defaults.health_check_timeout == policy_module.HEALTH_CHECK_TIMEOUT
+    assert defaults.health_check_interval == policy_module.HEALTH_CHECK_INTERVAL
+
+
+def test_policy_shell_constants_generation() -> None:
+    generated = policy_module.format_shell_constants()
+    assert f"SLIDING_WINDOW_S={int(policy_module.SLIDING_WINDOW_SECONDS)}" in generated
+    assert f"SLIDING_CRASH_LIMIT={policy_module.SLIDING_CRASH_LIMIT}" in generated
+    assert f"SLIDING_RESTART_SLEEP_S={int(policy_module.SLIDING_RESTART_SLEEP_SECONDS)}" in generated
+    assert f"SUPERVISOR_CRASH_CAP={policy_module.CRASH_CAP}" in generated
+    for line in generated.splitlines():
+        stripped = line.strip()
+        assert not stripped or stripped.startswith("#") or "=" in stripped
+
+
+def test_entrypoint_sources_the_policy_constants() -> None:
+    """The entrypoint consumes the generated constants (no inline magic left).
+
+    Verifies the sourced values equal the Python constants by running the
+    generator exactly as the entrypoint does, and greps the script for the
+    wiring.
+    """
+    repo_root = Path(__file__).resolve().parents[4]
+    entrypoint = repo_root / "deploy" / "fly" / "entrypoint.sh"
+    assert entrypoint.exists(), f"entrypoint missing at {entrypoint}"
+    text = entrypoint.read_text(encoding="utf-8")
+    assert "SLIDING_WINDOW_S=300" not in text  # inline magic numbers removed
+    assert "SLIDING_CRASH_LIMIT=5" not in text
+    assert "modulo.launcher.policy" in text
+    assert "SLIDING_RESTART_SLEEP_S" in text
+
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, "-m", "modulo.launcher.policy"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "PYTHONPATH": str(repo_root / "backend" / "src")},
+    )
+    assert result.returncode == 0, result.stderr
+    sourced: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, _, value = stripped.partition("=")
+        sourced[key] = value
+    assert int(sourced["SLIDING_WINDOW_S"]) == int(policy_module.SLIDING_WINDOW_SECONDS)
+    assert int(sourced["SLIDING_CRASH_LIMIT"]) == policy_module.SLIDING_CRASH_LIMIT
+    assert int(sourced["SLIDING_RESTART_SLEEP_S"]) == int(policy_module.SLIDING_RESTART_SLEEP_SECONDS)
+    assert str(policy_module.CRASH_CAP) == sourced["SUPERVISOR_CRASH_CAP"]
