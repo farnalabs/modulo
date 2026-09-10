@@ -139,6 +139,16 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
+from modulo.db.migrations._rls_ceremony import (
+    assert_owner_is_migrate as _assert_owner_is_migrate,
+)
+from modulo.db.migrations._rls_ceremony import (
+    is_postgres as _is_postgres,
+)
+from modulo.db.migrations._rls_ceremony import (
+    role_exists as _role_exists,
+)
+
 revision: str = "0192_run_node_outputs"
 down_revision: str | None = "0191_bundled_runner_seed_backfill"
 branch_labels: str | Sequence[str] | None = None
@@ -418,32 +428,6 @@ _QUARANTINE_TOTAL_SQL = f"SELECT count(*) FROM {_QUARANTINE_TABLE}"  # noqa: S60
 # deliberate, documented exception.)
 _ALEMBIC_RUNTIME_LOGGER = "alembic.runtime.migration"
 _log = logging.getLogger(_ALEMBIC_RUNTIME_LOGGER)
-
-
-def _is_postgres(bind: sa.Connection) -> bool:
-    return bind.dialect.name == "postgresql"
-
-
-def _role_exists(bind: sa.Connection, role: str) -> bool:
-    """Return True when the Postgres role exists (fresh dev/BDD DBs have none)."""
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
-
-
-def _assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
-    """POST-CREATE ownership assertion — the 0066 ceremony (before RLS)."""
-    owner = bind.execute(
-        sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass(:tbl)").bindparams(
-            tbl=f"public.{table}"
-        )
-    ).scalar_one_or_none()
-    if owner != _MIGRATE_ROLE:
-        raise RuntimeError(
-            f"{table} owner is {owner!r}, expected '{_MIGRATE_ROLE}' "
-            "(the app role must NOT own run_node_outputs — owner bypasses RLS)"
-        )
 
 
 def _count(bind: sa.Connection, sql: str, params: dict[str, object] | None = None) -> int:
