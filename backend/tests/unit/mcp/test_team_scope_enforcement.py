@@ -867,12 +867,10 @@ class TestReviewHitlTeamScope(_OperatorAuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._check_human_only_gate", new_callable=AsyncMock, return_value=None)
     @patch("modulo.api.mcp_server.HITLManager")
-    @patch("modulo.api.mcp_server._check_human_only_gate", return_value=None)
     async def test_claim_allowed_for_own_team_run(
         self,
-        mock_check_human_only: MagicMock,
         mock_manager_cls: MagicMock,
-        mock_human_only: AsyncMock,
+        mock_check_human_only: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         _ctx_team_id.set(_TEAM_A)
