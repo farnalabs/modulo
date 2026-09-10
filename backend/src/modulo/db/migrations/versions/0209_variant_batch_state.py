@@ -43,6 +43,10 @@ _MIGRATE_ROLE = "modulo_migrate"
 _APP_ROLE = "modulo_app"
 _SYSTEM_ROLE = "modulo_system"
 _TABLE = "variant_batch_state"
+# Declared so the RLS-coverage drift test can detect this table's ENABLE ROW LEVEL
+# SECURITY migration (the DDL below is emitted via an f-string, which the test's
+# literal regex intentionally does not match).
+_ORG_SCOPED_TABLES = (_TABLE,)
 _ORG_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
 
 
