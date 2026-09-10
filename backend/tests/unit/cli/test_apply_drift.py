@@ -110,13 +110,13 @@ class TestDriftReportShape:
         assert not report["created"]
         assert not report["updated"]
         assert not report["blocked"]
-        assert report["drift_detail"] == {}
+        assert not report["drift_detail"]
         assert not has_drift(report)
 
 
 class TestNodeLevelPipelineDrift:
     @respx.mock
-    def test_modified_node_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_modified_node_is_reported(self) -> None:
         from tests.unit.cli.test_apply_pipeline import (
             CONFIG_TEXT as PIPELINE_CONFIG_TEXT,
         )
@@ -145,12 +145,12 @@ class TestNodeLevelPipelineDrift:
             report = executor.run(config, dry_run=False, drift=True)
         detail = report["drift_detail"]
         assert detail["sample"]["nodes"]["modified"] == ["00000000-0000-0000-0000-0000000000a1"]
-        assert detail["sample"]["nodes"]["added"] == []
-        assert detail["sample"]["nodes"]["removed"] == []
-        assert detail["sample"]["edges"]["added"] == []
+        assert not detail["sample"]["nodes"]["added"]
+        assert not detail["sample"]["nodes"]["removed"]
+        assert not detail["sample"]["edges"]["added"]
 
     @respx.mock
-    def test_added_and_removed_nodes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_added_and_removed_nodes(self) -> None:
         from tests.unit.cli.test_apply_pipeline import (
             _mock_current_with_pipelines,
             _pipeline_item,
@@ -185,10 +185,10 @@ class TestNodeLevelPipelineDrift:
         detail = report["drift_detail"]["sample"]
         assert detail["nodes"]["removed"] == ["00000000-0000-0000-0000-0000000000a2"]
         assert detail["nodes"]["added"] == ["00000000-0000-0000-0000-0000000000a3"]
-        assert detail["nodes"]["modified"] == []
+        assert not detail["nodes"]["modified"]
 
     @respx.mock
-    def test_unrelated_field_drift_gets_no_graph_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_unrelated_field_drift_gets_no_graph_entry(self) -> None:
         """Top-level-only drift (no graph difference) gets no breakdown entry."""
         from tests.unit.cli.test_apply_pipeline import (
             _mock_current_with_pipelines,
@@ -205,7 +205,7 @@ class TestNodeLevelPipelineDrift:
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False, drift=True)
-        assert report["drift_detail"] == {}
+        assert not report["drift_detail"]
         updated = [e["name"] for e in report["updated"] if e["kind"] == "pipeline"]
         assert updated == ["sample"]
 
@@ -357,7 +357,7 @@ class TestDiffExitCodes:
         assert result.exit_code == 0, result.output
         parsed = json.loads(result.output)
         assert parsed["mode"] == "drift"
-        assert parsed["drift_detail"] == {}
+        assert not parsed["drift_detail"]
         assert all(not parsed[s] for s in ("created", "updated", "blocked", "failed"))
 
     @respx.mock

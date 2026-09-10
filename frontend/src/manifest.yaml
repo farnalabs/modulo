@@ -126,7 +126,7 @@ routes:
         name: pipeline-list
         breadcrumb: Pipelines
         parent: /
-        product_map: [feat-pipelines, feat-router]
+        product_map: [feat-pipelines, feat-router, feat-apply]
         sidebar_group: build
         sidebar_order: 2
         type: list_page
@@ -284,7 +284,7 @@ routes:
         name: schemas
         breadcrumb: Schemas
         parent: /
-        product_map: [feat-schemas]
+        product_map: [feat-schemas, feat-apply]
         sidebar_group: configure
         sidebar_order: 1
         type: list_page
@@ -388,7 +388,7 @@ routes:
         name: settings-triggers
         breadcrumb: Triggers
         parent: /
-        product_map: [feat-triggers]
+        product_map: [feat-triggers, feat-apply]
         sidebar_group: configure
         sidebar_order: 6
         type: form_page
@@ -583,7 +583,7 @@ routes:
         name: admin-model-backends
         breadcrumb: Model Backends
         parent: /
-        product_map: [feat-model-backends]
+        product_map: [feat-model-backends, feat-apply]
         sidebar_group: configure
         sidebar_order: 3
         type: list_page

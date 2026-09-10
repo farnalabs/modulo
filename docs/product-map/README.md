@@ -109,6 +109,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-connectors** - External tool connectors - routes: `/admin/connectors`
 - **feat-environments** - Environment profiles and run environments - routes: `/admin/environments`, `/admin/sandbox-concurrency`, `/environment-profiles`, `/environment-profiles/new`, `/environment-profiles/:id/edit`
 - **feat-triggers** - Manual, webhook, and scheduled triggers - routes: `/settings/triggers`
+- **feat-apply** - `modulo apply` declarative configuration CLI (FAR-681) - routes: `/schemas`, `/admin/model-backends`, `/pipelines`, `/settings/triggers`
 
 ### Admin
 - **feat-teams** - Users, teams, and role-based access - routes: `/settings/teams`, `/admin/users`
