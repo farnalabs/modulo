@@ -42,7 +42,7 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and FAR-644's 0206_deleted_defaults_signal_check chains off 0205,
 # and FAR-761's 0207_collection_install_tracking chains off 0206, and #337's
 # 0208_notification_indexes_and_constraint chains off 0207 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0208_notification_indexes_and_constraint"
+_CHAIN_HEAD_MIGRATION = "0209_collection_install_id_entity_columns"
 
 
 def _source(name: str) -> str:
