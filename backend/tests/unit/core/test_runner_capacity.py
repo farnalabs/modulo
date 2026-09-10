@@ -1192,18 +1192,12 @@ async def test_sweep_acquires_marker_lock_on_dedicated_connection(
 async def test_sweep_proceeds_when_advisory_lock_not_acquired(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """FAR-766 follow-up (review gap): when the session-scoped DEDUP advisory
-    lock CANNOT be acquired — ``pg_try_advisory_lock`` returns False, e.g. the
-    SAQ-worker / cron sweep holds it on another xdist worker in the full
-    ``-n 2`` suite — the sweep must FAIL OPEN and STILL clear stale markers.
-
-    The OLD code returned early (the ``skipped_locked`` zero result: cleared ==
-    0) so stale terminal/leaked markers accumulated as phantom capacity — the
-    worse failure mode. The FIXED code proceeds without the dedup lock; the
-    per-row CAS guards (``marker_seen`` equality) keep the concurrent
-    re-process idempotent, and the ``finally`` block only releases the lock when
-    ``acquired`` is True.
-    """
+    """A dedup lock that can never be acquired (``pg_try_advisory_lock`` returns
+    False every poll) must FAIL OPEN: the sweep PROCEEDS to clear stale markers
+    rather than skipping the whole tick. A skipped sweep would let stale markers
+    accumulate as phantom capacity and take the D8 rollback signal dark (qa F5
+    liveness contract); the per-row CAS guards + SAQ unique=True remain the real
+    overlap guards, so a missed lock must never abort the sweep."""
     _patch_gate(monkeypatch, flag_on=False)
 
     class _S(_FakeGateSettings):
@@ -1230,14 +1224,14 @@ async def test_sweep_proceeds_when_advisory_lock_not_acquired(
     with caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"):
         result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
 
-    assert any("runner.capacity.marker_sweep_lock_not_acquired_proceeding" in r.message for r in caplog.records), (
-        "the fail-open proceed path must log marker_sweep_lock_not_acquired_proceeding"
+    caplog.set_level(logging.DEBUG, logger="modulo.core.runner_capacity")
+    result = await reconcile_runner_dispatch_markers(factory)  # type: ignore[arg-type]
+
+    assert result["cleared"] == 1, "fail-open must proceed and clear the stale marker"
+    assert stale_awaiting.id in factory.cleared, "a fail-open sweep must clear the stale marker"
+    assert any("runner.capacity.marker_sweep_proceeding_without_lock" in r.message for r in caplog.records), (
+        "the fail-open path must log marker_sweep_proceeding_without_lock"
     )
-    assert not any("runner.capacity.marker_sweep_skipped_locked" in r.message for r in caplog.records), (
-        "the OLD skipped_locked early-return must NOT fire"
-    )
-    assert result["cleared"] == 1, "fail-open: the sweep still clears the stale marker without the lock"
-    assert stale_awaiting.id in factory.cleared
 
 
 async def test_sweep_serialises_contending_sweeps_via_polling(
