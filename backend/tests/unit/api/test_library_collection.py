@@ -1378,3 +1378,136 @@ class TestSeedGitHubPrReviewerBundle:
 
         coll = _MODULO_BY_SLUG[("library_collection", "github-pr-reviewer")]
         assert coll.content_json["trust_header"] == {"source": "modulo", "verified": True}
+
+
+# ---------------------------------------------------------------------------
+# FAR-787: 6 library collection bundles + agent/pipeline seed integrity
+# ---------------------------------------------------------------------------
+
+_NEW_BUNDLE_SLUGS = [
+    "prompt-to-pr",
+    "changelog-generator",
+    "release-notes-generator",
+    "pr-description-writer",
+    "issue-triage",
+    "license-checker",
+]
+
+_NEW_AGENT_SLUGS = [
+    "prompt-to-pr-implement-agent",
+    "changelog-agent",
+    "release-notes-agent",
+    "pr-description-agent",
+    "issue-triage-agent",
+    "license-checker-agent",
+]
+
+_NEW_PIPELINE_SLUGS = [
+    "prompt-to-pr-pipeline",
+    "changelog-pipeline",
+    "release-notes-pipeline",
+    "pr-description-pipeline",
+    "issue-triage-pipeline",
+    "license-checker-pipeline",
+]
+
+
+class TestAllNewBundlesExist:
+    """Verify all 6 FAR-787 collection bundles are in the seed data."""
+
+    def test_all_collections_exist(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        for slug in _NEW_BUNDLE_SLUGS:
+            key = ("library_collection", slug)
+            assert key in _MODULO_BY_SLUG, f"Missing collection bundle for {slug}"
+
+    def test_all_collections_are_library_collection_type(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        for slug in _NEW_BUNDLE_SLUGS:
+            coll = _MODULO_BY_SLUG[("library_collection", slug)]
+            assert coll.primitive_type == "library_collection"
+
+    def test_all_collections_are_published(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        for slug in _NEW_BUNDLE_SLUGS:
+            coll = _MODULO_BY_SLUG[("library_collection", slug)]
+            assert coll.status == "published", f"Collection '{slug}' is not published"
+
+    def test_all_collections_have_expected_tags(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        expected_tags = {
+            "prompt-to-pr": {"library_collection", "code-generation", "pr", "github", "sandbox"},
+            "changelog-generator": {"library_collection", "changelog", "release", "github"},
+            "release-notes-generator": {"library_collection", "release-notes", "github", "linear"},
+            "pr-description-writer": {"library_collection", "pr-description", "github"},
+            "issue-triage": {"library_collection", "triage", "issues", "github"},
+            "license-checker": {"library_collection", "license", "compliance", "dependencies"},
+        }
+        for slug, expected in expected_tags.items():
+            coll = _MODULO_BY_SLUG[("library_collection", slug)]
+            assert set(coll.tags) == expected, f"Tags mismatch for '{slug}'"
+
+
+class TestAllBundlePinsResolve:
+    """Verify every pinned slug across all 6 bundles exists as a primitive."""
+
+    def test_all_pins_resolve(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        for slug in _NEW_BUNDLE_SLUGS:
+            coll = _MODULO_BY_SLUG[("library_collection", slug)]
+            pins = coll.content_json.get("manifest_pins", [])
+            assert pins, f"Collection '{slug}' has no manifest pins"
+            for pin in pins:
+                pin_slug = pin["slug"]
+                # Pin type can be schema, agent, or pipeline_template — check all
+                found = False
+                for ptype in ("schema", "agent", "pipeline_template"):
+                    if (ptype, pin_slug) in _MODULO_BY_SLUG:
+                        found = True
+                        break
+                assert found, f"Pin '{pin_slug}' in collection '{slug}' not found in seed data"
+
+    def test_all_agents_have_prompts(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        for slug in _NEW_AGENT_SLUGS:
+            key = ("agent", slug)
+            assert key in _MODULO_BY_SLUG, f"Missing agent primitive for {slug}"
+            agent = _MODULO_BY_SLUG[key]
+            prompt = agent.content_json.get("prompt_template", "")
+            assert prompt, f"Agent '{slug}' has empty prompt_template"
+
+    def test_all_pipelines_have_nodes_and_edges(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        for slug in _NEW_PIPELINE_SLUGS:
+            key = ("pipeline_template", slug)
+            assert key in _MODULO_BY_SLUG, f"Missing pipeline template for {slug}"
+            pipeline = _MODULO_BY_SLUG[key]
+            content = pipeline.content_json
+            assert content.get("graph_nodes"), f"Pipeline '{slug}' has empty graph_nodes"
+            assert "edges" in content, f"Pipeline '{slug}' missing edges key"
+
+    def test_bundle_connector_requirements_present(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        for slug in _NEW_BUNDLE_SLUGS:
+            coll = _MODULO_BY_SLUG[("library_collection", slug)]
+            reqs = coll.content_json.get("connector_requirements", [])
+            assert reqs, f"Collection '{slug}' has no connector_requirements"
+            for req in reqs:
+                assert "connector_type_id" in req, f"Collection '{slug}' connector req missing type_id"
+                assert "capabilities" in req, f"Collection '{slug}' connector req missing capabilities"
+
+    def test_bundle_trust_headers_present(self) -> None:
+        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+
+        for slug in _NEW_BUNDLE_SLUGS:
+            coll = _MODULO_BY_SLUG[("library_collection", slug)]
+            trust = coll.content_json.get("trust_header")
+            assert trust == {"source": "modulo", "verified": True}, f"Collection '{slug}' missing or wrong trust_header"

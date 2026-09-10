@@ -1247,11 +1247,756 @@ _MODULO_PRIMITIVES.extend(
             },
             tags=["library_collection", "code-review", "pr", "github", "quick-start"],
         ),
+        # -------------------------------------------------------------------
+        # FAR-787: Prompt-to-PR bundle (FAR-781)
+        # -------------------------------------------------------------------
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A0",
+            primitive_type="agent",
+            name="Prompt-to-PR Implement Agent",
+            slug="prompt-to-pr-implement-agent",
+            description=(
+                "Reads a task description, explores the codebase, implements the"
+                " change, runs tests, commits, pushes, and creates a pull request."
+            ),
+            content_json={
+                "input_schema": None,
+                "output_schema": None,
+                "prompt_template": (
+                    "You are an AI software engineer implementing a development task.\n\n"
+                    "TASK:\n{{ input }}\n\n"
+                    "Follow these steps:\n"
+                    "1. Understand the task and explore the relevant codebase files.\n"
+                    "2. Implement the required changes in the target code path.\n"
+                    "3. Run the project's test command to validate the changes.\n"
+                    "4. Fix any test failures before proceeding.\n"
+                    "5. Stage all changes, commit with a descriptive Conventional Commits message.\n"
+                    "6. Push the branch to the remote repository.\n"
+                    "7. Create a pull request with a structured description (What/Why/How/Testing).\n\n"
+                    "Report: files changed, test results (pass/fail), commit SHA, and PR URL."
+                ),
+                "connector_type_refs": [
+                    {"connector_type": "github", "capabilities": ["read", "write", "code_review"]},
+                ],
+                "required_environment_capabilities": [_EGRESS_GITHUB],
+                "model_backend_id": None,
+                "retry_policy": {},
+                "token_budget": None,
+            },
+            tags=["agent", "prompt-to-pr", "code-generation", "github", "sandbox"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A1",
+            primitive_type="pipeline_template",
+            name="Prompt-to-PR Pipeline",
+            slug="prompt-to-pr-pipeline",
+            description=(
+                "End-to-end pipeline: implement a task from a prompt, review the"
+                " resulting PR, and create it automatically."
+            ),
+            content_json={
+                "agents": [
+                    {
+                        "name": "Implement Agent",
+                        "description": "Implements the task in a worktree branch and creates a PR.",
+                        "prompt_template": (
+                            "You are an AI software engineer implementing a development task.\n\n"
+                            "TASK:\n{{ input }}\n\n"
+                            "Follow these steps:\n"
+                            "1. Understand the task and explore the relevant codebase files.\n"
+                            "2. Implement the required changes in the target code path.\n"
+                            "3. Run the project's test command to validate the changes.\n"
+                            "4. Fix any test failures before proceeding.\n"
+                            "5. Stage all changes, commit with a descriptive Conventional Commits message.\n"
+                            "6. Push the branch to the remote repository.\n"
+                            "7. Create a pull request with a structured description (What/Why/How/Testing).\n\n"
+                            "Report: files changed, test results (pass/fail), commit SHA, and PR URL."
+                        ),
+                        "connector_type_refs": [
+                            {"connector_type": "github", "capabilities": ["read", "write", "code_review"]},
+                        ],
+                        "required_environment_capabilities": [_EGRESS_GITHUB],
+                    },
+                    {
+                        "name": "Review Agent",
+                        "description": "Reviews the created PR and returns APPROVE or REQUEST_CHANGES.",
+                        "prompt_template": (
+                            "You are a senior code reviewer. Review the following"
+                            " GitHub PR diff for bugs, security issues, style"
+                            " violations, and correctness problems.\n\n"
+                            "Return a JSON verdict with:\n"
+                            "- decision: APPROVE or REQUEST_CHANGES\n"
+                            "- summary: a 1-3 sentence overall assessment\n"
+                            "- findings: array of issues found (empty if APPROVE)\n\n"
+                            "PR Diff:\n{{ input }}"
+                        ),
+                        "connector_type_refs": ["github"],
+                        "required_environment_capabilities": [_EGRESS_GITHUB],
+                    },
+                ],
+                "graph_nodes": [
+                    {
+                        "id": "implement",
+                        "node_type": "agent",
+                        "agent_index": 0,
+                        "label": "Implement",
+                        "position": {"x": 50, "y": 100},
+                    },
+                    {
+                        "id": "review",
+                        "node_type": "agent",
+                        "agent_index": 1,
+                        "label": "Review",
+                        "position": {"x": 350, "y": 100},
+                    },
+                ],
+                "edges": [
+                    {
+                        "source_node_id": "implement",
+                        "target_node_id": "review",
+                        "edge_type": "normal",
+                    },
+                ],
+                "connector_type_refs": ["github"],
+                "schema_refs": ["pr-review-decision"],
+                "category": "code-generation",
+            },
+            tags=["pipeline_template", "prompt-to-pr", "code-generation", "pr", "github"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-000000000099",
+            primitive_type="library_collection",
+            name="Prompt-to-PR",
+            slug="prompt-to-pr",
+            description=(
+                "Turn a task description into a GitHub PR. Installs an"
+                " implement agent, review agent, and pipeline. Requires:"
+                " model backend + GitHub token."
+            ),
+            content_json={
+                "manifest_pins": [
+                    {"slug": "pr-review-decision", "version": "1.0"},
+                    {"slug": "pr-review-agent", "version": "1.0"},
+                    {"slug": "prompt-to-pr-implement-agent", "version": "1.0"},
+                    {"slug": "prompt-to-pr-pipeline", "version": "1.0"},
+                ],
+                "connector_requirements": [
+                    {
+                        "connector_type_id": "github",
+                        "description": "GitHub token for reading code, pushing branches, and creating PRs",
+                        "capabilities": ["read", "write", "code_review"],
+                    }
+                ],
+                "trust_header": {"source": "modulo", "verified": True},
+            },
+            tags=["library_collection", "code-generation", "pr", "github", "sandbox"],
+        ),
+        # -------------------------------------------------------------------
+        # FAR-787: Changelog Generator bundle (FAR-782)
+        # -------------------------------------------------------------------
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A2",
+            primitive_type="agent",
+            name="Changelog Agent",
+            slug="changelog-agent",
+            description=(
+                "Reads merged PRs since a given tag and generates a"
+                " conventional-commits markdown changelog grouped by type."
+            ),
+            content_json={
+                "input_schema": None,
+                "output_schema": None,
+                "prompt_template": (
+                    "You are a release engineer. Given a list of merged PRs since"
+                    " a given tag, generate a changelog entry in Conventional Commits"
+                    " markdown format.\n\n"
+                    "Group entries by type: feat, fix, chore, docs, refactor, test, perf.\n"
+                    "Each entry should reference the PR number and title.\n"
+                    "Include a '## Unreleased' header and a link to compare against"
+                    " the previous tag.\n\n"
+                    "Tag: {{ parameter.tag }}\nPRs:\n{{ input }}"
+                ),
+                "connector_type_refs": [
+                    {"connector_type": "github", "capabilities": ["read"]},
+                ],
+                "required_environment_capabilities": [_EGRESS_GITHUB],
+                "model_backend_id": None,
+                "retry_policy": {},
+                "token_budget": None,
+            },
+            tags=["agent", "changelog", "release", "github"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A3",
+            primitive_type="pipeline_template",
+            name="Changelog Pipeline",
+            slug="changelog-pipeline",
+            description=("Generates a changelog from merged PRs with a HITL gate before publishing."),
+            content_json={
+                "agents": [
+                    {
+                        "name": "Changelog Agent",
+                        "description": "Generates a conventional-commits changelog from merged PRs.",
+                        "prompt_template": (
+                            "You are a release engineer. Given a list of merged PRs since"
+                            " a given tag, generate a changelog entry in Conventional Commits"
+                            " markdown format.\n\n"
+                            "Group entries by type: feat, fix, chore, docs, refactor, test, perf.\n"
+                            "Each entry should reference the PR number and title.\n\n"
+                            "Tag: {{ parameter.tag }}\nPRs:\n{{ input }}"
+                        ),
+                        "connector_type_refs": [
+                            {"connector_type": "github", "capabilities": ["read"]},
+                        ],
+                        "required_environment_capabilities": [_EGRESS_GITHUB],
+                    },
+                ],
+                "graph_nodes": [
+                    {
+                        "id": "changelog-agent",
+                        "node_type": "agent",
+                        "agent_index": 0,
+                        "label": "Changelog Agent",
+                        "position": {"x": 50, "y": 100},
+                    },
+                    {
+                        "id": "hitl-gate",
+                        "node_type": "manual",
+                        "label": "Review Gate",
+                        "position": {"x": 350, "y": 100},
+                    },
+                ],
+                "edges": [
+                    {
+                        "source_node_id": "changelog-agent",
+                        "target_node_id": "hitl-gate",
+                        "edge_type": "normal",
+                        "hitl_gate_config": {
+                            "label": "Approve Changelog",
+                            "description": "Review the generated changelog before publishing.",
+                            "claim_expiry_minutes": 60,
+                            "human_only": True,
+                        },
+                    },
+                ],
+                "connector_type_refs": ["github"],
+                "schema_refs": [],
+                "category": "release",
+            },
+            tags=["pipeline_template", "changelog", "release", "github"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-00000000009A",
+            primitive_type="library_collection",
+            name="Changelog Generator",
+            slug="changelog-generator",
+            description=(
+                "Auto-generate a conventional-commits changelog from merged PRs."
+                " Installs a changelog agent and pipeline. Requires: GitHub token."
+            ),
+            content_json={
+                "manifest_pins": [
+                    {"slug": "changelog-agent", "version": "1.0"},
+                    {"slug": "changelog-pipeline", "version": "1.0"},
+                ],
+                "connector_requirements": [
+                    {
+                        "connector_type_id": "github",
+                        "description": "GitHub token for reading merged PRs and creating releases",
+                        "capabilities": ["read", "write"],
+                    }
+                ],
+                "trust_header": {"source": "modulo", "verified": True},
+            },
+            tags=["library_collection", "changelog", "release", "github"],
+        ),
+        # -------------------------------------------------------------------
+        # FAR-787: Release Notes bundle (FAR-783)
+        # -------------------------------------------------------------------
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000AA",
+            primitive_type="agent",
+            name="Release Notes Agent",
+            slug="release-notes-agent",
+            description=(
+                "Reads merged PRs and closed issues for a milestone and"
+                " generates marketing-ready release notes with highlights,"
+                " breaking changes, and categorized features/fixes."
+            ),
+            content_json={
+                "input_schema": None,
+                "output_schema": None,
+                "prompt_template": (
+                    "You are a technical writer. Given merged PRs and closed issues"
+                    " for a release milestone, generate marketing-ready release notes.\n\n"
+                    "Include sections: Highlights (top 3-5 features), Breaking Changes,"
+                    " New Features, Bug Fixes, Improvements, and Deprecations.\n"
+                    "Write for a developer audience — clear, concise, and actionable.\n\n"
+                    "Milestone: {{ parameter.milestone }}\nPRs & Issues:\n{{ input }}"
+                ),
+                "connector_type_refs": [
+                    {"connector_type": "github", "capabilities": ["read", "write"]},
+                ],
+                "required_environment_capabilities": [_EGRESS_GITHUB],
+                "model_backend_id": None,
+                "retry_policy": {},
+                "token_budget": None,
+            },
+            tags=["agent", "release-notes", "github", "linear"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-00000000009F",
+            primitive_type="pipeline_template",
+            name="Release Notes Pipeline",
+            slug="release-notes-pipeline",
+            description=("Generates release notes from PRs/issues with a HITL gate before publishing."),
+            content_json={
+                "agents": [
+                    {
+                        "name": "Release Notes Agent",
+                        "description": "Generates marketing-ready release notes from PRs and issues.",
+                        "prompt_template": (
+                            "You are a technical writer. Given merged PRs and closed issues"
+                            " for a release milestone, generate marketing-ready release notes.\n\n"
+                            "Include sections: Highlights, Breaking Changes, New Features,"
+                            " Bug Fixes, Improvements, Deprecations.\n\n"
+                            "Milestone: {{ parameter.milestone }}\nPRs & Issues:\n{{ input }}"
+                        ),
+                        "connector_type_refs": [
+                            {"connector_type": "github", "capabilities": ["read", "write"]},
+                        ],
+                        "required_environment_capabilities": [_EGRESS_GITHUB],
+                    },
+                ],
+                "graph_nodes": [
+                    {
+                        "id": "release-notes-agent",
+                        "node_type": "agent",
+                        "agent_index": 0,
+                        "label": "Release Notes Agent",
+                        "position": {"x": 50, "y": 100},
+                    },
+                    {
+                        "id": "hitl-gate",
+                        "node_type": "manual",
+                        "label": "Review Gate",
+                        "position": {"x": 350, "y": 100},
+                    },
+                ],
+                "edges": [
+                    {
+                        "source_node_id": "release-notes-agent",
+                        "target_node_id": "hitl-gate",
+                        "edge_type": "normal",
+                        "hitl_gate_config": {
+                            "label": "Approve Release Notes",
+                            "description": "Review the release notes before publishing.",
+                            "claim_expiry_minutes": 60,
+                            "human_only": True,
+                        },
+                    },
+                ],
+                "connector_type_refs": ["github"],
+                "schema_refs": [],
+                "category": "release",
+            },
+            tags=["pipeline_template", "release-notes", "github", "linear"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-00000000009B",
+            primitive_type="library_collection",
+            name="Release Notes Generator",
+            slug="release-notes-generator",
+            description=(
+                "Generate marketing-ready release notes from merged PRs and"
+                " closed issues. Installs a release-notes agent and pipeline."
+                " Requires: GitHub or Linear token."
+            ),
+            content_json={
+                "manifest_pins": [
+                    {"slug": "release-notes-agent", "version": "1.0"},
+                    {"slug": "release-notes-pipeline", "version": "1.0"},
+                ],
+                "connector_requirements": [
+                    {
+                        "connector_type_id": "github",
+                        "description": "GitHub token for reading PRs/issues and writing release notes",
+                        "capabilities": ["read", "write"],
+                    }
+                ],
+                "trust_header": {"source": "modulo", "verified": True},
+            },
+            tags=["library_collection", "release-notes", "github", "linear"],
+        ),
+        # -------------------------------------------------------------------
+        # FAR-787: PR Description Writer bundle (FAR-784)
+        # -------------------------------------------------------------------
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A6",
+            primitive_type="agent",
+            name="PR Description Agent",
+            slug="pr-description-agent",
+            description=(
+                "Reads a branch diff and writes a structured PR description"
+                " with What/Why/How/Testing/Related Issues sections."
+            ),
+            content_json={
+                "input_schema": None,
+                "output_schema": None,
+                "prompt_template": (
+                    "You are a technical writer. Given a branch diff, write a"
+                    " structured pull request description.\n\n"
+                    "Use these sections:\n"
+                    "## What\nBrief summary of the changes.\n"
+                    "## Why\nThe motivation or problem being solved.\n"
+                    "## How\nImplementation approach and key decisions.\n"
+                    "## Testing\nHow the changes were tested and what tests pass.\n"
+                    "## Related Issues\nLinks to related issues (use #NNN format).\n\n"
+                    "Diff:\n{{ input }}"
+                ),
+                "connector_type_refs": [
+                    {"connector_type": "github", "capabilities": ["read", "write"]},
+                ],
+                "required_environment_capabilities": [_EGRESS_GITHUB],
+                "model_backend_id": None,
+                "retry_policy": {},
+                "token_budget": None,
+            },
+            tags=["agent", "pr-description", "github"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A7",
+            primitive_type="pipeline_template",
+            name="PR Description Pipeline",
+            slug="pr-description-pipeline",
+            description="Writes a structured PR description from a branch diff.",
+            content_json={
+                "agents": [
+                    {
+                        "name": "PR Description Agent",
+                        "description": "Writes a structured PR description from a branch diff.",
+                        "prompt_template": (
+                            "You are a technical writer. Given a branch diff, write a"
+                            " structured pull request description.\n\n"
+                            "Use these sections: What, Why, How, Testing, Related Issues.\n\n"
+                            "Diff:\n{{ input }}"
+                        ),
+                        "connector_type_refs": [
+                            {"connector_type": "github", "capabilities": ["read", "write"]},
+                        ],
+                        "required_environment_capabilities": [_EGRESS_GITHUB],
+                    },
+                ],
+                "graph_nodes": [
+                    {
+                        "id": "pr-description-agent",
+                        "node_type": "agent",
+                        "agent_index": 0,
+                        "label": "PR Description Agent",
+                        "position": {"x": 50, "y": 100},
+                    },
+                ],
+                "edges": [],
+                "connector_type_refs": ["github"],
+                "schema_refs": [],
+                "category": "pr-description",
+            },
+            tags=["pipeline_template", "pr-description", "github"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-00000000009C",
+            primitive_type="library_collection",
+            name="PR Description Writer",
+            slug="pr-description-writer",
+            description=(
+                "Auto-generate structured PR descriptions (What/Why/How/Testing)"
+                " from a branch diff. Installs a PR description agent and pipeline."
+                " Requires: GitHub token."
+            ),
+            content_json={
+                "manifest_pins": [
+                    {"slug": "pr-description-agent", "version": "1.0"},
+                    {"slug": "pr-description-pipeline", "version": "1.0"},
+                ],
+                "connector_requirements": [
+                    {
+                        "connector_type_id": "github",
+                        "description": "GitHub token for reading diffs and writing PR descriptions",
+                        "capabilities": ["read", "write"],
+                    }
+                ],
+                "trust_header": {"source": "modulo", "verified": True},
+            },
+            tags=["library_collection", "pr-description", "github"],
+        ),
+        # -------------------------------------------------------------------
+        # FAR-787: Issue Triage bundle (FAR-785)
+        # -------------------------------------------------------------------
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A8",
+            primitive_type="agent",
+            name="Issue Triage Agent",
+            slug="issue-triage-agent",
+            description=(
+                "Reads a new issue and categorizes it (bug/feature/question/docs),"
+                " suggests priority P0-P3, writes acceptance criteria, and suggests"
+                " labels."
+            ),
+            content_json={
+                "input_schema": None,
+                "output_schema": None,
+                "prompt_template": (
+                    "You are an issue triage specialist. Read the following new issue"
+                    " and produce a structured triage report.\n\n"
+                    "For the issue, determine:\n"
+                    "- category: bug, feature, question, or docs\n"
+                    "- priority: P0 (critical/blocker), P1 (high), P2 (medium), P3 (low)\n"
+                    "- acceptance_criteria: list of conditions that must be met to close this issue\n"
+                    "- suggested_labels: list of labels to apply (e.g. bug, enhancement, help-wanted)\n"
+                    "- summary: 1-2 sentence summary of the issue\n"
+                    "- reasoning: brief explanation of your categorization and priority\n\n"
+                    "Issue:\n{{ input }}"
+                ),
+                "connector_type_refs": [
+                    {"connector_type": "github", "capabilities": ["read", "write"]},
+                ],
+                "required_environment_capabilities": [_EGRESS_GITHUB],
+                "model_backend_id": None,
+                "retry_policy": {},
+                "token_budget": None,
+            },
+            tags=["agent", "triage", "issues", "github"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A9",
+            primitive_type="pipeline_template",
+            name="Issue Triage Pipeline",
+            slug="issue-triage-pipeline",
+            description=(
+                "Triages new issues with categorization, priority, and"
+                " label suggestions, with a HITL gate before applying labels."
+            ),
+            content_json={
+                "agents": [
+                    {
+                        "name": "Issue Triage Agent",
+                        "description": "Categorizes issues and suggests priority, labels, and acceptance criteria.",
+                        "prompt_template": (
+                            "You are an issue triage specialist. Read the following new issue"
+                            " and produce a structured triage report.\n\n"
+                            "Determine: category (bug/feature/question/docs), priority (P0-P3),"
+                            " acceptance criteria, suggested labels, summary, and reasoning.\n\n"
+                            "Issue:\n{{ input }}"
+                        ),
+                        "connector_type_refs": [
+                            {"connector_type": "github", "capabilities": ["read", "write"]},
+                        ],
+                        "required_environment_capabilities": [_EGRESS_GITHUB],
+                    },
+                ],
+                "graph_nodes": [
+                    {
+                        "id": "issue-triage-agent",
+                        "node_type": "agent",
+                        "agent_index": 0,
+                        "label": "Issue Triage Agent",
+                        "position": {"x": 50, "y": 100},
+                    },
+                    {
+                        "id": "hitl-gate",
+                        "node_type": "manual",
+                        "label": "Triage Review Gate",
+                        "position": {"x": 350, "y": 100},
+                    },
+                ],
+                "edges": [
+                    {
+                        "source_node_id": "issue-triage-agent",
+                        "target_node_id": "hitl-gate",
+                        "edge_type": "normal",
+                        "hitl_gate_config": {
+                            "label": "Approve Triage",
+                            "description": "Review the triage report before applying labels to the issue.",
+                            "claim_expiry_minutes": 60,
+                            "human_only": True,
+                        },
+                    },
+                ],
+                "connector_type_refs": ["github"],
+                "schema_refs": [],
+                "category": "triage",
+            },
+            tags=["pipeline_template", "triage", "issues", "github"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-00000000009D",
+            primitive_type="library_collection",
+            name="Issue Triage",
+            slug="issue-triage",
+            description=(
+                "Auto-triage new GitHub issues with category, priority,"
+                " acceptance criteria, and label suggestions. Installs a"
+                " triage agent and pipeline. Requires: GitHub token."
+            ),
+            content_json={
+                "manifest_pins": [
+                    {"slug": "issue-triage-agent", "version": "1.0"},
+                    {"slug": "issue-triage-pipeline", "version": "1.0"},
+                ],
+                "connector_requirements": [
+                    {
+                        "connector_type_id": "github",
+                        "description": "GitHub token for reading issues and applying labels",
+                        "capabilities": ["read", "write"],
+                    }
+                ],
+                "trust_header": {"source": "modulo", "verified": True},
+            },
+            tags=["library_collection", "triage", "issues", "github"],
+        ),
+        # -------------------------------------------------------------------
+        # FAR-787: License Checker bundle (FAR-786)
+        # -------------------------------------------------------------------
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A4",
+            primitive_type="agent",
+            name="License Checker Agent",
+            slug="license-checker-agent",
+            description=(
+                "Scans dependency manifests (build.gradle, package.json,"
+                " requirements.txt, go.mod, Cargo.toml, pyproject.toml),"
+                " resolves licenses via SPDX/API, classifies by restrictiveness,"
+                " and generates a structured report with commercial-use flags."
+            ),
+            content_json={
+                "input_schema": None,
+                "output_schema": None,
+                "prompt_template": (
+                    "You are a software license compliance analyst. Scan the following"
+                    " dependency manifest(s) and produce a structured license report.\n\n"
+                    "For each dependency:\n"
+                    "- name: package name\n"
+                    "- version: resolved version\n"
+                    "- license: SPDX license identifier\n"
+                    "- restrictiveness: permissive, weak-copyleft, strong-copyleft,\n"
+                    "  non-commercial, custom, or unknown\n"
+                    "- commercial_use_ok: true/false/unknown\n"
+                    "- notes: any special restrictions or concerns\n\n"
+                    "At the end, provide:\n"
+                    "- total_dependencies: count\n"
+                    "- permissive_count / weak_copyleft_count / strong_copyleft_count\n"
+                    "- non_commercial_count / unknown_count\n"
+                    "- risk_level: low / medium / high (based on presence of strong-copyleft or non-commercial)\n"
+                    "- summary: 2-3 sentence overall assessment\n\n"
+                    "Dependency manifests:\n{{ input }}"
+                ),
+                "connector_type_refs": [
+                    {"connector_type": "github", "capabilities": ["read"]},
+                ],
+                "required_environment_capabilities": [_EGRESS_GITHUB],
+                "model_backend_id": None,
+                "retry_policy": {},
+                "token_budget": None,
+            },
+            tags=["agent", "license", "compliance", "dependencies"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-0000000000A5",
+            primitive_type="pipeline_template",
+            name="License Checker Pipeline",
+            slug="license-checker-pipeline",
+            description=(
+                "Scans a repo's dependency manifests for license compliance"
+                " with a HITL gate before finalizing the report."
+            ),
+            content_json={
+                "agents": [
+                    {
+                        "name": "License Checker Agent",
+                        "description": "Scans dependency manifests and produces a license compliance report.",
+                        "prompt_template": (
+                            "You are a software license compliance analyst. Scan the following"
+                            " dependency manifests and produce a structured license report.\n\n"
+                            "For each dependency, report: name, version, SPDX license, restrictiveness"
+                            " (permissive/weak-copyleft/strong-copyleft/non-commercial/custom/unknown),"
+                            " commercial_use_ok, and notes.\n\n"
+                            "Provide a summary with counts per restrictiveness category and an overall risk level.\n\n"
+                            "Dependency manifests:\n{{ input }}"
+                        ),
+                        "connector_type_refs": [
+                            {"connector_type": "github", "capabilities": ["read"]},
+                        ],
+                        "required_environment_capabilities": [_EGRESS_GITHUB],
+                    },
+                ],
+                "graph_nodes": [
+                    {
+                        "id": "license-checker-agent",
+                        "node_type": "agent",
+                        "agent_index": 0,
+                        "label": "License Checker Agent",
+                        "position": {"x": 50, "y": 100},
+                    },
+                    {
+                        "id": "hitl-gate",
+                        "node_type": "manual",
+                        "label": "Compliance Review Gate",
+                        "position": {"x": 350, "y": 100},
+                    },
+                ],
+                "edges": [
+                    {
+                        "source_node_id": "license-checker-agent",
+                        "target_node_id": "hitl-gate",
+                        "edge_type": "normal",
+                        "hitl_gate_config": {
+                            "label": "Approve License Report",
+                            "description": "Review the license compliance report before finalizing.",
+                            "claim_expiry_minutes": 60,
+                            "human_only": True,
+                        },
+                    },
+                ],
+                "connector_type_refs": ["github"],
+                "schema_refs": [],
+                "category": "compliance",
+            },
+            tags=["pipeline_template", "license", "compliance", "dependencies"],
+        ),
+        _make_modulo(
+            pid="00000000-0000-0000-0000-00000000009E",
+            primitive_type="library_collection",
+            name="License Checker",
+            slug="license-checker",
+            description=(
+                "Scan a repo's dependency manifests for license compliance."
+                " Classifies each dependency by restrictiveness and flags"
+                " commercial-use concerns. Installs a license-checker agent"
+                " and pipeline. Requires: GitHub token or filesystem access."
+            ),
+            content_json={
+                "manifest_pins": [
+                    {"slug": "license-checker-agent", "version": "1.0"},
+                    {"slug": "license-checker-pipeline", "version": "1.0"},
+                ],
+                "connector_requirements": [
+                    {
+                        "connector_type_id": "github",
+                        "description": "GitHub token for reading repository dependency files",
+                        "capabilities": ["read"],
+                    }
+                ],
+                "trust_header": {"source": "modulo", "verified": True},
+            },
+            tags=["library_collection", "license", "compliance", "dependencies"],
+        ),
     ]
 )
 
 # The library_collection type requires status="published" to be installable.
-_MODULO_PRIMITIVES[-1].status = "published"
+for _p in _MODULO_PRIMITIVES:
+    if _p.primitive_type == "library_collection":
+        _p.status = "published"
 
 # Indexes for O(1) community lookup
 _MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRIMITIVES}
