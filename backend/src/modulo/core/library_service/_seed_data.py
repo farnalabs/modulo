@@ -1251,7 +1251,11 @@ _MODULO_PRIMITIVES.extend(
 )
 
 # The library_collection type requires status="published" to be installable.
-_MODULO_PRIMITIVES[-1].status = "published"
+# Pin to the specific primitive rather than the list tail so appending new
+# primitives later cannot silently change which collection is published.
+_github_pr_reviewer = _MODULO_PRIMITIVES[-1]
+assert _github_pr_reviewer.slug == "github-pr-reviewer", "seed order changed; pin explicitly"
+_github_pr_reviewer.status = "published"
 
 # Indexes for O(1) community lookup
 _MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRIMITIVES}
