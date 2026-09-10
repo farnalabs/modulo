@@ -2095,6 +2095,12 @@ elements:
       - testid: collection-publish
         type: button
         dynamic_testid: false
+      - testid: collection-grant-agents
+        type: button
+        dynamic_testid: false
+      - testid: collection-create-connector
+        type: button
+        dynamic_testid: false
     /library/:id/create-pipeline:
       - testid: library-wizard-back
         type: button
