@@ -298,7 +298,15 @@ const { loading, error, data: gates, fetched, load: loadGates } = useDataFetch<G
     const res = await api.GET('/api/v1/hitl/gates', {
       params: { query: { status: serverStatusFor(statusFilter.value), page: page.value, page_size: PAGE_SIZE } },
     })
-    if (res.error) return { error: res.error }
+    // FAR-768 regression: a missing envelope is a FAILURE, not an empty queue.
+    // The api client returns { error: undefined, data: undefined } for a
+    // response with no envelope (e.g. an unrecovered 401, a 5xx with an empty
+    // body). Such a response must surface the error state — letting it fall
+    // through to { data: [] } would mislead operators into thinking the review
+    // queue was empty during an outage.
+    if (res.error || !res.data || res.response?.ok === false) {
+      return { error: res.error ?? { detail: 'Failed to load HITL gates' } }
+    }
     const payload = (res.data as any) || {}
     totalGates.value = payload.total ?? 0
     return { data: ((payload.items || []) as any[]).map((g) => ({

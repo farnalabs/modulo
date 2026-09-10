@@ -1074,6 +1074,32 @@ describe('SettingsHitlReviewView', () => {
     expect(wrapper!.text()).toContain('No pending HITL gates')
   })
 
+  it('renders the fetch-error state (not empty) when the envelope is missing ({ error: undefined }, FAR-768)', async () => {
+    // THE regression: an unrecovered 401 (or any response with no body) leaves
+    // the api client wrapper returning { data: undefined, error: undefined }
+    // (see client.ts). The fetcher MUST treat a missing envelope as a failure —
+    // otherwise the empty state ("No pending HITL gates") masks an outage.
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === GATES_URL) {
+        // The exact shape the auth wrapper returns when the refresh fails:
+        // response, data and error all undefined.
+        return Promise.resolve({ response: undefined, data: undefined, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    wrapper = mount(SettingsHitlReviewView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper!.find('[data-testid="hitl-review-fetch-error"]').exists()).toBe(true)
+    expect(wrapper!.text()).toContain('Failed to load HITL gates')
+    expect(wrapper!.text()).not.toContain('No pending HITL gates')
+  })
+
   it('renders gate rows on a successful response with rows (FAR-768)', async () => {
     const { api } = await import('../lib/api/client');
     (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
