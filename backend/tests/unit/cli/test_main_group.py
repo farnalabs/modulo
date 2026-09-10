@@ -404,6 +404,22 @@ def test_logs_rotate_proceeds_when_launcher_stopped(monkeypatch: pytest.MonkeyPa
     assert "no rotation" in result.output
 
 
+def test_logs_rotate_child_component_is_not_rotated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`logs postgres --rotate` / `logs redis --rotate` must NOT rotate the child
+    log, even though it prints 'rotation applies to the app log only' (FAR-676
+    review finding — the rotate call previously sat outside the app-only guard).
+    """
+    import modulo.launcher.supervisor as supervisor
+
+    rotated_calls: list[str] = []
+    monkeypatch.setattr(supervisor, "rotate_log", lambda path: rotated_calls.append(str(path)) is None)
+    for component in ("postgres", "redis"):
+        result = CliRunner().invoke(cli_main.cli, ["logs", "--rotate", "--data-dir", str(tmp_path), component])
+        assert result.exit_code == 0
+        assert "rotation applies to the app log only" in result.output
+    assert rotated_calls == [], f"child rotation must not run, but rotate_log was called on: {rotated_calls}"
+
+
 def test_doctor_command_invokes_run_doctor_and_propagates_exit_code(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

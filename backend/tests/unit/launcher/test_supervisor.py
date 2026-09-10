@@ -842,6 +842,37 @@ def test_runtime_manifest_roundtrip_and_corrupt_handling(tmp_path: Path) -> None
     assert not read_runtime_manifest(path)
 
 
+def test_record_runtime_persists_installed_bundle_pg_version(tmp_path: Path) -> None:
+    """`_record_runtime_locked` must persist `installed_bundle_pg_version` into the
+    runtime manifest's extra so doctor's downgrade/upgrade axis can fire (FAR-676
+    review finding — the axis was never written in production)."""
+    path = tmp_path / "runtime.json"
+    supervisor = Supervisor(SupervisorKnobs(), runtime_path=path)
+    supervisor._installed_bundle_pg_version = "16.4"
+    supervisor._record_runtime_locked()
+    written = path.read_text(encoding="utf-8")
+    assert "installed_bundle_pg_version" in written
+    assert "16.4" in written
+    import json
+
+    manifest = json.loads(written)
+    assert manifest["children"] == {}
+    assert manifest["extra"]["installed_bundle_pg_version"] == "16.4"
+
+
+def test_record_runtime_degraded_preserves_extra(tmp_path: Path) -> None:
+    """A later degraded write must not wipe the previously-persisted bundle version."""
+    path = tmp_path / "runtime.json"
+    supervisor = Supervisor(SupervisorKnobs(), runtime_path=path)
+    supervisor._installed_bundle_pg_version = "16.4"
+    supervisor._record_runtime_locked()
+    supervisor._degrade_locked("boom")
+    written = path.read_text(encoding="utf-8")
+    manifest = json.loads(written)
+    assert manifest["extra"]["degraded_reason"] == "boom"
+    assert manifest["extra"]["installed_bundle_pg_version"] == "16.4"
+
+
 def test_knobs_from_env_overrides_and_ignores_garbage(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODULO_LAUNCHER_TICK_SECONDS", "0.5")
     monkeypatch.setenv("MODULO_LAUNCHER_CRASH_CAP", "9")

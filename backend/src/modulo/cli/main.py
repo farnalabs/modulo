@@ -455,24 +455,27 @@ def logs(
     click.echo(f"# modulo {_package_version()} — {component} log: {path}")
     if rotate:
         if component != "app":
+            # Child logs (postgres/redis) are written-append by the running
+            # bundled process; rotating under a live holder redirects post-rename
+            # writes into the rotated-away inode. We do not rotate them.
             click.echo("rotation applies to the app log only")
-        else:
-            # rotate_log is only safe when no process holds the log open for
-            # appending; an attached launcher redirects post-rename writes into
-            # the rotated-away inode. Refuse rather than silently corrupt the log.
-            from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
+            return
+        # rotate_log is only safe when no process holds the log open for
+        # appending; an attached launcher redirects post-rename writes into
+        # the rotated-away inode. Refuse rather than silently corrupt the log.
+        from modulo.launcher.supervisor import LOCK_SUFFIX, _pid_alive, _read_lock_holder
 
-            lock_path = resolved.parent / (resolved.name + LOCK_SUFFIX)
-            holder = _read_lock_holder(lock_path)
-            if holder is not None and _pid_alive(holder.pid):
-                click.echo(
-                    "refused: the launcher is still running — rotating launcher.log while the "
-                    "launcher holds it open for appending would redirect writes into the "
-                    "rotated-away inode. Stop the launcher (`modulo stop`) first, then re-run "
-                    "`modulo logs --rotate`.",
-                    err=True,
-                )
-                raise SystemExit(1)
+        lock_path = resolved.parent / (resolved.name + LOCK_SUFFIX)
+        holder = _read_lock_holder(lock_path)
+        if holder is not None and _pid_alive(holder.pid):
+            click.echo(
+                "refused: the launcher is still running — rotating launcher.log while the "
+                "launcher holds it open for appending would redirect writes into the "
+                "rotated-away inode. Stop the launcher (`modulo stop`) first, then re-run "
+                "`modulo logs --rotate`.",
+                err=True,
+            )
+            raise SystemExit(1)
         rotated = rotate_log(path)
         if rotated:
             click.echo(f"rotated: {path} -> {path.with_suffix(path.suffix + '.1')}")

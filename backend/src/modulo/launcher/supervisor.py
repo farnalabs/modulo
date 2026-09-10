@@ -809,6 +809,12 @@ class Supervisor:
         self._stop_event = threading.Event()
         self._degraded_reason: str | None = None
         self._monitor_thread: threading.Thread | None = None
+        # Bundled postgres version, resolved once at boot (best effort) and
+        # persisted into the runtime manifest so doctor's
+        # `installed_bundle_pg_version` axis can detect a downgrade/upgrade
+        # against the cluster's last-run version. None until `start()` runs
+        # (or the binary is unresolvable).
+        self._installed_bundle_pg_version: str | None = None
 
     # -- registration / lifecycle -------------------------------------------
 
@@ -828,6 +834,7 @@ class Supervisor:
 
     def start(self, *, start_monitor: bool = True) -> None:
         """Spawn immediately-ready children and (optionally) the monitor thread."""
+        self._installed_bundle_pg_version = _resolve_bundled_postgres_version()
         self.tick()
         if start_monitor:
             thread = threading.Thread(target=self.monitor_loop, name="modulo-supervisor", daemon=True)
@@ -1118,11 +1125,13 @@ class Supervisor:
     def _record_runtime_locked(self) -> None:
         if self._runtime_path is None:
             return
-        extra = None
+        extra: dict[str, Any] = {}
         if self._degraded_reason is not None:
-            extra = {"degraded_reason": self._degraded_reason}
+            extra["degraded_reason"] = self._degraded_reason
+        if self._installed_bundle_pg_version is not None:
+            extra["installed_bundle_pg_version"] = self._installed_bundle_pg_version
         try:
-            write_runtime_manifest(self._runtime_path, self.child_pids(), extra=extra)
+            write_runtime_manifest(self._runtime_path, self.child_pids(), extra=extra or None)
         except OSError:
             _log.exception("supervisor.runtime_manifest_write_failed path=%s", self._runtime_path)
 
@@ -1193,6 +1202,36 @@ def rotate_log(
     except OSError:
         _log.warning("supervisor.log_rotation_failed path=%s", path)
         return False
+
+
+def _resolve_bundled_postgres_version() -> str | None:
+    """Best-effort bundled postgres version (``postgres --version`` output).
+
+    Used at supervisor boot to persist ``installed_bundle_pg_version`` into the
+    runtime manifest so doctor can detect a bundled-binary downgrade/upgrade
+    against the cluster's last-run version. Returns None when the binary is
+    missing or unresolvable (the doctor axis then honestly skips).
+    """
+    from modulo.launcher.entry import resolve_bin_dir
+
+    bin_dir = resolve_bin_dir()
+    binary = bin_dir / ("postgres.exe" if sys.platform == "win32" else "postgres")
+    if not binary.is_file():
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603 — argv fully pinned
+            [str(binary), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for token in result.stdout.split():
+        if token and token[0].isdigit() and "." in token:
+            return token
+    return None
 
 
 def _default_spawner(argv: list[str], env: dict[str, str] | None) -> ChildProcess:
