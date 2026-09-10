@@ -5229,7 +5229,8 @@ export interface paths {
          * Install Collection Endpoint
          * @description Install a published collection into the organisation.
          *
-         *     Requires the ``pipeline.create`` permission (resolves to the operator role).
+         *     Requires the AND union of: library.copy + schema.create + agent.create +
+         *     pipeline.create (all resolve to 'operator' role).
          */
         post: operations["install_collection_endpoint_api_v1_libraries_collections__primitive_id__install_post"];
         delete?: never;

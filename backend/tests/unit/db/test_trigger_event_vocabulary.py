@@ -74,7 +74,7 @@ _MIGRATION_PATH = (
 # and FAR-760's 0205_library_collection_type chained onto 0204_runner_probe_cache,
 # and FAR-644's 0206_deleted_defaults_signal_check chained onto 0205,
 # and FAR-761's 0207_collection_install_tracking chained onto 0206, and #337's
-# 0208_notification_indexes_and_constraint chained onto 0207, and #352's
+# 0208_notification_indexes_and_constraint chained onto 0207, and #337's
 # 0209_collection_install_id_entity_columns chained onto 0208, and FAR-764's
 # 0210_community_gate chained onto 0209 as the chain head.
 _CHAIN_HEAD_MIGRATION_NAME = "0210_community_gate"

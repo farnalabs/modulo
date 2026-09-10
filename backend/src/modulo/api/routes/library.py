@@ -2118,7 +2118,8 @@ async def install_collection_endpoint(
 ) -> CollectionInstallResponse:
     """Install a published collection into the organisation.
 
-    Requires the ``pipeline.create`` permission (resolves to the operator role).
+    Requires the AND union of: library.copy + schema.create + agent.create +
+    pipeline.create (all resolve to 'operator' role).
     """
     org_id = _require_organisation_id(principal)
     await _require_library_collection_flag(org_id)

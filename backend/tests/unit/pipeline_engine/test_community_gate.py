@@ -202,7 +202,7 @@ async def test_resolve_scope_keeps_granted_community_install_connectors():
 
     scope = await executor._resolve_run_connector_scope(_FakeSession([agent], [install]), org_id, graph_json)
 
-    assert executor._community_gated_agents == set()
+    assert not executor._community_gated_agents
     assert "github" in scope
 
 
@@ -218,5 +218,5 @@ async def test_resolve_scope_keeps_non_community_install_connectors():
 
     scope = await executor._resolve_run_connector_scope(_FakeSession([agent], [install]), org_id, graph_json)
 
-    assert executor._community_gated_agents == set()
+    assert not executor._community_gated_agents
     assert "github" in scope
