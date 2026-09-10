@@ -46,6 +46,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 from modulo.db.migrations._rls_ceremony import (
     assert_owner_is_migrate as _assert_owner_is_migrate,
@@ -84,7 +85,21 @@ def upgrade() -> None:
     else:
         migrate_role = False
 
+    insp = inspect(bind)
+
     for table in _ENTITY_TABLES:
+        # Migration 0207_collection_install_tracking already creates this column
+        # (with IF NOT EXISTS) on a fresh DB, so re-adding it here would fail the
+        # whole chain with "column <table>.collection_install_id already exists"
+        # during ``alembic upgrade head`` (seen on the pre-deploy integration-test
+        # run). On a prod DB whose 0207 predates the column add, the column is
+        # still absent and must be created here. Idempotent existence checks keep
+        # the migration correct for both a fresh and an already-applied DB.
+        existing_cols = {c["name"] for c in insp.get_columns(table)}
+        column_present = _COLUMN in existing_cols
+        existing_indexes = {i["name"] for i in insp.get_indexes(table)}
+        index_present = f"ix_{table}_{_COLUMN}" in existing_indexes
+
         # The SET ROLE ownership ceremony only applies where the table is already
         # owned by ``modulo_migrate`` (prod DBs whose earlier migrations ran under
         # the migrate role). On a fresh DB where the migration caller owns the
@@ -95,11 +110,13 @@ def upgrade() -> None:
         if migrate_owns_table:
             op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-        op.add_column(
-            table,
-            sa.Column(_COLUMN, sa.Uuid(), nullable=True),
-        )
-        op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
+        if not column_present:
+            op.add_column(
+                table,
+                sa.Column(_COLUMN, sa.Uuid(), nullable=True),
+            )
+        if not index_present:
+            op.create_index(f"ix_{table}_{_COLUMN}", table, [_COLUMN])
 
         if pg and migrate_owns_table:
             op.execute("RESET ROLE")
