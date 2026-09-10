@@ -536,10 +536,10 @@ def test_backup_chmod_failure_continues_per_entry(tmp_path: Path, monkeypatch: p
     backup_dir = tmp_path / "b"
     real_chmod = os.chmod
 
-    def _flaky_chmod(path: Any, mode: int) -> None:
+    def _flaky_chmod(path: Any, mode: int, follow_symlinks: bool = True) -> None:
         if str(path).endswith(_DB_SQL_NAME):
             raise OSError("simulated EPERM")
-        real_chmod(path, mode)
+        real_chmod(path, mode, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr("modulo.cli.backup.os.chmod", _flaky_chmod)
     with contextlib.ExitStack() as stack:
