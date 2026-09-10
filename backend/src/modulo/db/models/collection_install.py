@@ -5,10 +5,10 @@ primitive into an organisation. ``CollectionInstallEntity`` is the per-entity
 child recording exactly which schemas/agents/pipelines an install wrote.
 
 The ORM metadata here is kept byte-for-byte consistent with migration
-``0206_collection_install_tracking`` — the primary key is ``install_id`` (NOT
+``0207_collection_install_tracking`` — the primary key is ``install_id`` (NOT
 ``id``), the table carries ``created_at`` only (no ``updated_at``), and the child
 FK targets ``collection_install.install_id``. A conformance test
-(``tests/unit/db/test_migration_0206_collection_install_tracking.py``) pins these
+(``tests/unit/db/test_migration_0207_collection_install_tracking.py``) pins these
 invariants so model/migration drift cannot silently pass the mocked unit tests.
 """
 
@@ -71,8 +71,8 @@ class CollectionInstall(Base):
         server_default=text("false"),
     )
     resolved_manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    connector_checklist: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    installed_entities: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    connector_checklist: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    installed_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(

@@ -3148,10 +3148,8 @@ async def _create_eval_definition_impl(
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("create_eval_definition")
 
-    from modulo.api.routes.evals import (
-        _MSG_PIPELINE_NOT_FOUND,
-        _eval_def_to_dict,
-    )
+    from modulo.api.constants import MSG_PIPELINE_NOT_FOUND
+    from modulo.api.routes.evals import _eval_def_to_dict
 
     if (err := _assert_create_eval_definition_params(name, eval_type, failure_behaviour, pass_threshold)) is not None:
         return err
@@ -3184,7 +3182,7 @@ async def _create_eval_definition_impl(
             )
         ).scalar_one_or_none()
         if pipeline is None:
-            return {"error": "pipeline_not_found", "detail": _MSG_PIPELINE_NOT_FOUND}
+            return {"error": "pipeline_not_found", "detail": MSG_PIPELINE_NOT_FOUND}
 
         eval_def = EvalDefinition(
             organisation_id=org_id,
@@ -3760,7 +3758,7 @@ async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("get_hitl_gate")
-    from modulo.db.crud.hitl_gate_config import resolve_hitl_gate_config
+    from modulo.db.crud.hitl_gate_config import human_only_effective, resolve_hitl_gate_config
 
     org_id = _ctx_org_id_val()
     rid, rid_err = _parse_uuid_param(run_id, "run_id")
@@ -3797,7 +3795,7 @@ async def _get_hitl_gate_impl(run_id: str, gate_id: str) -> dict[str, Any]:
         result["gate_config"] = {
             "label": config.get("label"),
             "condition": config.get("condition"),
-            "human_only": bool(config.get("human_only", False)),
+            "human_only": human_only_effective(config),
             "claim_expiry_minutes": config.get("claim_expiry_minutes"),
             "reject_target": config.get("reject_target"),
             "required_team_id": str(required_team) if required_team else None,
@@ -3988,11 +3986,17 @@ async def _check_human_only_gate(
 ) -> dict[str, Any] | None:
     """Return an error dict when the gate is human_only, else ``None``.
 
-    Called for the ``approve`` and ``deliver_manual`` actions: a ``human_only``
-    gate can only be decided by a browser-authenticated human, never by an
-    API-key/MCP client (MCP clients authenticate with API keys — they are
-    never browser sessions). ``reject`` stays allowed: rejection is the safe
-    direction.
+    Called for the ``claim``, ``approve`` and ``deliver_manual`` actions
+    (FAR-609: claim is human_only too — MCP clients authenticate with API
+    keys, so a human_only gate can be neither CLAIMED nor decided through
+    MCP): a ``human_only`` gate can only be decided by a browser-authenticated
+    human, never by an API-key/MCP client. ``reject`` is not mechanically
+    intercepted but it is NOT an agent escape hatch: reject requires a
+    claim_token, and the claim action is denied for MCP callers on a
+    human_only (now the default) gate, so an agent can neither claim, decide,
+    NOR reject such a gate — only a principal already holding a claim (e.g.
+    claimed before the policy change) can reject. Agent-only runs on default
+    gates require browser-human intervention (intended policy).
 
     FAR-610: the gate's config is resolved from the RUN's snapshot graph
     (falling back to the live pipeline edges, then the live HITL-node config)
@@ -4226,10 +4230,16 @@ async def _review_hitl_impl(
         if run is None:
             return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
 
-        if action in ("approve", "deliver_manual"):
+        if action in ("claim", "approve", "deliver_manual"):
             # FAR-610: deliver_manual is a decision exactly like approve — a
             # human_only gate must not be decided by an API-key/MCP client.
-            # reject stays allowed (safe direction).
+            # FAR-609: claim is human_only too — non-browser principals can
+            # neither claim OR decide a human_only gate. reject is not
+            # intercepted, but it is not an agent escape hatch either: reject
+            # requires a claim_token and claim is denied for non-browser
+            # principals on default-human_only gates, so only a principal
+            # already holding a claim can reject; agent-only runs on default
+            # gates require browser-human intervention (intended policy).
             human_only_err = await _check_human_only_gate(s, org_id, run, gate_id, action)
             if human_only_err:
                 return human_only_err
@@ -4260,8 +4270,13 @@ async def _review_hitl_impl(
         "Step 1: call with action='claim' to get a claim_token. "
         "Step 2: call with action='approve', 'reject', or 'deliver_manual' + your claim_token. "
         "'deliver_manual' requires 'output' (a dict) to supply the output directly. "
-        "human_only gates return 403 on approve and deliver_manual — "
-        "only a browser-authenticated human can decide them."
+        "human_only gates return 403 on claim, approve and deliver_manual "
+        "(FAR-609: claim is human_only too) — only a browser-authenticated "
+        "human can claim or decide them. reject is NOT an agent escape hatch: "
+        "it requires a claim_token, and claim is denied on default-"
+        "human_only gates, so only a principal already holding a claim can "
+        "reject; agent-only runs on default gates require browser-human "
+        "intervention (intended policy)."
     ),
 )
 @_RETRY_DB
@@ -4658,12 +4673,52 @@ async def list_triggers(
         return _tool_error("Failed to list triggers")
 
 
+def _assert_create_model_backend_provider(provider: str) -> dict[str, Any] | None:
+    """Validate the ``provider`` of create_model_backend; error dict or None.
+
+    An unknown provider previously reached the DB check constraint and surfaced
+    as internal_error; validate up-front (mirroring the REST 422) and call out
+    the test-only 'stub' backend explicitly.
+    """
+    if provider == "stub":
+        return {
+            "error": "validation_error",
+            "field": "provider",
+            "detail": (
+                "The 'stub' provider is a test double used by automated tests "
+                "and is not supported via MCP. Choose a real provider, e.g. "
+                "openai, anthropic, gemini, deepseek, groq, opencode."
+            ),
+        }
+    try:
+        from modulo.api.routes.model_backends import _validate_provider
+
+        _validate_provider(provider)
+    except StarletteHTTPException:
+        return {
+            "error": "validation_error",
+            "field": "provider",
+            "detail": f"Unknown model backend provider: {provider!r}",
+        }
+    except Exception:
+        # The plugin registry path failed for an infra reason — the REST route
+        # treats that the same way (422); log and mirror its verdict.
+        _log.exception("create_model_backend provider validation failed")
+        return {
+            "error": "validation_error",
+            "field": "provider",
+            "detail": f"Unknown model backend provider: {provider!r}",
+        }
+    return None
+
+
 @mcp.tool(
     description="Create a new model backend (provider configuration). "
     "The API key is NOT sent through this tool — instead, a one-time setup URL is returned. "
     "Open the URL in your browser to provide the API key directly. "
     "This keeps the secret out of the LLM context and MCP transport logs. "
-    "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode.",
+    "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode. "
+    "The built-in 'stub' provider is a test double and cannot be created via MCP."
 )
 @_RETRY_DB
 async def create_model_backend(
@@ -4678,6 +4733,9 @@ async def create_model_backend(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("create_model_backend")
+
+        if (err := _assert_create_model_backend_provider(provider)) is not None:
+            return err
 
         from modulo.core.mcp_setup_handoff import create_handoff
 
@@ -7778,7 +7836,9 @@ async def restore_parameter_set(
 
 @mcp.tool(
     description="AI-assisted schema inference. Takes a sample JSON payload and returns an inferred "
-    "JSON Schema definition.",
+    "JSON Schema definition. Precondition: this preview feature requires developer "
+    "mode (toggle Developer Mode in Admin > Feature Flags, or MODULO_DEV_MODE=true) "
+    "and at least one configured model backend; the call fails otherwise.",
 )
 @_RETRY_DB
 async def infer_schema(

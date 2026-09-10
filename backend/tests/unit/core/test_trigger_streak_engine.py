@@ -311,10 +311,12 @@ class TestMigrationBackfillGrace:
         # with main); FAR-681 slice 2 added 0203_triggers_add_name on top of
         # 0195, FAR-681 slice 2 (#289/#293) added 0204_runner_probe_cache on top
         # of 0203_triggers_add_name, FAR-760's 0205_library_collection_type
-        # chains on top of 0204_runner_probe_cache, and FAR-761's
-        # 0206_collection_install_tracking chains on top of 0205, so it is now
-        # the single linear head of the chain.
-        assert heads == ["0206_collection_install_tracking"], f"expected a single head, got {heads}"
+        # chains on top of 0204_runner_probe_cache, and FAR-644's
+        # 0206_deleted_defaults_signal_check chains on top of 0205, and FAR-761's
+        # 0207_collection_install_tracking chains on top of 0206, and FAR-764's
+        # 0208_community_gate chains on top of 0207, so it is now the
+        # single linear head of the chain.
+        assert heads == ["0208_community_gate"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 from modulo.db.url_utils import derive_system_database_url
 from modulo.launcher.secrets_file import LauncherSecrets
@@ -73,8 +74,14 @@ def compose_config(state: LauncherState, secrets: LauncherSecrets) -> dict[str, 
     the engine requires); every asyncpg-level consumer downgrades it the way
     the container path does.
     """
+    # quote_plus hardening (FAR-680): a MANUAL secrets rotation can put
+    # URL-special characters in the password; unquoted, they malformed the
+    # URL (an '@' or '/' inside the password changed the host/userinfo split
+    # and could leak the password into the path). Generated token_urlsafe
+    # secrets are unaffected.
     database_url = (
-        f"postgresql+asyncpg://modulo:{secrets.postgres_password}@{POSTGRES_HOST}:{state.postgres_port}/{APP_DB_NAME}"
+        f"postgresql+asyncpg://modulo:{quote_plus(secrets.postgres_password)}"
+        f"@{POSTGRES_HOST}:{state.postgres_port}/{APP_DB_NAME}"
     )
     system_url = derive_system_database_url(database_url)
     return {

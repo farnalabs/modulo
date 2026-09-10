@@ -51,6 +51,7 @@ from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
+from tests.unit._legacy_seed import seed_legacy_blobs
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -564,6 +565,11 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
+        # IN THE DATABASE until B2b — the repo's raw Core legacy-table readers
+        # select them; reproduce the migrated shape.
+        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -602,14 +608,27 @@ async def _seed_run(
         langgraph_thread_id=f"thread-{run_id}",
         claim_token="tok-a",
         cancellation_requested=False,
-        raw_output_markers=markers,
-        outputs_json=outputs,
-        node_telemetry_json=telemetry,
         error_code=error_code,
         work_intact=work_intact,
     )
     session.add(run)
     await session.flush()
+    # FAR-583 B1: the legacy blob columns no longer map on the ORM — the
+    # seeding writes them through the repo's raw Core legacy table (the same
+    # parameterised-SQL surface the production fallback readers use).
+    await seed_legacy_blobs(
+        session,
+        run.id,
+        **{
+            key: value
+            for key, value in (
+                ("outputs_json", outputs),
+                ("node_telemetry_json", telemetry),
+                ("raw_output_markers", markers),
+            )
+            if value is not None
+        },
+    )
     return run
 
 
@@ -685,6 +704,12 @@ class TestPersistenceHook:
         run_id = uuid.uuid4()
         async with session.begin():
             await _seed_run(session, run_id)
+            # FAR-583 B1: the blobs write is the PRIMARY store write — bound
+            # org required (fail-closed); production terminalization sessions
+            # are org-bound and the SQLite-side binding mirrors that contract.
+            from modulo.db.rls import set_rls_org
+
+            await set_rls_org(session, _ORG)
             updated = await update_run_status(
                 session,
                 run_id,
@@ -909,6 +934,11 @@ class TestFailureAndIdempotency:
         assert (await _read_classification(engine, run_id))["value"] == "no_delivery"
 
         async with session.begin():
+            # FAR-583 B1: the re-terminalization carries blobs — bound org
+            # required (see test_update_run_status_writes_classification_atomically).
+            from modulo.db.rls import set_rls_org
+
+            await set_rls_org(session, _ORG)
             await update_run_status(
                 session,
                 run_id,
@@ -1106,6 +1136,12 @@ class TestSweep:
 
         async with eng.begin() as conn:
             await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+            # FAR-583 B1: legacy blob columns stay in the database until B2b
+            # (raw-SQL readers) — reproduce the migrated shape here too (this
+            # test builds its OWN engine; the shared fixture carries the same
+            # ALTERs).
+            for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+                await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         try:
             run_id = uuid.uuid4()
             maker = async_sessionmaker(eng, expire_on_commit=False, autobegin=False)

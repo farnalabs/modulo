@@ -1,0 +1,1 @@
+{"blocked": [], "created": [{"kind": "schema", "name": "fresh"}, {"kind": "model_backend", "name": "openai"}, {"kind": "pipeline", "name": "sample"}, {"kind": "trigger", "name": "sample/nightly"}, {"kind": "trigger", "name": "sample/hook"}], "drift_detail": {}, "failed": [], "mode": "drift", "unchanged": [{"kind": "schema", "name": "stable"}], "updated": []}

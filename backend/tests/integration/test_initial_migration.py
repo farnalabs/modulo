@@ -42,9 +42,10 @@ pytestmark = pytest.mark.integration
 # ANY JSONB<->JSON modify_type, bare-column-set FK matching, blanket
 # audit-chain remove_columns) hid genuine drift. Every entry below carries a
 # one-line reason and an expiry tag:
-#   * `# expires: B2b`  — the drift disappears when migration 0192 drops the
-#     legacy runs blob columns; remove the entry then (a stale entry would
-#     keep hiding drift and must fail loudly instead).
+#   * `# expires: B2b (migration 0194 drops the columns)`  — the drift
+#     disappears when migration 0194 drops the legacy runs blob columns;
+#     remove the entry then (a stale entry would keep hiding drift and must
+#     fail loudly instead).
 #   * `# permanent (documented repo divergence)` — the repo's multi-backend
 #     convention or DB-trigger-maintained surface.
 # GENUINE drift stays listed as a KNOWN GAP with `# tracked: FAR-583
@@ -71,6 +72,13 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     ),
     "audit_events": frozenset({"payload_json"}),
     "chat_messages": frozenset({"tool_calls_json", "tool_results_json"}),
+    "collection_install": frozenset(
+        {
+            "resolved_manifest",
+            "connector_checklist",
+            "installed_entities",
+        }
+    ),
     "composite_templates": frozenset({"sub_pipeline_graph_json", "parameter_ports_json"}),
     "connector_instances": frozenset({"config_json", "allowed_operations"}),
     "environment_profiles": frozenset({"capabilities_json", "config_json", "secret_refs_json"}),
@@ -85,7 +93,7 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     # (0195, FAR-634): jsonb in the migration; generic JSON in the ORM for
     # SQLite/MariaDB parity — the same pattern as decision_payload below.
     "hitl_claims": frozenset({"decision_payload", "context_json", "gate_config_json"}),
-    "library_primitives": frozenset({"tags", "content_json"}),
+    "library_primitives": frozenset({"tags", "content_json", "manifest_pins", "trust_header"}),
     "library_sync_state": frozenset({"manifest_json", "catalog_json"}),
     "lifecycle_maps": frozenset({"content_json"}),
     "metrics_staging": frozenset({"payload"}),
@@ -113,13 +121,14 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     # permanent (documented repo divergence) — the new table keeps its three
     # blob columns after B2b (they ARE the store once the legacy columns go).
     "run_node_outputs": frozenset({"outputs_json", "node_telemetry_json", "raw_output_markers"}),
-    # runs: the three legacy blob columns EXPIRE at B2b (dropped by 0192);
-    # the rest are the multi-backend parity convention.
+    # runs: the three legacy blob columns EXPIRE at B2b (dropped by 0194,
+    # after the ORM mapping was cut at B1); the rest are the multi-backend
+    # parity convention.
     "runs": frozenset(
         {
-            "outputs_json",  # expires: B2b
-            "node_telemetry_json",  # expires: B2b
-            "raw_output_markers",  # expires: B2b
+            "outputs_json",  # expires: B2b (migration 0194 drops the columns)
+            "node_telemetry_json",  # expires: B2b (migration 0194 drops the columns)
+            "raw_output_markers",  # expires: B2b (migration 0194 drops the columns)
             "cost_breakdown",
             "node_token_usage",
             "input_payload",
@@ -207,28 +216,16 @@ _ORM_CHECK_DIVERGENCE: frozenset[tuple[str, str]] = frozenset(
         # migration's strict jsonb_typeof shape (repo parity rule).
         # permanent (documented repo divergence)
         ("run_node_outputs", "ck_run_node_outputs_meta_present"),
-        # deleted_defaults: the ORM declares this signal guard but NO
-        # migration has created it — genuine drift, known gap.
-        # tracked: FAR-583 follow-up
-        ("deleted_defaults", "ck_deleted_defaults_signal_nonempty"),
     }
 )
+# The ``deleted_defaults`` signal guard (FAR-644) is NO LONGER listed here:
+# migration 0206 creates it at the DB level, so the ORM declaration and the
+# migrated schema now agree — the entry was removed with the drift it tracked.
 
-# ORM-declared graph-consistency FKs to nodes.id that no migration has
-# created yet — genuine drift, KNOWN GAP (pre-existing; the ORM is stricter
-# than the migrated schema).
-# tracked: FAR-583 follow-up
-_NODES_ID_FK_KNOWN_GAPS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("eval_definitions", "node_id"),
-        ("eval_results", "node_id"),
-        ("node_observations", "node_id"),
-        ("pipeline_edges", "source_node_id"),
-        ("pipeline_edges", "target_node_id"),
-        ("run_evidence", "node_id"),
-        ("snapshot_schema_pins", "node_id"),
-    }
-)
+# ORM-declared FKs to nodes.id were REMOVED from the models (FAR-644): the
+# deprecated ``nodes`` table never holds JSON-graph node ids, so no migration
+# should create these constraints (see migration 0170's correction). Any new
+# add_fk diff now FAILS the test — the old KNOWN-GAP wheel is gone.
 
 # Tables that exist in the DB but deliberately have NO ORM model.
 # permanent (documented repo divergence)
@@ -305,20 +302,23 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         return inner[2] == "modulo_journey_facts" and inner[3].name == "updated_at"
     if kind == "remove_column":
         # Audit-chain columns the DB triggers own (0108) — per-table entries.
-        return inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]
+        if inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]:
+            return True
+        # The legacy ``runs`` blob columns (FAR-583 B1): the ORM mapping was
+        # CUT while the DB keeps the columns until migration 0194 (B2b), so
+        # the parity diff arrives as an ORM-side remove_column. Per-column
+        # B2b-expiry entries; removed together with the columns at B2b.
+        return (inner[2], inner[3].name) in _JSONB_DB_TO_JSON_ORM_EXPIRES_B2B
     if kind == "remove_fk":
         # The audit-chain FKs on the trigger-maintained columns — per-table.
         return inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool(
             {col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]
         )
     if kind == "add_fk":
-        # Graph-consistency FKs to nodes.id the ORM declares but no migration
-        # has created yet — per-(table, column) KNOWN GAP entries.
-        table = inner[1].table.name
-        col_names = {col.name for col in inner[1].columns}
-        return any(
-            known_table == table and col_names == {known_col} for (known_table, known_col) in _NODES_ID_FK_KNOWN_GAPS
-        )
+        # ANY ORM-declared FK the migrated schema lacks is real drift (the
+        # far-644 nodes.id KNOWN-GAP wheel was closed with the drift itself;
+        # a stale wheel would keep hiding new FK drift).
+        return False
     if kind == "remove_constraint":
         # CHECK guards that exist ONLY in migrations (0157/0165/0192) —
         # per-(table, constraint) entries.
@@ -363,18 +363,19 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
     rewrite — the old blanket classes hid genuine drift). Every entry carries
     a one-line reason and an expiry tag:
 
-    * ``# expires: B2b`` — the drift disappears when migration 0192 drops the
-      legacy ``runs`` blob columns; the entry must be removed then (a stale
-      entry keeps hiding drift and must fail loudly instead).
+    * ``# expires: B2b (migration 0194 drops the columns)`` — the drift
+      disappears when migration 0194 drops the legacy ``runs`` blob columns;
+      the entry must be removed then (a stale entry keeps hiding drift and
+      must fail loudly instead).
     * ``# permanent (documented repo divergence)`` — the repo's multi-backend
       convention (JSONB in migrations / generic JSON in the ORM) or
       DB-trigger-maintained columns.
 
-    GENUINE drift that stays listed as a KNOWN GAP (tracked, not silently
-    ignored): ORM-declared graph-consistency FKs to ``nodes.id`` and the
-    ``deleted_defaults`` CHECK that no migration has created yet
-    (``# tracked: FAR-583 follow-up`` — raised with the Conductor). Anything
-    NOT listed fails the test.
+    The former GENUINE drift entries (ORM-declared FKs to ``nodes.id`` and the
+    ``deleted_defaults`` CHECK, both ``# tracked: FAR-583 follow-up``) were
+    closed with the drift itself in FAR-644: the ORM FKs were stripped (the
+    deprecated ``nodes`` table never holds JSON-graph node ids) and migration
+    0206 creates the CHECK. Anything NOT listed fails the test.
     """
     async with db_engine.connect() as connection:
         differences = await connection.run_sync(
@@ -545,17 +546,24 @@ class TestParityIgnoreListClassify:
         assert _is_benign_migration_managed(
             ("remove_table", Table("run_node_outputs_quarantine", MetaData(), Column("run_id", Integer)))
         )
-        # Known gap: nodes.id FK the ORM declares, no migration created.
-        assert _is_benign_migration_managed(("add_fk", self._fk("pipeline_edges", "source_node_id", "nodes.id")))
-        # Known gap / strict-twin divergence: ORM CHECK add side.
-        assert _is_benign_migration_managed(
-            ("add_constraint", self._check("deleted_defaults", "ck_deleted_defaults_signal_nonempty"))
-        )
+        # A known-gap wheel that was CLOSED (FAR-644) must NOT stay silent:
+        # nodes.id FKs were stripped from the ORM, so any add_fk is real drift.
+        assert not _is_benign_migration_managed(("add_fk", self._fk("pipeline_edges", "source_node_id", "nodes.id")))
+        # Strict-twin divergence: ORM CHECK add side (run_node_outputs only —
+        # deleted_defaults is now created by migration 0206, so its former
+        # wheel must fail like the others).
         assert _is_benign_migration_managed(
             ("add_constraint", self._check("run_node_outputs", "ck_run_node_outputs_meta_present"))
         )
+        assert not _is_benign_migration_managed(
+            ("add_constraint", self._check("deleted_defaults", "ck_deleted_defaults_signal_nonempty"))
+        )
         # B2b-expiring legacy column still listed while the columns exist.
         assert _is_benign_migration_managed(("modify_type", None, "runs", "outputs_json", {}, JSONB(), JSON()))
+        # B2b-expiring legacy column: the B1 ORM cut makes the parity drift a
+        # remove_column (DB column present, ORM mapping gone) — the
+        # per-column expiry set classifies it benign until B2b.
+        assert _is_benign_migration_managed(("remove_column", None, "runs", Column("outputs_json", JSONB())))
         # Comments/indexes stay blanket-ignored (reasoned in the predicate).
         assert _is_benign_migration_managed(("modify_comment",))
         assert _is_benign_migration_managed(("add_index", None, "t", "ix_something"))
@@ -587,6 +595,9 @@ class TestParityIgnoreListClassify:
         assert not _is_benign_migration_managed(
             ("remove_column", None, "brand_new_table", Column("created_by", UUID()))
         )
+        # A listed table's UNLISTED remove_column is real drift (the B2b
+        # expiry set is per-column, never per-table).
+        assert not _is_benign_migration_managed(("remove_column", None, "runs", Column("brand_new_column", JSONB())))
         # An unlisted FK (non-audit columns) is real drift.
         assert not _is_benign_migration_managed(("remove_fk", self._fk("agents", "pipeline_id", "pipelines.id")))
         # An unlisted nodes.id FK is real drift.

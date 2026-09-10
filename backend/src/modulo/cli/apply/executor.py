@@ -539,7 +539,13 @@ class ApplyExecutor:
                             }
                         )
 
-    def run(self, config: ApplyConfig, dry_run: bool, refresh_secrets: bool = False) -> dict[str, Any]:
+    def run(
+        self,
+        config: ApplyConfig,
+        dry_run: bool,
+        refresh_secrets: bool = False,
+        drift: bool = False,
+    ) -> dict[str, Any]:
         """Resolve refs, plan, optionally execute, and return the report.
 
         Phase order: schemas -> model_backends -> pipelines -> triggers
@@ -549,6 +555,12 @@ class ApplyExecutor:
         ``refresh_secrets`` set, triggers whose raw config declares
         secret-shaped entries always re-send their config (secret-only
         rotation is invisible to the drift hash otherwise).
+
+        With ``drift`` set the run NEVER writes: it returns after the plan
+        phase with the report labelled ``"mode": "drift"`` plus the
+        node-level pipeline breakdown (``"drift_detail"``) — the same gate
+        the dry-run return takes, so no POST/PATCH/PUT code path is
+        reachable in drift mode (verified by tests/unit/cli/test_apply_drift.py).
         """
         from modulo.cli.apply import pipeline_apply, trigger_apply
 
@@ -599,9 +611,15 @@ class ApplyExecutor:
             refresh_secrets=refresh_secrets,
         )
         report: dict[str, Any] = build_plan(desired, current_entities, blocked)
-        report["dry_run"] = dry_run
         report["failed"] = []
         if dry_run:
+            report["dry_run"] = True
+            return report
+        if drift:
+            from modulo.cli.apply.drift import build_drift_detail
+
+            report["mode"] = "drift"
+            report["drift_detail"] = build_drift_detail(current_entities, desired, report)
             return report
         self.apply_schemas(entities, current_entities, report)
         self.apply_backends(entities, current_entities, resolved_api_keys, report)

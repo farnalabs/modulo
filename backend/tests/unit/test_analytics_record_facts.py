@@ -38,6 +38,7 @@ from modulo.core.analytics import (
 from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
+from tests.unit._legacy_seed import seed_legacy_blobs
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
 
@@ -48,6 +49,11 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         tables = [t for t in Base.metadata.sorted_tables if t.name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
+        # IN THE DATABASE until B2b — the repo's raw Core legacy-table readers
+        # select them; reproduce the migrated shape.
+        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
+            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -72,10 +78,17 @@ async def _seed_run(session: AsyncSession, **blob_overrides: object) -> Run:
         "status": "complete",
     }
     values.update(blob_overrides)
+    # FAR-583 B1: the legacy blob columns no longer map on the ORM — the
+    # seeding writes them through the repo's raw Core legacy table (the same
+    # parameterised-SQL surface the production fallback readers use).
+    legacy_values = {
+        key: values.pop(key) for key in ("outputs_json", "node_telemetry_json", "raw_output_markers") if key in values
+    }
     run = Run(**values)
     async with session.begin():
         session.add(run)
         await session.flush()
+        await seed_legacy_blobs(session, run.id, **legacy_values)
     return run
 
 

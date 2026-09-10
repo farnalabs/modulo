@@ -2895,6 +2895,7 @@ export default {
       "re_enable": "Re-enable",
       "show_outcomes": "Show outcomes",
       "hide_outcomes": "Hide outcomes",
+      "toggling": "...",
       "recent_outcomes": "Recent outcomes",
       "outcome_delivered": "Delivered",
       "outcome_no_delivery": "No delivery",

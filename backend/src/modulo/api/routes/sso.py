@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
+from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, get_system_db_session, require_feature
 from modulo.auth.sso import (
@@ -24,9 +24,6 @@ from modulo.core.feature_flags import CommunityTier, PlanContext, resolve_plan_c
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.crud.sso_provider import get_enabled_saml_provider, list_enabled_oidc_providers
 from modulo.settings import Settings, get_settings
-
-_MSG_DATABASE_ERROR_PLEASE_TRY = "Database error. Please try again."
-
 
 _log = logging.getLogger(__name__)
 
@@ -257,7 +254,7 @@ async def oidc_callback(
         _log.warning("OIDC callback DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -304,7 +301,7 @@ async def saml_login(
         _log.warning("SAML login DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise
@@ -359,7 +356,7 @@ async def saml_acs(
         _log.warning("SAML ACS DB error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_PLEASE_TRY,
+            detail=MSG_DB_ERROR_PLEASE_TRY,
         ) from exc
     except HTTPException:
         raise

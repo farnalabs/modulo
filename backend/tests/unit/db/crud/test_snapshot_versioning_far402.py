@@ -256,8 +256,11 @@ class TestRollbackDiscriminator:
     async def test_rollback_tags_created_kind_rollback(self, mock_enforce, mock_apply, mock_resolve, mock_create):
         from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
-        mock_resolve.return_value = True
-        mock_apply.return_value = SimpleNamespace(denied=False, has_weakening=False, reason_code=None)
+        # FAR-609: the diff result now also carries weakened_nodes — the mock
+        # must provide both lists for the caller's blended raise/audit path.
+        mock_apply.return_value = SimpleNamespace(
+            denied=False, has_weakening=False, reason_code=None, weakened_edges=[], weakened_nodes=[]
+        )
         new_snapshot = MagicMock()
         mock_create.return_value = new_snapshot
 

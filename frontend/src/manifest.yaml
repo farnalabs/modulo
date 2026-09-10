@@ -126,7 +126,7 @@ routes:
         name: pipeline-list
         breadcrumb: Pipelines
         parent: /
-        product_map: [feat-pipelines, feat-router]
+        product_map: [feat-pipelines, feat-router, feat-apply]
         sidebar_group: build
         sidebar_order: 2
         type: list_page
@@ -284,7 +284,7 @@ routes:
         name: schemas
         breadcrumb: Schemas
         parent: /
-        product_map: [feat-schemas]
+        product_map: [feat-schemas, feat-apply]
         sidebar_group: configure
         sidebar_order: 1
         type: list_page
@@ -388,7 +388,7 @@ routes:
         name: settings-triggers
         breadcrumb: Triggers
         parent: /
-        product_map: [feat-triggers]
+        product_map: [feat-triggers, feat-apply]
         sidebar_group: configure
         sidebar_order: 6
         type: form_page
@@ -583,7 +583,7 @@ routes:
         name: admin-model-backends
         breadcrumb: Model Backends
         parent: /
-        product_map: [feat-model-backends]
+        product_map: [feat-model-backends, feat-apply]
         sidebar_group: configure
         sidebar_order: 3
         type: list_page
@@ -3435,6 +3435,23 @@ features:
             - "[x] Audit events invite_created / invite_revoked (admin paths) and invite_consumed (accept path) record the invitation lifecycle; consume audit is fail-open — an audit failure never fails enrollment"
     feat-analytics:
         description: Reporting and analytics over runs, costs, and facts
+    feat-apply:
+        description: '`modulo apply` — declarative configuration CLI (FAR-681)'
+        status: covered
+        behaviours:
+            # Config format & loading (backend/src/modulo/cli/apply/)
+            - "[x] `modulo apply -f <file>` loads single- or multi-document YAML (api_version modulo.dev/v1 major-gated; minor suffixes merge leniently) declaring entities.schemas / entities.model_backends / entities.pipelines / entities.triggers; duplicate names per kind (triggers keyed as pipeline/name) and trigger forward-references to a pipeline declared only in a LATER document are load-time errors"
+            - "[x] Secrets are refs-only: backend api_key and trigger config_json secret-shaped entries (sensitive LEAF keys or server-maskable values) must be ${env:VAR} or secretref://<key> references — inline secret literals are forbidden at validation; ${env:} refs are resolved client-side (missing/empty var blocks that entity), secretref:// is blocked pending server-side resolution, and hmac_secret/signing_secret are Fernet-encrypted server-side on write"
+            # Plan / apply engine
+            - "[x] Planning is name-based upsert scoped to the org (the HTTP transport is the operator's MODULO_URL + MODULO_API_KEY bearer org key): per-entity decisions created / updated / unchanged / blocked, hashed over CANONICAL managed-field views (api_key excluded; trigger config_json compared on the desired key set with masked secrets stripped symmetrically and daily_spend_limit quantized to the column's 4dp scale) — runtime state (next_fire_at, streak_epoch, ...) never produces drift"
+            - "[x] Entities apply in dependency order schemas -> model_backends -> pipelines -> triggers with per-entity containment (one failure moves that entity to failed, the rest still apply); graphs are cached by canonical hash (a graph write snapshots the pipeline, so an unchanged graph must not churn snapshots); provider mismatches on backends and same-version-different-content schema versions are blocked (never silently diverged); missing/ambiguous agent or duplicated live-name references are blocked, apply never auto-creates agents"
+            - "[x] Backend writes are verified: the server-side health-check endpoint re-runs after each create/update and an unhealthy result moves the entity to failed (exit 1) — a stored-but-broken credential is never reported as plain success"
+            # Exit codes
+            - "[x] Exit codes: --dry-run/--plan always exits 0; real apply exits 1 when any entity was blocked or failed (including backend health-check failures); --diff exits 0 when the org matches the config and 1 when drift is detected (created/updated/blocked) so CI can gate on config drift"
+            # Drift mode (--diff, slice 3)
+            - "[x] `--diff` (drift mode) is read-only: it fetches the live org state and reports the plan-shape report explicitly labelled mode=drift WITHOUT writing anything (the run returns after the plan phase — no POST/PATCH/PUT code path is reachable), adds a node-level breakdown for drifted pipelines (drift_detail: graph node/edge added/removed/modified matched by id; top-level-only drift gets no entry), and the table output prefixes verbs (drift create / drift update) plus per-graph drift detail lines"
+            # Output
+            - "[x] Output: human-friendly table (render_table: create/update/block/fail/unchanged lines + summary counts, or drift-prefixed variants) or --output json / --json (the full report); 401 surfaces 'check MODULO_API_KEY', 404 'server does not expose endpoint ... / older version', network errors surface as 'apply failed: ...'"
     feat-audit:
         description: Audit trail and audit log
         status: covered

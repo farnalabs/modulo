@@ -16,6 +16,7 @@
         <div v-if="formMode === 'add'" class="card p-6">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.AdminModelBackendsView.new_model_backend') }}</h2>
           <div v-if="presets.length > 0 && !selectedPresetId && !manualMode" class="mb-6">
+            <h3 class="mb-1 text-sm font-medium">{{ $t('views.AdminModelBackendsView.preset_picker_title') }}</h3>
             <p class="mb-3 text-sm text-muted-foreground">{{ $t('views.AdminModelBackendsView.preset_picker_description') }}</p>
             <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <button

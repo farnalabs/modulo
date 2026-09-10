@@ -13,7 +13,8 @@ and proves:
   * every uuid PK column (ORM metadata, FK parents excluded) carries the
     ``gen_random_uuid()`` default in ``information_schema.columns``;
   * the default is SELECTIVE — string PKs and composite-PK FK columns
-    (``run_evidence``) are untouched;
+    (``run_evidence.run_id``) are untouched; ``run_evidence.node_id`` is no
+    longer an FK (FAR-644) so it correctly receives the default;
   * the outage-class path is fixed: a raw ``INSERT INTO system_config ...``
     WITHOUT the id column SUCCEEDS and gets a server-generated uuid;
   * the downgrade drops the defaults and a re-upgrade restores them.
@@ -165,10 +166,11 @@ async def test_every_uuid_pk_has_gen_random_uuid_default(fresh_migration_db) -> 
     assert not missing, f"uuid PKs without gen_random_uuid() default: {missing}"
 
     # Selectivity: the default must NOT blanket-apply to non-uuid PKs or to the
-    # composite-PK FK columns that were deliberately excluded.
+    # composite-PK FK columns that were deliberately excluded (run_evidence.run_id).
+    # run_evidence.node_id is NOT an FK parent (FAR-644 stripped the deprecated
+    # nodes.id FK), so it is a covered uuid-PK and correctly carries the default.
     assert rows.get(("tier_catalog", "tier_id")) is None, "string PK must have no uuid default"
     assert rows.get(("run_evidence", "run_id")) is None, "FK composite-PK part must have no default"
-    assert rows.get(("run_evidence", "node_id")) is None, "FK composite-PK part must have no default"
 
 
 async def test_raw_insert_without_id_gets_server_generated_uuid(fresh_migration_db) -> None:

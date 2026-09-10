@@ -427,6 +427,12 @@ async def list_model_backend_presets_endpoint(
         return ModelBackendPresetListResponse(
             items=[ModelBackendPresetResponse(**preset.model_dump()) for preset in MODEL_BACKEND_PRESETS]
         )
+    except IntegrityError:
+        logger.exception(_CODE_MODEL_BACKENDS_PRESETS)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
     except ProgrammingError:
         logger.exception(_CODE_MODEL_BACKENDS_PRESETS)
         raise HTTPException(

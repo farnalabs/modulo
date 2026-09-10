@@ -14,6 +14,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import (
+    MSG_ERROR_TRACKING_NOT_AVAILABLE,
+    MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+    MSG_NO_ORGANISATION,
+    MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.models.error import (
@@ -47,11 +53,7 @@ from modulo.settings import Settings, get_settings
 
 _CODE_ERRORS_RESOLVE = "errors.resolve"
 _CODE_ERRORS_INGEST_ERRORS = "errors.ingest_errors"
-_MSG_ERROR_TRACKING_NOT_AVAILABLE = "Error tracking is not available. Run database migrations to enable it."
-_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE = "Error tracking is temporarily unavailable. Please try again."
-_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE = "An unexpected error occurred while processing your request."
 _CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
-_MSG_NO_ORGANISATION = "No organisation"
 
 # Scheduler-starvation surfacing (FAR-604). Pending runs blocked on a capacity
 # cap carry a RAW marker in ``runs.error_code`` (``error_codes.LEGACY_ALIASES``
@@ -215,20 +217,20 @@ async def ingest_errors(
         _log.exception(_CODE_ERRORS_INGEST_ERRORS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception(_CODE_ERRORS_INGEST_ERRORS)
         _log.warning("error_tracking.db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.ingest_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {"results": [ErrorGroupResult(**r) for r in results]}
@@ -329,20 +331,20 @@ async def ingest_errors_public(
         _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
         _log.warning("error_tracking.public_ingest_db_error", extra={"ip": client_ip})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.public_ingest_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     if not results:
@@ -428,7 +430,7 @@ async def list_error_groups(
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -474,20 +476,20 @@ async def list_error_groups(
         _log.exception("errors.list_error_groups")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("errors.list_error_groups")
         _log.warning("error_tracking.list_groups_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.list_groups_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
@@ -529,7 +531,7 @@ async def get_scheduler_starvation(
     """
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     threshold = datetime.now(UTC) - timedelta(minutes=_STARVATION_THRESHOLD_MINUTES)
     async with session.begin():
@@ -561,7 +563,7 @@ async def get_error_group_detail(
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -576,20 +578,20 @@ async def get_error_group_detail(
         _log.exception("errors.get_error_group_detail")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("errors.get_error_group_detail")
         _log.warning("error_tracking.get_group_detail_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.get_group_detail_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {
@@ -615,7 +617,7 @@ async def patch_error_group(
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -638,20 +640,20 @@ async def patch_error_group(
         _log.exception("errors.patch_error_group")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("errors.patch_error_group")
         _log.warning("error_tracking.patch_group_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.patch_group_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     return {
@@ -682,7 +684,7 @@ async def list_error_events(
 ) -> dict[str, Any]:
     org_id = principal.organisation_id
     if org_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_MSG_NO_ORGANISATION)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
         async with session.begin():
@@ -701,20 +703,20 @@ async def list_error_events(
         _log.exception("errors.list_error_events")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=_MSG_ERROR_TRACKING_NOT_AVAILABLE,
+            detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
         _log.exception("errors.list_error_events")
         _log.warning("error_tracking.list_events_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
+            detail=MSG_ERROR_TRACKING_TEMPORARILY_UNAVAILABLE,
         ) from exc
     except Exception as exc:
         _log.exception("error_tracking.list_events_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
+            detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
     items = [_serialize_error_event_detail(e) for e in events]

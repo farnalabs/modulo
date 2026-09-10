@@ -982,7 +982,7 @@ _PR_TEMPLATE_EDGES = [
             "label": "Approve Review",
             "description": "Review the generated comments before posting to the PR.",
             "claim_expiry_minutes": 60,
-            "human_only": False,
+            "human_only": True,
         },
     },
 ]
@@ -1047,7 +1047,7 @@ _RELEASE_TEMPLATE_EDGES = [
             "label": "Approve Release",
             "description": "Review the release notes before tagging the release.",
             "claim_expiry_minutes": 60,
-            "human_only": False,
+            "human_only": True,
         },
     },
 ]
@@ -1124,7 +1124,7 @@ _INCIDENT_TEMPLATE_EDGES = [
             "label": "Verify Resolution",
             "description": "Confirm the incident is resolved before generating the postmortem.",
             "claim_expiry_minutes": 60,
-            "human_only": False,
+            "human_only": True,
         },
     },
 ]

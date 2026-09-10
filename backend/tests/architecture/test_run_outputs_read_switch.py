@@ -1,18 +1,19 @@
 """Architecture test: every run-blob read goes through the repo (FAR-583).
 
-The ``run_node_outputs`` store (PR A) is the single chokepoint for the
-per-node blobs; the legacy ``runs`` columns (``outputs_json`` /
-``node_telemetry_json`` / ``raw_output_markers``) keep dual-writing until PR
-B1 and are dropped at B2b. This lens guards the READ-SWITCH: no production
-code may read the legacy columns (or reassemble around the repo) except the
-sanctioned surfaces below. Three scans over ``backend/src`` (migrations
-excluded):
+The ``run_node_outputs`` store is the single blob chokepoint; legacy
+``runs`` blob columns (``outputs_json`` / ``node_telemetry_json`` /
+``raw_output_markers``) remain IN THE DATABASE until B2b (migration 0194)
+but their ORM mapping was cut at B1, so the only sanctioned touchpoints left
+are raw-SQL surfaces. This lens guards the B1 contract cut: no production
+code may reference the legacy columns EXCEPT the raw-SQL surfaces below.
+Three scans over ``backend/src`` (migrations excluded):
 
 1. AST visitor: zero ``Attribute`` references to the three column names, and
    zero non-locally-bound ``Name`` references, outside the allowlist. Local
    function parameters named ``outputs_json`` (the data-processing helpers in
-   ``node_output_split`` / ``classify``) are NOT column references — the
-   symtable analysis distinguishes locally-bound names from free/global ones.
+   ``node_output_split`` / ``classify``) and the ``_RunStatusUpdate`` payload
+   fields (crud.run) are NOT column references — the symtable/scope analysis
+   distinguishes locally-bound names from free/global ones.
 2. Zero ``getattr(<expr>, "<column>")`` patterns (the string form the
    compiler cannot trace).
 3. RAW-TEXT scan for the three column names in string constants, with
@@ -20,12 +21,13 @@ excluded):
    false-positive) — catches string-embedded SQL the AST identifier scan
    cannot. Comments never execute and are not scanned.
 
-The whole-file entries are the pass-1/2a-sanctioned surfaces: the repo module
-itself, the dual-write chokepoints (``crud.run`` / ``recovery`` /
-``node_runner``), the reconcile legs that keep reading legacy columns until
-B1 (``cron_helpers``), the model definitions, and the SQL-side facts readers
-(``analytics.maintenance``). B2a removes the sweep + the kill-switch entries
-and makes this test unconditional.
+B1 state asserted: the dual-write chokepoint write lines, the reconciles'
+legacy-column scan tuple, the marker helper's ORM attribute leg, and the
+three ``_RUNS_LIST_DEFERRED_COLUMNS`` entries are GONE; the only remaining
+column references are the repo module's own raw Core legacy-table legs, the
+catch-up sweep body (the B1 SRP split ``run_node_outputs_backfill`` module),
+and the shape-key/comment surfaces that mirror the legacy names by contract.
+B2a removes the sweep entries and makes this test fully unconditional.
 """
 
 import ast
@@ -39,15 +41,23 @@ COLUMNS = ("outputs_json", "node_telemetry_json", "raw_output_markers")
 # Whole-file allowlist — every reference in these files is sanctioned:
 # (path-relative-to-src/modulo, reason).
 _WHOLE_FILE_ALLOWLIST: dict[str, str] = {
-    "db/crud/run_node_outputs.py": "the repo module — the single blob chokepoint",
-    "db/crud/run.py": "dual-write chokepoints (both update_run_status branches) + the deferred-columns list",
-    "db/models/run.py": "the legacy column definitions on the model (dropped at B2b)",
+    "db/crud/run_node_outputs.py": (
+        "the repo module — the single blob chokepoint: the new-table columns "
+        "(ORM columns, legit) + the raw Core legacy-table readers that serve "
+        "the EMPTY/MISMATCH fallback, the fenced markers join, and the marker "
+        "dual-write's legacy leg"
+    ),
+    "db/crud/run_node_outputs_backfill.py": (
+        "the catch-up sweep body (B1 SRP split out of the repo module): its "
+        "selection legs read the legacy blob columns through the raw Core "
+        "legacy table — the same sanctioned surface, extracted; removed at "
+        "B2a/B2b with the sweep itself"
+    ),
     "db/models/run_node_outputs.py": "the new-table model + its portable CHECK constraints",
-    "db/models/run_daily_facts.py": "facts column comments referencing the legacy formula (updated at B2b)",
-    "core/pipeline_engine/node_runner.py": "the marker persist chokepoint (savepoint path) + FAR-228 gate readers",
-    "core/pipeline_engine/recovery.py": "the recovery REPLACE chokepoint (legacy write + dual-write)",
-    "core/cron_helpers.py": "dispatcher-reconcile legs keep reading legacy columns until B1 + stats keys",
-    "core/analytics/maintenance.py": "SQL-side facts formula coalesce readers (documented parity)",
+    "core/analytics/maintenance.py": (
+        "SQL-side facts formula — new-table column reads + the legacy coalesce"
+        " fallback through the raw Core legacy table (documented parity, dropped at B2b)"
+    ),
 }
 
 # Scoped allowlist — (file, innermost-enclosing-scope-name): the only
@@ -56,13 +66,18 @@ _WHOLE_FILE_ALLOWLIST: dict[str, str] = {
 _SCOPED_ALLOWLIST: dict[tuple[str, str], str] = {
     ("api/routes/runs.py", "build_fixture_map"): "RunIOResponse wire-shape field, not the ORM column",
     ("api/routes/runs.py", "_build_messages"): "_MessageContext dataclass field, not the ORM column",
+    ("db/crud/run.py", "update_run_status"): (
+        "_RunStatusUpdate payload kwargs (the blobs write API surface), not the ORM column"
+    ),
+    ("db/crud/run.py", "_update_run_status_fenced"): (
+        "_RunStatusUpdate payload fields (the blobs write API surface), not the ORM column"
+    ),
 }
 
 # Raw-text allowlist — whole files whose string constants may carry the
 # column names (shape keys / SQL inside sanctioned modules).
 _RAW_TEXT_FILE_ALLOWLIST: dict[str, str] = {
     "db/crud/run_node_outputs.py": "the repo module (dict keys + upsert set_ kwargs)",
-    "db/crud/run.py": "the chokepoint (fenced SQL + params + deferred-columns list)",
     "db/crud/run_retention.py": "export payload shape keys (the export format mirrors the legacy names by contract)",
     "db/models/run_daily_facts.py": "facts column comments (updated at B2b)",
     "db/models/run_node_outputs.py": "the model's portable CHECK constraint strings",

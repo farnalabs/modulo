@@ -447,6 +447,7 @@ def test_degraded_boot_exits_nonzero_with_status_hint(
     captured = capsys.readouterr()
     assert code == 1
     assert "launcher degraded" in captured.err
+    assert "modulo doctor" in captured.err
     assert "modulo status" in captured.err
     assert "launcher.log" in captured.err
 

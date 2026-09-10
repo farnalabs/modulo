@@ -27,7 +27,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
+from modulo.api.constants import (
+    MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+    MSG_ENVIRONMENT_PROFILE_NOT_FOUND,
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_UNEXPECTED_ERROR,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
@@ -56,8 +61,6 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
 
-_MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again later."
-_MSG_ENVIRONMENT_PROFILE_NOT_FOUND = "Environment profile not found"
 _CODE_RUNNERS_STATUS = "runners.status"
 _CODE_RUNNERS_APPLY_TEMPLATE = "runners.apply_template"
 
@@ -259,7 +262,7 @@ async def get_runners_status(
         _log.exception(_CODE_RUNNERS_STATUS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -367,7 +370,7 @@ async def apply_template(
         _log.exception(_CODE_RUNNERS_APPLY_TEMPLATE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
+            detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except Exception as exc:
         _log.exception("Unexpected error applying runner template: %s", exc)
@@ -378,6 +381,6 @@ async def apply_template(
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=_MSG_ENVIRONMENT_PROFILE_NOT_FOUND + " (or not a seeded template row)",
+            detail=MSG_ENVIRONMENT_PROFILE_NOT_FOUND + " (or not a seeded template row)",
         )
     return _apply_response(profile)

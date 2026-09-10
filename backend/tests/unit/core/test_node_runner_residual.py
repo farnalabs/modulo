@@ -73,6 +73,10 @@ class _FakeSession:
     def begin(self) -> Self:
         return self
 
+    def begin_nested(self) -> Self:
+        """FAR-583: the marker savepoint — the fake has no real nesting."""
+        return self
+
     def in_transaction(self) -> bool:
         return True
 
@@ -148,6 +152,13 @@ class _MarkerRunRow:
 
 def _run_row_router(row: _MarkerRunRow | None) -> Callable[[str], Any]:
     def _route(stmt_text: str) -> Any:
+        if row is not None and "raw_output_markers" in stmt_text and "FROM runs" in stmt_text:
+            # FAR-583 B1: the marker path's legacy read-merge-write leg runs
+            # through the repo's raw parameterised-SQL helpers — serve the
+            # read from the in-memory row.
+            r = MagicMock()
+            r.scalar_one_or_none.return_value = dict(row.raw_output_markers) or None
+            return r
         if "FROM runs" in stmt_text:
             r = MagicMock()
             r.scalar_one_or_none.return_value = row
@@ -2274,7 +2285,17 @@ async def test_sandbox_success_delivery_marker_prefers_drained_stdout():
     sandbox.commands.run = AsyncMock(return_value=handle)
     sandbox.kill = AsyncMock()
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+    async def _mirror_legacy_write(session: Any, *, run_id: str, markers: dict[str, Any]) -> None:
+        # FAR-583 B1: the legacy leg writes the runs row via raw parameterised
+        # SQL — the in-memory fake row has no schema to UPDATE, so the test
+        # mirrors the merged dict onto it for the assertion (the raw write
+        # itself is exercised on the repo-module tests).
+        row.raw_output_markers = dict(markers)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.db.crud.run_node_outputs.write_legacy_raw_output_markers", _mirror_legacy_write),
+    ):
         result = await fn(_run_state())
     assert result["output"]["status"] == "completed"
     marker = next(iter(row.raw_output_markers.values()))

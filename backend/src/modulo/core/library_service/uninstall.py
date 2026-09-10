@@ -19,10 +19,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.agent import Agent
-from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.schema import Schema
+from modulo.db.models import Agent, CollectionInstall, CollectionInstallEntity, Pipeline, Schema
 
 __all__ = ["uninstall_collection"]
 
@@ -75,20 +72,20 @@ async def _check_unmodified(
     matches); False if the user already detached it.
     """
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
+        entity = await session.scalar(select(Schema).where(Schema.id == entity_id))
         if entity is None:
             return False
         return entity.collection_install_id == install_id
     if entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
+        entity = await session.scalar(select(Agent).where(Agent.id == entity_id))
         if entity is None:
             return False
-        return entity.collection_install_id == install_id
+        return bool(entity.collection_install_id == install_id)
     if entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
+        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
         if entity is None:
             return False
-        return entity.collection_install_id == install_id
+        return bool(entity.collection_install_id == install_id)
     return False
 
 
@@ -99,15 +96,15 @@ async def _delete_entity(
 ) -> None:
     """Delete an unmodified entity."""
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
+        entity = await session.scalar(select(Schema).where(Schema.id == entity_id))
         if entity is not None:
             await session.delete(entity)
     elif entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
+        entity = await session.scalar(select(Agent).where(Agent.id == entity_id))
         if entity is not None:
             await session.delete(entity)
     elif entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
+        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
         if entity is not None:
             await session.delete(entity)
 
@@ -119,17 +116,36 @@ async def _detach_entity(
 ) -> None:
     """Detach provenance from a modified entity (set collection_install_id = None)."""
     if entity_type == "schema":
-        entity = await session.get(Schema, entity_id)
+        entity = await session.scalar(select(Schema).where(Schema.id == entity_id))
         if entity is not None:
             entity.collection_install_id = None
     elif entity_type == "agent":
-        entity = await session.get(Agent, entity_id)
+        entity = await session.scalar(select(Agent).where(Agent.id == entity_id))
         if entity is not None:
             entity.collection_install_id = None
     elif entity_type == "pipeline":
-        entity = await session.get(Pipeline, entity_id)
+        entity = await session.scalar(select(Pipeline).where(Pipeline.id == entity_id))
         if entity is not None:
             entity.collection_install_id = None
+
+
+async def _entity_exists(
+    session: AsyncSession,
+    entity_type: str,
+    entity_id: uuid.UUID,
+) -> bool:
+    """Return True if the tracked entity row still exists.
+
+    A tracking row may outlive its entity when the entity was removed
+    out-of-band; in that case there is nothing to delete or detach.
+    """
+    if entity_type == "schema":
+        return await session.scalar(select(Schema).where(Schema.id == entity_id)) is not None
+    if entity_type == "agent":
+        return await session.scalar(select(Agent).where(Agent.id == entity_id)) is not None
+    if entity_type == "pipeline":
+        return await session.scalar(select(Pipeline).where(Pipeline.id == entity_id)) is not None
+    return False
 
 
 # Reverse topological order: pipelines → agents → schemas
@@ -140,6 +156,7 @@ async def uninstall_collection(
     session: AsyncSession,
     org_id: uuid.UUID,
     install_id: uuid.UUID,
+    collection_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Uninstall a collection, removing or deterring entities as appropriate.
 
@@ -147,9 +164,15 @@ async def uninstall_collection(
     Modified entities (whose ``collection_install_id`` was already cleared)
     are detached rather than deleted.
 
+    When ``collection_id`` is supplied it is validated against the install's
+    owning collection so an install cannot be uninstalled through the wrong
+    collection URL.
+
     All-or-nothing: if any step fails, the entire uninstall is rolled back.
     """
     install = await _load_install(session, org_id, install_id)
+    if collection_id is not None and install.collection_id != collection_id:
+        raise InstallNotFoundError(f"Install {install_id} does not belong to collection {collection_id}")
     entity_rows = await _load_entity_rows(session, install_id)
 
     # Sort entities by uninstall order
@@ -164,6 +187,17 @@ async def uninstall_collection(
     detached: list[dict[str, str]] = []
 
     for entity_row in sorted_entities:
+        # The underlying entity may have been removed out-of-band. Skip it:
+        # there is nothing to delete or detach, and reporting it as "detached"
+        # would be misleading. Its tracking row is cleaned up by the cascade
+        # below when the install record is deleted.
+        if not await _entity_exists(
+            session,
+            entity_row.entity_type,
+            entity_row.entity_id,
+        ):
+            continue
+
         is_unmodified = await _check_unmodified(
             session,
             entity_row.entity_type,

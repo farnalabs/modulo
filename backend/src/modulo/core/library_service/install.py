@@ -132,7 +132,6 @@ async def _build_bundle_from_pins(
             schemas.extend(workflow_content.get("schemas", []))
 
     return {
-        "format_version": "1",
         "pipeline": {
             "name": "Collection Install",
             "description": "Entities installed from a library collection",
@@ -273,13 +272,22 @@ async def install_collection(
     # 3. Build the materialize_import bundle
     bundle = await _build_bundle_from_pins(resolved_pins)
 
-    # 4. Check for existing install (resume/idempotent path)
+    # 4. Refuse re-install when an install already exists for this collection.
+    # A single install per collection is enforced by a unique constraint, and
+    # re-running materialize_import would create a second full set of entities
+    # while orphaning the previously stamped ones. Callers must uninstall
+    # before installing again.
     existing_stmt = select(CollectionInstall).where(
         CollectionInstall.organisation_id == org_id,
         CollectionInstall.collection_id == collection_id,
     )
     existing = (await session.execute(existing_stmt)).scalar_one_or_none()
-    install_id = existing.install_id if existing else uuid.uuid4()
+    if existing is not None:
+        raise CollectionInstallError(
+            f"Collection '{collection.name}' is already installed "
+            f"(install {existing.install_id}). Uninstall it before installing again."
+        )
+    install_id = uuid.uuid4()
 
     # 5. Call materialize_import (all-or-nothing transaction)
     warnings: list[str] = []
@@ -313,37 +321,25 @@ async def install_collection(
     # connector access until an operator explicitly grants access.
     community_sourced = collection.source in ("community", "registry")
 
-    # 10. Create or update CollectionInstall record
-    if existing is not None:
-        existing.status = "installed"
-        existing.community_sourced = community_sourced
-        existing.resolved_manifest = {
-            "schemas": result.get("schemas", {}),
-            "agents": result.get("agents", {}),
-            "pipeline_id": result.get("pipeline_id"),
-            "warnings": warnings,
-        }
-        existing.connector_checklist = connector_checklist
-        existing.installed_entities = entities
-    else:
-        session.add(
-            CollectionInstall(
-                install_id=install_id,
-                collection_id=collection_id,
-                collection_version=collection.version,
-                organisation_id=org_id,
-                status="installed",
-                community_sourced=community_sourced,
-                resolved_manifest={
-                    "schemas": result.get("schemas", {}),
-                    "agents": result.get("agents", {}),
-                    "pipeline_id": result.get("pipeline_id"),
-                    "warnings": warnings,
-                },
-                connector_checklist=connector_checklist,
-                installed_entities=entities,
-            )
+    # 10. Create the CollectionInstall provenance record
+    session.add(
+        CollectionInstall(
+            install_id=install_id,
+            collection_id=collection_id,
+            collection_version=collection.version,
+            organisation_id=org_id,
+            status="installed",
+            community_sourced=community_sourced,
+            resolved_manifest={
+                "schemas": result.get("schemas", {}),
+                "agents": result.get("agents", {}),
+                "pipeline_id": result.get("pipeline_id"),
+                "warnings": warnings,
+            },
+            connector_checklist=connector_checklist,
+            installed_entities=entities,
         )
+    )
 
     await session.flush()
 

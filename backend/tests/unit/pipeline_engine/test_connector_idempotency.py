@@ -548,6 +548,7 @@ class _FakeConnectorRun:
     """Stand-in for ``modulo.db.models.run.Run`` used by ``_write_raw_output_marker``."""
 
     def __init__(self, markers: dict, idempotency_key: str | None) -> None:
+        self.id = "run-123"
         self.raw_output_markers = markers
         self.idempotency_key = idempotency_key
 
@@ -560,8 +561,26 @@ class _FakeConnectorResult:
         return self._run
 
 
+class _FakeLegacyMarkersResult:
+    """Result for the raw-SQL legacy markers SELECT (FAR-583 B1): serves the
+    fake row's markers dict through the reader's ``scalar_one_or_none``."""
+
+    def __init__(self, markers: dict) -> None:
+        self._markers = markers
+
+    def scalar_one_or_none(self) -> dict | None:
+        return dict(self._markers) or None
+
+
 class _FakeConnectorSession:
-    """A session that surfaces the run row for the write marker persist, no DB."""
+    """A session that surfaces the run row for the write marker persist, no DB.
+
+    FAR-583 B1: the marker path's legacy read-merge-write runs through the
+    repo's raw parameterised-SQL helpers (``read_legacy_raw_output_markers`` /
+    ``write_legacy_raw_output_markers``) — the fake routes those statements
+    against the in-memory row (read: serve the dict; write: apply it) and
+    hosts the new-table savepoint leg.
+    """
 
     def __init__(self, run: _FakeConnectorRun) -> None:
         self._run = run
@@ -575,7 +594,22 @@ class _FakeConnectorSession:
     def begin(self) -> Self:
         return self
 
-    async def execute(self, statement: object, *args: object, **kwargs: object) -> _FakeConnectorResult:
+    def begin_nested(self) -> Self:
+        return self
+
+    async def execute(self, statement: object, *args: object, **kwargs: object) -> Any:
+        stmt_text = str(statement)
+        if "UPDATE runs" in stmt_text and "raw_output_markers" in stmt_text:
+            markers: Any = None
+            try:
+                markers = statement.compile().params.get("raw_output_markers")  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover — the fake never blocks on compile drift
+                markers = None
+            if isinstance(markers, dict):
+                self._run.raw_output_markers = dict(markers)
+            return _FakeConnectorResult(self._run)
+        if "raw_output_markers" in stmt_text and "FROM runs" in stmt_text:
+            return _FakeLegacyMarkersResult(self._run.raw_output_markers)
         return _FakeConnectorResult(self._run)
 
     async def flush(self) -> None:

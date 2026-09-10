@@ -441,6 +441,142 @@ async def test_denied_then_allowed_for_privileged(monkeypatch: pytest.MonkeyPatc
     assert call_kwargs["payload_json"]["affected_edges"][0]["weakening_types"] == ["human_only"]
 
 
+async def test_replace_denies_node_level_hitl_config_weakening_for_non_privileged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-609 review: the FAR-402 node-level ``hitl_config`` human_only
+    relaxation is guarded on graph save — a non-privileged save that flips an
+    existing hitl node's human_only true->false is denied like the edge-level
+    write."""
+    old_hitl_node = {
+        "id": _NODE_A,
+        "node_type": "hitl",
+        "hitl_config": {"human_only": True, "claim_team_id": None},
+    }
+    new_hitl_node = {
+        "id": _NODE_A,
+        "node_type": "hitl",
+        "hitl_config": {"human_only": False, "claim_team_id": None},
+    }
+    pipeline = _PipelineRow()
+    pipeline.graph_nodes_json = [old_hitl_node]
+    session = _build_session(_pipeline_result(pipeline), _edges_result([]))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=pipeline.id,
+            org_id=uuid.uuid4(),
+            nodes=[new_hitl_node],
+            edges=[],
+            is_privileged=False,
+            caller_type="rest",
+        )
+    assert excinfo.value.reason_code == REASON_INSUFFICIENT_ROLE
+    assert excinfo.value.weakening_types == ["human_only"]
+    assert (_NODE_A, _NODE_A, "hitl_node") in excinfo.value.correlation_keys
+    session.add_all.assert_not_called()
+    audit.assert_not_awaited()
+
+
+async def test_replace_allows_node_level_weakening_for_privileged_with_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The privileged node-level relaxation proceeds and is audited with the
+    ``affected_nodes`` payload key."""
+    old_hitl_node = {
+        "id": _NODE_A,
+        "node_type": "hitl",
+        "hitl_config": {"human_only": True},
+    }
+    new_hitl_node = {
+        "id": _NODE_A,
+        "node_type": "hitl",
+        "hitl_config": {"human_only": False},
+    }
+    pipeline = _PipelineRow()
+    pipeline.graph_nodes_json = [old_hitl_node]
+    old, new = _weakening_edges(dict(_GATE), dict(_GATE))  # no edge-level weakening
+    session = _build_session(_pipeline_result(pipeline), _edges_result(old))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    async def fake_role(session_obj: object, account_id: str, organisation_id: str) -> str:
+        return "admin"
+
+    monkeypatch.setattr("modulo.db.crud.org_membership.resolve_role_from_membership", fake_role)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[new_hitl_node],
+        edges=new,
+        is_privileged=True,
+        caller_type="rest",
+        account_id=uuid.uuid4(),
+    )
+    assert result is not None
+    audit.assert_awaited_once()
+    payload = audit.call_args.kwargs["payload_json"]
+    assert payload["denied"] is False
+    assert payload["affected_nodes"][0]["node_id"] == _NODE_A
+    assert payload["affected_nodes"][0]["weakening_types"] == ["human_only"]
+
+
+async def test_replace_denies_hitl_node_removal_for_non_privileged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting a hitl node removes its runtime gate entirely — structural
+    weakening the edge diff cannot see."""
+    old_hitl_node = {"id": _NODE_B, "node_type": "hitl", "hitl_config": {"human_only": False}}
+    pipeline = _PipelineRow()
+    pipeline.graph_nodes_json = [old_hitl_node]
+    session = _build_session(_pipeline_result(pipeline), _edges_result([]))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    with pytest.raises(HitlGateWeakeningDenied) as excinfo:
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=pipeline.id,
+            org_id=uuid.uuid4(),
+            nodes=[],  # hitl node removed from the graph
+            edges=[],
+            is_privileged=False,
+            caller_type="rest",
+        )
+    assert excinfo.value.reason_code == REASON_CORRELATION_KEY_MISMATCH
+    assert excinfo.value.weakening_types == ["structural:hitl_node_removed"]
+
+
+async def test_replace_untouched_hitl_config_is_not_weakening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A save that leaves the hitl node's hitl_config intact writes without
+    denial and without audit."""
+    old_hitl_node = {"id": _NODE_A, "node_type": "hitl", "hitl_config": {"human_only": True}}
+    pipeline = _PipelineRow()
+    pipeline.graph_nodes_json = [old_hitl_node]
+    session = _build_session(_pipeline_result(pipeline), _edges_result([]))
+    audit = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+
+    result = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline.id,
+        org_id=uuid.uuid4(),
+        nodes=[copy.deepcopy(old_hitl_node)],
+        edges=[],
+        is_privileged=False,
+        caller_type="rest",
+    )
+    assert result is not None
+    audit.assert_not_awaited()
+
+
 async def test_allowed_weakening_with_live_admin_role_under_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     """caller_type='rest' + live admin role: the live role is authoritative."""
     pipeline = _PipelineRow()

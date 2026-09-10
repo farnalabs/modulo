@@ -4011,14 +4011,53 @@ def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> An
     )
 
 
+def _final_row_absent_expr() -> Any:
+    """The ONE correlated NOT-EXISTS expression for the run's far-583 store
+    finalisation marker: ``NOT EXISTS(run_node_output __final__ row)``.
+
+    Single definition shared by the nodeless zombie predicate (line-level
+    WHERE leg) and the reconcile org SELECT (the ``outputs_absent`` labeled
+    column — the label is applied at the call site) so the two correlated
+    subqueries can never drift (qa iteration 1 rider).
+    """
+    from sqlalchemy import exists as sa_exists
+    from sqlalchemy import select as sa_select
+
+    from modulo.db.models.run import Run
+    from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
+
+    return ~sa_exists(
+        sa_select(1)
+        .select_from(RunNodeOutput)
+        .where(
+            RunNodeOutput.run_id == Run.id,
+            RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+        )
+    )
+
+
 def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     """Match a claimed-but-never-executed SAQ zombie.
 
     Predicate: ``running`` + ``dispatcher='saq'`` + NO finalised node output
-    (``node_token_usage``/``outputs_json`` both NULL — these are only written at
-    run finalisation) + started more than *age_minutes* ago + ZERO LangGraph
-    checkpoints for the run's thread (checkpoints are written when a node
-    COMPLETES a super-step).
+    (``node_token_usage`` NULL — written at run finalisation — AND no
+    ``__final__`` row for the run in ``run_node_outputs``, the FAR-583 store
+    the finalisation writes since PR A) + started more than *age_minutes* ago
+    + ZERO LangGraph checkpoints for the run's thread (checkpoints are written
+    when a node COMPLETES a super-step).
+
+    FAR-583 B1: the legacy ``runs.outputs_json IS NULL`` leg is GONE (the
+    column's ORM mapping is cut) — the ``NOT EXISTS(run_node_outputs
+    __final__ row)`` leg SUBSUMES it for running runs. Healing note (qa
+    iteration 1 rider): the catch-up sweep selects TERMINAL runs ONLY
+    (``run_node_outputs_backfill`` filters ``status.in_(TERMINAL_STATUSES)``),
+    so it does NOT heal this RUNNING-run class. A running run is protected
+    from a spurious match by the other two legs: the ``node_token_usage``
+    leg (written at run finalisation) and the checkpoint leg (LangGraph
+    writes a checkpoint when a node COMPLETES a super-step) — the NOT-EXISTS
+    leg is the wedge backstop for a run that produced neither before stalling
+    (marker-only runs remain re-dispatch-eligible — markers never produce
+    ``__final__`` rows).
 
     The age gate MUST exceed the pipeline's max node timeout: a legitimate
     long-running first node writes its first checkpoint only after it finishes,
@@ -4052,13 +4091,16 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
             text("c.thread_id = runs.langgraph_thread_id"),
         )
     )
+    # Parameterised through the model columns (a Select carries bound params
+    # natively — a text()-leg would need bindparams() on a TextClause, which
+    # a Select does not expose).
     return and_(
         Run.status == "running",
         Run.dispatcher == "saq",
         Run.node_token_usage.is_(None),
-        Run.outputs_json.is_(None),
         Run.started_at < func_now_minus(age_minutes * 60),
         ~sa_exists(checkpoint_subquery),
+        _final_row_absent_expr(),
     )
 
 
@@ -4069,10 +4111,15 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     (e.g. stale heartbeat AND nodeless); this discriminates the nodeless repair
     (budget- and throttle-bounded re-dispatch; terminal-fail on budget
     exhaustion) from the stale repair (unconditional re-dispatch).
+
+    FAR-583 B1: the outputs side is checked via the row's ``outputs_absent``
+    flag (the reconcile SELECT carries ``NOT EXISTS( run_node_outputs
+    __final__ row )`` — see :func:`_nodeless_zombie_predicate`), not the cut
+    ``row.outputs_json`` attribute.
     """
     if row.status != "running":
         return False
-    if row.node_token_usage is not None or row.outputs_json is not None:
+    if row.node_token_usage is not None or not row.outputs_absent:
         return False
     if row.started_at is None:
         return False
@@ -4083,7 +4130,7 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     """Decide whether a nodeless zombie's retry BUDGET allows a re-dispatch.
 
     A nodeless zombie executed ZERO nodes (no checkpoint, no node_token_usage,
-    no outputs_json), so re-dispatch is SAFE — there is nothing to
+    no finalised store row), so re-dispatch is SAFE — there is nothing to
     double-execute, and these pipelines only create PRs after a node runs.
 
     This is the pure budget decision ONLY — it does NOT bound the enqueue
@@ -5475,7 +5522,7 @@ async def _run_outputs_sweep_for_org(org_id: uuid.UUID, summary: dict[str, Any])
     remaining orgs continue. Best-effort: a failure never raises past this
     helper (cancellation excepted).
     """
-    from modulo.db.crud.run_node_outputs import backfill_run_node_outputs_batch
+    from modulo.db.crud.run_node_outputs_backfill import backfill_run_node_outputs_batch
 
     factory = _open_system_factory()
     healed = 0
@@ -5611,7 +5658,14 @@ async def _reconcile_org(
                         Run.dispatched_at,
                         Run.heartbeat_at,
                         Run.node_token_usage,
-                        Run.outputs_json,
+                        # FAR-583 B1: the legacy outputs_json column is gone
+                        # from the scan — the row-level nodeless recheck
+                        # discriminates on whether the run still has NO
+                        # ``__final__`` row in the per-node store (the
+                        # finalisation-represented marker). Computed as a
+                        # correlated NOT EXISTS (see _nodeless_zombie_predicate;
+                        # one shared expression — qa iteration 1 rider).
+                        _final_row_absent_expr().label("outputs_absent"),
                         Run.started_at,
                         Run.claim_count,
                         Run.dispatcher,
@@ -6066,7 +6120,7 @@ async def _reconcile_nodeless_repair(
     """Repair a claimed-but-nodeless zombie; ``None`` when the row continues.
 
     A nodeless zombie executed ZERO nodes (no checkpoint, no
-    ``node_token_usage``, no ``outputs_json``), so re-dispatch is SAFE (no
+    ``node_token_usage``, no finalised store row), so re-dispatch is SAFE (no
     double-execution; these pipelines only create PRs after a node runs).
     Four-way outcome (FAR-509):
 
