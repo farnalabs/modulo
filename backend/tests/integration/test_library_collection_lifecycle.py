@@ -339,7 +339,8 @@ async def test_full_install_verify_uninstall_round_trip(
                 {"id": new_schema_id},
             )
             r = row.first()
-            assert r is not None and r[0] is not None
+            assert r is not None
+            assert r[0] is not None
 
         for new_agent_id in agent_id_map.values():
             row = await conn.execute(
@@ -347,7 +348,8 @@ async def test_full_install_verify_uninstall_round_trip(
                 {"id": new_agent_id},
             )
             r = row.first()
-            assert r is not None and r[0] is not None
+            assert r is not None
+            assert r[0] is not None
 
         # Verify a pipeline was created
         row = await conn.execute(
@@ -366,8 +368,8 @@ async def test_full_install_verify_uninstall_round_trip(
     result = await uninstall_collection(db_session, org, install_id)
     await db_session.commit()
 
-    assert len(result["deleted"]) > 0
-    assert result["detached"] == []
+    assert result["deleted"]
+    assert not result["detached"]
 
     # Verify install record deleted
     install_check = await db_session.get(CollectionInstall, install_id)

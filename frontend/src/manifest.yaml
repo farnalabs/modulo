@@ -90,7 +90,7 @@ routes:
         name: library-collection-create
         breadcrumb: New Collection
         parent: /library
-        product_map: [feat-library]
+        product_map: [feat-library, feat-library-collections]
         sidebar_group:
         sidebar_order:
         type: form_page
@@ -101,7 +101,7 @@ routes:
         name: library-collection-detail
         breadcrumb: Collection
         parent: /library
-        product_map: [feat-library]
+        product_map: [feat-library, feat-library-collections]
         sidebar_group:
         sidebar_order:
         type: page

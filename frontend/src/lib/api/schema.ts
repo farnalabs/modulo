@@ -5281,6 +5281,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/libraries/collections/{primitive_id}/installs/{install_id}/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant Collection Agents Endpoint
+         * @description Grant tool/connector access for community-sourced collection agents.
+         *
+         *     Flips ``agents_granted`` on the install record.  Only applies to
+         *     community-sourced installs; raises 400 for non-community installs.
+         *     Idempotent: granting an already-granted install returns the record as-is.
+         */
+        post: operations["grant_collection_agents_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries/collections/{primitive_id}/installs/{install_id}": {
         parameters: {
             query?: never;
@@ -9771,6 +9795,16 @@ export interface components {
             organisation_id: string;
             /** Status */
             status: string;
+            /**
+             * Community Sourced
+             * @default false
+             */
+            community_sourced: boolean;
+            /**
+             * Agents Granted
+             * @default false
+             */
+            agents_granted: boolean;
             /** Resolved Manifest */
             resolved_manifest?: {
                 [key: string]: unknown;
@@ -30185,6 +30219,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CollectionInstallListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_collection_agents_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__grant_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+                install_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionInstallResponse"];
                 };
             };
             /** @description Validation Error */

@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.workflow_import_export import materialize_import
+from modulo.core.workflow_import_export import BUNDLE_FORMAT_VERSION, materialize_import
 from modulo.db.models.agent import Agent
 from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
@@ -124,7 +124,7 @@ async def _build_bundle_from_pins(
                 }
             )
         elif pin.primitive_type == "workflow":
-            workflow_content = content.get("bundle", content)
+            workflow_content = content.get("bundle") or content
             pipeline_info = workflow_content.get("pipeline", {})
             pipeline_graph_nodes = pipeline_info.get("graph_nodes_json", [])
             graph_nodes.extend(pipeline_graph_nodes)
@@ -132,6 +132,7 @@ async def _build_bundle_from_pins(
             schemas.extend(workflow_content.get("schemas", []))
 
     return {
+        "format_version": BUNDLE_FORMAT_VERSION,
         "pipeline": {
             "name": "Collection Install",
             "description": "Entities installed from a library collection",
