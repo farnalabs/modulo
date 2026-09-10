@@ -41,9 +41,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and FAR-760's 0205_library_collection_type chains off 0204_runner_probe_cache,
 # and FAR-644's 0206_deleted_defaults_signal_check chains off 0205,
 # and FAR-761's 0207_collection_install_tracking chains off 0206, and #337's
-# 0208_notification_indexes_and_constraint chains off 0207, and FAR-775's
-# 0209_variant_batch_state chains off 0208 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0209_variant_batch_state"
+# 0208_notification_indexes_and_constraint chains off 0207, 0209_collection_install_id_entity_columns
+# chains off 0208, and FAR-775's 0210_variant_batch_state chains off 0209 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0210_variant_batch_state"
 
 
 def _source(name: str) -> str:

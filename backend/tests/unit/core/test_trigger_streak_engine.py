@@ -315,9 +315,10 @@ class TestMigrationBackfillGrace:
         # 0206_deleted_defaults_signal_check chains on top of 0205, and FAR-761's
         # 0207_collection_install_tracking chains on top of 0206, and #337's
         # 0208_notification_indexes_and_constraint chains on top of 0207, and
-        # FAR-775's 0209_variant_batch_state chains on top of 0208, so it is now
-        # the single linear head of the chain.
-        assert heads == ["0209_variant_batch_state"], f"expected a single head, got {heads}"
+        # FAR-762/FAR-761's 0209_collection_install_id_entity_columns chains on
+        # top of 0208, and FAR-775's 0210_variant_batch_state chains on top of
+        # that, so it is now the single linear head of the chain.
+        assert heads == ["0210_variant_batch_state"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------
