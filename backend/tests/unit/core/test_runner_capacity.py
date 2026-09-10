@@ -45,6 +45,7 @@ _CLAIM = "claim-token-abc"
 class _FakeGateSettings:
     runner_capacity_gate_enabled = False
     runner_capacity_lock_timeout_ms = 2000
+    runner_marker_sweep_lock_timeout_seconds = 5
 
 
 def _fake_session(factory_results: dict[str, Any] | None = None) -> Any:
@@ -87,6 +88,7 @@ def _patch_gate(monkeypatch: pytest.MonkeyPatch, *, flag_on: bool = False) -> No
     class _S:
         runner_capacity_gate_enabled = flag_on
         runner_capacity_lock_timeout_ms = 2000
+        runner_marker_sweep_lock_timeout_seconds = 5
 
     import modulo.core.runner_capacity as rc
 
@@ -1534,6 +1536,8 @@ async def test_sweep_failed_org_pass_emits_no_marker_cleared_events(
             text_str = str(stmt)
             # The clear UPDATE executes INSIDE the transaction that is about
             # to fail — the outcome is classified but never committed.
+            if "set_config" in text_str:
+                return MagicMock()
             if "SELECT id, status, error_code" in text_str:
                 result = MagicMock()
                 result.all.return_value = [doomed_row]
@@ -1798,6 +1802,208 @@ async def test_resume_gate_lock_timeout_maps_to_retryable_capacity_error(
     from modulo.db.sqlstates import sqlstate_of
 
     assert sqlstate_of(dbapi_cause) == "55P03"
+
+
+# ---------------------------------------------------------------------------
+# FAR-767: lock_timeout regression tests — sweep must not wedge under
+# sandbox contention
+# ---------------------------------------------------------------------------
+
+
+async def test_sweep_org_lock_timeout_fail_open(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-767: when a per-org sweep transaction hits lock_timeout (SQLSTATE
+    55P03) because a sandbox-run holds a conflicting row lock, the org pass
+    fails OPEN — the sweep logs a distinctive event, increments orgs_failed,
+    and continues to the next org instead of blocking past the 120s SAQ
+    timeout.  The sweep returns within the bound."""
+    from sqlalchemy.exc import DBAPIError
+
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+        runner_marker_sweep_lock_timeout_seconds = 1
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    # Build a factory: org-index returns one org, the org session raises a
+    # lock-timeout error on the candidate scan (the FIRST statement after
+    # set_rls_org + set_config that hits a row lock held by a sandbox run).
+    _factory = _FakeSweepFactory([])
+
+    def _lock_timeout_inner() -> Exception:
+        """Mimic the DBAPIError chain asyncpg raises on lock_timeout."""
+        inner = Exception("lock timeout")
+        inner.sqlstate = "55P03"  # type: ignore[attr-defined]
+        return inner
+
+    calls = {"n": 0}
+
+    def _factory_with_lock_timeout() -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Org-index session — normal.
+            org_index = MagicMock()
+
+            async def _org_index_execute(stmt: Any, params: Any = None) -> Any:
+                result = MagicMock()
+                result.all.return_value = [(uuid.uuid4(),)]
+                return result
+
+            org_index.execute = AsyncMock(side_effect=_org_index_execute)
+            return _factory._wrap(org_index)
+
+        # Org session — lock_timeout on the candidate scan.
+        org_session = MagicMock()
+
+        async def _org_execute(stmt: Any, params: Any = None) -> Any:
+            text_str = str(stmt)
+            if "set_config" in text_str:
+                return MagicMock()
+            if "SELECT id, status, error_code" in text_str:
+                raise DBAPIError("stmt", {}, _lock_timeout_inner())
+            # Should not reach here — the lock_timeout aborts the transaction.
+            result = MagicMock()  # pragma: no cover
+            result.all.return_value = []
+            return result
+
+        org_session.execute = AsyncMock(side_effect=_org_execute)
+        org_session.close = AsyncMock()
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=org_session)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        org_session.begin = MagicMock(return_value=begin_cm)
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=org_session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        session_cm.close = AsyncMock()
+        return session_cm
+
+    _factory_with_lock_timeout.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
+
+    import time
+
+    t0 = time.monotonic()
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
+        pytest.raises(RunnerMarkerSweepError) as excinfo,
+    ):
+        await reconcile_runner_dispatch_markers(_factory_with_lock_timeout)  # type: ignore[arg-type]
+    elapsed = time.monotonic() - t0
+
+    # The sweep completed promptly — lock_timeout bounded the wait.
+    assert elapsed < 10, f"sweep took {elapsed:.1f}s — lock_timeout not effective"
+    # The org pass was counted as failed.
+    assert excinfo.value.org_failures == 1
+    # The distinctive lock-timeout event was logged (not the generic org_failed).
+    assert any("marker_sweep_org_lock_timeout" in r.message for r in caplog.records), (
+        "lock_timeout must emit marker_sweep_org_lock_timeout, not generic org_failed"
+    )
+    assert not any("marker_sweep_org_failed" in r.message for r in caplog.records), (
+        "lock_timeout must NOT emit the generic marker_sweep_org_failed"
+    )
+
+
+async def test_sweep_lock_timeout_only_affected_org(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-767: when one org hits lock_timeout but another succeeds, only the
+    locked org is counted failed — the successful org's clears are committed."""
+    from sqlalchemy.exc import DBAPIError
+
+    _patch_gate(monkeypatch, flag_on=False)
+
+    class _S(_FakeGateSettings):
+        runner_marker_stale_seconds = 25 * 3600
+        saq_job_heartbeat = 30
+        saq_reenqueue_window = 600
+        saq_claimed_nodeless_minutes = 20
+        runner_marker_sweep_lock_timeout_seconds = 1
+
+    import modulo.core.runner_capacity as rc
+
+    monkeypatch.setattr(rc, "get_settings", lambda: _S())
+    monkeypatch.setattr(rc, "_sweep_recoverability_predicate", lambda: (MagicMock(), MagicMock()))
+    monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
+
+    org_a = uuid.uuid4()
+    org_b = uuid.uuid4()
+    stale_row = _Row(status="complete", sandbox_dispatch_state=build_dispatch_marker("k", "e2b"))
+
+    def _lock_timeout_inner() -> Exception:
+        inner = Exception("lock timeout")
+        inner.sqlstate = "55P03"  # type: ignore[attr-defined]
+        return inner
+
+    calls = {"n": 0}
+
+    def _two_org_factory() -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Org-index session — two orgs.
+            org_index = MagicMock()
+
+            async def _org_index_execute(stmt: Any, params: Any = None) -> Any:
+                result = MagicMock()
+                result.all.return_value = [(org_a,), (org_b,)]
+                return result
+
+            org_index.execute = AsyncMock(side_effect=_org_index_execute)
+            return _FakeSweepFactory([])._wrap(org_index)
+
+        if calls["n"] == 2:
+            # Org A — lock_timeout on candidate scan.
+            org_session = MagicMock()
+
+            async def _org_a_execute(stmt: Any, params: Any = None) -> Any:
+                text_str = str(stmt)
+                if "set_config" in text_str:
+                    return MagicMock()
+                if "SELECT id, status, error_code" in text_str:
+                    raise DBAPIError("stmt", {}, _lock_timeout_inner())
+                result = MagicMock()  # pragma: no cover
+                result.all.return_value = []
+                return result
+
+            org_session.execute = AsyncMock(side_effect=_org_a_execute)
+            org_session.close = AsyncMock()
+            begin_cm = MagicMock()
+            begin_cm.__aenter__ = AsyncMock(return_value=org_session)
+            begin_cm.__aexit__ = AsyncMock(return_value=False)
+            org_session.begin = MagicMock(return_value=begin_cm)
+            session_cm = MagicMock()
+            session_cm.__aenter__ = AsyncMock(return_value=org_session)
+            session_cm.__aexit__ = AsyncMock(return_value=False)
+            session_cm.close = AsyncMock()
+            return session_cm
+
+        # Org B — succeeds (stale terminal marker cleared).
+        factory_b = _FakeSweepFactory([stale_row])
+        return factory_b._org_session()
+
+    _two_org_factory.kw = {"bind": _FakeLockEngine()}  # type: ignore[attr-defined]
+
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.runner_capacity"),
+        pytest.raises(RunnerMarkerSweepError) as excinfo,
+    ):
+        await reconcile_runner_dispatch_markers(_two_org_factory)  # type: ignore[arg-type]
+
+    # Only org_a hit the lock timeout; org_b succeeded.
+    assert excinfo.value.org_failures == 1
+    assert excinfo.value.scanned == 1  # org_b's row was scanned
+    assert excinfo.value.cleared == 1  # org_b's marker was cleared
 
 
 def _unused(*_a: Any, **_kw: Any) -> None:  # pragma: no cover

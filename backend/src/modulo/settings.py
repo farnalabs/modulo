@@ -335,6 +335,16 @@ class Settings(BaseSettings):
     # back to runs.updated_at) is cleared, and a stale non-terminal RUNNING run
     # is terminalised with it. Default 25h.
     runner_marker_stale_seconds: int = Field(default=90000, alias="RUNNER_MARKER_STALE_SECONDS", ge=3600, le=604800)
+    # FAR-767: per-org lock_timeout for the runner-marker sweep's transactional
+    # statements (candidate scan + CAS updates). A sweep org pass that blocks on
+    # a row lock held by an in-flight sandbox-run transaction must NOT wedge the
+    # 120s dispatcher_reconcile job — the lock wait is bounded to this ceiling
+    # (default 5s) and the org pass fails OPEN (logged, counted in orgs_failed,
+    # skipped for this tick; the 60s cadence self-heals). Follows the executor's
+    # SET LOCAL lock_timeout pattern (executor.py ~line 2937).
+    runner_marker_sweep_lock_timeout_seconds: int = Field(
+        default=5, alias="RUNNER_MARKER_SWEEP_LOCK_TIMEOUT_SECONDS", ge=1, le=30
+    )
     # Machine deployment identity for the runner workspace-identity label
     # (reconciler scoping; hostname fallback when unset).
     runner_machine_id: str = Field(default="", alias="MODULO_RUNNER_MACHINE_ID")

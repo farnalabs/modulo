@@ -21,13 +21,13 @@ Three scans over ``backend/src`` (migrations excluded):
    false-positive) — catches string-embedded SQL the AST identifier scan
    cannot. Comments never execute and are not scanned.
 
-B1 state asserted: the dual-write chokepoint write lines, the reconciles'
-legacy-column scan tuple, the marker helper's ORM attribute leg, and the
-three ``_RUNS_LIST_DEFERRED_COLUMNS`` entries are GONE; the only remaining
-column references are the repo module's own raw Core legacy-table legs, the
-catch-up sweep body (the B1 SRP split ``run_node_outputs_backfill`` module),
-and the shape-key/comment surfaces that mirror the legacy names by contract.
-B2a removes the sweep entries and makes this test fully unconditional.
+B2a state asserted (FAR-694): the dual-write chokepoint write lines, the
+reconciles' legacy-column scan tuple, the marker helper's ORM attribute leg,
+the three ``_RUNS_LIST_DEFERRED_COLUMNS`` entries, the catch-up sweep body
+(the B2a-removed ``run_node_outputs_backfill`` module), and the kill-switch
+surface are GONE; the only remaining column references are the repo module's
+own raw Core legacy-table legs and the shape-key/comment surfaces that mirror
+the legacy names by contract. B2b drops the entries that die with the columns.
 """
 
 import ast
@@ -46,12 +46,6 @@ _WHOLE_FILE_ALLOWLIST: dict[str, str] = {
         "(ORM columns, legit) + the raw Core legacy-table readers that serve "
         "the EMPTY/MISMATCH fallback, the fenced markers join, and the marker "
         "dual-write's legacy leg"
-    ),
-    "db/crud/run_node_outputs_backfill.py": (
-        "the catch-up sweep body (B1 SRP split out of the repo module): its "
-        "selection legs read the legacy blob columns through the raw Core "
-        "legacy table — the same sanctioned surface, extracted; removed at "
-        "B2a/B2b with the sweep itself"
     ),
     "db/models/run_node_outputs.py": "the new-table model + its portable CHECK constraints",
     "core/analytics/maintenance.py": (

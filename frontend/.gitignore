@@ -4,3 +4,7 @@
 # Playwright shared-login auth state (globalSetup storageState; may contain
 # session tokens — never commit).
 storageState-*.json
+
+# Dead npm lockfile — repo is pnpm-managed (packageManager in package.json).
+# An accidental `npm install` must not re-introduce a tracked lockfile.
+package-lock.json

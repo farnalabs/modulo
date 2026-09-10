@@ -69,11 +69,15 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 - [x] Pipeline cost circuit breaker (§8.10): a pipeline crossing its monthly spend
       threshold trips the breaker and permanently pauses triggers until an admin
       re-enables it via `POST /circuit-breaker/{pipeline_id}/reset`
-- [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team`
+- [x] `GET /export?period=this_month|last_month|7d|30d|90d&group_by=team|pipeline|model`
       streams a CSV attachment with a `costs-export-{period}.csv` disposition;
-      the exposed `pipeline`/`model` granularities are refused with an explicit
-      422 (the per-model / per-pipeline export surface is not implemented) so a
-      caller never receives mislabelled team rows or an internal error
+      `team` reuses the daily-ledger grouping (historical shape), `pipeline`
+      aggregates `Σ runs.total_cost_usd` per pipeline over the window
+      (`cost_controller/_cost_export_by_pipeline`), and `model` aggregates the
+      runs' `cost_breakdown` per `self_reported` cost component (the model/LLM
+      spend sources; `cost_controller/_cost_export_by_model`). The pre-2026-09
+      explicit-422 refusal for `pipeline`/`model` is retired — the enum values
+      now stream real rows.
 - [x] Scheduled cost reports: `POST/GET/DELETE /reports` manage org-owned
       daily/weekly/monthly, team/org, csv/json, one-time/recurring reports with
       `recipients` (email) required (min 1)
@@ -92,13 +96,14 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
 
 ## Known Gaps
 
-- **Pipeline- and model-level export granularity is not implemented** — the
-  endpoint's `group_by` enum still advertises `pipeline`/`model` (for forward
-  compatibility), but the CSV export is team-ledger only: those values now fail
-  with an explicit 422 instead of silently returning the team report (`model`)
-  or 500ing via `get_cost_report`'s `ValueError` (`pipeline`). Independent
-  pipeline/model grouping needs a runs-table/cost-component aggregation that is
-  not yet shipped.
+- **`model` export granularity is per cost-component, not per model-backend
+  identifier** — the runs table records spend via `cost_breakdown` components
+  (the org's named spend contributors), so `group_by=model` aggregates per
+  `self_reported` component (the model/LLM spend sources). A truly per-model
+  split requires the producer to record a stable model identifier per run,
+  which is not yet shipped; orgs that configure per-model `self_reported`
+  components get that granularity today. `pipeline` granularity is fully
+  implemented from `runs` (per-pipeline sums of `total_cost_usd`).
 - **No BDD for the ceiling / scheduled-report / anomaly / cost-component surfaces** —
   `cost_controls.feature` covers only token budget, org/team spend limits and the
   circuit breaker; the rest are unit-only.
@@ -121,3 +126,15 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   (`500`) on `pipeline`; unimplemented granularities now fail with an explicit
   422 naming `team` as the supported export grouping. `api/routes/costs.py` +
   `test_costs.py` / `test_costs_routes_coverage.py` updated.
+- 2026-09-10: **improve-architecture (product-map walk)** — closed the export
+  granularity gap: `GET /export` now implements `pipeline` (per-pipeline
+  `Σ runs.total_cost_usd` aggregation over the window) and `model` (per
+  `self_reported` cost-component aggregation over the runs' `cost_breakdown`)
+  on top of the existing `team` ledger export; the retired 422 for those enum
+  values streams real CSV rows instead. `cost_controller.get_cost_export_rows`
+  (+ `_cost_export_by_pipeline` / `_cost_export_by_model`) is unit-covered
+  (`test_cost_controller.py::TestGetCostExportRows`); `test_costs.py` and
+  `test_costs_routes_coverage.py` updated for the new granularities and the
+  error matrix now patches `get_cost_export_rows`. The residual narrowing gap
+  ("model granularity is per cost-component, not per model-backend identifier")
+  is tracked in Known Gaps above.

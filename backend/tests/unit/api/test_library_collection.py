@@ -994,6 +994,68 @@ class TestInstallCollectionService:
         with pytest.raises(CollectionInstallError, match="no manifest pins"):
             asyncio.run(run())
 
+    def test_install_refuses_when_already_installed(self) -> None:
+        from modulo.core.library_service.install import (
+            CollectionInstallError,
+            install_collection,
+        )
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_collection = MagicMock()
+            mock_collection.organisation_id = _ORG_ID
+            mock_collection.primitive_type = "library_collection"
+            mock_collection.status = "published"
+            mock_collection.name = "My Collection"
+            mock_collection.version = "1.0"
+            mock_collection.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
+            mock_session.get = AsyncMock(return_value=mock_collection)
+
+            pin = MagicMock()
+            pin.id = uuid.uuid4()
+            pin.name = "my-schema"
+            pin.primitive_type = "schema"
+            pin.content_json = {}
+            pin_result = MagicMock()
+            pin_result.scalar_one_or_none = MagicMock(return_value=pin)
+
+            existing = MagicMock()
+            existing.install_id = uuid.uuid4()
+            existing_result = MagicMock()
+            existing_result.scalar_one_or_none = MagicMock(return_value=existing)
+
+            # Call 1 resolves the manifest pin; call 2 finds the existing install.
+            mock_session.execute = AsyncMock(side_effect=[pin_result, existing_result])
+
+            await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())
+
+        with pytest.raises(CollectionInstallError, match="already installed"):
+            asyncio.run(run())
+
+
+class TestUninstallCollectionService:
+    def test_uninstall_collection_id_mismatch_raises(self) -> None:
+        from modulo.core.library_service.uninstall import (
+            InstallNotFoundError,
+            uninstall_collection,
+        )
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            install = MagicMock()
+            install.organisation_id = _ORG_ID
+            install.collection_id = uuid.uuid4()
+            mock_session.get = AsyncMock(return_value=install)
+            await uninstall_collection(
+                mock_session,
+                _ORG_ID,
+                uuid.uuid4(),
+                collection_id=uuid.uuid4(),
+            )
+
+        with pytest.raises(InstallNotFoundError):
+            asyncio.run(run())
+
 
 # ---------------------------------------------------------------------------
 # Service: grant_collection_agents unit tests (FAR-764)
@@ -1069,6 +1131,58 @@ class TestGrantCollectionAgents:
 
         with pytest.raises(InstallNotFoundError):
             asyncio.run(run())
+
+    def test_uninstall_skips_missing_entity(self) -> None:
+        from modulo.core.library_service.uninstall import uninstall_collection
+
+        async def run() -> dict:
+            mock_session = AsyncMock()
+            install = MagicMock()
+            install.organisation_id = _ORG_ID
+            install.collection_id = uuid.uuid4()
+            mock_session.get = AsyncMock(return_value=install)
+
+            # Tracking row points at an entity that no longer exists.
+            row = MagicMock()
+            row.entity_type = "schema"
+            row.entity_id = uuid.uuid4()
+            entity_result = MagicMock()
+            entity_result.scalars = MagicMock(return_value=[row])
+            mock_session.execute = AsyncMock(return_value=entity_result)
+            # _entity_exists → False (entity row gone)
+            mock_session.scalar = AsyncMock(return_value=None)
+
+            return await uninstall_collection(mock_session, _ORG_ID, uuid.uuid4())
+
+        result = asyncio.run(run())
+        assert not result["deleted"]
+        assert not result["detached"]
+
+    def test_check_unmodified_true_when_stamped(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = install_id
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is True
+
+    def test_check_unmodified_false_when_detached(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = uuid.uuid4()  # different stamp
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is False
 
 
 # ---------------------------------------------------------------------------

@@ -2201,6 +2201,7 @@ async def uninstall_collection_endpoint(
                 session,
                 org_id=org_id,
                 install_id=req.install_id,
+                collection_id=primitive_id,
             )
     except InstallNotFoundError as exc:
         raise HTTPException(

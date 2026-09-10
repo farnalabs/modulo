@@ -344,11 +344,13 @@ def _new_primitive_source_local(ctx: dict[str, Any]) -> None:
     assert data["source"] == "local", f"Expected source=local, got {data['source']}"
 
 
-@then("the new primitive has forked_from set to the community primitive id")
-def _new_primitive_forked_from(ctx: dict[str, Any]) -> None:
+@then("the new primitive has forked_from unset for the in-memory community primitive")
+def _new_primitive_forked_from_unset(ctx: dict[str, Any]) -> None:
+    """FAR-697 — in-memory builtins have no library_primitives row, so the
+    copy cannot set an FK on forked_from; the link would reject the insert."""
     data = ctx["response"].json()
-    assert data["forked_from"] is not None, "forked_from should not be None"
-    assert str(data["forked_from"]) == str(PRIMITIVE_10)
+    got = data["forked_from"]
+    assert got is None, f"forked_from should be None for an in-memory builtin copy, got {got}"
 
 
 @when("an MCP client sends copy_library_primitive with the community primitive id")

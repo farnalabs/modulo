@@ -78,6 +78,12 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
 
 ## QA History
 
+- 2026-09-10: **improve-architecture (product-map walk)** — registered the preset
+  picker/testids of `AdminModelBackendsView.vue` (`admin-model-backends-*` preset and
+  manual-entry controls) in the manifest `elements:` inventory and added the view to the
+  reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`),
+  so a newly shipped panel on the model-backends page can no longer ship invisible to
+  Remy's docs indexer / `/api/v1/manifest`.
 - 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-model-backends`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/model_backends.py`,

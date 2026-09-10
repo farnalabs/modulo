@@ -399,7 +399,7 @@ class TestExportCosts:
     def test_export_csv(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.get_cost_report",
+                "modulo.api.routes.costs.get_cost_export_rows",
                 return_value=self.ROWS,
             ),
             patch("modulo.api.routes.costs.set_rls_org"),
@@ -414,15 +414,63 @@ class TestExportCosts:
         assert "Alpha Team" in body
         assert "150.0" in body
 
+    def test_export_forwards_group_by_to_aggregator(self, client: TestClient) -> None:
+        for group_by in ("team", "pipeline", "model"):
+            with (
+                patch("modulo.api.routes.costs.get_cost_export_rows", new=AsyncMock(return_value=[])),
+                patch("modulo.api.routes.costs.set_rls_org"),
+            ):
+                resp = client.get(f"/api/v1/admin/costs/export?period=this_month&group_by={group_by}&format=csv")
+            assert resp.status_code == 200, f"group_by={group_by}: {resp.text}"
+            assert "entity_id" in resp.text
+
+    def test_export_pipeline_grouping_streams_csv(self, client: TestClient) -> None:
+        pipeline_rows = [
+            {
+                "entity_id": "00000000-0000-0000-0000-0000000000aa",
+                "entity_name": "Ship Pipeline",
+                "total_spend_usd": 42.5,
+                "total_runs": 3,
+            },
+        ]
+        with (
+            patch(
+                "modulo.api.routes.costs.get_cost_export_rows",
+                return_value=pipeline_rows,
+            ),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/admin/costs/export?period=30d&group_by=pipeline&format=csv")
+
+        assert resp.status_code == 200
+        assert "Ship Pipeline" in resp.text
+        assert "42.5" in resp.text
+
+    def test_export_model_grouping_streams_csv(self, client: TestClient) -> None:
+        model_rows = [
+            {
+                "entity_id": "llm_tokens",
+                "entity_name": "LLM Tokens",
+                "total_spend_usd": 9.99,
+                "total_runs": 4,
+            },
+        ]
+        with (
+            patch(
+                "modulo.api.routes.costs.get_cost_export_rows",
+                return_value=model_rows,
+            ),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/admin/costs/export?period=90d&group_by=model&format=csv")
+
+        assert resp.status_code == 200
+        assert "LLM Tokens" in resp.text
+        assert "9.99" in resp.text
+
     def test_export_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get("/api/v1/admin/costs/export")
         assert resp.status_code in (401, 403)
-
-    def test_export_unimplemented_group_by_returns_422(self, client: TestClient) -> None:
-        for group_by in ("pipeline", "model"):
-            resp = client.get(f"/api/v1/admin/costs/export?period=this_month&group_by={group_by}&format=csv")
-            assert resp.status_code == 422
-            assert "team" in resp.json()["detail"]
 
     def test_export_invalid_period_returns_422(self, client: TestClient) -> None:
         resp = client.get("/api/v1/admin/costs/export?period=invalid")
