@@ -134,6 +134,19 @@ def _init_once_register_legacy_commands() -> None:
 _init_once_register_legacy_commands()
 
 
+def _init_once_register_users_command() -> None:
+    """Register the FAR-680 ``users`` command group (lazy module import)."""
+    from modulo.cli.users import users
+
+    existing = cli.commands.get("users")
+    if existing is not None and existing is not users:
+        raise RuntimeError("command 'users' is already registered on the modulo group")
+    cli.add_command(users, name="users")
+
+
+_init_once_register_users_command()
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------

@@ -58,8 +58,6 @@ def _run(status: str, *, thread_id: str | None = None) -> Run:
         input_hash="a" * 64,
         langgraph_thread_id=tid,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
-        outputs_json={"k": "v" * 100},
-        node_telemetry_json={"n": 1},
         cost_breakdown=[{"amount": "1"}],
     )
 

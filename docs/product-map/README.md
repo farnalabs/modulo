@@ -149,7 +149,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `feat-product-analytics`, `feat-pipelines`, `feat-runs`, `feat-dashboard`,
 > `feat-costs`, `feat-notifications`, `feat-observability`, `feat-plugins`,
 > `feat-triggers`, `feat-analytics`, `feat-audit` gained their behaviour-tracker
-> entries — see the graph index below.
+> entries — see the graph index below. The 2026-09-10 walk added `feat-apply`
+> (registered in the manifest by FAR-681 but never tracked).
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
@@ -174,6 +175,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-runs](build/runs.md) => PRD N/A
 
 ### Configure
+- [feat-apply](configure/apply.md) => PRD N/A
 - [feat-connectors](configure/connectors.md) => PRD N/A
 - [feat-guardrails](configure/guardrails.md) => PRD N/A
 - [feat-mcp](configure/mcp.md) => PRD N/A

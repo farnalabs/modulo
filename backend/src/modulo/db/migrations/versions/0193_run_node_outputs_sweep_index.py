@@ -6,7 +6,7 @@ Creates the catch-up sweep's backing partial index on ``runs``:
         ON runs (organisation_id, completed_at)
         WHERE status IN (<the 9-state terminal set>)
 
-The sweep body (``crud.run_node_outputs.backfill_run_node_outputs_batch``)
+The sweep body (``crud.run_node_outputs_backfill.backfill_run_node_outputs_batch``)
 selects ``organisation_id = :org AND status IN (terminal) ORDER BY
 completed_at ASC LIMIT :cap`` every dispatcher_reconcile tick. Without an
 index the selection degrades to a full scan of every org's terminal runs on
@@ -56,7 +56,7 @@ _INDEX_NAME = "ix_runs_org_completed_at_terminal_sweep"
 # Inline terminal-status literal (migrations cannot import app constants).
 # MUST equal sorted(db.models.run.TERMINAL_STATUSES) — pinned by the unit
 # test, and MUST match the sweep body's selection
-# (crud.run_node_outputs.backfill_run_node_outputs_batch uses
+# (crud.run_node_outputs_backfill.backfill_run_node_outputs_batch uses
 # db.models.run.TERMINAL_STATUSES directly).
 _TERMINAL_RUN_STATUSES = (
     "budget_exceeded",

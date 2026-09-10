@@ -112,6 +112,17 @@ class _RetentionResult:
         self._statement = statement
 
     def scalar_one_or_none(self) -> _FakeRunRow | None:
+        # FAR-583 B1: the marker path's legacy read (
+        # ``read_legacy_raw_output_markers``) is a single-column SELECT served
+        # through ``scalar_one_or_none`` — serve the fake row's markers dict
+        # (SQL NULL = the fake row's None = no markers).
+        if (
+            self._row is not None
+            and "runs.raw_output_markers" in self._statement
+            and "run_node_outputs" not in self._statement
+        ):
+            markers = self._row.raw_output_markers
+            return dict(markers) if isinstance(markers, dict) else None
         return self._row
 
     def all(self) -> list[Any]:
@@ -192,7 +203,21 @@ class _RetentionSession:
         return bind
 
     async def execute(self, stmt: object, params: dict | None = None) -> _RetentionResult:
-        return _RetentionResult(self._row if "FROM runs" in str(stmt) else None, statement=str(stmt))
+        stmt_text = str(stmt)
+        # FAR-583 B1: the marker path's legacy write (
+        # ``write_legacy_raw_output_markers``) is a parameterised UPDATE of the
+        # runs row — apply the bound markers onto the in-memory row (there is
+        # no schema to UPDATE here).
+        if "UPDATE runs" in stmt_text and "raw_output_markers" in stmt_text and self._row is not None:
+            markers: Any = None
+            try:
+                markers = stmt.compile().params.get("raw_output_markers")  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover — the fake never blocks on compile drift
+                markers = None
+            if isinstance(markers, dict):
+                self._row.raw_output_markers = dict(markers)
+            return _RetentionResult(self._row, statement=stmt_text)
+        return _RetentionResult(self._row if "FROM runs" in stmt_text else None, statement=stmt_text)
 
     async def flush(self) -> None:
         return None

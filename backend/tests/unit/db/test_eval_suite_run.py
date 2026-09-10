@@ -837,7 +837,8 @@ def test_single_migration_head() -> None:
     # 0205_library_collection_type (FAR-760) chains off 0204_runner_probe_cache.
     chaining_off_0204 = [p for p in revisions if parents[p] == "0204_runner_probe_cache"]
     assert [_basename(p) for p in chaining_off_0204] == ["0205_library_collection_type.py"]
-    # 0206_deleted_defaults_signal_check (FAR-644) chains off 0205_library_collection_type.
+    # 0206_deleted_defaults_signal_check (FAR-644) chains off 0205_library_collection_type;
+    # 0207_collection_install_tracking (FAR-761) chains off 0206_deleted_defaults_signal_check.
     chaining_off_0205 = [p for p in revisions if parents[p] == "0205_library_collection_type"]
     assert [_basename(p) for p in chaining_off_0205] == ["0206_deleted_defaults_signal_check.py"]
     # 0207_collection_install_tracking (FAR-761) chains off 0206_deleted_defaults_signal_check.
