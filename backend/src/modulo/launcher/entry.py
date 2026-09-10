@@ -36,6 +36,17 @@ intermediate fork waits for a readiness handshake from the detached
 grandchild and forwards boot failures to the original stderr BEFORE the
 caller's process exits, so a failed detached boot can never surface as a
 silent success. TODO(P3): the Windows service seam.
+
+Terminal degraded (FAR-674): a crash-cap trip is TERMINAL. The supervisor
+persists the degrade record (``degraded.json`` sibling of state.json —
+reason + the last crash backtraces) and the launcher exits with
+``policy.DEGRADED_EXIT_CODE``; a subsequent normal start REFUSES with the
+persisted reason and the resume path until ``modulo start --clear-degraded``
+(or ``modulo clear-degraded``) clears the record. When the degrade happens
+within ``policy.UPGRADE_DEGRADED_WINDOW_SECONDS`` of a recorded upgrade
+boot (the ``upgrade.json`` marker FAR-675's machinery writes), the exit
+and refusal messages additionally carry the refuse/restore guidance and the
+pre-upgrade snapshot path.
 """
 
 from __future__ import annotations
@@ -150,13 +161,16 @@ def run_start(
     *,
     detach: bool = False,
     bin_dir: Path | None = None,
+    clear_degraded: bool = False,
     serve: Callable[[str, int, threading.Event], None] | None = None,
 ) -> int:
     """Boot the single-install stack and serve the API until signalled.
 
-    Returns 0 on a clean shutdown (SIGINT/SIGTERM), 1 on a failed or
-    degraded boot. ``serve`` is the uvicorn seam (tests substitute a stub);
-    it blocks until its ``stop_event`` is set.
+    Returns ``policy.DEGRADED_EXIT_CODE`` on a terminal-degraded exit, 0 on
+    a clean shutdown (SIGINT/SIGTERM), 1 on a failed boot. ``serve`` is the
+    uvicorn seam (tests substitute a stub); it blocks until its
+    ``stop_event`` is set. ``clear_degraded`` removes a persisted
+    terminal-degraded record before the boot (the resume path).
     """
     # FIRST ACTION — before any other modulo import (ADR 031 Decision 2).
     env_safety.scrub_os_environment()
@@ -169,11 +183,11 @@ def run_start(
         )
     effective_data_dir = data_dir if data_dir is not None else default_data_dir()
     if detach:
-        return _start_detached(effective_data_dir, bin_dir)
-    return _run_foreground(effective_data_dir, bin_dir=bin_dir, serve=serve)
+        return _start_detached(effective_data_dir, bin_dir, clear_degraded=clear_degraded)
+    return _run_foreground(effective_data_dir, bin_dir=bin_dir, clear_degraded=clear_degraded, serve=serve)
 
 
-def _start_detached(data_dir: Path, bin_dir: Path | None) -> int:
+def _start_detached(data_dir: Path, bin_dir: Path | None, *, clear_degraded: bool = False) -> int:
     """Double-fork + setsid detach; logs land in the data dir (POSIX only).
 
     The caller must NOT be told "success" before the detached boot has
@@ -207,7 +221,7 @@ def _start_detached(data_dir: Path, bin_dir: Path | None) -> int:
     data_dir.mkdir(parents=True, exist_ok=True)
     _redirect_stdio(data_dir / LAUNCHER_LOG_FILENAME)
     try:
-        code = _run_foreground(data_dir, bin_dir=bin_dir, serve=None, ready_fd=write_fd)
+        code = _run_foreground(data_dir, bin_dir=bin_dir, clear_degraded=clear_degraded, serve=None, ready_fd=write_fd)
     except BaseException as exc:
         message = f"failed: {exc}".encode()
         with contextlib.suppress(OSError):
@@ -262,24 +276,46 @@ def _run_foreground(
     data_dir: Path,
     *,
     bin_dir: Path | None,
+    clear_degraded: bool = False,
     serve: Callable[[str, int, threading.Event], None] | None,
     ready_fd: int | None = None,
 ) -> int:
+    import time as time_module
+
     from modulo.launcher import initdb as initdb_module
-    from modulo.launcher import secrets_file
+    from modulo.launcher import policy, secrets_file
     from modulo.launcher import state as state_module
-    from modulo.launcher.supervisor import DataDirLock, LauncherError, Supervisor, knobs_from_env, reconcile_orphans
+    from modulo.launcher.supervisor import (
+        DEGRADED_FILENAME,
+        UPGRADE_MARKER_FILENAME,
+        DataDirLock,
+        LauncherError,
+        Supervisor,
+        clear_degraded_record,
+        knobs_from_env,
+        read_degraded_record,
+        reconcile_orphans,
+    )
 
     run_state = _RunState()
     run_state.install_signal_handlers()
     data_dir.mkdir(parents=True, exist_ok=True)
     effective_bin_dir = resolve_bin_dir(bin_dir)
+    degraded_path = data_dir / DEGRADED_FILENAME
 
     lock = DataDirLock(data_dir, mode="serve")
     lock.acquire()
     supervisor: Supervisor | None = None
     try:
         try:
+            # Terminal-degraded gate (FAR-674): the resume path clears the
+            # record first; a present record refuses the normal start.
+            if clear_degraded:
+                clear_degraded_record(degraded_path)
+                _log.info("entry.degraded_state_cleared path=%s", degraded_path)
+            degraded_record = read_degraded_record(degraded_path)
+            if degraded_record is not None:
+                raise BootError(_degraded_refusal_message(degraded_record, degraded_path, data_dir))
             env_safety.assert_no_ambient_service_urls(data_dir)
             _verify_bundled_binaries(effective_bin_dir)
             secrets = secrets_file.load_or_create(data_dir / SECRETS_FILENAME)
@@ -294,6 +330,10 @@ def _run_foreground(
                 knobs,
                 runtime_path=data_dir / "runtime.json",
                 on_degraded=_degraded_callback(run_state),
+                degraded_path=degraded_path,
+                degraded_context=_upgrade_context_provider(
+                    data_dir / UPGRADE_MARKER_FILENAME, time_module.time, policy.UPGRADE_DEGRADED_WINDOW_SECONDS
+                ),
             )
             run_state.bind_supervisor(supervisor)
             composed = _compose_and_pin_config(data_dir, launcher_state, secrets)
@@ -335,15 +375,10 @@ def _run_foreground(
             )
             supervisor.shutdown()
             if run_state.degraded.is_set() or supervisor.degraded_reason is not None or monitor_abnormal:
-                sys.stderr.write(
-                    "launcher degraded: "
-                    + (supervisor.degraded_reason or "a supervisor failure was detected")
-                    + "\nRun `modulo doctor` for a per-check diagnosis, `modulo status` for the "
-                    + "component table, and inspect launcher.log in "
-                    + str(data_dir)
-                    + ".\n"
-                )
-                return 1
+                reason = supervisor.degraded_reason or "a supervisor failure was detected"
+                sys.stderr.write(_degraded_exit_message(reason, degraded_path, data_dir))
+                sys.stderr.flush()
+                return policy.DEGRADED_EXIT_CODE
             return 0
         except (BootError, LauncherError, env_safety.AmbientEnvironmentError):
             raise
@@ -397,6 +432,113 @@ def _degraded_callback(run_state: _RunState) -> Callable[[str], None]:
         run_state.serve_stop.set()
 
     return _on_degraded
+
+
+# ---------------------------------------------------------------------------
+# Terminal-degraded messaging + post-upgrade context (FAR-674)
+# ---------------------------------------------------------------------------
+
+
+def _degraded_exit_message(reason: str, degraded_path: Path, data_dir: Path) -> str:
+    """The terminal-degraded stderr text (actionable, names the resume path)."""
+    from modulo.launcher.supervisor import read_degraded_record
+
+    lines = [
+        f"launcher degraded: {reason}",
+        "This is a TERMINAL degraded state: the launcher exited without restarting its stack.",
+        f"Inspect launcher.log in {data_dir} and the persisted crash backtraces in",
+        f"{degraded_path}; run `modulo doctor` for a per-check diagnosis and `modulo status`",
+        "for the component table.",
+        "After fixing the cause, resume with `modulo start --clear-degraded`.",
+    ]
+    guidance = _post_upgrade_guidance(read_degraded_record(degraded_path))
+    if guidance:
+        lines.append(guidance)
+    return "\n".join(lines) + "\n"
+
+
+def _degraded_refusal_message(record: dict[str, Any], degraded_path: Path, data_dir: Path) -> str:
+    """Why a normal start refuses while terminal-degraded, plus the resume path."""
+    import time as time_module
+
+    reason = record.get("reason", "unknown")
+    lines = [
+        "Refusing to start: the launcher is in a TERMINAL DEGRADED state (a crash-cap trip",
+        f"was persisted for this data dir). Reason: {reason}",
+    ]
+    degraded_at = record.get("degraded_at")
+    if isinstance(degraded_at, (int, float)) and not isinstance(degraded_at, bool):
+        stamp = time_module.strftime("%Y-%m-%dT%H:%M:%SZ", time_module.gmtime(float(degraded_at)))
+        lines.append(f"Degraded at: {stamp}")
+    lines.extend(
+        [
+            f"The last crash backtraces are persisted in {degraded_path}; the launcher log",
+            f"is {data_dir / 'launcher.log'}.",
+            "Inspect the cause (`modulo doctor`, `modulo status`), fix it, then resume with",
+            "`modulo start --clear-degraded` (or `modulo clear-degraded`).",
+        ]
+    )
+    guidance = _post_upgrade_guidance(record)
+    if guidance:
+        lines.append(guidance)
+    return "\n".join(lines)
+
+
+def _post_upgrade_guidance(record: dict[str, Any] | None) -> str:
+    """Post-upgrade refuse/restore guidance (detection only; FAR-675 lands later)."""
+    if not isinstance(record, dict) or not record.get("post_upgrade"):
+        return ""
+    snapshot = record.get("pre_upgrade_snapshot")
+    lines = [
+        (
+            "This degraded state began within the upgrade watch window "
+            "(an upgrade boot was recently recorded for this data dir)."
+        )
+    ]
+    if isinstance(snapshot, str) and snapshot:
+        lines.append(
+            f"A pre-upgrade snapshot was recorded at {snapshot} — restore it manually with "
+            f"`modulo restore {snapshot}` (see `modulo restore --help`), or downgrade the binary "
+            "to the pre-upgrade version."
+        )
+    else:
+        lines.append(
+            "No pre-upgrade snapshot was recorded — restore from your external backups, or "
+            "downgrade the binary to the pre-upgrade version."
+        )
+    lines.append("The full upgrade/rollback machinery is the upgrade epic (FAR-675).")
+    return "\n".join(lines)
+
+
+def _upgrade_context_provider(
+    marker_path: Path, now: Callable[[], float], window_seconds: float
+) -> Callable[[], dict[str, Any]]:
+    """Degrade-context provider: post-upgrade detection (read-only).
+
+    Consumes the ``upgrade.json`` marker FAR-675's machinery writes. When a
+    degrade occurs within *window_seconds* of the recorded upgrade boot the
+    context marks it ``post_upgrade`` and carries the pre-upgrade snapshot
+    path (if the marker recorded one) so the degrade message includes the
+    refuse/restore guidance.
+    """
+    from modulo.launcher.supervisor import read_upgrade_marker
+
+    def _context() -> dict[str, Any]:
+        marker = read_upgrade_marker(marker_path)
+        if marker is None:
+            return {}
+        upgraded_at = marker.get("upgraded_at")
+        if not isinstance(upgraded_at, (int, float)) or isinstance(upgraded_at, bool):
+            return {}
+        if now() - float(upgraded_at) > window_seconds:
+            return {}
+        context: dict[str, Any] = {"post_upgrade": True}
+        snapshot = marker.get("pre_upgrade_snapshot")
+        if isinstance(snapshot, str) and snapshot:
+            context["pre_upgrade_snapshot"] = snapshot
+        return context
+
+    return _context
 
 
 def _load_or_init_state(data_dir: Path, secrets: Any, state_module: Any) -> Any:

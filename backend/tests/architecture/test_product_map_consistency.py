@@ -310,12 +310,14 @@ def test_mapped_route_elements_cover_owning_view_testids():
     """
     owned_pages = {
         "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
+        "/admin/connectors": "frontend/src/views/AdminConnectorsView.vue",
         "/admin/costs/limits": "frontend/src/views/AdminSpendLimitsView.vue",
         "/admin/errors": "frontend/src/views/AdminErrorsView.vue",
         "/admin/feature-flags": "frontend/src/views/AdminFeatureFlagsView.vue",
         "/admin/housekeeping": "frontend/src/views/AdminHousekeepingView.vue",
         "/admin/notification-delivery": "frontend/src/views/AdminNotificationDeliveryLogView.vue",
         "/admin/remy": "frontend/src/views/AdminRemyView.vue",
+        "/admin/runners/profiles": "frontend/src/views/AdminRunnersView.vue",
         "/admin/run-retention": "frontend/src/views/AdminRunRetentionView.vue",
         "/admin/system/config": "frontend/src/views/AdminSystemConfigView.vue",
         "/admin/users": "frontend/src/views/AdminUsersView.vue",
@@ -326,6 +328,10 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/settings/email": "frontend/src/views/SettingsEmailView.vue",
         "/settings/hitl-review": "frontend/src/views/SettingsHitlReviewView.vue",
         "/settings/mcp": "frontend/src/views/SettingsMcpView.vue",
+        "/admin/model-backends": "frontend/src/views/AdminModelBackendsView.vue",
+        "/library": "frontend/src/views/LibraryView.vue",
+        "/library/collections/new": "frontend/src/views/CollectionCreateView.vue",
+        "/lifecycle-maps/:id": "frontend/src/views/lifecycle-map/LifecycleMapView.vue",
     }
     elements = _load_elements()
     for route, view_rel in owned_pages.items():
