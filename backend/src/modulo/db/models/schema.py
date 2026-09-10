@@ -42,6 +42,7 @@ class Schema(OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     abstract_name: Mapped[str | None] = mapped_column(String(255))
+    collection_install_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True
     )

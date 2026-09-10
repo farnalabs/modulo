@@ -13,7 +13,7 @@ Feature: Copy to Adapt Library Primitives
     Then the response status is 200
     And a new library primitive is created in the org
     And the new primitive has source "local"
-    And the new primitive has forked_from set to the community primitive id
+    And the new primitive has forked_from unset for the in-memory community primitive
 
   Scenario: MCP client with viewer role cannot copy a primitive
     Given a specific primitive exists with id "00000000-0000-0000-0000-000000000010"

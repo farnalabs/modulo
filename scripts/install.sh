@@ -2,11 +2,12 @@
 #
 # Modulo native installer (Linux) — single-install distribution, P1a.
 # Spec: ADR 031 (single-install native distribution); this ticket: FAR-670.
+#        + pre-upgrade upgrade path (FAR-672).
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
 #   bash modulo-install.sh [options]
-#   ./install.sh [--force] [--from-file <tarball>]
+#   ./install.sh [--force] [--from-file <tarball>] [--skip-backup]
 #
 # NOTE: download to a file and run it (as above) rather than streaming a
 # download straight into a shell. install.sh verifies every download's sha256
@@ -23,6 +24,37 @@
 #      The `current` symlink is the primitive reused by the upgrade machinery
 #      (FAR-672): upgrades re-point it; nothing else is version-specific.
 #   4. Writes a PATH shim at ~/.local/bin/modulo pointing at current/launcher.
+#
+# Upgrade path (FAR-672, ADR 031 Decision 7 — the P1a upgrade = rerun this
+# installer against an existing install):
+#
+#   1. When a populated bundled data dir exists, the installer ENFORCES a
+#      pre-upgrade pg_dump via the OLD installation's bundled runtime
+#      (python -m modulo.launcher.upgrade): bundled pg_dump client, dump
+#      written to a versioned snapshot dir inside the data dir, verified
+#      non-empty. ANY dump failure aborts the whole installer — no binary
+#      swap happens without a verified snapshot.
+#      The dump needs the bundled Postgres REACHABLE, so run the installer
+#      FIRST (while the launcher is running), then:
+#   2. The installer REFUSES to perform the versioned-dir/current-symlink
+#      swap while the data-dir lock is held (the live launcher holds it).
+#      Stop the launcher ('modulo stop'), then re-run this installer with
+#      --skip-backup: the flag is THE loud, explicit acknowledgement that
+#      the enforced dump already succeeded and must not be redone (the
+#      stopped stack cannot be dumped).
+#   3. The swap itself reuses the versioned dir + `current` symlink
+#      primitive from step 3 above; the PATH shim never changes.
+#
+# Migrating from Docker Compose (pg_dump -> `modulo restore`):
+#   docker compose exec postgres pg_dump -U modulo --clean --if-exists \
+#            --no-owner --no-acl modulo > modulo-backup.sql
+#   docker compose down
+#   bash modulo-install.sh            # fresh native install
+#   modulo restore <backup-dir> --data-dir <fresh-data-dir> --yes
+#   (or restore the SQL directly: pg_restore-free plain SQL is replayed via
+#   psql by the backup CLI). The compose cluster is alpine/musl and the
+#   native one is glibc — the restore hard-warns on collation-version drift
+#   (pg_collation versions) and prints reindexdb guidance (FAR-672).
 #
 # Bundle artifact layout (must stay in sync with .github/workflows/bundle-release.yml):
 #   modulo-<version>-linux-<arch>.tar.gz
@@ -48,6 +80,7 @@ MARKER_FILE="${INSTALL_ROOT}/.modulo-native-install"
 
 FORCE=0
 FROM_FILE=""
+SKIP_BACKUP=0
 
 die() {
   printf 'ERROR: %b\n' "$*" >&2
@@ -69,12 +102,19 @@ Options:
                            modulo-<version>-linux-<arch>.tar.gz instead of
                            downloading from GitHub Releases (offline installs;
                            see ADR 031 for the signed-manifest roadmap).
+  --skip-backup            Skip the upgrade's ENFORCED pre-upgrade pg_dump
+                           (upgrade-only). LOUD: pass this ONLY when a previous
+                           installer run already produced the snapshot and the
+                           bundled stack is stopped (the swap needs it stopped,
+                           and a stopped stack cannot be dumped). The installer
+                           prints the snapshot path it left behind.
   --help                   Show this help.
 
 Environment overrides:
   VERSION=<tag>            Install a specific bundle tag (default: latest release).
   MODULO_INSTALL_ROOT      Install root (default: ~/.local/opt/modulo).
   MODULO_BIN_DIR           Shim directory (default: ~/.local/bin).
+  MODULO_DATA_DIR          Bundled data dir (default: ~/.local/share/modulo/data).
 
 When running the downloaded script, pass options like:  bash modulo-install.sh --force
 EOF
@@ -123,6 +163,78 @@ verify_sums_in_dir() {
   fi
 }
 
+# --- upgrade machinery (FAR-672) --------------------------------------------
+
+DATA_DIR="${MODULO_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/modulo/data}"
+LOCK_FILE="${DATA_DIR}.lock"
+
+# lock_holder_pid — the holder PID recorded in the data-dir lock file, or 0.
+# The native launcher writes {"pid": N, "mode": ..., "starttime": ...} there
+# while it holds the exclusive flock; it truncates on a CLEAN release, so a
+# recorded PID is either a live holder or (after SIGKILL) a stale identity.
+lock_holder_pid() {
+  local pid
+  [ -f "${LOCK_FILE}" ] || return 1
+  pid="$(grep -o '"pid": *[0-9]*' "${LOCK_FILE}" 2>/dev/null | grep -o '[0-9]*' | head -n 1)" || return 1
+  [ -n "${pid}" ] || return 1
+  printf '%s' "${pid}"
+}
+
+# lock_holder_mode — the holder's recorded lock mode (backup/restore/serve),
+# for the refusal transcript. Empty when the record lacks a mode field.
+lock_holder_mode() {
+  [ -f "${LOCK_FILE}" ] || return 1
+  grep -o '"mode": *"[^"]*"' "${LOCK_FILE}" 2>/dev/null | head -n 1 | sed 's/"mode": *//' || true
+}
+
+# refuse_when_locked — the swap phase NEVER races a live launcher.
+# Linux-first (P1a): liveness = /proc/<pid>. On a non-Linux host /proc/<pid>
+# never matches, so a record would read as stale — but this installer refuses
+# non-Linux platforms in preflight() anyway, so that branch is unreachable.
+# The holder PID is RE-READ after the /proc check: a lock can change hands
+# between the grep and the /proc check, and the die/info text must describe
+# the record that is actually on disk now.
+refuse_when_locked() {
+  local holder_pid holder_mode
+  holder_pid="$(lock_holder_pid)" || return 0
+  [ -n "${holder_pid}" ] || return 0
+  holder_mode="$(lock_holder_mode)"
+  if [ -d "/proc/${holder_pid}" ]; then
+    holder_pid="$(lock_holder_pid)" || return 0
+    holder_mode="$(lock_holder_mode)"
+    die "Refusing: the data dir is locked by another launcher (holder PID ${holder_pid}${holder_mode:+, mode ${holder_mode}}).\nStop it first:  modulo stop\nThen re-run this installer. The enforced pre-upgrade snapshot already on disk is reused when you pass --skip-backup:\n  bash modulo-install.sh --skip-backup"
+  fi
+  info "INFO: stale lock record (holder PID ${holder_pid}${holder_mode:+, mode ${holder_mode}} is gone) — the kernel released the lock; proceeding."
+}
+
+# run_pre_upgrade_dump — the INSTALLER-ENFORCED pre-upgrade pg_dump (ADR 031
+# Decision 7). Runs the OLD (current) installation's bundled runtime upgrade
+# helper: bundled pg_dump client, versioned snapshot inside the data dir,
+# non-empty verification in the helper itself. ANY failure aborts here and
+# nothing version-specific is laid out. The snapshot path is the helper's
+# final stdout line (the installer reports it; the operator aborts with it).
+run_pre_upgrade_dump() {
+  local old_root="${INSTALL_ROOT}/current"
+  local py="${old_root}/runtime/bin/python3"
+  local helper="${old_root}/backend/src/modulo/launcher/upgrade.py"
+  local rc snapshot_path
+  [ -x "${py}" ] || die "cannot run the pre-upgrade pg_dump: no bundled runtime at ${py} (no prior native install to upgrade — remove the populated data dir or ignore)"
+  [ -f "${helper}" ] || die "cannot run the pre-upgrade pg_dump: the installed bundle predates the launcher upgrade helper (${helper})"
+  info "Pre-upgrade pg_dump (enforced by FAR-672) — the bundled stack must be running..."
+  if snapshot_path="$(PYTHONPATH="${old_root}/backend/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      MODULO_BUNDLED_BIN_DIR="${old_root}/pg" \
+      "${py}" -m modulo.launcher.upgrade --data-dir "${DATA_DIR}")"; then
+    :
+  else
+    rc=$?
+    die "pre-upgrade pg_dump FAILED (exit ${rc}) — upgrade ABORTED, no binary swap was made. The installer aborted BEFORE installing anything; fix the dump failure and re-run. If a verified snapshot ALREADY exists in ${DATA_DIR} and the bundled stack is stopped (a stopped stack cannot be dumped), re-run with --skip-backup:\n  bash modulo-install.sh --skip-backup"
+  fi
+  [ -d "${snapshot_path}" ] || die "pre-upgrade pg_dump succeeded but the snapshot path is missing: '${snapshot_path}'"
+  UPGRADE_SNAPSHOT_PATH="${snapshot_path}"
+  info "Pre-upgrade snapshot verified: ${UPGRADE_SNAPSHOT_PATH}"
+  info "  Restore later with: modulo restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
+}
+
 resolve_latest_tag() {
   # Follow the /releases/latest redirect (no API token, no API rate limit):
   # https://github.com/farnalabs/modulo/releases/latest -> .../tag/<tag>
@@ -166,6 +278,10 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die "--from-file requires a path to modulo-<version>-linux-<arch>.tar.gz"
       FROM_FILE="$2"
       shift 2
+      ;;
+    --skip-backup)
+      SKIP_BACKUP=1
+      shift
       ;;
     --help | -h)
       usage
@@ -241,6 +357,49 @@ bundle_dir="${1%/}"
 [ -f "${bundle_dir}/SHA256SUMS" ] || die "malformed bundle: SHA256SUMS missing from the archive"
 verify_sums_in_dir "${bundle_dir}"
 info "bundle internal SHA256SUMS verified"
+
+# --- upgrade guard (FAR-672): enforced pre-upgrade dump + lock refusal ------
+#
+# Only when BOTH an existing populated data dir and a prior native install
+# exist: that is the rerun-the-installer upgrade. A populated-but-first-time
+# native install (e.g. a DR restore finished on a machine that has never had
+# this installer) boots its data dir as-is; `current` is created fresh over
+# an empty versions/ tree, so the swap below is inert in that case.
+
+# newest pre-upgrade snapshot in the data dir (mtime order), for the
+# --skip-backup path: the operator must KNOW which snapshot is authoritative.
+newest_pre_upgrade_snapshot() {
+  ls -1dt "${DATA_DIR}"/pre-upgrade-dump-* 2>/dev/null | head -n 1
+}
+
+UPGRADE_SNAPSHOT_PATH=""
+if [ -f "${DATA_DIR}/state.json" ]; then
+  if [ -f "${INSTALL_ROOT}/current/runtime/bin/python3" ]; then
+    if [ "${SKIP_BACKUP}" -eq 1 ]; then
+      printf 'WARNING: --skip-backup: installing WITHOUT creating a new pre-upgrade snapshot.\nYou (the operator) passed the loud explicit flag: confirm a verified snapshot already\nexists in %s and that the bundled stack is stopped (a stopped stack cannot be dumped;\nthe previous installer run printed its snapshot path and left it in the data dir).\n' "${DATA_DIR}" >&2
+      newest_snapshot="$(newest_pre_upgrade_snapshot)"
+      if [ -n "${newest_snapshot}" ]; then
+        UPGRADE_SNAPSHOT_PATH="${newest_snapshot}"
+        info "Newest pre-upgrade snapshot found in ${DATA_DIR}: ${UPGRADE_SNAPSHOT_PATH}"
+        info "Restore later with: modulo restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
+      else
+        info "No pre-upgrade snapshot directory found in ${DATA_DIR} — verify manually that a snapshot exists before continuing."
+      fi
+    else
+      run_pre_upgrade_dump
+    fi
+  fi
+  # The swap phase NEVER races a live launcher's data-dir lock — whenever a
+  # bootstrapped data dir exists, whether or not this run produced a dump and
+  # whether or not a prior native install existed. (The dump branch NEEDS
+  # the running stack, so the refusal sits AFTER the dump, before the swap.)
+  refuse_when_locked
+  if [ -n "${UPGRADE_SNAPSHOT_PATH}" ]; then
+    info "Upgrade snapshot requirement satisfied (snapshot: ${UPGRADE_SNAPSHOT_PATH})"
+  else
+    info "Upgrade snapshot requirement satisfied (--skip-backup run; the existing snapshot in ${DATA_DIR} must be verified by the operator)"
+  fi
+fi
 
 # --- lay out the versioned install + `current` symlink ----------------------
 
@@ -323,6 +482,9 @@ info ""
 info "Modulo bundle ${VERSION_NUM} installed."
 info "  Bundle: ${INSTALL_ROOT}/current"
 info "  Shim:   ${shim}"
+if [ -n "${UPGRADE_SNAPSHOT_PATH}" ]; then
+  info "  Pre-upgrade snapshot: ${UPGRADE_SNAPSHOT_PATH}"
+fi
 if [ "${bin_on_path}" -eq 0 ] && [ "${path_updated}" -eq 0 ]; then
   info ""
   info "NOTE: ${BIN_DIR} is not on your PATH and no shell rc file was updated."

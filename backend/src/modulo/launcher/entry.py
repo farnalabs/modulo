@@ -338,9 +338,10 @@ def _run_foreground(
                 sys.stderr.write(
                     "launcher degraded: "
                     + (supervisor.degraded_reason or "a supervisor failure was detected")
-                    + "\nRun `modulo status` and inspect launcher.log in "
+                    + "\nRun `modulo doctor` for a per-check diagnosis, `modulo status` for the "
+                    + "component table, and inspect launcher.log in "
                     + str(data_dir)
-                    + " (modulo doctor arrives in a later update).\n"
+                    + ".\n"
                 )
                 return 1
             return 0

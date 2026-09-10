@@ -11,7 +11,11 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR, MSG_RESOURCE_ALREADY_EXISTS
+from modulo.api.constants import (
+    MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+    MSG_INTERNAL_SERVER_ERROR,
+    MSG_RESOURCE_ALREADY_EXISTS,
+)
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.api_key import (
@@ -35,7 +39,6 @@ from modulo.settings import Settings, get_settings
 
 _CODE_API_KEYS_CREATE_API = "api_keys.create_api_key_endpoint"
 _MSG_API_KEYS_NOT_AVAILABLE = "API keys are not available. Run database migrations to enable this feature."
-_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable. Please try again."
 _CODE_API_KEYS_UPDATE_API = "api_keys.update_api_key_endpoint"
 _CODE_API_KEYS_REVOKE_API = "api_keys.revoke_api_key_endpoint"
 
@@ -364,7 +367,7 @@ async def _mint_api_key(
         logger.warning("create_api_key SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -464,7 +467,7 @@ async def list_api_keys_endpoint(
         logger.warning("list_api_keys SQLAlchemyError", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -584,7 +587,7 @@ async def _apply_key_update(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise
@@ -653,7 +656,7 @@ async def revoke_api_key_endpoint(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
         ) from None
     except HTTPException:
         raise

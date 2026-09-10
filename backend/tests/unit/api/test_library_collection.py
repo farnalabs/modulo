@@ -616,4 +616,492 @@ class TestValidateManifestPins:
                 return await _validate_manifest_pins([{"slug": "my-schema", "version": "1.0"}], MagicMock(), _ORG_ID)
 
         errors = asyncio.run(run())
-        assert errors == []
+        assert not errors
+
+
+# ---------------------------------------------------------------------------
+# Route: POST /collections/{id}/install (FAR-762)
+# ---------------------------------------------------------------------------
+
+
+def _make_install_record(
+    *,
+    install_id: uuid.UUID | None = None,
+    collection_id: uuid.UUID | None = None,
+    status: str = "installed",
+) -> MagicMock:
+    rec = MagicMock()
+    rec.install_id = install_id or uuid.uuid4()
+    rec.collection_id = collection_id or uuid.uuid4()
+    rec.collection_version = "1.0"
+    rec.organisation_id = _ORG_ID
+    rec.status = status
+    rec.resolved_manifest = {"schemas": {}, "agents": {}}
+    rec.connector_checklist = []
+    rec.installed_entities = []
+    rec.created_at = _NOW
+    return rec
+
+
+class TestInstallCollectionEndpoint:
+    def test_install_success(self, client: TestClient) -> None:
+        mock_install = _make_install_record()
+        with (
+            patch(
+                "modulo.api.routes.library.install_collection",
+                new_callable=AsyncMock,
+                return_value=mock_install,
+            ),
+            patch(
+                "modulo.api.routes.library.compute_runnable",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{mock_install.collection_id}/install",
+            )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["status"] == "installed"
+        assert data["runnable"] is True
+        assert data["install_id"] == str(mock_install.install_id)
+
+    def test_install_not_published(self, client: TestClient) -> None:
+        from modulo.core.library_service.install import CollectionNotPublishedError
+
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.install_collection",
+            new_callable=AsyncMock,
+            side_effect=CollectionNotPublishedError("not published"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/install",
+            )
+        assert resp.status_code == 400
+
+    def test_install_pin_resolution_error(self, client: TestClient) -> None:
+        from modulo.core.library_service.install import PinResolutionError
+
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.install_collection",
+            new_callable=AsyncMock,
+            side_effect=PinResolutionError("pin not found"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/install",
+            )
+        assert resp.status_code == 422
+
+    def test_install_generic_error(self, client: TestClient) -> None:
+        from modulo.core.library_service.install import CollectionInstallError
+
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.install_collection",
+            new_callable=AsyncMock,
+            side_effect=CollectionInstallError("something went wrong"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/install",
+            )
+        assert resp.status_code == 400
+
+    def test_install_runner_denied(self, runner_client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        resp = runner_client.post(
+            f"/api/v1/libraries/collections/{coll_id}/install",
+        )
+        assert resp.status_code in (401, 403)
+
+    def test_install_programming_error(self, client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.install_collection",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/install",
+            )
+        assert resp.status_code == 501
+
+    def test_install_sqlalchemy_error(self, client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.install_collection",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/install",
+            )
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Route: POST /collections/{id}/uninstall (FAR-762)
+# ---------------------------------------------------------------------------
+
+
+class TestUninstallCollectionEndpoint:
+    def test_uninstall_success(self, client: TestClient) -> None:
+        install_id = uuid.uuid4()
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.uninstall_collection",
+            new_callable=AsyncMock,
+            return_value={
+                "install_id": str(install_id),
+                "deleted": [],
+                "detached": [],
+            },
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/uninstall",
+                json={"install_id": str(install_id)},
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["install_id"] == str(install_id)
+        assert not data["deleted"]
+        assert not data["detached"]
+
+    def test_uninstall_not_found(self, client: TestClient) -> None:
+        from modulo.core.library_service.uninstall import InstallNotFoundError
+
+        install_id = uuid.uuid4()
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.uninstall_collection",
+            new_callable=AsyncMock,
+            side_effect=InstallNotFoundError("not found"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/uninstall",
+                json={"install_id": str(install_id)},
+            )
+        assert resp.status_code == 404
+
+    def test_uninstall_generic_error(self, client: TestClient) -> None:
+        from modulo.core.library_service.uninstall import UninstallError
+
+        install_id = uuid.uuid4()
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.uninstall_collection",
+            new_callable=AsyncMock,
+            side_effect=UninstallError("failed"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/uninstall",
+                json={"install_id": str(install_id)},
+            )
+        assert resp.status_code == 400
+
+    def test_uninstall_runner_denied(self, runner_client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        resp = runner_client.post(
+            f"/api/v1/libraries/collections/{coll_id}/uninstall",
+            json={"install_id": str(uuid.uuid4())},
+        )
+        assert resp.status_code in (401, 403)
+
+    def test_uninstall_programming_error(self, client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.uninstall_collection",
+            new_callable=AsyncMock,
+            side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/uninstall",
+                json={"install_id": str(uuid.uuid4())},
+            )
+        assert resp.status_code == 501
+
+    def test_uninstall_sqlalchemy_error(self, client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.uninstall_collection",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("db down"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{coll_id}/uninstall",
+                json={"install_id": str(uuid.uuid4())},
+            )
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Route: GET /collections/{id}/installs (FAR-762)
+# ---------------------------------------------------------------------------
+
+
+class TestListCollectionInstallsEndpoint:
+    def test_list_installs_programming_error(self, client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.select",
+            return_value=MagicMock(),
+        ):
+            client.mock_session.execute = AsyncMock(
+                side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
+            )
+            resp = client.get(
+                f"/api/v1/libraries/collections/{coll_id}/installs",
+            )
+        assert resp.status_code == 501
+
+    def test_list_installs_sqlalchemy_error(self, client: TestClient) -> None:
+        coll_id = uuid.uuid4()
+        with patch(
+            "modulo.api.routes.library.select",
+            return_value=MagicMock(),
+        ):
+            client.mock_session.execute = AsyncMock(
+                side_effect=SQLAlchemyError("db down"),
+            )
+            resp = client.get(
+                f"/api/v1/libraries/collections/{coll_id}/installs",
+            )
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Route: GET /collections/{id}/installs/{install_id} (FAR-762)
+# ---------------------------------------------------------------------------
+
+
+class TestGetCollectionInstallEndpoint:
+    def test_get_install_success(self, client: TestClient) -> None:
+        mock_install = _make_install_record()
+        with patch(
+            "modulo.api.routes.library.compute_runnable",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            client.mock_session.get = AsyncMock(return_value=mock_install)
+            resp = client.get(
+                f"/api/v1/libraries/collections/{mock_install.collection_id}/installs/{mock_install.install_id}",
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["install_id"] == str(mock_install.install_id)
+        assert data["runnable"] is True
+
+    def test_get_install_not_found(self, client: TestClient) -> None:
+        client.mock_session.get = AsyncMock(return_value=None)
+        resp = client.get(
+            f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}",
+        )
+        assert resp.status_code == 404
+
+    def test_get_install_wrong_collection(self, client: TestClient) -> None:
+        mock_install = _make_install_record()
+        wrong_collection_id = uuid.uuid4()
+        client.mock_session.get = AsyncMock(return_value=mock_install)
+        resp = client.get(
+            f"/api/v1/libraries/collections/{wrong_collection_id}/installs/{mock_install.install_id}",
+        )
+        assert resp.status_code == 404
+
+    def test_get_install_programming_error(self, client: TestClient) -> None:
+        client.mock_session.get = AsyncMock(
+            side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
+        )
+        resp = client.get(
+            f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}",
+        )
+        assert resp.status_code == 501
+
+    def test_get_install_sqlalchemy_error(self, client: TestClient) -> None:
+        client.mock_session.get = AsyncMock(
+            side_effect=SQLAlchemyError("db down"),
+        )
+        resp = client.get(
+            f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}",
+        )
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Service: install_collection unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestInstallCollectionService:
+    def test_install_not_published_raises(self) -> None:
+        from modulo.core.library_service.install import (
+            CollectionNotPublishedError,
+            install_collection,
+        )
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_collection = MagicMock()
+            mock_collection.organisation_id = _ORG_ID
+            mock_collection.primitive_type = "library_collection"
+            mock_collection.status = "draft"
+            mock_session.get = AsyncMock(return_value=mock_collection)
+            await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())
+
+        with pytest.raises(CollectionNotPublishedError):
+            asyncio.run(run())
+
+    def test_install_not_collection_raises(self) -> None:
+        from modulo.core.library_service.install import (
+            CollectionInstallError,
+            install_collection,
+        )
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_collection = MagicMock()
+            mock_collection.organisation_id = _ORG_ID
+            mock_collection.primitive_type = "workflow"
+            mock_collection.status = "published"
+            mock_session.get = AsyncMock(return_value=mock_collection)
+            await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())
+
+        with pytest.raises(CollectionInstallError, match="not a collection"):
+            asyncio.run(run())
+
+    def test_install_empty_pins_raises(self) -> None:
+        from modulo.core.library_service.install import (
+            CollectionInstallError,
+            install_collection,
+        )
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_collection = MagicMock()
+            mock_collection.organisation_id = _ORG_ID
+            mock_collection.primitive_type = "library_collection"
+            mock_collection.status = "published"
+            mock_collection.manifest_pins = []
+            mock_session.get = AsyncMock(return_value=mock_collection)
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = None
+            mock_session.execute = AsyncMock(return_value=mock_result)
+            await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())
+
+        with pytest.raises(CollectionInstallError, match="no manifest pins"):
+            asyncio.run(run())
+
+    def test_install_refuses_when_already_installed(self) -> None:
+        from modulo.core.library_service.install import (
+            CollectionInstallError,
+            install_collection,
+        )
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            mock_collection = MagicMock()
+            mock_collection.organisation_id = _ORG_ID
+            mock_collection.primitive_type = "library_collection"
+            mock_collection.status = "published"
+            mock_collection.name = "My Collection"
+            mock_collection.version = "1.0"
+            mock_collection.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
+            mock_session.get = AsyncMock(return_value=mock_collection)
+
+            pin = MagicMock()
+            pin.id = uuid.uuid4()
+            pin.name = "my-schema"
+            pin.primitive_type = "schema"
+            pin.content_json = {}
+            pin_result = MagicMock()
+            pin_result.scalar_one_or_none = MagicMock(return_value=pin)
+
+            existing = MagicMock()
+            existing.install_id = uuid.uuid4()
+            existing_result = MagicMock()
+            existing_result.scalar_one_or_none = MagicMock(return_value=existing)
+
+            # Call 1 resolves the manifest pin; call 2 finds the existing install.
+            mock_session.execute = AsyncMock(side_effect=[pin_result, existing_result])
+
+            await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())
+
+        with pytest.raises(CollectionInstallError, match="already installed"):
+            asyncio.run(run())
+
+
+class TestUninstallCollectionService:
+    def test_uninstall_collection_id_mismatch_raises(self) -> None:
+        from modulo.core.library_service.uninstall import (
+            InstallNotFoundError,
+            uninstall_collection,
+        )
+
+        async def run() -> None:
+            mock_session = AsyncMock()
+            install = MagicMock()
+            install.organisation_id = _ORG_ID
+            install.collection_id = uuid.uuid4()
+            mock_session.get = AsyncMock(return_value=install)
+            await uninstall_collection(
+                mock_session,
+                _ORG_ID,
+                uuid.uuid4(),
+                collection_id=uuid.uuid4(),
+            )
+
+        with pytest.raises(InstallNotFoundError):
+            asyncio.run(run())
+
+    def test_uninstall_skips_missing_entity(self) -> None:
+        from modulo.core.library_service.uninstall import uninstall_collection
+
+        async def run() -> dict:
+            mock_session = AsyncMock()
+            install = MagicMock()
+            install.organisation_id = _ORG_ID
+            install.collection_id = uuid.uuid4()
+            mock_session.get = AsyncMock(return_value=install)
+
+            # Tracking row points at an entity that no longer exists.
+            row = MagicMock()
+            row.entity_type = "schema"
+            row.entity_id = uuid.uuid4()
+            entity_result = MagicMock()
+            entity_result.scalars = MagicMock(return_value=[row])
+            mock_session.execute = AsyncMock(return_value=entity_result)
+            # _entity_exists → False (entity row gone)
+            mock_session.scalar = AsyncMock(return_value=None)
+
+            return await uninstall_collection(mock_session, _ORG_ID, uuid.uuid4())
+
+        result = asyncio.run(run())
+        assert not result["deleted"]
+        assert not result["detached"]
+
+    def test_check_unmodified_true_when_stamped(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = install_id
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is True
+
+    def test_check_unmodified_false_when_detached(self) -> None:
+        from modulo.core.library_service.uninstall import _check_unmodified
+
+        async def run() -> bool:
+            install_id = uuid.uuid4()
+            entity = MagicMock()
+            entity.collection_install_id = uuid.uuid4()  # different stamp
+            mock_session = AsyncMock()
+            mock_session.scalar = AsyncMock(return_value=entity)
+            return await _check_unmodified(mock_session, "schema", uuid.uuid4(), install_id)
+
+        assert asyncio.run(run()) is False

@@ -342,17 +342,21 @@ async def _re_read_primitive(
     session: AsyncSession,
     org_id: uuid.UUID,
     primitive_id: uuid.UUID,
-) -> LibraryPrimitive:
+) -> tuple[LibraryPrimitive, bool]:
     """Re-read the source inside the copy transaction to avoid TOCTOU.
 
     Falls back to the in-memory cache for modulo/community primitives.
+    Returns ``(primitive, in_db)`` — ``in_db`` is False when the source came
+    from the in-memory builtin cache (it has no ``library_primitives`` row,
+    so ``forked_from`` cannot reference it: the FK would fail).
     """
     refreshed = await get_library_primitive(session, primitive_id)
-    if refreshed is None:
-        refreshed = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
+    if refreshed is not None:
+        return refreshed, True
+    refreshed = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
     if refreshed is None:
         raise LookupError(f"Primitive {primitive_id} not found for org {org_id} during copy")
-    return refreshed
+    return refreshed, False
 
 
 async def _increment_registry_downloads(session: AsyncSession, refreshed: LibraryPrimitive) -> None:
@@ -371,6 +375,8 @@ def _build_copy_args(
     new_version: str,
     target_team_id: uuid.UUID | None,
     created_by: uuid.UUID | None,
+    *,
+    forked_from: uuid.UUID | None,
 ) -> dict[str, Any]:
     """Build the create_library_primitive kwargs for an adapted org copy."""
     return {
@@ -385,7 +391,7 @@ def _build_copy_args(
         "tags": list(refreshed.tags or []),
         "content_json": dict(refreshed.content_json) if refreshed.content_json is not None else {},
         "source_url": None,
-        "forked_from": refreshed.id,
+        "forked_from": forked_from,
         "checksum": None,
         "ed25519_signature": None,
         "verified": None,
@@ -427,11 +433,23 @@ async def copy_to_adapt(
     async def _do(s: AsyncSession) -> LibraryPrimitive:
         if created_by is not None:
             await set_rls_user_context(s, created_by, org_role)
-        refreshed = await _re_read_primitive(s, org_id, primitive_id)
+        refreshed, in_db = await _re_read_primitive(s, org_id, primitive_id)
         new_version = _bump_version(refreshed.version)
         await _increment_registry_downloads(s, refreshed)
         return await create_library_primitive(
-            s, **_build_copy_args(refreshed, org_id, new_version, target_team_id, created_by)
+            s,
+            **_build_copy_args(
+                refreshed,
+                org_id,
+                new_version,
+                target_team_id,
+                created_by,
+                # ``forked_from`` has an FK on library_primitives — in-memory
+                # builtin sources (modulo/community caches) have no row, so the
+                # copy must not reference them or the insert fails with an FK
+                # violation (internal_error 500 on copy_library_primitive).
+                forked_from=refreshed.id if in_db else None,
+            ),
         )
 
     return await _with_org_txn(session, org_id, _do)

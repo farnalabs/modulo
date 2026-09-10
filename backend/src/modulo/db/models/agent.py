@@ -60,6 +60,7 @@ class Agent(OrgScoped):
     parameter_schema_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("parameter_schemas.id", ondelete="RESTRICT"), nullable=True, index=True
     )
+    collection_install_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
