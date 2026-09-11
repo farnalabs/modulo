@@ -542,7 +542,7 @@ def test_migration_is_reversible_single_head() -> None:
 
 
 def test_single_migration_head() -> None:
-    """Exactly one migration chains off each predecessor, and the head is 0211_variant_batch_state."""
+    """Exactly one migration chains off each predecessor, and the head is 0212_variant_batch_state_updated_at."""
     import re
 
     revisions = {}
@@ -842,14 +842,16 @@ def test_single_migration_head() -> None:
     # 0208_notification_indexes_and_constraint (#337) chains off 0207;
     # 0209_collection_install_id_entity_columns (#352) chains off 0208;
     # 0210_community_gate (FAR-764) chains off 0209;
-    # 0211_variant_batch_state (FAR-775) chains off 0210 as the head.
+    # 0211_variant_batch_state (FAR-775) chains off 0210, and 0212_variant_batch_state_updated_at
+    # chains off 0211 as the head.
     chaining_off_0205 = [p for p in revisions if parents[p] == "0205_library_collection_type"]
     assert [_basename(p) for p in chaining_off_0205] == ["0206_deleted_defaults_signal_check.py"]
     chaining_off_0206 = [p for p in revisions if parents[p] == "0206_deleted_defaults_signal_check"]
     assert [_basename(p) for p in chaining_off_0206] == ["0207_collection_install_tracking.py"]
     # 0208 chains off 0207; 0209_collection_install_id_entity_columns chains off
     # 0208; 0210_community_gate (FAR-764) chains off 0209, and FAR-775's
-    # 0211_variant_batch_state chains off 0210 -> it is the single head.
+    # 0211_variant_batch_state chains off 0210, and 0212_variant_batch_state_updated_at
+    # chains off 0211 -> it is the single head.
     chaining_off_0207 = [p for p in revisions if parents[p] == "0207_collection_install_tracking"]
     assert [_basename(p) for p in chaining_off_0207] == ["0208_notification_indexes_and_constraint.py"]
     # 0209_collection_install_id_entity_columns (#352) chains off 0208_notification_indexes_and_constraint.
@@ -858,11 +860,12 @@ def test_single_migration_head() -> None:
     # 0210_community_gate (FAR-764) chains off 0209_collection_install_id_entity_columns.
     chaining_off_0209 = [p for p in revisions if parents[p] == "0209_collection_install_id_entity_columns"]
     assert [_basename(p) for p in chaining_off_0209] == ["0210_community_gate.py"]
-    # FAR-775's 0211_variant_batch_state chains off 0210_community_gate -> it is the single head.
+    # FAR-775's 0211_variant_batch_state chains off 0210_community_gate -> it is not the head;
+    # 0212_variant_batch_state_updated_at chains off 0211 as the single head.
     chaining_off_0210 = [p for p in revisions if parents[p] == "0210_community_gate"]
     assert [_basename(p) for p in chaining_off_0210] == ["0211_variant_batch_state.py"]
     chaining_off_0211 = [p for p in revisions if parents[p] == "0211_variant_batch_state"]
-    assert not chaining_off_0211
+    assert [_basename(p) for p in chaining_off_0211] == ["0212_variant_batch_state_updated_at.py"]
 
 
 async def test_load_eval_subscriber_events_normalises_json() -> None:
