@@ -325,6 +325,7 @@ class ModelBackendPresetResponse(BaseModel):
     default_model_id: str
     description: str
     api_key_docs_url: str
+    default_params: dict[str, Any]
 
 
 class ModelBackendPresetListResponse(BaseModel):

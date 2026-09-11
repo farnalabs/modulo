@@ -131,6 +131,20 @@ class TestModelBackendPresets:
         groq = next(p for p in MODEL_BACKEND_PRESETS if p.provider == "groq")
         assert "llama" in groq.default_model_id.lower() or "mixtral" in groq.default_model_id.lower()
 
+    def test_every_preset_has_valid_default_params(self) -> None:
+        for preset in MODEL_BACKEND_PRESETS:
+            assert isinstance(preset.default_params, dict)
+            assert all(isinstance(k, str) for k in preset.default_params)
+            assert all(isinstance(v, (str, int, float, bool)) or v is None for v in preset.default_params.values()), (
+                f"Preset {preset.id!r} default_params must be JSON-serialisable primitives"
+            )
+
+    def test_at_least_one_free_or_low_cost_preset(self) -> None:
+        hints = [p.description.lower() for p in MODEL_BACKEND_PRESETS]
+        assert any(("free" in h or "low cost" in h) for h in hints), (
+            "At least one preset must advertise a free/low-cost option"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Endpoint tests
@@ -157,7 +171,15 @@ def test_presets_endpoint_response_shape(client: TestClient) -> None:
     resp = client.get("/api/v1/model-backends/presets")
     assert resp.status_code == 200
     items = resp.json()["items"]
-    required_fields = {"id", "provider", "display_name", "default_model_id", "description", "api_key_docs_url"}
+    required_fields = {
+        "id",
+        "provider",
+        "display_name",
+        "default_model_id",
+        "description",
+        "api_key_docs_url",
+        "default_params",
+    }
     for item in items:
         assert required_fields.issubset(item.keys()), f"Missing fields: {required_fields - item.keys()}"
 

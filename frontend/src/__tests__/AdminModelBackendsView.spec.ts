@@ -304,6 +304,35 @@ describe('AdminModelBackendsView — preset picker', () => {
     expect(vm.formData.model_id).toBe('openai-model')
   })
 
+  it('pre-fills display_name and default_params when a preset is selected', async () => {
+    mockBackendsGet([backend('mb-1')], [preset('openai', { default_params: { temperature: 0.7 } })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    await wrapper.find('[data-testid="admin-model-backends-preset-openai"]').trigger('click')
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { formData: { display_name: string; default_params: string } }
+    expect(vm.formData.display_name).toBe('Openai Preset')
+    expect(JSON.parse(vm.formData.default_params)).toEqual({ temperature: 0.7 })
+  })
+
+  it('pre-fills an empty default_params string for a preset without default_params', async () => {
+    mockBackendsGet([backend('mb-1')], [preset('openai', { default_params: {} })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await openAddForm(wrapper)
+
+    await wrapper.find('[data-testid="admin-model-backends-preset-openai"]').trigger('click')
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { formData: { default_params: string } }
+    expect(vm.formData.default_params).toBe('')
+  })
+
   it('shows preset description and docs link after selection', async () => {
     mockBackendsGet([backend('mb-1')], [preset('openai')])
     const wrapper = mountView()

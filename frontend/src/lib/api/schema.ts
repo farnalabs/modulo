@@ -13326,6 +13326,10 @@ export interface components {
             description: string;
             /** Api Key Docs Url */
             api_key_docs_url: string;
+            /** Default Params */
+            default_params: {
+                [key: string]: unknown;
+            };
         };
         /** ModelBackendResponse */
         ModelBackendResponse: {
