@@ -158,6 +158,84 @@ hang-death count is the `"likely hung"` marker in the detail of a
 
 ---
 
+## Native Single-Install Troubleshooting
+
+For the native bundle (`scripts/install.sh`, `modulo start --detach`).
+
+### First aid: doctor / status / logs
+
+Run these in order before anything else:
+
+```bash
+modulo doctor           # exit 0 healthy, 1 unhealthy, 2 degraded (warnings), 3 uninitialized
+modulo status           # per-component (postgres/redis/api/workers) pid+port+alive table
+modulo logs app         # launcher/supervisor log (pass -f to follow; postgres/redis also accepted)
+```
+
+- `doctor --fix` applies safe orphan sweeps; a LIVE postgres is never raced.
+- `status` prints `DEGRADED: <reason>` when a previous crash tripped the
+  terminal-degraded trip: resume with `modulo start --clear-degraded`
+  (persistence: `degraded.json` beside `state.json` in the data dir).
+- `doctor --report report.zip` writes a REDACTED diagnostic archive
+  (versions, OS info, doctor output, log tails) for bug reports.
+
+Where things live: install root `~/.local/opt/modulo/` (versions under
+`versions/<version>/`, the `current` symlink), data dir
+`~/.local/share/modulo/data/` (state.json, secrets.json at 0600, pgdata,
+logs). Bundled servers bind NON-default high ports (write their ports
+down from `modulo status --json` before firewall changes).
+
+### Service removal when the binary was deleted
+
+If the bundle directory or the `current` symlink was deleted while a
+systemd USER unit is installed, `modulo service uninstall` cannot run
+(it needs the launcher). Remove the unit manually:
+
+```bash
+systemctl --user stop modulo.service || true
+systemctl --user disable modulo.service || true
+rm -f ~/.config/systemd/user/modulo.service
+systemctl --user daemon-reload
+loginctl disable-linger "$(id -un)" || true  # disabled linger so the unit cannot restart on login
+```
+
+### Migrating from Docker Compose
+
+```bash
+# on the Compose host: dump the database
+docker compose exec postgres pg_dump -U modulo --clean --if-exists \
+  --no-owner --no-acl modulo > modulo-backup.sql
+docker compose down
+
+# install native, then restore the SQL into the fresh data dir
+bash modulo-install.sh
+modulo start --detach
+modulo restore <backup-dir> --data-dir <fresh-data-dir> --yes
+```
+
+The Compose images are alpine/musl and the native bundle is glibc - the
+restore warns on collation-version drift (pg_collation) and prints
+reindexdb guidance. Verify with `modulo doctor --json` and the seeded
+admins before decommissioning the Compose cluster.
+
+### LAN TLS trust
+
+The bundled server binds loopback by default. Serving over the LAN with TLS
+terminates at the operator's reverse proxy (the nginx/Caddy path is documented
+in docs/deployment.md); the launcher does not provision certificates itself.
+Use an internal CA whose root your clients already trust, or keep the LAN
+host on the VPN tunnel. A self-signed CA that only the launcher would have to
+distribute to every client laptop and browser is not part of v1.
+
+### Port re-assignment
+
+The bundled Postgres, Redis, and API ports are assigned at FIRST boot and
+persisted in the data dir's `state.json`; they are never auto-reassigned.
+For a manual change: stop the stack (`modulo stop`), edit the port keys in
+the data dir's `state.json`, then `modulo start`. An existing pgdata keeps
+its data across a port change; but any external references to the old port
+(webhook URLs pointed at the API, connector configs) must be updated too.
+
 ## Log Locations
 
 | Environment | Log Source | Location |

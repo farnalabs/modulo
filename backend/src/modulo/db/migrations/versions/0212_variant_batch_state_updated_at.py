@@ -5,17 +5,17 @@ Revises: 0211_variant_batch_state
 Create Date: 2026-09-11
 
 The ``VariantBatchState`` model uses ``TimestampMixin``, which declares both
-``created_at`` and ``updated_at``. Migration ``0211_variant_batch_state`` now
-creates the table including ``updated_at``, so the migrated schema matches the
-ORM metadata (verified by
+``created_at`` and ``updated_at``. Migration ``0211_variant_batch_state`` does
+NOT create ``updated_at`` — main ``#371`` (ddc423a) removed it from ``0211`` to
+avoid a double-add race — so this migration is the one that adds the column and
+brings the migrated schema in line with the ORM metadata (verified by
 ``tests/integration/test_initial_migration.py::test_migrated_schema_matches_orm_metadata``).
 
-This follow-up exists to *guarantee* the column is present on deployments whose
-``0211`` predates the column-drift fix. The ADD is guarded with ``IF NOT EXISTS``
-so it is a no-op when ``0211`` already created the column, keeping the chain
-idempotent across fresh DBs and production replays alike. The column mirrors the
-``TimestampMixin`` declaration: ``DateTime(timezone=True)``, ``nullable=False``,
-``server_default=now()``.
+The ADD is guarded with ``IF NOT EXISTS`` so it is a no-op on production DBs that
+applied an *older* ``0211`` which did declare ``updated_at`` (those predate the
+``#371`` removal). That keeps the chain idempotent across fresh DBs and production
+replays alike. The column mirrors the ``TimestampMixin`` declaration:
+``DateTime(timezone=True)``, ``nullable=False``, ``server_default=now()``.
 
 Ownership ceremony (the 0066/0134 pattern, in spirit from 0209): on a DB where
 the table is already owned by ``modulo_migrate`` (production, bootstrap ran
@@ -62,9 +62,18 @@ def upgrade() -> None:
 
     if pg:
         op.execute("SET search_path TO public")
-        migrate_role = _role_exists(bind, _MIGRATE_ROLE)
-    else:
-        migrate_role = False
+
+    # 0211_variant_batch_state does NOT declare ``updated_at`` (main #371 removed
+    # it), so on a fresh DB the column is genuinely missing and this migration
+    # adds it. The guard below also makes the migration a no-op on production DBs
+    # that applied the older 0211 (which DID declare ``updated_at``), preventing
+    # the DuplicateColumn failure that occurs when both the table DDL and this
+    # ADD try to create the same column.
+    existing = {c["name"] for c in sa.inspect(bind).get_columns(_TABLE)}
+    if _COLUMN in existing:
+        return
+
+    migrate_role = _role_exists(bind, _MIGRATE_ROLE) if pg else False
 
     # Only SET ROLE where the table is already owned by modulo_migrate (prod);
     # on a fresh DB the caller owns the table and SET ROLE would fail the ADD.
@@ -73,10 +82,10 @@ def upgrade() -> None:
     if migrate_owns_table:
         op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-    # Guarded DDL: 0211_variant_batch_state now creates variant_batch_state WITH
-    # updated_at (FAR-775 column-drift fix), so this follow-up must not re-add a
-    # column that already exists. ADD COLUMN IF NOT EXISTS keeps the chain
-    # idempotent across fresh DBs and production replays alike.
+    # Guarded DDL: 0211_variant_batch_state does NOT create updated_at (main #371
+    # removed it), so this follow-up is the one that adds the column. The ADD COLUMN
+    # IF NOT EXISTS keeps the chain idempotent across fresh DBs (column absent) and
+    # production replays that applied an older 0211 (column already present).
     op.execute(
         f'ALTER TABLE public."{_TABLE}" '
         f'ADD COLUMN IF NOT EXISTS "{_COLUMN}" timestamp with time zone '
