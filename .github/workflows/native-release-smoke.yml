@@ -61,6 +61,11 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      # The push trigger only fires on bundle-v* tags, so github.ref_name is
+      # always the exact release artifact to smoke. Without this the fetch
+      # step falls into the fatal else ("neither TAG nor the canary env is set").
+      TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
         uses: actions/checkout@v7
@@ -99,6 +104,10 @@ jobs:
             fi
           elif [ -n "${TAG:-}" ]; then
             # RELEASE-SMOKE leg: the EXACT tag-published artifact, never rebuilt.
+            case "${TAG}" in
+              bundle-v*) ;;
+              *) echo "::error::release-smoke TAG '${TAG}' does not match bundle-v*"; exit 1 ;;
+            esac
             version="${TAG#bundle-v}"
             tarball="modulo-${version}-linux-amd64.tar.gz"
             assets="$(gh release view "${TAG}" --json assets --jq '.assets[].name')"
@@ -350,6 +359,28 @@ jobs:
             version="${tag#bundle-v}"
             echo "TAG=${tag}" >> "$GITHUB_ENV"
             echo "TARBALL=canary.tar.gz" >> "$GITHUB_ENV"
+            # Resolve N-1 (the previous bundle-v release) so the N-1 upgrade leg
+            # below is not permanently dead code. Best-effort: a resolution
+            # failure must WARN, never abort the smoke.
+            set +e
+            release_list="$(gh api "repos/${{ github.repository }}/releases?per_page=20" \
+              --jq '[.[] | select(.tag_name | startswith("bundle-v")) | .tag_name] | join("\n")' 2>/dev/null)"
+            set -e
+            if [ -n "${release_list}" ]; then
+              readarray -t tags_arr < <(printf '%s\n' "${release_list}")
+              idx=-1
+              for i in "${!tags_arr[@]}"; do
+                if [ "${tags_arr[i]}" = "${tag}" ]; then idx=$i; break; fi
+              done
+              if [ "${idx}" -ge 0 ] && [ "$((idx+1))" -lt "${#tags_arr[@]}" ]; then
+                echo "N_MINUS_1=${tags_arr[idx+1]}" >> "$GITHUB_ENV"
+                echo "resolved N-1 release: ${tags_arr[idx+1]}"
+              else
+                echo "::warning::no N-1 release resolvable for ${tag} - N-1 upgrade leg will be skipped"
+              fi
+            else
+              echo "::warning::could not list releases to resolve N-1 for ${tag} - N-1 upgrade leg will be skipped"
+            fi
             curl -fsSL -o canary.tar.gz \
               "https://github.com/${{ github.repository }}/releases/download/${tag}/modulo-${version}-linux-amd64.tar.gz" \
               || { echo "::error::published artifact not downloadable at ${tag}"; exit 1; }
@@ -364,6 +395,10 @@ jobs:
             fi
           elif [ -n "${TAG:-}" ]; then
             # RELEASE-SMOKE leg: the EXACT tag-published artifact, never rebuilt.
+            case "${TAG}" in
+              bundle-v*) ;;
+              *) echo "::error::release-smoke TAG '${TAG}' does not match bundle-v*"; exit 1 ;;
+            esac
             version="${TAG#bundle-v}"
             tarball="modulo-${version}-linux-amd64.tar.gz"
             assets="$(gh release view "${TAG}" --json assets --jq '.assets[].name')"

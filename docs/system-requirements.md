@@ -27,8 +27,8 @@ actually ship - do not widen these rows until the packaging tickets land):
 | OS | glibc floor | Status |
 |----|-------------|--------|
 | Debian 13+ | 2.41 | Supported |
-| Ubuntu 26.04+ | 2.39+ | Supported |
-| Ubuntu 20.04-25.04 | 2.31-2.35 | Not supported (glibc below the bundled floor) |
+| Ubuntu 24.04+ | 2.39+ | Supported |
+| Ubuntu 20.04-22.04 | 2.31-2.35 | Not supported (glibc below the bundled floor) |
 | macOS | - | Planned (P2) |
 | Windows | - | Planned (P3) |
 
