@@ -22,17 +22,19 @@ left to 0207 and only the index is created here (idempotently).
 ROLE WIRING (the 0134 ceremony, verbatim in spirit from 0066): migrations run
 as the ``DATABASE_ADMIN_URL`` superuser, but the org-scoped entity tables are
 owned by ``modulo_migrate``. We ``SET ROLE modulo_migrate`` before the
-``ALTER TABLE ... ADD COLUMN`` only where the table is already owned by that
-role (production, where bootstrap ran before alembic) so ownership stays
+``CREATE INDEX`` only where the table is already owned by that role
+(production, where bootstrap ran before alembic) so index ownership stays
 consistent; on a fresh DB where the migration caller owns the tables the
-ceremony is skipped and the column is added by the caller. The step is
+ceremony is skipped and the index is created by the caller. The step is
 unconditional on the role merely existing — ``SET ROLE`` to a non-owner would
-fail the ALTER.
+fail the ``CREATE INDEX``, and we ``RESET ROLE`` + assert ``modulo_migrate``
+owns the table afterwards.
 
-Postgres-only concern: the column/index are plain DDL with no RLS/policy
-change (the tables already carry org-isolation RLS + DML grants), so no RLS
-step runs. SQLite (used by unit tests via ``Base.metadata.create_all``) has no
-role machinery — ``op.add_column`` / ``op.create_index`` run directly there.
+Postgres-only concern: the index is plain DDL with no RLS/policy change (the
+tables already carry org-isolation RLS + DML grants), so no RLS step runs.
+SQLite (used by unit tests via ``Base.metadata.create_all``) has no role
+machinery — the index is created directly via raw ``CREATE INDEX IF NOT EXISTS``
+SQL (``op.execute``), with no ``SET ROLE`` / ``RESET ROLE`` ceremony.
 """
 
 from __future__ import annotations

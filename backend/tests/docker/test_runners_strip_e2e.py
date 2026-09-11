@@ -431,6 +431,14 @@ async def _ensure_image_present(url: str | None, image: str) -> None:
 
 
 async def _kill_local_container_by_label(label: str) -> None:
+    # NOTE: the shared compose-rig dind container carries the label
+    # ``modulo.test=runner-ci-dind`` (deploy/compose/runner-ci.yml), so
+    # killing ``runner-ci-dind`` takes down the SAME dind engine the harness
+    # rig and the other docker-marked suites rely on. This helper is intended
+    # only for the engine-kill scenario (Scenario 3); callers are
+    # responsible for restoring the rig afterwards (the harness job tears the
+    # rig down at the end regardless, but a later test file / local re-run
+    # must not be left with a dead dind).
     async with aiodocker.Docker() as docker:
         containers = await docker.containers.list(filters={"label": [f"modulo.test={label}"]})
         for container in containers:
@@ -653,3 +661,15 @@ async def test_engine_kill_flips_strip_and_emits_notification_and_error_event(
     events_after = await _count_error_events(superuser_engine, test_org, "runner_unavailable")
     assert notifications_after - notifications_before == 1
     assert events_after - events_before == 1
+
+    # Restore the shared compose-rig dind engine we killed above
+    # (_kill_local_container_by_label). The harness job tears the whole rig
+    # down at the end, but restarting dind here keeps the rig usable for any
+    # later test file in the same job / a local re-run (see the helper's note).
+    with contextlib.suppress(Exception):
+        async with aiodocker.Docker() as docker:
+            containers = await docker.containers.list(all=True, filters={"label": [f"modulo.test={_DINO_LABEL}"]})
+            for container in containers:
+                with contextlib.suppress(Exception):
+                    await container.start()
+        await _wait_for_engine_up(dind_host)

@@ -104,7 +104,7 @@ jobs:
             echo "Manual dispatch - running harness unconditionally."
             exit 0
           fi
-          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py"
+          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py backend/tests/docker/test_runners_strip_e2e.py"
           # `rc=0; out=$(...)` survives Actions' `bash -e -o pipefail`: a bare
           # `out=$(...)` aborts the step before the failure can be inspected,
           # and swallowing the error into empty output silently SKIPS the
@@ -181,7 +181,7 @@ jobs:
           MODULO_RUNNER_HARNESS_DIND_HOST: "tcp://127.0.0.1:${{ env.DIND_PORT }}"
           MODULO_RUNNER_HARNESS_NETWORK: "runner-ci-workspace"
         run: |
-          uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py -m docker --tb=short -q --timeout=600 -p no:warnings
+          uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py tests/docker/test_runners_strip_e2e.py -m docker --tb=short -q --timeout=600 -p no:warnings
       - name: Proxy log completeness dump (always)
         if: always() && steps.changed.outputs.changed == 'true'
         shell: bash
