@@ -45,8 +45,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      UV_CACHE_DIR: /mod-uv-cache
-      UV_PYTHON_INSTALL_DIR: /mod-uv-pythons
+      UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+      UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/uv-pythons
     steps:
       - name: Checkout
         uses: actions/checkout@v7
