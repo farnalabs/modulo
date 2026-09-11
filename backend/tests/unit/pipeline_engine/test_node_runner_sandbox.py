@@ -1135,6 +1135,129 @@ async def test_success_output_carries_full_stdout_length_when_truncated():
     assert artifact["stderr_length"] == output["stderr_length"]
 
 
+# ---------------------------------------------------------------------------
+# FAR-792: per-node std  retention — tail (512KB) vs full (stdout_max_bytes)
+# ---------------------------------------------------------------------------
+
+
+def _sandbox_with_std_bytes(stdout: str, stderr: str = "", log_content: str = "") -> tuple[MagicMock, dict]:
+    """A sandbox whose captured streams come from the SDK (non-redirected) or
+    from the drained log (redirect path) depending on the test's need."""
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = stdout
+    cmd_result.stderr = stderr
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    if log_content:
+        sandbox.files.read = AsyncMock(side_effect=_read_router('{"summary": "done"}', log_content))
+        sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(log_content)))
+    else:
+        sandbox.files.read = AsyncMock(side_effect=_read_router('{"summary": "done"}'))
+        sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    return sandbox, cmd_result
+
+
+async def test_full_retention_honors_stdout_max_bytes():
+    """stdout_retention_mode="full" + stdout_max_bytes keeps up to the configured
+    cap (not the fixed 512KB) and surfaces stdout_truncated + the full length."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=2048)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox, _ = _sandbox_with_std_bytes("x" * 4096)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == "x" * 2048
+    assert output["stdout_length"] == 4096
+    assert output["stdout_truncated"] is True
+    assert result["artifacts"][0]["output"]["stdout_truncated"] is True
+
+
+async def test_full_retention_default_5mb_holds_whole_stream():
+    """stdout_retention_mode="full" without stdout_max_bytes keeps substreams up
+    to the 5MB default — a 1MB stream is retained in full, no truncation flag."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full")
+    fn = make_sandbox_agent_fn(node_def)
+    long_stdout = "x" * (1024 * 1024)
+    sandbox, _ = _sandbox_with_std_bytes(long_stdout)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == long_stdout
+    assert output["stdout_length"] == len(long_stdout)
+    assert "stdout_truncated" not in output
+
+
+async def test_tail_mode_ignores_stdout_max_bytes():
+    """stdout_retention_mode="tail" (the default) keeps the legacy 512KB cap
+    EVEN when stdout_max_bytes is offered — full retention must be opted into."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="tail", stdout_max_bytes=999)
+    fn = make_sandbox_agent_fn(node_def)
+    long_stdout = "x" * (_MAX_ARTIFACT_LOG + 1234)
+    sandbox, _ = _sandbox_with_std_bytes(long_stdout)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == long_stdout[:_MAX_ARTIFACT_LOG]
+    assert output["stdout_length"] == len(long_stdout)
+    assert output["stdout_truncated"] is True
+
+
+async def test_full_retention_redacts_before_truncation():
+    """Redaction runs on the FULL stream before the cap slice, so a tokenized
+    URL whose closing ``@`` would be cut by the cap is still masked in the
+    retained artifact (FAR-792 redact-before-truncate ordering)."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=100)
+    fn = make_sandbox_agent_fn(node_def)
+    # The ``@`` terminator of the tokenized URL sits at offset 100+ — beyond a
+    # 100-byte cap. Truncate-then-redact keeps the raw `https://git:BBBB...`
+    # prefix (no @ in the window, so the URL pattern cannot match it).
+    secret_url = "https://git:" + ("B" * 40) + "@github.com/org/repo"
+    sandbox, _ = _sandbox_with_std_bytes("u" * 80 + secret_url)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert "<redacted>" in output["agent_stdout"]
+    assert "BBB" not in output["agent_stdout"]
+    assert output["stdout_truncated"] is True
+
+
+async def test_full_retention_drain_keeps_beyond_512kb():
+    """In full mode the watchdog's drain window scales to the node cap, so the
+    redirected-log path retains more than the 512KB legacy tail (default 5MB)."""
+    node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full")
+    fn = make_sandbox_agent_fn(node_def)
+    log_content = "q" * (3 * 1024 * 1024)
+    sandbox, _ = _sandbox_with_std_bytes("", log_content=log_content)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == log_content
+    assert output["stdout_length"] == len(log_content)
+    assert "stdout_truncated" not in output
+
+
 async def test_success_output_omits_sandbox_log_tail():
     """Success outputs do NOT carry sandbox_id/sandbox_log_tail — keep them small."""
     node_def = _base_node_def(timeout_seconds=30)
