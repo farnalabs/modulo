@@ -269,7 +269,7 @@ async def ingest_errors_public(
     now = _time.time()
     timestamps = _public_rate_limit.setdefault(client_ip, [])
     timestamps[:] = [t for t in timestamps if now - t < 60]
-    if len(timestamps) >= 1:
+    if timestamps:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded. Max 1 request per 60 seconds.",
