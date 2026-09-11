@@ -85,8 +85,8 @@ from modulo.db.crud.run import (
 )
 from modulo.db.crud.run_node_outputs import (
     RunBlobs,
-    read_run_blobs_with_fallback,
-    read_run_markers_with_fallback,
+    read_run_blobs,
+    read_run_markers,
 )
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -758,9 +758,7 @@ async def _run_gate_fired(session: AsyncSession, run: Any) -> bool:
     classification = getattr(run, "run_classification", None)
     if isinstance(classification, dict) and classification.get("reason") == REASON_DELIVERED_EMAIL:
         return True
-    markers = await read_run_markers_with_fallback(
-        session, run_id=run.id, organisation_id=getattr(run, "organisation_id", None)
-    )
+    markers = await read_run_markers(session, run_id=run.id, organisation_id=getattr(run, "organisation_id", None))
     return bool(_any_marker_delivery_done(markers))
 
 
@@ -1716,9 +1714,7 @@ async def get_run_io_endpoint(
             blobs = (
                 None
                 if run is None
-                else await read_run_blobs_with_fallback(
-                    session, run_id=run_id, organisation_id=principal.organisation_id
-                )
+                else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
         _log.exception("runs.get_run_io_endpoint")
@@ -1777,9 +1773,7 @@ async def export_run_fixture(
             snapshot = await _load_snapshot_for_run(session, run)
             # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
             # (the response body is built after the tx closes).
-            blobs = await read_run_blobs_with_fallback(
-                session, run_id=run_id, organisation_id=principal.organisation_id
-            )
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
     except IntegrityError:
         _log.exception("runs.export_run_fixture")
         raise HTTPException(
@@ -1995,9 +1989,7 @@ async def get_run_node_output(
             blobs = (
                 None
                 if run is None
-                else await read_run_blobs_with_fallback(
-                    session, run_id=run_id, organisation_id=principal.organisation_id
-                )
+                else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
         _log.exception("runs.get_run_node_output")
@@ -2882,9 +2874,7 @@ async def reveal_node_prompt(
 
             # FAR-583 read-switch: reassemble the prior-outputs blobs INSIDE
             # the transaction (one batched repo query + the legacy fallback).
-            blobs = await read_run_blobs_with_fallback(
-                session, run_id=run_id, organisation_id=principal.organisation_id
-            )
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
 
         return _render_prompt_response(
             _build_messages(
@@ -2981,16 +2971,12 @@ async def diff_node_output(
             blobs_a = (
                 None
                 if run_a is None
-                else await read_run_blobs_with_fallback(
-                    session, run_id=req.run_id_a, organisation_id=principal.organisation_id
-                )
+                else await read_run_blobs(session, run_id=req.run_id_a, organisation_id=principal.organisation_id)
             )
             blobs_b = (
                 None
                 if run_b is None
-                else await read_run_blobs_with_fallback(
-                    session, run_id=req.run_id_b, organisation_id=principal.organisation_id
-                )
+                else await read_run_blobs(session, run_id=req.run_id_b, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
         _log.exception("runs.diff_node_output")

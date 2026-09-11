@@ -35,7 +35,7 @@ from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run import update_run_status
-from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.base import Base
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
@@ -330,7 +330,7 @@ class TestStatusWriteBlobPersistence:
 
         async with sqlite_sessionmaker() as session, session.begin():
             await set_rls_org(session, _ORG)
-            blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=_ORG)
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=_ORG)
         assert blobs.outputs == outputs
         assert blobs.telemetry == telemetry
         assert blobs.markers is None

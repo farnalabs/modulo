@@ -137,7 +137,7 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     update_run_status,
 )
-from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback, read_run_markers_with_fallback
+from modulo.db.crud.run_node_outputs import read_run_blobs, read_run_markers
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
@@ -3449,7 +3449,7 @@ class PipelineExecutor:
                 await set_rls_execution_context(session)
                 run = await get_run(session, run_id)
                 if run is not None:
-                    blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=org_id)
+                    blobs = await read_run_blobs(session, run_id=run_id, organisation_id=org_id)
                     outputs_json = dict(blobs.outputs) if isinstance(blobs.outputs, dict) else {}
                     telemetry_json = dict(blobs.telemetry) if isinstance(blobs.telemetry, dict) else {}
         except asyncio.CancelledError:
@@ -4504,7 +4504,7 @@ class PipelineExecutor:
                 # per-node lazy loads. The run row here is a FRESH load in
                 # this transaction, so no in-session unsaved state is relied
                 # on.
-                run_markers = await read_run_markers_with_fallback(session, run_id=run_id, organisation_id=org_id)
+                run_markers = await read_run_markers(session, run_id=run_id, organisation_id=org_id)
                 cancellation_requested = bool(current_run.cancellation_requested)
                 idempotency_key = current_run.idempotency_key
         return node_attempt_count, current_token, run_markers, cancellation_requested, idempotency_key

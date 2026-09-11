@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modulo.core.analytics.metrics import record_facts_write_failed
-from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs_with_fallback
+from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -133,7 +133,7 @@ async def _fact_run_blobs(session: AsyncSession, run: Run) -> RunBlobs | None:
     The two byte facts used to call the per-side fallback readers, each of
     which ran the FULL rows-fetch + RLS probe + legacy SELECT — six statements
     per terminalization where three suffice. One
-    :func:`read_run_blobs_with_fallback` call serves BOTH sides (the EMPTY /
+    :func:`read_run_blobs` call serves BOTH sides (the EMPTY /
     direction-aware fallback to the legacy columns is part of that one read,
     so pre-sweep stragglers still measure stably); the two byte helpers are
     then pure computations over the returned blobs. A read failure degrades
@@ -142,7 +142,7 @@ async def _fact_run_blobs(session: AsyncSession, run: Run) -> RunBlobs | None:
     writer and must never be the thing that fails a fact write.
     """
     try:
-        return await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+        return await read_run_blobs(session, run_id=run.id, organisation_id=run.organisation_id)
     except asyncio.CancelledError:
         raise
     except Exception:
