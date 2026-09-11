@@ -21,6 +21,7 @@ from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.variant_batch_state import VariantBatchState
 from modulo.db.models.variant_group import VariantGroup
 
 _log = logging.getLogger(__name__)
@@ -572,6 +573,18 @@ async def run_variant_batch(
     # with the same value so the compare route can load the batch purely by it.
     batch_id = uuid.uuid4()
 
+    # FAR-775: persist batch metadata row so the list/detail endpoints can
+    # load batches independently of scanning the runs table.
+    await upsert_batch_state(
+        session,
+        batch_id=batch_id,
+        org_id=org_id,
+        name=None,
+        pipeline_id=group.pipeline_id,
+        variant_group_id=group.id,
+        input_payload=input_payload or {},
+    )
+
     dispatch = _RunDispatch(org_id=org_id, account_id=account_id, trigger_type=trigger_type)
 
     results: list[dict[str, Any]] = []
@@ -838,3 +851,154 @@ async def get_batch_compare(
             }
         )
     return entries
+
+
+# ---------------------------------------------------------------------------
+# variant_batch_state CRUD (FAR-775)
+# ---------------------------------------------------------------------------
+
+
+async def list_batch_runs_for_batch_ids(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    batch_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[Run]]:
+    """Batch-load runs for multiple batch_ids in ONE query (no N+1).
+
+    Returns ``{batch_id: [Run, ...]}`` ordered by ``created_at`` per batch.
+    Only batch_ids present in the result dict have runs.
+    """
+    if not batch_ids:
+        return {}
+    result = await session.execute(
+        select(Run)
+        .where(Run.organisation_id == org_id, Run.batch_id.in_(batch_ids))
+        .order_by(Run.batch_id, Run.created_at)
+    )
+    runs = list(result.scalars().all())
+    by_batch: dict[uuid.UUID, list[Run]] = {}
+    for run in runs:
+        bid = uuid.UUID(str(run.batch_id))
+        by_batch.setdefault(bid, []).append(run)
+    return by_batch
+
+
+async def get_batch_state(
+    session: AsyncSession,
+    *,
+    batch_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> VariantBatchState | None:
+    """Load a batch state row by batch_id, org-scoped."""
+    result = await session.execute(
+        select(VariantBatchState).where(
+            VariantBatchState.batch_id == batch_id,
+            VariantBatchState.organisation_id == org_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_batch_state(
+    session: AsyncSession,
+    *,
+    batch_id: uuid.UUID,
+    org_id: uuid.UUID,
+    name: str | None = None,
+    pipeline_id: uuid.UUID | None = None,
+    variant_group_id: uuid.UUID | None = None,
+    input_payload: dict[str, Any] | None = None,
+) -> VariantBatchState:
+    """Insert or update a batch state row.
+
+    If a row already exists (same batch_id + org), update the mutable fields.
+    Otherwise create a new row. Returns the state row after flush.
+    """
+    existing = await get_batch_state(session, batch_id=batch_id, org_id=org_id)
+    if existing is not None:
+        if name is not None:
+            existing.name = name
+        if pipeline_id is not None:
+            existing.pipeline_id = pipeline_id
+        if variant_group_id is not None:
+            existing.variant_group_id = variant_group_id
+        if input_payload is not None:
+            existing.input_payload = input_payload
+        await session.flush()
+        return existing
+
+    state = VariantBatchState(
+        batch_id=batch_id,
+        organisation_id=org_id,
+        name=name,
+        pipeline_id=pipeline_id,
+        variant_group_id=variant_group_id,
+        input_payload=input_payload or {},
+    )
+    session.add(state)
+    await session.flush()
+    return state
+
+
+async def soft_delete_batch_state(
+    session: AsyncSession,
+    *,
+    batch_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> bool:
+    """Soft-delete a batch state row. Returns True if a row was found and deleted."""
+    state = await get_batch_state(session, batch_id=batch_id, org_id=org_id)
+    if state is None:
+        return False
+    if state.deleted_at is not None:
+        return True  # already deleted
+    state.deleted_at = datetime.now(UTC)
+    await session.flush()
+    return True
+
+
+async def get_all_state_batch_ids(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+) -> set[uuid.UUID]:
+    """Return the full set of non-deleted batch_ids in variant_batch_state for an org.
+
+    Used by ``list_batches`` to exclude ALL state-table rows from the legacy
+    scan — not just the current page's rows, which would inflate the total.
+    """
+    result = await session.execute(
+        select(VariantBatchState.batch_id).where(
+            VariantBatchState.organisation_id == org_id,
+            VariantBatchState.deleted_at.is_(None),
+        )
+    )
+    return {uuid.UUID(str(row[0])) for row in result.all()}
+
+
+async def list_batch_states(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[VariantBatchState], int]:
+    """List non-deleted batch states for an org, paginated."""
+    base = select(VariantBatchState).where(
+        VariantBatchState.organisation_id == org_id,
+        VariantBatchState.deleted_at.is_(None),
+    )
+    count_q = (
+        select(func.count())
+        .select_from(VariantBatchState)
+        .where(
+            VariantBatchState.organisation_id == org_id,
+            VariantBatchState.deleted_at.is_(None),
+        )
+    )
+    offset = (page - 1) * page_size
+    total = (await session.execute(count_q)).scalar_one()
+    query = base.order_by(VariantBatchState.created_at.desc()).offset(offset).limit(page_size)
+    items = list((await session.execute(query)).scalars())
+    return items, total
