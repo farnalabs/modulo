@@ -158,7 +158,7 @@ class Run(OrgScoped):
     __table_args__ = (
         CheckConstraint(
             "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', "
-            "'correction', 'slack_app_mention')",
+            "'correction', 'slack_app_mention', 'rerun')",
             name="ck_runs_trigger_type",
         ),
         CheckConstraint(

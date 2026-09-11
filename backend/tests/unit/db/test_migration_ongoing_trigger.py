@@ -33,7 +33,7 @@ from alembic.script import ScriptDirectory
 
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _MIGRATION_0113 = "0113_guardrail_summary"
-_HEAD_MIGRATION = "0212_variant_batch_state_updated_at"
+_HEAD_MIGRATION = "0213_runs_rerun_trigger_type"
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
 _SPEND_PARTIAL = "trigger_type <> 'ongoing' OR (daily_spend_limit IS NOT NULL AND daily_spend_limit > 0)"
@@ -131,6 +131,39 @@ def _source(module: ModuleType) -> str:
     return path.read_text(encoding="utf-8")
 
 
+class TestRerunTriggerTypeWiden:
+    """0213 widens both trigger-vocabulary CHECKs for the 'rerun' value."""
+
+    @pytest.fixture
+    def migration_0213(self) -> ModuleType:
+        path = _VERSIONS_DIR / f"{_HEAD_MIGRATION}.py"
+        assert path.exists(), f"Migration file missing: {path}"
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(f"migration_{_HEAD_MIGRATION}", path)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_down_revision_is_previous_head(self, migration_0213: ModuleType) -> None:
+        assert migration_0213.down_revision == "0212_variant_batch_state_updated_at"
+
+    def test_widens_both_trigger_vocabularies(self, migration_0213: ModuleType) -> None:
+        source = _source(migration_0213)
+        assert "ck_runs_trigger_type" in source
+        assert "ck_run_daily_facts_trigger_type" in source
+        assert "'rerun'" in source
+
+    def test_widen_ceremony_follows_not_valid_validate(self, migration_0213: ModuleType) -> None:
+        source = _source(migration_0213)
+        assert "DROP CONSTRAINT" in source
+        assert "ADD CONSTRAINT" in source
+        assert "NOT VALID" in source
+        assert "VALIDATE CONSTRAINT" in source
+
+
 class TestOrmCheckDriftGuard:
     def test_trigger_orm_check_includes_ongoing(self) -> None:
         from sqlalchemy import CheckConstraint
@@ -153,6 +186,16 @@ class TestOrmCheckDriftGuard:
         assert "ck_runs_trigger_type" in names
         runs_check = next(c for c in checks if c.name == "ck_runs_trigger_type")
         assert "ongoing" in runs_check.sqltext.text
+
+    def test_run_orm_check_includes_rerun(self) -> None:
+        from sqlalchemy import CheckConstraint
+
+        from modulo.db.models.run import Run
+
+        runs_check = next(
+            c for c in Run.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_runs_trigger_type"
+        )
+        assert "rerun" in runs_check.sqltext.text
 
     def test_orm_partial_ongoing_checks_present(self) -> None:
         from sqlalchemy import CheckConstraint
