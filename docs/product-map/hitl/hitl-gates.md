@@ -240,6 +240,13 @@ may decide.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+  search-bar surface (`components/shared/FilterBar.vue` static testids
+  `filter-bar-search` / `filter-bar-search-wrapper`) in the `/settings/hitl-review`
+  manifest `elements:` inventory and wired the component into the reverse
+  testid-coverage guard, so the HITL review search control the page ships stays
+  visible to Remy's docs indexer and `/api/v1/manifest`.
+
 - 2026-09-11: **improve-architecture (product-map walk)** — closed the
   `/settings/hitl-review` element-inventory drift for the shared gate-card
   surface: the page renders `hitl/HitlGateCard.vue` (whose `hitl-gate-foreign-claim`

@@ -1220,6 +1220,12 @@ elements:
       - testid: flag-override-select
         type: select
         dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
+        type: element
+        dynamic_testid: false
     /admin/errors:
       - testid: scheduler-starvation
         type: element
@@ -1228,6 +1234,12 @@ elements:
         type: element
         dynamic_testid: false
       - testid: admin-errors-message-truncated
+        type: element
+        dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
         type: element
         dynamic_testid: false
     /admin/housekeeping:
@@ -2229,6 +2241,12 @@ elements:
       - testid: library-create-collection
         type: button
         dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
+        type: element
+        dynamic_testid: false
     /library/collections/new:
       - testid: collection-name
         type: input
@@ -2458,6 +2476,12 @@ elements:
         dynamic_testid: false
       - testid: pipeline-list-action-menu
         type: button
+        dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
+        type: element
         dynamic_testid: false
     /pipelines/:id/editor:
       - testid: pipeline-editor-save
@@ -2773,6 +2797,12 @@ elements:
       - testid: copy-wizard-step-indicator
         type: element
         dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
+        type: element
+        dynamic_testid: false
     /remy:
       - testid: remy-only-view
         type: element
@@ -2816,6 +2846,12 @@ elements:
         dynamic_testid: false
       - testid: runs-list-next-page
         type: button
+        dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
+        type: element
         dynamic_testid: false
     /runs/:id:
       - testid: run-detail-share-summary
@@ -3166,6 +3202,12 @@ elements:
       - testid: schema-editor-version
         type: input
         dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
+        type: element
+        dynamic_testid: false
     /schemas/infer:
       - testid: schema-inference-connector
         type: select
@@ -3347,6 +3389,12 @@ elements:
         dynamic_testid: false
       - testid: hitl-review-next-page
         type: button
+        dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
+        type: element
         dynamic_testid: false
     /settings/license:
       - testid: license-key-input

@@ -120,6 +120,21 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 
 - 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
+  `/admin/node-categories`: the whole-page view(s) `AdminNodeCategoriesView.vue` render static `data-testid`s that the
+  product map `elements:` inventory already documents, but the surface was not yet
+  guarded against drift. The route now maps to its owning view so a newly shipped
+  testid can no longer silently stay invisible to Remy's docs indexer /
+  `/api/v1/manifest`.
+
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+  search-bar surface (`components/shared/FilterBar.vue` static testids
+  `filter-bar-search` / `filter-bar-search-wrapper`) in the `/pipelines` and
+  `/pipelines/copy` manifest `elements:` inventory and wired the component into the
+  reverse testid-coverage guard, so the pipeline search control both pages ship
+  stays visible to Remy's docs indexer and `/api/v1/manifest`.
+
+- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/pipelines/copy`: the whole-page view(s) `CopyPipelineWizard.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
   guarded against drift. The route now maps to its owning view so a newly shipped

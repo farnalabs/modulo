@@ -82,6 +82,13 @@ applied migration between versions (`core/schema_registry/*`).
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+  search-bar surface (`components/shared/FilterBar.vue` static testids
+  `filter-bar-search` / `filter-bar-search-wrapper`) in the `/schemas/editor/:id`
+  manifest `elements:` inventory and wired the component into the reverse
+  testid-coverage guard, so the schema search control the page ships stays visible
+  to Remy's docs indexer and `/api/v1/manifest`.
+
 - 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/parameter-schemas, /schemas/editor/:id, /schemas/infer`: the whole-page view(s) `ParameterSchemasView.vue, SchemaEditorView.vue, SchemaInferenceView.vue` render static `data-testid`s that the

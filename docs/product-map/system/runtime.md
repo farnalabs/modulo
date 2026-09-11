@@ -59,6 +59,15 @@ purging old run data.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
+  `/settings/rate-limits` and `/settings/runtime-config`: the whole-page view(s)
+  `SettingsRateLimitsView.vue` / `SettingsRuntimeConfigView.vue` render static `data-testid`s that the
+  product map `elements:` inventory already documents, but the surface was not yet
+  guarded against drift. The routes now map to their owning views so a newly shipped
+  testid can no longer silently stay invisible to Remy's docs indexer /
+  `/api/v1/manifest`.
+
 - 2026-09-11: **improve-architecture (product-map walk)** — registered the
   app-layout DB-capacity banner (`DbCapacityBanner.vue` static testids
   `db-capacity-banner`, `db-capacity-usage`, `db-capacity-run-retention-link`,
