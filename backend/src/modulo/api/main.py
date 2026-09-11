@@ -122,6 +122,7 @@ from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
 from modulo.api.routes.triggers import pipeline_triggers_router
 from modulo.api.routes.triggers import router as triggers_router
+from modulo.api.routes.variant_batches import router as variant_batches_router
 from modulo.api.routes.variants import router as variants_router
 from modulo.api.routes.viewmodel import router as viewmodel_router
 from modulo.api.routes.views import router as views_router
@@ -1145,6 +1146,7 @@ app.include_router(notifications_router)
 app.include_router(sensitive_router)
 app.include_router(observability_router)
 app.include_router(variants_router)
+app.include_router(variant_batches_router)
 app.include_router(feedback_router)
 app.include_router(guardrail_config_router)
 app.include_router(plugins_router)

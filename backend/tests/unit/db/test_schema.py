@@ -90,6 +90,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "token_families",
         "trigger_events",
         "triggers",
+        "variant_batch_state",
         "variant_groups",
         "webhook_dedup_hashes",
         "webhook_payloads",
