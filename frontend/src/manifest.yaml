@@ -1956,6 +1956,9 @@ elements:
       - testid: runner-profile-drift
         type: element
         dynamic_testid: false
+      - testid: runner-profile-active-workspaces
+        type: element
+        dynamic_testid: false
       - testid: runners-profiles-apply
         type: button
         dynamic_testid: false
