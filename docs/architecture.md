@@ -107,7 +107,7 @@ Each eval has a pass threshold and failure behaviour: `warn` (soft – run conti
 Manages Human-in-the-Loop gates using LangGraph's `interrupt()`. Atomic claim semantics via `SELECT ... FOR UPDATE` on `hitl_claims` table. Claim tokens are opaque random strings (alpha) or short-lived JWTs (v1).
 
 Features:
-- `human_only` flag – blocks LLM approval via MCP; defaults to `true` (FAR-609) so every gate is human-only unless it explicitly opts out, and non-browser credentials cannot claim or decide such gates (REST claim route + MCP review_hitl claim both enforce it). Reject is not an agent escape hatch: it requires a claim token, and non-browser principals can no longer claim a default-human_only gate, so only a principal already holding a claim can reject — agent-only runs on default gates require browser-human intervention (intended policy)
+- `human_only` flag – blocks LLM approval via MCP; defaults to `true` (FAR-609) so every gate is human-only unless it explicitly opts out, and non-browser credentials cannot claim or decide such gates (REST claim route + MCP review_hitl claim both enforce it). Reject is not an agent escape hatch: it requires a claim token, and non-browser principals can no longer claim a default-human_only gate, so only a principal already holding a claim can reject; agent-only runs on default gates require browser-human intervention (intended policy)
 - `required_team_id` – restricts claims to specific team members
 - Claim expiry background job (default: 60s interval, Postgres advisory lock for single-worker execution)
 - `manual` node type – same as HITL but human provides full output
@@ -253,7 +253,7 @@ Manages the local and community library of reusable primitives (agents, schemas,
 
 ### Declarative Configuration CLI (`modulo/cli/apply/`) – FAR-681
 
-`modulo apply -f <config.yaml>` applies an org's schemas (+ versions), model backends, pipelines and triggers to a live deployment from one YAML file (`api_version: modulo.dev/v1`), driven by `MODULO_URL` + `MODULO_API_KEY` (bearer `mk_` org key). Planning is name-based upsert (RLS-bound to the key's org): each entity chooses created / updated / unchanged / blocked from a canonical managed-field hash, so rerun is idempotent and runtime state (`next_fire_at`, `streak_epoch`, ...) never causes drift. Keys: entities apply in dependency order with per-entity containment; secrets are refs-only (`${env:VAR}` / `secretref://<key>` — inline literals are a validation error; the server masks stored secrets, so `--refresh-secrets` re-sends trigger configs whose secrets rotated); backend writes are health-check-verified; `--dry-run/--plan` reports without writing; `--diff` is a read-only drift report (plan-shaped, labelled `mode=drift`, with graph node/edge breakdown for drifted pipelines) used as a CI gate — exit 0 when the org matches the config, exit 1 on drift (created/updated/blocked), and real apply exits 1 on any blocked/failed entity.
+`modulo apply -f <config.yaml>` applies an org's schemas (+ versions), model backends, pipelines and triggers to a live deployment from one YAML file (`api_version: modulo.dev/v1`), driven by `MODULO_URL` + `MODULO_API_KEY` (bearer `mk_` org key). Planning is name-based upsert (RLS-bound to the key's org): each entity chooses created / updated / unchanged / blocked from a canonical managed-field hash, so rerun is idempotent and runtime state (`next_fire_at`, `streak_epoch`, ...) never causes drift. Keys: entities apply in dependency order with per-entity containment; secrets are refs-only (`${env:VAR}` / `secretref://<key>` -- inline literals are a validation error; the server masks stored secrets, so `--refresh-secrets` re-sends trigger configs whose secrets rotated); backend writes are health-check-verified; `--dry-run/--plan` reports without writing; `--diff` is a read-only drift report (plan-shaped, labelled `mode=drift`, with graph node/edge breakdown for drifted pipelines) used as a CI gate -- exit 0 when the org matches the config, exit 1 on drift (created/updated/blocked), and real apply exits 1 on any blocked/failed entity.
 
 ## Data Flow
 
@@ -346,8 +346,8 @@ org triggers pause). Four independent mechanisms keep that gate healthy:
 #### Runner capacity gate (FAR-594 D8)
 
 Sandbox-agent dispatches (every `sandbox_mode`, every provider tier) reserve a
-runner slot through ONE atomic transaction —
-`runner_capacity.acquire_runner_dispatch_slot` — replacing the pre-D8 racy
+runner slot through ONE atomic transaction --
+`runner_capacity.acquire_runner_dispatch_slot` -- replacing the pre-D8 racy
 check-then-act count. Transaction shape: `SET LOCAL lock_timeout`
 (`RUNNER_CAPACITY_LOCK_TIMEOUT_MS`, default 2s) → **own-row
 claim-token-fenced lock FIRST** → per-org advisory lock (the RESERVED
@@ -356,7 +356,7 @@ claim-token-fenced lock FIRST** → per-org advisory lock (the RESERVED
 dispatch-marker UPDATE commits the reservation → the workspace provisions
 OUTSIDE the transaction. The uniform row→advisory ordering is shared with the
 resume path (`executor.resume` writes the run row before its advisory lock),
-which makes the scheme cycle-free by construction — including same-run
+which makes the scheme cycle-free by construction, including same-run
 dispatch+resume overlap. SQLSTATE 55P03 (lock_timeout) degrades to a RETRYABLE
 capacity denial with the distinct `runner.capacity.lock_degraded` event; 40P01
 is a separate `runner.capacity.deadlock_degraded` alarm (expected impossible
@@ -364,10 +364,10 @@ under the uniform ordering). Every other DB error fails OPEN
 (`runner.capacity.gate_error`) and the dispatch marker is still written
 best-effort in its own transaction; if even that write fails
 (`sandbox_agent.best_effort_marker_failed`) the dispatch proceeds
-markerless fail-open — the sweep and the re-dispatch path own healing, a DB
+markerless fail-open; the sweep and the re-dispatch path own healing, a DB
 hiccup must never become a dispatch outage.
 
-- **Count population (unified across all four capacity paths — dispatch gate,
+- **Count population (unified across all four capacity paths: dispatch gate,
   resume gate, HITL pre-check, claim-time read):** flag ON: `running` runs
   holding a live dispatch marker only. `awaiting_human`/`pending`/`claimed`/
   `unknown`/`hitl_parked` hold no slot (a parked HITL run cannot starve the
@@ -375,7 +375,7 @@ hiccup must never become a dispatch outage.
   the decided-gate auto-resume loop). The count excludes the run's OWN marker,
   so a re-dispatch of a run still carrying a fence-carrying stale marker
   cannot self-block. Flag OFF: the pre-D8 population exactly
-  (`ACTIVE_RUN_STATUSES`, no tombstone exclusion) — the flag-off window is the
+  (`ACTIVE_RUN_STATUSES`, no tombstone exclusion) -- the flag-off window is the
   pre-D8 behaviour, not a hybrid.
 - **Tier attribution:** the gate's marker write carries `"provider"`
   (`runner_docker` | `e2b` | `local`) + `"written_at"`. Legacy tier-less
@@ -387,49 +387,49 @@ hiccup must never become a dispatch outage.
   by it); an explicit value gates ALL runner dispatches; an explicit `null` is
   no gate; `0` is deny-all. Flag OFF keeps the pre-D8 behaviour exactly: the
   pre-D8 count population above (no advisory lock, no lock_timeout,
-  `enforced_cap` semantics — absent key = no gate), the legacy
+  `enforced_cap` semantics; absent key = no gate), the legacy
   `_uuid_to_lock_keys` keyspace on the resume path, and NO HITL tombstone.
   The flag is short-lived (removed at GA).
-- **HITL boundary (flag ON):** at interrupt handling — before the run enters
-  `awaiting_human` — any remaining NON-FENCE dispatch marker becomes the
+- **HITL boundary (flag ON):** at interrupt handling, before the run enters
+  `awaiting_human`, any remaining NON-FENCE dispatch marker becomes the
   `{"state": "cleared_at_hitl"}` tombstone: capacity-neutral (the count is
   running-only AND excludes tombstones) while still recording the dispatch.
   The exactly-once `script_executing` fence is NEVER tombstoned (a fence
   proves a script PROCESS may have started; replacing it would let the fence
-  be re-acquired — double-execute). Flag OFF the tombstone does not fire at
+  be re-acquired, double-execute). Flag OFF the tombstone does not fire at
   all (pre-D8: the marker simply survives the park).
 - **State-aware reconciliation sweep** (wired into `dispatcher_reconcile`
   every 60s and a dedicated 5-min `runner_marker_sweep` cron): clears non-fence
   markers on genuinely terminal runs and markers stale beyond 25h
   (`RUNNER_MARKER_STALE_SECONDS`; marker `written_at`, legacy tier-less
   fall back to `runs.updated_at`); a stale clear on a non-terminal RUNNING run
-  also terminalises the run (`worker_lost` — the slot is reclaimed by killing
+  also terminalises the run (`worker_lost`; the slot is reclaimed by killing
   the zombie, so no running-without-marker-without-workspace state can be
   minted) unless the row itself is FRESH (a freshly-resumed long-parked run:
   only the stale marker is cleared, never a live attempt); every
   clear/transition UPDATE is CAS-guarded on the classified marker text (a
-  concurrent fresh-marker commit makes the UPDATE match 0 rows — the sweep
+  concurrent fresh-marker commit makes the UPDATE match 0 rows; the sweep
   never clobbers a reservation it did not classify), the candidate scan is
   batched (500-row cursor pages) over the
   `ix_runs_org_runner_marker_sweep` partial index, and any org-index or
   org-pass failure raises `RunnerMarkerSweepError` carrying the partial
-  counts (the cron wrapper persists them + re-raises — retries engage).
+  counts (the cron wrapper persists them + re-raises, retries engage).
   Fence-carrying `script_executing` components on NON-terminal rows are
   NEVER cleared (precedence over staleness); on TERMINAL rows the
   rollback detector's anomaly-code exemption outranks the fence, and a
   terminal non-anomaly crash-leaked fence clears past the staleness cap.
   Runs `dispatcher_reconcile` considers recoverable keep their markers (the
-  sweep evaluates the reconciler's OWN OR-composed recovery predicates —
+  sweep evaluates the reconciler's OWN OR-composed recovery predicates,
   parity by construction, evaluated lazily and never for terminal rows);
   terminal runs carrying the rollback detector's anomaly error
   codes keep their markers (`rollback_thresholds._count_claim_without_marker`
-  requires them). Every COMMITTED clear emits `runner.capacity.marker_cleared`
-  — the coordination note the D4 container reconciler consumes (the cleared
+  requires them). Every COMMITTED clear emits `runner.capacity.marker_cleared`;
+  the coordination note the D4 container reconciler consumes (the cleared
   run is terminal or capacity-neutral, so its workspace becomes an orphan the
   D4 reconciler owns destroying); a rolled-back org pass emits nothing. After
   each org's pass the live count is asserted ≤ cap with
   `runner.capacity.violation` on a genuine breach (a cap-less org never
-  violates) — the D8 rollback signal. The claim-time demotion
+  violates); the D8 rollback signal. The claim-time demotion
   (`_check_capacity`) remains an explicitly
   ADVISORY, lock-free, population-only read (its own-row lock exists only at
   the fenced demote write); the sweep is its named backstop.
@@ -560,7 +560,7 @@ Hardcoded sliding-window rules enforced by `RateLimitMiddleware` (see `backend/s
 
 Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op when Redis is unavailable. Auth rate limiter requires Redis and is disabled without it.
 
-The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, review actions, AND both surfaces — the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). The manual-output submit route (`/runs/{run_id}/manual/{gate_id}/submit` — an approve-capability HITL surface whose path has no `/hitl/` segment) shares the SAME aggregate bucket, so a sweep alternating `/hitl/` review actions and `/manual/` submits exhausts one budget. MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule — they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
+The HITL budget is AGGREGATE per identity (JWT user, API-key prefix, or IP) across runs, gates, review actions, AND both surfaces; the bucket key normalizes the whole variable tail (FAR-611), so rotating gates, runs, or actions cannot dodge the 20/min cap (the 2026-09-05 bulk-approve sweep spread 22 decisions across per-gate buckets and was never throttled). The manual-output submit route (`/runs/{run_id}/manual/{gate_id}/submit`, an approve-capability HITL surface whose path has no `/hitl/` segment, shares the SAME aggregate bucket, so a sweep alternating `/hitl/` review actions and `/manual/` submits exhausts one budget. MCP review actions sit behind the general `/mcp` 200/min rule rather than the HITL rule; they are machine-surface, human_only gates are already denied there, and tightening the MCP budget is follow-up work if MCP-side sweeps ever warrant it.
 
 ## Deployment Architecture
 
