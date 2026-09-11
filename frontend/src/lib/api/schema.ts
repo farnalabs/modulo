@@ -14795,6 +14795,11 @@ export interface components {
              */
             placeholder_digest: boolean;
             drift?: components["schemas"]["ProfileDriftResponse"];
+            /**
+             * Active Workspaces
+             * @default 0
+             */
+            active_workspaces: number;
         };
         /** ProfileListResponse */
         ProfileListResponse: {

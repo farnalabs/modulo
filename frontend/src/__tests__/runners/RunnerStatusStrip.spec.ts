@@ -36,6 +36,7 @@ function makeStatus(overrides: Partial<RunnersStatus> = {}): RunnersStatus {
         available: true,
         placeholder_digest: false,
         drift: { is_seeded: true, drifted: false, drifted_fields: [] },
+        active_workspaces: 0,
       },
     ],
     concurrency: {
@@ -77,6 +78,7 @@ describe('RunnerStatusStrip', () => {
           available: true,
           placeholder_digest: false,
           drift: { is_seeded: false, drifted: false, drifted_fields: [] },
+          active_workspaces: 0,
         },
       ],
     })
