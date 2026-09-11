@@ -156,12 +156,32 @@
                 <Square v-else aria-hidden="true" class="h-3.5 w-3.5" />
                 {{ cancelLabel(row.run_id as string) }}
               </button>
+              <button
+                type="button"
+                v-if="isTerminalStatus(row.status as string) && row.pipeline_id"
+                :disabled="rerunningIds.has(row.run_id as string)"
+                :data-testid="`runs-list-rerun-${row.run_id}`"
+                :aria-label="$t('views.RunsListView.rerun')"
+                class="ml-2 inline-flex items-center gap-1 rounded-lg border border-input bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-50"
+                @click.stop="rerunRun(row as RunListItem)"
+                @keydown.stop
+              >
+                <LoaderCircle v-if="rerunningIds.has(row.run_id as string)" aria-hidden="true" class="h-3.5 w-3.5 animate-spin" />
+                <RotateCcw v-else aria-hidden="true" class="h-3.5 w-3.5" />
+                {{ rerunLabel(row.run_id as string) }}
+              </button>
               <span
                 v-if="cancelErrors[row.run_id as string]"
                 :data-testid="`runs-list-cancel-error-${row.run_id}`"
                 role="alert"
                 class="ml-2 text-xs text-destructive"
               >{{ cancelErrors[row.run_id as string] }}</span>
+              <span
+                v-if="rerunErrors[row.run_id as string]"
+                :data-testid="`runs-list-rerun-error-${row.run_id}`"
+                role="alert"
+                class="ml-2 text-xs text-destructive"
+              >{{ rerunErrors[row.run_id as string] }}</span>
             </div>
           </template>
         </DataTable>
@@ -209,7 +229,7 @@ import RunErrorTag from '../components/shared/RunErrorTag.vue'
 import RunWarningsBadge from '../components/shared/RunWarningsBadge.vue'
 import { ref, computed, watch, onUnmounted, onMounted } from 'vue'
 import { useRoute, useRouter, type LocationQuery } from 'vue-router'
-import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
+import { fetchRuns, requestRunCancellation, requestRunRerun, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -219,10 +239,10 @@ import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
-import { isNonTerminalStatus } from '../constants/runStatuses'
+import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { LoaderCircle, Square } from '@lucide/vue'
+import { LoaderCircle, Square, RotateCcw } from '@lucide/vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -232,6 +252,9 @@ const { t } = useI18n()
 const confirmingIds = ref(new Set<string>())
 const cancellingIds = ref(new Set<string>())
 const cancelErrors = ref<Record<string, string>>({})
+const rerunConfirmingIds = ref(new Set<string>())
+const rerunningIds = ref(new Set<string>())
+const rerunErrors = ref<Record<string, string>>({})
 
 const pageSize = 20
 const FILTER_STORAGE_KEY = 'runs-list-filters'
@@ -455,6 +478,37 @@ async function cancelRun(run: RunListItem) {
     await loadRuns()
   } finally {
     cancellingIds.value = new Set([...cancellingIds.value].filter((id) => id !== runId))
+  }
+}
+
+function rerunLabel(runId: string): string {
+  if (rerunningIds.value.has(runId)) return t('views.RunsListView.rerunning')
+  if (rerunConfirmingIds.value.has(runId)) return t('views.RunsListView.rerun_confirm')
+  return t('views.RunsListView.rerun')
+}
+
+async function rerunRun(run: RunListItem) {
+  const runId = run.run_id
+  if (!isTerminalStatus(run.status)) return
+  if (rerunningIds.value.has(runId)) return
+  // Two-click confirm per row (mirrors cancel): always warn, since the list
+  // does not know the pipeline's idempotency flag without a per-row fetch.
+  if (!rerunConfirmingIds.value.has(runId)) {
+    rerunConfirmingIds.value = new Set([...rerunConfirmingIds.value, runId])
+    return
+  }
+  rerunConfirmingIds.value = new Set([...rerunConfirmingIds.value].filter((id) => id !== runId))
+  rerunningIds.value = new Set([...rerunningIds.value, runId])
+  rerunErrors.value = { ...rerunErrors.value, [runId]: '' }
+  try {
+    const { runId: newRunId, error } = await requestRunRerun(runId, t('views.RunsListView.rerun_failed'))
+    if (error) {
+      rerunErrors.value = { ...rerunErrors.value, [runId]: error }
+      return
+    }
+    if (newRunId) router.push(`/runs/${newRunId}`)
+  } finally {
+    rerunningIds.value = new Set([...rerunningIds.value].filter((id) => id !== runId))
   }
 }
 

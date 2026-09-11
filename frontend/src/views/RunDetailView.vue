@@ -246,6 +246,24 @@
         <span v-if="cancelError" role="alert" class="ml-3 text-xs text-destructive">{{ cancelError }}</span>
       </div>
 
+      <!-- Re-run button for terminal runs (FAR-788) -->
+      <div v-if="canRerun" class="my-4" data-testid="run-detail-rerun">
+        <button
+          type="button"
+          :disabled="rerunning"
+          data-testid="run-rerun"
+          :aria-label="$t('views.RunDetailView.rerun')"
+          class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50"
+          @click="onRerunClick"
+        >
+          <svg v-if="rerunning" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <RotateCcw v-else class="h-4 w-4" aria-hidden="true" />
+          {{ rerunning ? $t('views.RunDetailView.rerunning') : (rerunConfirming ? $t('views.RunDetailView.rerun_confirm') : $t('views.RunDetailView.rerun')) }}
+        </button>
+        <span v-if="rerunConfirming" role="alert" class="ml-3 text-xs text-warning">{{ $t('views.RunDetailView.rerun_confirm_warning') }}</span>
+        <span v-if="rerunError" role="alert" class="ml-3 text-xs text-destructive">{{ rerunError }}</span>
+      </div>
+
       <!-- Trace ID -->
       <div v-if="run.trace_id" class="flex items-center gap-2">
         <span class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.otel_trace_id') }}</span>
@@ -686,7 +704,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import type { Ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, getAccessToken } from '../lib/api/client'
 import type { components } from '../lib/api/client'
@@ -701,13 +719,13 @@ import HitlGateCard from '../components/hitl/HitlGateCard.vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
-import { requestRunCancellation } from '../lib/api/runs'
+import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'
 import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { Check, X, AlertTriangle } from '@lucide/vue'
+import { Check, X, AlertTriangle, RotateCcw } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
   created_at?: string | null
@@ -791,6 +809,7 @@ interface RunChunkEvent {
 }
 
 const route = useRoute()
+const router = useRouter()
 const { t, locale } = useI18n()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 const run = ref<RunResponse | null>(null)
@@ -808,6 +827,10 @@ const revealedPrompts = ref<Record<string, null | { prompt: string; messages: { 
 const selectedPrompt = ref<{ nodeName: string; prompt: string; tokenCount: number | null } | null>(null)
 const cancelling = ref(false)
 const cancelError = ref<string | null>(null)
+const rerunning = ref(false)
+const rerunError = ref<string | null>(null)
+const rerunConfirming = ref(false)
+const pipelineIdempotent = ref<boolean | null>(null)
 const pendingGates = ref<components['schemas']['GateResponse'][]>([])
 const hitlLoading = ref(false)
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
@@ -1212,6 +1235,8 @@ const isTerminal = computed(() => run.value != null && isTerminalStatus(run.valu
 
 const canCancel = computed(() => run.value != null && !isTerminalStatus(run.value.status))
 
+const canRerun = computed(() => isTerminal.value && !!run.value?.pipeline_id)
+
 function nodeStatusBadgeClass(node: NodeEntry): string {
   return statusBadgeClassFor(node.status)
 }
@@ -1389,6 +1414,56 @@ async function cancelRun() {
   } finally {
     cancelling.value = false
   }
+}
+
+// FAR-788: idempotency is a per-graph-node flag — the replay is side-effect
+// safe only when EVERY node in the pipeline's graph is idempotent. When the
+// graph cannot be read (or has no nodes) we fall back to the confirm path.
+// The fetch only runs once the run is terminal (button becomes visible).
+watch(
+  () => (isTerminal.value ? (run.value?.pipeline_id ?? null) : null),
+  async (pipelineId) => {
+    pipelineIdempotent.value = null
+    rerunConfirming.value = false
+    if (!pipelineId) return
+    try {
+      const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+        params: { path: { pipeline_id: pipelineId } },
+      })
+      const nodes = data?.nodes ?? []
+      pipelineIdempotent.value = nodes.length > 0 && nodes.every((n) => n.idempotent !== false)
+    } catch (e) {
+      // Best-effort: fall back to the confirm-required path when unknown.
+      console.warn('Failed to fetch pipeline graph idempotency', e)
+    }
+  },
+  { immediate: true },
+)
+
+async function doRerun() {
+  const runId = route.params.id as string
+  if (!runId) return
+  rerunning.value = true
+  rerunError.value = null
+  try {
+    const { runId: newRunId, error } = await requestRunRerun(runId, t('views.RunDetailView.rerun_failed'))
+    if (error) {
+      rerunError.value = error
+    } else if (newRunId) {
+      router.push(`/runs/${newRunId}`)
+    }
+  } finally {
+    rerunning.value = false
+    rerunConfirming.value = false
+  }
+}
+
+function onRerunClick() {
+  if (rerunConfirming.value || pipelineIdempotent.value === true) {
+    void doRerun()
+    return
+  }
+  rerunConfirming.value = true
 }
 
 // FAR-631 invariant: approve/reject empties pendingGates and flips the run

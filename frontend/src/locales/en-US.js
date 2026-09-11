@@ -1226,6 +1226,10 @@ export default {
       "stop_confirm": "Confirm?",
       "stopping": "Stopping...",
       "cancel_failed": "Failed to cancel:",
+      "rerun": "Re-run",
+      "rerun_confirm": "Re-run?",
+      "rerunning": "Re-running...",
+      "rerun_failed": "Failed to re-run:",
       "triggered_by": "Triggered by",
       "heartbeat": "Heartbeat",
       "queued": "queued",
@@ -1566,6 +1570,11 @@ export default {
       "stop": "Stop Run",
       "stopping": "Stopping...",
       "cancel_failed": "Failed to cancel:",
+      "rerun": "Re-run",
+      "rerun_confirm": "Confirm re-run?",
+      "rerunning": "Re-running...",
+      "rerun_failed": "Failed to re-run:",
+      "rerun_confirm_warning": "This pipeline is non-idempotent: re-running may repeat side effects (PRs, comments, deploys).",
       "triggered_by": "Triggered by",
       "last_heartbeat": "Last heartbeat",
       "cost_so_far": "Cost so far",
@@ -3773,7 +3782,8 @@ export default {
       "agent_signal": "Agent Signal",
       "ongoing": "Ongoing",
       "correction": "Correction",
-      "slack_app_mention": "Slack Mention"
+      "slack_app_mention": "Slack Mention",
+      "rerun": "Rerun"
     },
     "heartbeat": {
       "just_now": "just now",

@@ -319,8 +319,9 @@ class TestMigrationBackfillGrace:
         # FAR-764's 0210_community_gate chains on top of 0209, and FAR-775's
         # 0211_variant_batch_state chains on top of 0210, and FAR-775's
         # follow-up 0212_variant_batch_state_updated_at chains on top of 0211,
+        # and FAR-788's 0213_runs_rerun_trigger_type chains on top of 0212,
         # so it is now the single linear head of the chain.
-        assert heads == ["0212_variant_batch_state_updated_at"], f"expected a single head, got {heads}"
+        assert heads == ["0213_runs_rerun_trigger_type"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

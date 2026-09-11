@@ -6,6 +6,7 @@ import logging
 import re
 import uuid
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -107,6 +108,7 @@ _CODE_RUNS_OBSERVE_RUN_NODE = "runs.observe_run_node"
 _DEFAULT_FLOAT_DISPLAY = "0.000000"
 _CODE_RUN_LIST = "run.list"
 _CODE_RUNS_TRIGGER_RUN = "runs.trigger_run"
+_CODE_RUNS_TRIGGER_RERUN = "runs.trigger_rerun"
 _CODE_RUNS_REVEAL_NODE_PROMPT = "runs.reveal_node_prompt"
 
 
@@ -1134,6 +1136,176 @@ async def trigger_run(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
     await dispatch_run(str(run_id), str(org_id), queue="runs")
+
+    return run_response
+
+
+# ---------------------------------------------------------------------------
+# Rerun (FAR-788): re-execute a terminal run against its pinned snapshot
+# ---------------------------------------------------------------------------
+
+
+async def _create_rerun_run(session: AsyncSession, principal: TenantPrincipal, source_run: Run) -> Run:
+    """Create a rerun of a terminal run: same snapshot, copied input payload.
+
+    Runs inside the caller's transaction (RLS already set). The rerun is
+    pinned to the SOURCE run's ``snapshot_id`` — no fresh snapshot is created —
+    so it executes exactly what the source run executed, not whatever the live
+    graph says today. The input payload is copied server-side from the source
+    row (the request body carries no payload, so callers cannot smuggle a
+    different one in). Lineage: ``trigger_type='rerun'`` and
+    ``parent_run_id=<source run id>``.
+
+    Rate-limit bypass (deliberate): the source run already consumed a trigger
+    slot when it was originally created; a rerun is operator-initiated
+    recovery/re-execution, not a new trigger, so the pipeline's
+    ``max_triggers`` rate limit must not block it.
+    """
+    if source_run.status not in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Run is not in a terminal status: {source_run.status} - only completed or failed runs can be re-run"
+            ),
+        )
+
+    # Defence-in-depth: the column is NOT NULL, but a defensive 409 beats a
+    # 500 for legacy/pre-migration rows that somehow lack the pin.
+    if source_run.snapshot_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Source run has no snapshot to re-execute",
+        )
+
+    pipeline = await get_pipeline(session, source_run.pipeline_id, organisation_id=principal.organisation_id)
+    if pipeline is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline {source_run.pipeline_id} not found",
+        )
+
+    snapshot_result = await session.execute(
+        select(PipelineSnapshot).where(PipelineSnapshot.id == source_run.snapshot_id)
+    )
+    snapshot = snapshot_result.scalar_one_or_none()
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Source run's snapshot is missing",
+        )
+
+    # Server-side payload copy: a rerun always re-sends exactly what the
+    # source run received. deepcopy so the new run's payload never aliases the
+    # ORM instance's loaded dict.
+    copied_payload = deepcopy(source_run.input_payload) if isinstance(source_run.input_payload, dict) else {}
+
+    await _validate_run_input_basics(session, snapshot.graph_json, snapshot, copied_payload)
+
+    run = await create_run(
+        session,
+        org_id=principal.organisation_id,
+        pipeline_id=pipeline.id,
+        snapshot_id=source_run.snapshot_id,
+        trigger_type="rerun",
+        input_payload=copied_payload,
+        # FAR-620 attribution: the rerun belongs to the CALLER's account.
+        account_id=principal.account_id,
+        parent_run_id=source_run.id,
+        # No rate_limit_key — the rerun bypasses the pipeline trigger rate
+        # limit (see docstring). No trigger_id — operator-initiated, not
+        # trigger-initiated, so the org pause gate treats it as exempt.
+    )
+    # Attach the already-loaded pipeline so _build_run_response can read
+    # run.pipeline.name without a lazy load (same autobegin rationale as the
+    # manual trigger path).
+    run.pipeline = pipeline
+    return run
+
+
+@router.post(
+    "/{run_id}/rerun",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+async def trigger_rerun(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    _engine: AsyncEngine = Depends(_get_engine),
+    principal: TenantPrincipal = require_permission_any_credential("run.trigger"),
+) -> RunResponse:
+    """Re-execute a terminal run against its original snapshot.
+
+    Returns 202 immediately; execution happens in a background task. The new
+    run carries ``trigger_type='rerun'``, ``parent_run_id=<source run id>``,
+    the source run's ``snapshot_id`` and a server-side copy of its input
+    payload. Only runs in a terminal status can be re-run (409 otherwise).
+    """
+    org_id = principal.organisation_id
+
+    run_response: RunResponse | None = None
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            source_run = await get_run(session, run_id, organisation_id=org_id)
+            if source_run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+            run = await _create_rerun_run(session, principal, source_run)
+            run_id_new = run.id
+            # Build the response while the transaction is still open (same
+            # autobegin rationale as the manual trigger path); gate_fired
+            # reads through the run_node_outputs repo reader in the SAME
+            # transaction (FAR-583).
+            run_response = _build_run_response(run, gate_fired=await _run_gate_fired(session, run))
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_TRIGGER_RERUN)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_TRIGGER_RERUN)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except OrgDeletedError as exc:
+        _log.exception(_CODE_RUNS_TRIGGER_RERUN)
+        if exc.deleted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot create run: organisation {exc.org_id} is deleted",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cannot create run: organisation {exc.org_id} not found",
+        ) from None
+
+    except StorageExhaustedError:
+        raise
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    await dispatch_run(str(run_id_new), str(org_id), queue="runs")
 
     return run_response
 

@@ -2899,6 +2899,12 @@ elements:
       - testid: run-detail-hitl-message
         type: element
         dynamic_testid: false
+      - testid: run-detail-rerun
+        type: element
+        dynamic_testid: false
+      - testid: run-rerun
+        type: button
+        dynamic_testid: false
     /runs/diff:
       - testid: diff-loading
         type: element
@@ -3938,6 +3944,12 @@ features:
         description: Run execution, history, detail, and output diffs
         status: covered
         behaviours:
+            # Run rerun (FAR-788)
+            - "[x] POST /api/v1/runs/{run_id}/rerun (run.trigger permission, 202) re-executes a terminal run by reusing the source run's snapshot_id and a SERVER-SIDE deep copy of its input_payload (the request carries no body; the caller can never inject a payload), stamping the new run trigger_type='rerun' with lineage via parent_run_id and the caller's account_id, bypassing trigger rate limits (operator-initiated recovery, not a new trigger) while still passing the pause gate and guardrails kill-switch"
+            - "[x] Rerun admission guards: a non-terminal source run is 409 (only terminal runs re-run), a source run with snapshot_id NULL is 409 (legacy/pre-snapshot runs cannot re-run faithfully), a missing source run or deleted pipeline is 404, and a missing snapshot row is 409; the response carries the new run's snapshot_id + run_id so lineage is verifiable"
+            - "[x] Migration 0212 widens the runs and run_daily_facts trigger-vocabulary CHECK constraints with 'rerun' (drop + re-add NOT VALID + VALIDATE) so analytics bucket the new trigger type without a table rewrite"
+            - "[x] The run detail page shows a Re-run button for terminal runs; when every node in the pipeline's graph is flagged idempotent the click fires the request directly, otherwise the button requires a second confirm click with a warning that a non-idempotent re-run may repeat side effects; an unreadable or empty graph falls back to the confirm path; success navigates to the new run's detail page"
+            - "[x] The runs list shows a per-row Re-run button for terminal runs with a two-click confirm (the list never fetches per-row pipeline idempotency); success navigates to the new run's detail page and failures render inline"
             # Run-level cost warnings (missing self-report surfacing)
             - "[x] A self_reported cost component with at least one eligible sandbox node but no agent report is a CLEAR non-billing state: its breakdown entry stays visible (source self_reported, missing_self_report true, missing_self_report_reason agent_not_reported) but never renders as a normal $0.000000 money line in the run detail breakdown (no numeric basis, no phantom reported=0/node_count=0)"
             - "[x] The run detail response (GET /api/v1/runs/{id}) surfaces a structured warnings list ({\"code\", \"severity\", \"message\"}) derived from the run's cost_breakdown; a missing agent model-cost self-report emits code missing_self_report with severity warning"
