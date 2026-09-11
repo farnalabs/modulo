@@ -84,6 +84,16 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
 ## QA History
 
 - 2026-09-11: **improve-architecture (product-map walk)** — closed the
+  `/runs/:id` element-inventory drift for the HitlBriefing surface embedded in
+  `hitl/HitlGateCard.vue`: the gate card renders `HitlBriefing.vue` (the
+  gate reason/context briefing with its collapse toggle and condition-result
+  detail), so its shipped static testids (`hitl-briefing*`) are part of the Run
+  Detail page surface. They are now registered on `/runs/:id`, and
+  `test_mapped_route_elements_cover_owning_view_testids` maps the route to
+  `HitlBriefing.vue` alongside the previously-closed shared components, so a
+  newly shipped briefing testid can no longer drift invisible to Remy's docs
+  indexer / `/api/v1/manifest`.
+- 2026-09-11: **improve-architecture (product-map walk)** — closed the
   `/runs/:id` element-inventory drift for the shared components the Run Detail
   page renders: `shared/JsonViewer.vue` (the collapsible JSON explorer used for
   IO/output/telemetry inspection), `shared/ErrorAlert.vue` (its dismiss
