@@ -177,7 +177,7 @@ jobs:
           token="$(curl -fsS -X POST "${BASE}/api/v1/auth/login" \
             -H 'Content-Type: application/json' \
             -d "{\"email\":\"admin@modulo.run\",\"password\":\"${ADMIN_PASSWORD}\"}" \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')"
+            | jq -r '.access_token')"
           # MCP initialize: the remote MCP server is mounted at /mcp (api/main.py)
           curl -fsS -X POST "${BASE}/mcp" \
             -H "Authorization: Bearer ${token}" \
@@ -470,7 +470,7 @@ jobs:
           token="$(curl -fsS -X POST "${BASE}/api/v1/auth/login" \
             -H 'Content-Type: application/json' \
             -d "{\"email\":\"admin@modulo.run\",\"password\":\"${ADMIN_PASSWORD}\"}" \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')"
+            | jq -r '.access_token')"
           # MCP initialize: the remote MCP server is mounted at /mcp (api/main.py)
           curl -fsS -X POST "${BASE}/mcp" \
             -H "Authorization: Bearer ${token}" \
