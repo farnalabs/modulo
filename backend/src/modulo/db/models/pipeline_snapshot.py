@@ -1,5 +1,5 @@
 import uuid
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -80,5 +80,5 @@ class PipelineSnapshot(OrgScoped):
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
-    environment_profile: Mapped[Optional["EnvironmentProfile"]] = relationship()
+    environment_profile: Mapped["EnvironmentProfile | None"] = relationship()
     schema_pins: Mapped[list["SnapshotSchemaPin"]] = relationship(back_populates="snapshot")

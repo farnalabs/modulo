@@ -32,7 +32,6 @@ class BedrockBackend(ModelBackendBase):
             **default_params,
         )
         self._backend_id = f"bedrock/{model_id}"
-        self._model_id = model_id
 
     @property
     def backend_id(self) -> str:

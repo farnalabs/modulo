@@ -1,7 +1,7 @@
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Index, Integer, Numeric, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -49,4 +49,4 @@ class OrgDailyRunCount(OrgScoped):
     refused_spend_usd: Mapped[Decimal] = mapped_column(
         Numeric(14, 6), nullable=False, default=Decimal(0), server_default="0"
     )
-    team: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_id])
+    team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])
