@@ -636,7 +636,7 @@ jobs:
           issue_key="[canary] $(date -u +%F)"
           existing="$(gh issue list --search "in:title \"${issue_key}\"" --state open --json number --jq '.[0].number // ""')"
           link="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${{ github.run_id }}"
-          body="Nightly native canary FAILED. Latest failing run: ${link}"
+          body="Nightly native canary FAILED (tag: ${CANARY_TAG:-unknown}). Latest failing run: ${link}"
           if [ -n "${existing}" ]; then
             gh issue comment "${existing}" --body "${body}"
             echo "appended to tracking issue #${existing} (dedupe key: ${issue_key})"
