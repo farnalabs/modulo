@@ -41,6 +41,7 @@ from modulo.core.guardrails.compensation import compensate_blocked_run
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.trigger_engine import is_guardrail_blocked_run
 from modulo.db.crud.run import create_run
+from modulo.db.crud.run_node_outputs import replace_run_node_outputs
 from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
@@ -253,12 +254,15 @@ class TestCompensateBlockedRunAgainstRealDB:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, test_org)
-            await session.execute(
-                text("UPDATE runs SET outputs_json = (:out)::json WHERE id = :rid"),
-                {
-                    "rid": str(run_id),
-                    "out": json.dumps({"node_create_pr": {"output": {"number": 42}}}),
-                },
+            # Seed the executed node output on the new run_node_outputs store
+            # (FAR-583): compensate_blocked_run reads executed nodes from there,
+            # not the legacy runs.outputs_json blob column.
+            await replace_run_node_outputs(
+                session,
+                run_id=run_id,
+                organisation_id=test_org,
+                outputs={"node_create_pr": {"output": {"number": 42}}},
+                telemetry=None,
             )
             # Reload the run row and drive compensation through the real path.
             from modulo.db.crud.run import get_run
