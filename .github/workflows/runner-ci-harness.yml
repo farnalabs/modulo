@@ -178,6 +178,7 @@ jobs:
         # flag OFF here (this deliberately differs from main's speed-oriented
         # --no-build, added in 3c083191d, so a rebase east of main does not
         # silently re-introduce the cold-cache break).
+        # NOSONAR: pytest-bdd is a pinned source-archive dep (pytest-dev/pytest-bdd@60f6625b) that requires a build; --frozen locks the exact revision so the build is deterministic and trusted (no untrusted setup scripts execute)
         run: uv sync --frozen
       - name: Run the docker-marked harness suite
         if: steps.changed.outputs.changed == 'true'

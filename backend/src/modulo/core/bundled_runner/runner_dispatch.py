@@ -438,6 +438,13 @@ def _no_output_message(node_id: str) -> str:
     )
 
 
+def _schema_failure_message(node_id: str, schema_exc: str) -> str:
+    return (
+        f"Bundled Runner output for node '{node_id}' failed its declared output "
+        f"schema validation — retry in a fresh sandbox: {schema_exc}"
+    )
+
+
 def _budget_killed_message(node_id: str) -> str:
     return (
         f"Bundled Runner sandbox exceeded its wall-clock budget for node '{node_id}' "
@@ -872,24 +879,36 @@ async def run_bundled_runner_node(
                     raise ScriptInvalidOutputError(
                         f"Script-mode output failed schema validation for node {node_id!r}: {schema_exc}"
                     ) from None
-                return _build_sandbox_node_envelope(
+                # FAR-780: an llm-mode output that violates the node's DECLARED
+                # output contract (a missing schema-required field such as
+                # pr_url) must fail RETRYABLY so runtime_retry re-dispatches the
+                # node in a fresh sandbox. The previous synthetic
+                # ``status="failed"`` envelope (modulo_synthetic_failure=True)
+                # completed the node non-retryably: the run proceeded to a
+                # blocking eval (eval.blocked) with the sandbox destroyed and
+                # tokens burned, and the retryable ``sandbox.no_output_json``
+                # path never fired. The raw agent evidence is retained via the
+                # raw-output marker exactly as the no-output path above.
+                await _retain_raw_output_marker(
+                    session_factory,
+                    run_id=run_id,
+                    org_id_raw=org_id,
                     node_id=node_id,
-                    output=_SandboxNodeOutput(
-                        status="failed",
-                        summary=f"Output failed schema validation: {schema_exc}",
-                        exit_code=exit_code,
-                        wall_clock_time_ms=int(elapsed * 1000),
-                        cost_estimate_usd=_compute_sandbox_cost(elapsed, output_json),
-                        cost_source=output_json,
-                        output_json=output_json,
-                        agent_stdout=_redact_raw_output(agent_stdout_raw[:_MAX_ARTIFACT_LOG]),
-                        agent_stderr=_redact_raw_output(agent_stderr_raw[:_MAX_ARTIFACT_LOG]),
-                        stdout_length=len(agent_stdout_raw),
-                        stderr_length=len(agent_stderr_raw),
-                        attempt_key=attempt_key,
-                        modulo_synthetic_failure=True,
+                    attempt_key=attempt_key,
+                    summary=(
+                        "Bundled Runner agent output failed declared output schema validation — raw output retained"
                     ),
+                    source=_combine_raw_outputs(raw_output_str, agent_stdout_raw),
+                    parse_error=str(schema_exc),
+                    exit_code=exit_code,
+                    stdout_length=len(agent_stdout_raw),
+                    stderr_length=len(agent_stderr_raw),
+                    delivery_sentinel=delivery_sentinel,
                 )
+                raise SandboxNodeFailedError(
+                    _schema_failure_message(node_id=node_id, schema_exc=str(schema_exc)),
+                    node_id=node_id,
+                ) from None
 
         agent_stdout = _redact_raw_output(agent_stdout_raw[:_MAX_ARTIFACT_LOG])
         agent_stderr = _redact_raw_output(agent_stderr_raw[:_MAX_ARTIFACT_LOG])

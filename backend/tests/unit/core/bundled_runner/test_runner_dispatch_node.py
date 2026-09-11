@@ -34,6 +34,12 @@ from modulo.core.bundled_runner.runner_dispatch import (
     _source_contains_sentinel,
     _write_file_via_exec,
 )
+from modulo.core.pipeline_engine.node_runner import (
+    SandboxNodeFailedError as _RealSandboxNodeFailedError,
+)
+from modulo.core.pipeline_engine.node_runner import (
+    _validate_against_schema as _real_validate_against_schema,
+)
 
 
 class _FakeError(Exception):
@@ -342,17 +348,50 @@ async def test_run_schema_validation_failure_script_raises(patch_node_runner, mo
         await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
 
 
-async def test_run_schema_validation_failure_llm_returns_failed(patch_node_runner, monkeypatch) -> None:
+async def test_run_schema_validation_failure_llm_raises_retryable(patch_node_runner, monkeypatch) -> None:
     import modulo.core.pipeline_engine.node_runner as nrm
 
     def _bad_schema(*a, **k):
         raise ValueError("schema mismatch")
 
+    retained = {}
+
+    async def _retain(*a, **k):
+        retained.update(k)
+
     monkeypatch.setattr(nrm, "_validate_against_schema", _bad_schema, raising=False)
+    monkeypatch.setattr(nrm, "_retain_raw_output_marker", _retain, raising=False)
     monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value='{"summary":"ok"}'))
-    cfg = _config(sandbox_mode="llm", output_schema_json={"type": "object"})
-    out = await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
-    assert out["output"].status == "failed"
+    cfg = _config(sandbox_mode="llm", output_schema_json={"type": "object", "required": ["pr_url"]})
+    with pytest.raises(_FakeError) as excinfo:
+        await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
+    assert "schema validation" in str(excinfo.value)
+    assert retained.get("parse_error") == "schema mismatch"
+    assert '{"summary":"ok"}' in retained.get("source", "")
+
+
+async def test_run_schema_validation_failure_llm_retryable_real_schema(patch_node_runner, monkeypatch) -> None:
+    """FAR-780 regression: an llm-mode output that violates the node's DECLARED
+    output schema (a required field such as ``pr_url`` missing) raises the
+    retryable :class:`SandboxNodeFailedError` — ``runtime_retry`` re-dispatches
+    the node in a fresh sandbox — instead of returning the synthetic ``status=
+    failed`` envelope that completed the node non-retryably and eval-blocked the
+    run (``EvalBlockedError`` is a never-retryable control flow fault)."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+    from modulo.core.pipeline_engine import runtime_retry
+
+    monkeypatch.setattr(nrm, "SandboxNodeFailedError", _RealSandboxNodeFailedError, raising=False)
+    monkeypatch.setattr(nrm, "_validate_against_schema", _real_validate_against_schema, raising=False)
+    monkeypatch.setattr(
+        runner_dispatch,
+        "_read_file_via_exec",
+        AsyncMock(return_value='{"summary": "done"}'),
+    )
+    cfg = _config(sandbox_mode="llm", output_schema_json={"type": "object", "required": ["pr_url"]})
+    with pytest.raises(_RealSandboxNodeFailedError) as excinfo:
+        await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route(_FakeProvider()))
+    assert "pr_url" in str(excinfo.value)
+    assert runtime_retry.failure_event(excinfo.value) == "error"
 
 
 async def test_run_script_mode_nonzero_exit_raises(patch_node_runner, monkeypatch) -> None:
