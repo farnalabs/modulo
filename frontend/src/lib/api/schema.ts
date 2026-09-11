@@ -14410,6 +14410,16 @@ export interface components {
             outputs?: {
                 [key: string]: unknown;
             }[] | null;
+            /**
+             * Stdout Retention Mode
+             * @description Per-node stdout/stderr retention mode: 'tail' (legacy 512KB bound, default) or 'full' (retain up to stdout_max_bytes). Only valid on sandbox_agent nodes.
+             */
+            stdout_retention_mode?: ("tail" | "full") | null;
+            /**
+             * Stdout Max Bytes
+             * @description Max retained stdout/stderr bytes when stdout_retention_mode=='full'. Ignored in 'tail' mode. Must be a positive integer. Only valid on sandbox_agent nodes.
+             */
+            stdout_max_bytes?: number | null;
         };
         /** PipelineGraphResponse */
         PipelineGraphResponse: {

@@ -662,11 +662,18 @@ def test_api_node_persists_stdout_retention_fields():
 
 def test_api_node_rejects_stdout_retention_off_sandbox():
     """stdout retention is sandbox_agent-only — a declared value on another node
-    type would be a silent no-op, so it is rejected at save time."""
+    type would be a silent no-op, so it is rejected at save time.
+
+    A valid agent node (with agent_id) is used so the stdout_retention gate is
+    actually reached — an agent node without an agent_id is rejected earlier, by
+    the agent-only validation, which would mask this check.
+    """
     with pytest.raises(ValueError, match="sandbox_agent"):
-        PipelineGraphNode(**_sandbox_node_kwargs(node_type="agent", stdout_retention_mode="full"))
+        PipelineGraphNode(
+            **_sandbox_node_kwargs(node_type="agent", agent_id=uuid.uuid4(), stdout_retention_mode="full")
+        )
     with pytest.raises(ValueError, match="sandbox_agent"):
-        PipelineGraphNode(**_sandbox_node_kwargs(node_type="agent", stdout_max_bytes=2048))
+        PipelineGraphNode(**_sandbox_node_kwargs(node_type="agent", agent_id=uuid.uuid4(), stdout_max_bytes=2048))
 
 
 def test_api_node_rejects_bad_stdout_max_bytes():
