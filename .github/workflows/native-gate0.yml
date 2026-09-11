@@ -31,18 +31,6 @@ on:
       - "backend/src/modulo/api/main.py"
       - "deploy/fly/**"
       - ".github/workflows/native-gate0.yml"
-  push:
-    branches:
-      - "deliver/FAR-673"
-    paths:
-      # MUST stay in sync with .github/native-gate0-paths.txt (asserted below).
-      - ".github/native-gate0-paths.txt"
-      - "backend/src/modulo/db/**"
-      - "backend/src/modulo/settings.py"
-      - "backend/src/modulo/db/url_utils.py"
-      - "backend/src/modulo/api/main.py"
-      - "deploy/fly/**"
-      - ".github/workflows/native-gate0.yml"
 
 concurrency:
   group: native-gate0-${{ github.ref }}
@@ -58,8 +46,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
-      UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/uv-pythons
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PYTHON_INSTALL_DIR: /tmp/uv-pythons
     steps:
       - name: Checkout
         uses: actions/checkout@v7
