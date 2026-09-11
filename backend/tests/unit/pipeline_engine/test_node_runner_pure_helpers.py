@@ -12,13 +12,19 @@ from typing import Any
 
 import pytest
 
+from modulo.api.routes.pipelines import PipelineGraphNode
+from modulo.cli.apply.models import ApplyGraphNode
 from modulo.core.cost_controller.breakdown.params import MAX_REPORTABLE_TOKEN_COUNT, REPORTED_TOKEN_CHAIN
 from modulo.core.pipeline_engine import node_runner as nr
 from modulo.core.pipeline_engine.node_runner import (
+    _FULL_MODE_DEFAULT_MAX_BYTES,
+    _MAX_ARTIFACT_LOG,
     _build_model_cost_fields,
     _build_sandbox_node_envelope,
     _build_token_usage_fields,
     _claim_token_attempt_suffix,
+    _coerce_stdout_max_bytes,
+    _coerce_stdout_retention_mode,
     _combine_log_entries,
     _compile_delivery_sentinel_pattern,
     _compute_sandbox_cost,
@@ -28,6 +34,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _marker_delivery_done_for_node,
     _normalize_marker_text,
     _normalize_required_team_id,
+    _resolve_stdout_cap,
     _run_identity_strs,
     _source_contains_delivery_sentinel,
 )
@@ -510,3 +517,211 @@ class TestRunIdentityStrs:
         run_uuid = uuid.uuid4()
         state: dict[str, Any] = {"_run_id": run_uuid, "_pipeline_id": 7, "_org_id": None}
         assert _run_identity_strs(state) == (str(run_uuid), "7", "")
+
+
+# ---------------------------------------------------------------------------
+# FAR-792: per-node stdout/stderr retention — coercers, resolver, envelope key
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceStdoutRetentionMode:
+    """The retention-mode coercer must recognise exactly "tail" | "full" and
+    fall back to the SAFE legacy "tail" for anything else — a smuggled value
+    can never silently raise the retention cap."""
+
+    def test_recognised_modes_pass_through(self) -> None:
+        assert _coerce_stdout_retention_mode("tail") == "tail"
+        assert _coerce_stdout_retention_mode("full") == "full"
+
+    def test_missing_and_unknown_fall_back_to_tail(self) -> None:
+        assert _coerce_stdout_retention_mode(None) == "tail"
+        assert _coerce_stdout_retention_mode("all") == "tail"
+        assert _coerce_stdout_retention_mode("Full") == "tail"
+        assert _coerce_stdout_retention_mode(True) == "tail"
+        assert _coerce_stdout_retention_mode(1) == "tail"
+        assert _coerce_stdout_retention_mode([""]) == "tail"
+
+
+class TestCoerceStdoutMaxBytes:
+    """Only a genuine positive byte count can raise the retention cap; every
+    malformed value (bool, float, 0, negative, non-numeric) coerces to None."""
+
+    def test_positive_ints_and_numeric_strings_pass(self) -> None:
+        assert _coerce_stdout_max_bytes(5_000_000) == 5_000_000
+        assert _coerce_stdout_max_bytes("1024") == 1024
+        assert _coerce_stdout_max_bytes("100") == 100
+
+    def test_none_passes_through(self) -> None:
+        assert _coerce_stdout_max_bytes(None) is None
+
+    def test_booleans_rejected(self) -> None:
+        assert _coerce_stdout_max_bytes(True) is None
+        assert _coerce_stdout_max_bytes(False) is None
+
+    def test_non_positive_values_rejected(self) -> None:
+        assert _coerce_stdout_max_bytes(0) is None
+        assert _coerce_stdout_max_bytes(-100) is None
+        assert _coerce_stdout_max_bytes("-5") is None
+
+    def test_non_integral_floats_rejected(self) -> None:
+        assert _coerce_stdout_max_bytes(5.5) is None
+        assert _coerce_stdout_max_bytes("10.25") is None
+
+    def test_integral_float_accepted(self) -> None:
+        assert _coerce_stdout_max_bytes(5000.0) == 5000
+
+    def test_non_numeric_rejected(self) -> None:
+        assert _coerce_stdout_max_bytes("lots") is None
+        assert _coerce_stdout_max_bytes(object()) is None
+
+
+class TestResolveStdoutCap:
+    def test_tail_keeps_legacy_512kb_and_ignores_max_bytes(self) -> None:
+        assert _resolve_stdout_cap("tail", None) == _MAX_ARTIFACT_LOG
+        assert _resolve_stdout_cap("tail", 9_999_999) == _MAX_ARTIFACT_LOG
+
+    def test_full_without_max_bytes_uses_5mb_default(self) -> None:
+        assert _resolve_stdout_cap("full", None) == _FULL_MODE_DEFAULT_MAX_BYTES
+
+    def test_full_honours_max_bytes(self) -> None:
+        assert _resolve_stdout_cap("full", 1_024) == 1_024
+        assert _resolve_stdout_cap("full", 5_000_000) == 5_000_000
+
+    def test_cap_never_below_512kb_in_full(self) -> None:
+        # A full-mode cap smaller than the tail bound is still honoured as-is
+        # (the node asked for less retention); the drain window mirrors it.
+        assert _resolve_stdout_cap("full", 10_000) == 10_000
+
+
+class TestStdoutTruncatedEnvelopeKey:
+    """FAR-792: stdout_truncated is an OPT-IN EXTRA KEY — present only when
+    True, absent when False, so existing envelope shapes are unchanged."""
+
+    def _output(self, **overrides) -> nr._SandboxNodeOutput:
+        return nr._SandboxNodeOutput(
+            status="completed",
+            summary="did the thing",
+            exit_code=0,
+            wall_clock_time_ms=1200,
+            cost_estimate_usd=0.01,
+            **overrides,
+        )
+
+    def test_key_present_when_truncated(self) -> None:
+        envelope = _build_sandbox_node_envelope(
+            node_id="n1",
+            output=self._output(stdout_truncated=True, stdout_length=600_000),
+        )
+        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
+            assert view["stdout_truncated"] is True
+            assert view["stdout_length"] == 600_000
+
+    def test_key_absent_when_not_truncated(self) -> None:
+        envelope = _build_sandbox_node_envelope(node_id="n1", output=self._output())
+        for view in (envelope["artifacts"][0]["output"], envelope["output"]):
+            assert "stdout_truncated" not in view
+
+    def test_key_absent_when_explicitly_false(self) -> None:
+        envelope = _build_sandbox_node_envelope(
+            node_id="n1",
+            output=self._output(stdout_truncated=False),
+        )
+        assert "stdout_truncated" not in envelope["output"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-792: per-node stdout retention must be reachable through REAL config paths
+# (API PipelineGraphNode + CLI ApplyGraphNode), not just a hand-built node_def
+# dict in tests. These prove the declared fields survive save + round-trip into
+# _build_sandbox_node_config (the reviewer's prove-the-fix gap).
+# ---------------------------------------------------------------------------
+
+
+def _sandbox_node_kwargs(**overrides: Any) -> dict[str, Any]:
+    """Minimal valid sandbox_agent PipelineGraphNode kwargs."""
+    kwargs: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0.0, "y": 0.0},
+        "template_id": "opencode",
+        "agent_command": "echo hi",
+        "agent_prompt": "Do the thing",
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_api_node_persists_stdout_retention_fields():
+    """The API model keeps stdout_retention_mode / stdout_max_bytes on save so
+    the runtime can actually read them (no silent drop)."""
+    node = PipelineGraphNode(**_sandbox_node_kwargs(stdout_retention_mode="full", stdout_max_bytes=2048))
+    dumped = node.model_dump(mode="json")
+    assert dumped["stdout_retention_mode"] == "full"
+    assert dumped["stdout_max_bytes"] == 2048
+
+
+def test_api_node_rejects_stdout_retention_off_sandbox():
+    """stdout retention is sandbox_agent-only — a declared value on another node
+    type would be a silent no-op, so it is rejected at save time.
+
+    A valid agent node (with agent_id) is used so the stdout_retention gate is
+    actually reached — an agent node without an agent_id is rejected earlier, by
+    the agent-only validation, which would mask this check.
+    """
+    with pytest.raises(ValueError, match="sandbox_agent"):
+        PipelineGraphNode(
+            **_sandbox_node_kwargs(node_type="agent", agent_id=uuid.uuid4(), stdout_retention_mode="full")
+        )
+    with pytest.raises(ValueError, match="sandbox_agent"):
+        PipelineGraphNode(**_sandbox_node_kwargs(node_type="agent", agent_id=uuid.uuid4(), stdout_max_bytes=2048))
+
+
+def test_api_node_rejects_bad_stdout_max_bytes():
+    """The positive-integer gate rejects bools / negatives / non-integers."""
+    for bad in (0, -1, 1.5, "abc", True, False):
+        with pytest.raises(ValueError, match="positive integer"):
+            PipelineGraphNode(**_sandbox_node_kwargs(stdout_max_bytes=bad))
+
+
+def test_apply_node_accepts_and_round_trips_stdout_retention():
+    """The CLI mirror accepts the fields (extra='forbid' must NOT reject them)
+    and round-trips them into the API payload the executor normalises."""
+    node = ApplyGraphNode(**_sandbox_node_kwargs(stdout_retention_mode="full", stdout_max_bytes=2048))
+    assert node.stdout_retention_mode == "full"
+    assert node.stdout_max_bytes == 2048
+    payload = node.api_node_payload()
+    assert payload["stdout_retention_mode"] == "full"
+    assert payload["stdout_max_bytes"] == 2048
+
+
+def test_apply_node_rejects_bad_stdout_max_bytes():
+    """The CLI mirror shares the API's positive-integer gate."""
+    for bad in (0, -1, 1.5, "abc", True, False):
+        with pytest.raises(ValueError, match="positive integer"):
+            ApplyGraphNode(**_sandbox_node_kwargs(stdout_max_bytes=bad))
+
+
+def test_saved_graph_round_trips_into_sandbox_node_config():
+    """A graph saved via the API model (mode='full', 2048 bytes) carries the
+    values through model_dump into _build_sandbox_node_config, which the runtime
+    uses to set the retention cap."""
+    node = PipelineGraphNode(**_sandbox_node_kwargs(stdout_retention_mode="full", stdout_max_bytes=2048))
+    config = nr._build_sandbox_node_config(
+        node.model_dump(mode="json"),
+        session_factory=None,
+        single_sandbox_node=True,
+    )
+    assert config.stdout_retention_mode == "full"
+    assert config.stdout_max_bytes == 2048
+
+
+def test_saved_graph_defaults_to_tail():
+    """A graph saved without the fields falls back to the legacy 'tail' mode."""
+    node = PipelineGraphNode(**_sandbox_node_kwargs())
+    config = nr._build_sandbox_node_config(
+        node.model_dump(mode="json"),
+        session_factory=None,
+        single_sandbox_node=True,
+    )
+    assert config.stdout_retention_mode == "tail"
+    assert config.stdout_max_bytes is None

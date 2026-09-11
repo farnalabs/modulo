@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
+
 API_VERSION_PREFIX = "modulo.dev/v"
 API_VERSION_SUPPORTED_MAJOR = 1
 
@@ -226,7 +228,7 @@ class ApplyGraphCapabilityScope(BaseModel):
     context_scope: list[str] | None = None
 
 
-class ApplyGraphNode(BaseModel):
+class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     """A pipeline graph node in the apply config.
 
     Same shape as the API ``PipelineGraphNode`` EXCEPT the agent is referenced
@@ -295,6 +297,13 @@ class ApplyGraphNode(BaseModel):
     join_partial_policy: Literal["collect_and_proceed", "fail"] = "collect_and_proceed"
     inputs: list[dict[str, Any]] | None = None
     outputs: list[dict[str, Any]] | None = None
+    # FAR-792: per-node sandbox stdout/stderr retention (API PipelineGraphNode twin).
+    # Declared here so the CLI does NOT reject it loudly as an unknown field on a
+    # real saved graph; value rules are enforced by the REAL API node model when the
+    # executor normalises the resolved payload through it. ``stdout_max_bytes`` uses
+    # the same positive-integer gate as the API model.
+    stdout_retention_mode: Literal["tail", "full"] | None = None
+    stdout_max_bytes: int | None = None
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod

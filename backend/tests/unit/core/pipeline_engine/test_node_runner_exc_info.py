@@ -100,8 +100,7 @@ async def test_enforce_resource_limits_metrics_unavailable() -> None:
         stdout_percentage_delta=None,
         stream_broker=None,
         drained_chunks=[],
-        wallclock_budget_seconds=None,
-        start_time=0.0,
+        wall_clock=nr._WatchdogWallClock(None, 0.0),
     )
     wd._sandbox.get_metrics = AsyncMock(side_effect=RuntimeError("boom"))
     with patch.object(nr, "_log") as log:

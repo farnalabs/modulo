@@ -308,6 +308,10 @@ _is_truthy = bool
 # cap made every long run look cut mid-JSON). Consumers can tell stored
 # truncation from a genuine cut via the stdout_length/stderr_length fields.
 _MAX_ARTIFACT_LOG = 512000
+# FAR-792: default cap for a node that opts into ``stdout_retention_mode="full"``
+# without specifying ``stdout_max_bytes``. The "tail" default keeps
+# ``_MAX_ARTIFACT_LOG`` (512KB).
+_FULL_MODE_DEFAULT_MAX_BYTES = 5_000_000
 _MAX_OTEL_LOG_ATTR = 32768
 _MAX_ERROR_MSG = 500
 
@@ -1126,6 +1130,7 @@ async def _retain_raw_output_marker(
     status: str = "failed",
     index: int | str | None = None,
     payload: str | bytes | None = None,
+    max_artifact_bytes: int = _MAX_ARTIFACT_LOG,
 ) -> None:
     """Single builder + persist for a raw-output retention marker (FAR-188).
 
@@ -1143,7 +1148,9 @@ async def _retain_raw_output_marker(
     bounded tail, never a multi-MB log). Bytes are decoded exactly once;
     ``pr_url`` is extracted from the FULL UNREDACTED source, then the stored
     ``raw_output`` copy is scrubbed of credentials (``_redact_raw_output``)
-    and ONLY THEN truncated to ``_MAX_ARTIFACT_LOG`` for storage.
+    and ONLY THEN truncated to ``max_artifact_bytes`` for storage (the legacy
+    512KB ``_MAX_ARTIFACT_LOG``, or the node's FAR-792 full-retention cap when
+    the impl passes it).
 
     FAR-228: when *delivery_sentinel* is non-empty AND the pre-truncation
     ``source`` contains the sentinel as a FULL LINE, ``delivery_done: True`` is
@@ -1166,7 +1173,7 @@ async def _retain_raw_output_marker(
         "_modulo_marker": True,
         "status": status,
         "summary": summary,
-        "raw_output": _redact_raw_output(text)[:_MAX_ARTIFACT_LOG],
+        "raw_output": _redact_raw_output(text)[:max_artifact_bytes],
         "parse_error": parse_error,
         "pr_url": _extract_pr_url(text),
         "exit_code": exit_code,
@@ -5169,6 +5176,18 @@ def _emit_script_span_event(name: str, attrs: dict[str, Any]) -> None:
         pass
 
 
+@dataclass(frozen=True)
+class _WatchdogWallClock:
+    """Wall-clock spend budget + node-start monotonic time (FAR-296 Phase 4a).
+
+    Bundled so ``_SandboxWatchdog.__init__`` does not take a separate parameter
+    for each loosely-related timing input.
+    """
+
+    budget_seconds: int | None
+    start_time: float
+
+
 class _SandboxWatchdog:
     """Per-run sandbox watchdog + live-streaming state (FAR-310 chunk 2b-2)."""
 
@@ -5186,8 +5205,8 @@ class _SandboxWatchdog:
         stdout_percentage_delta: float | None,
         stream_broker: RunEventBroker | None,
         drained_chunks: list[str],
-        wallclock_budget_seconds: int | None,
-        start_time: float,
+        wall_clock: _WatchdogWallClock,
+        drain_window_bytes: int | None = None,
     ) -> None:
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
@@ -5217,8 +5236,13 @@ class _SandboxWatchdog:
         # the elapsed wall-clock against this budget and kills the sandbox when
         # exceeded (script mode only). ``start_time`` is the monotonic clock at
         # node start so the elapsed measurement survives the provisioning phase.
-        self._wallclock_budget_seconds = wallclock_budget_seconds
-        self._start_time = start_time
+        self._wallclock_budget_seconds = wall_clock.budget_seconds
+        self._start_time = wall_clock.start_time
+        # FAR-792: the drain window scales with the per-node retention cap in
+        # full mode so the retained tail can actually reach the configured
+        # ``stdout_max_bytes`` (a 512KB drain window would starve a 5MB cap).
+        # Defaults to the legacy ``_MAX_DRAIN_WINDOW`` (512KB) bound.
+        self._drain_window = drain_window_bytes or _MAX_DRAIN_WINDOW
 
     @property
     def budget_killed(self) -> bool:
@@ -5323,7 +5347,7 @@ class _SandboxWatchdog:
         full_len = len(text)
         # D3 trailing-window bound: the E2B files API has no range
         # read, so the full log was transferred again above. Only the
-        # last _MAX_DRAIN_WINDOW bytes are retained/processed —
+        # last ``self._drain_window`` bytes are retained/processed —
         # bounded per-tick memory and slicing on a multi-MB log.
         # ``full_len`` (what the read actually returned) is the
         # authoritative absolute file length; ``window_start`` is the
@@ -5334,8 +5358,9 @@ class _SandboxWatchdog:
         # ``size`` instead of ``full_len`` shifts the retained slice
         # left and permanently drops the first (full_len - size)
         # bytes of new in-window content.
-        if len(text) > _MAX_DRAIN_WINDOW:
-            text = text[-_MAX_DRAIN_WINDOW:]
+        window = self._drain_window
+        if len(text) > window:
+            text = text[-window:]
         window_start = max(full_len - len(text), 0)
         emit_start = max(self._drain_offset, window_start)
         new = text[emit_start - window_start :] if emit_start < full_len else ""
@@ -5364,13 +5389,13 @@ class _SandboxWatchdog:
 
         Drops the oldest chunks once the accumulated log exceeds the window,
         then clamps the head chunk to the window so the in-memory total can
-        never grow past ``_MAX_DRAIN_WINDOW``.
+        never grow past ``self._drain_window``.
         """
-        while self._drained_len > _MAX_DRAIN_WINDOW and len(self._drained_chunks) > 1:
+        while self._drained_len > self._drain_window and len(self._drained_chunks) > 1:
             dropped = self._drained_chunks.pop(0)
             self._drained_len -= len(dropped)
-        if self._drained_len > _MAX_DRAIN_WINDOW and self._drained_chunks:
-            self._drained_chunks[0] = self._drained_chunks[0][-_MAX_DRAIN_WINDOW:]
+        if self._drained_len > self._drain_window and self._drained_chunks:
+            self._drained_chunks[0] = self._drained_chunks[0][-self._drain_window :]
             self._drained_len = len(self._drained_chunks[0])
 
     async def probe_log_growth(self) -> None:
@@ -5659,6 +5684,8 @@ class _SandboxNodeConfig:
     watch_log_path: str | None
     stdout_percentage_delta: float | None
     watch_globs: list[str]
+    stdout_retention_mode: str
+    stdout_max_bytes: int | None
     delivery_sentinel: str | None
     loop_intercept_config: LoopInterceptConfig | None
     session_factory: Callable[..., Any] | None
@@ -5730,6 +5757,11 @@ class _SandboxNodeOutput(NamedTuple):
     agent_stderr: str = ""
     stdout_length: int = 0
     stderr_length: int = 0
+    # FAR-792: True when the captured stdout exceeded the node's effective
+    # retention cap (512KB "tail" default, or stdout_max_bytes in "full"
+    # mode) and the stored agent_stdout/agent_stderr were truncated. Default
+    # False so honest envelopes carry no key at all (backwards-compatible).
+    stdout_truncated: bool = False
     attempt_key: str | None = None
     changed_files: Any = _UNSET
     pr_url: Any = _UNSET
@@ -5809,6 +5841,8 @@ def _build_sandbox_node_envelope(
     inner["agent_stderr"] = output.agent_stderr
     inner["stdout_length"] = output.stdout_length
     inner["stderr_length"] = output.stderr_length
+    if output.stdout_truncated:
+        inner["stdout_truncated"] = True
     if output.changed_files is not _UNSET:
         inner["changed_files"] = output.changed_files
     if output.pr_url is not _UNSET:
@@ -6032,10 +6066,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     watch_log_path = config.watch_log_path
     stdout_percentage_delta = config.stdout_percentage_delta
     watch_globs = config.watch_globs
+    stdout_retention_mode = config.stdout_retention_mode
+    stdout_max_bytes = config.stdout_max_bytes
     delivery_sentinel = config.delivery_sentinel
     loop_intercept_config = config.loop_intercept_config
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
+
+    # FAR-792: effective stdout/stderr retention cap for this node. "tail"
+    # (legacy default) keeps the 512KB bound; "full" honours stdout_max_bytes
+    # (or the 5MB default). The same cap drives the stored artifact slices,
+    # the retention markers and the watchdog drain window.
+    _stdout_cap = _resolve_stdout_cap(stdout_retention_mode, stdout_max_bytes)
 
     from e2b import AsyncSandbox
     from e2b.exceptions import RateLimitException, SandboxException
@@ -6707,8 +6749,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stdout_percentage_delta=stdout_percentage_delta,
                 stream_broker=_stream_broker,
                 drained_chunks=_drained_chunks,
-                wallclock_budget_seconds=wallclock_budget_seconds,
-                start_time=start_time,
+                wall_clock=_WatchdogWallClock(wallclock_budget_seconds, start_time),
+                # FAR-792: only "full" mode widens the drain window to the node
+                # cap (so 5MB can actually be retained); "tail" keeps the legacy
+                # ``_MAX_DRAIN_WINDOW`` bound (and honors test patches of it).
+                drain_window_bytes=_stdout_cap if stdout_retention_mode == "full" else None,
             )
 
             _drain_fn = watchdog.drain_sandbox_log
@@ -6937,8 +6982,23 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
         _stdout_len = len(agent_stdout_raw)
         _stderr_len = len(agent_stderr_raw)
-        agent_stdout = _redact_raw_output(agent_stdout_raw[:_MAX_ARTIFACT_LOG])
-        agent_stderr = _redact_raw_output(agent_stderr_raw[:_MAX_ARTIFACT_LOG])
+        # FAR-792: redact BEFORE truncation so credential-scrubbing sees the
+        # full stream, then slice to the node's effective retention cap.
+        agent_stdout = _redact_raw_output(agent_stdout_raw)[:_stdout_cap]
+        agent_stderr = _redact_raw_output(agent_stderr_raw)[:_stdout_cap]
+        stdout_truncated = _stdout_len > _stdout_cap
+        if stdout_truncated or _stderr_len > _stdout_cap:
+            _log.warning(
+                "sandbox_agent.stdout_stderr_truncated",
+                extra={
+                    "node_id": node_id,
+                    "run_id": run_id,
+                    "retention_cap_bytes": _stdout_cap,
+                    "stderr_truncated": _stderr_len > _stdout_cap,
+                    "stdout_length": _stdout_len,
+                    "stderr_length": _stderr_len,
+                },
+            )
 
         # A timed-out command leaves ``cmd_result`` as None: the run timed
         # out (1800s node timeout) with COMPLETELY EMPTY stdout/stderr and
@@ -6995,7 +7055,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 attempt_key=attempt_key,
                 summary=(
                     "Sandbox agent command stalled/timed out — raw stdout retained "
-                    "(drain window keeps the last 512KB tail)"
+                    "(bounded to the node's retention cap)"
                 ),
                 source=_stall_source,
                 parse_error=command_error,
@@ -7003,6 +7063,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stdout_length=_stdout_len,
                 stderr_length=_stderr_len,
                 delivery_sentinel=delivery_sentinel,
+                max_artifact_bytes=_stdout_cap,
             )
             if watchdog.budget_killed:
                 # FAR-296 Phase 3b-3: the platform-side resource-cap killer
@@ -7089,6 +7150,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     stdout_length=_stdout_len,
                     stderr_length=_stderr_len,
                     delivery_sentinel=delivery_sentinel,
+                    max_artifact_bytes=_stdout_cap,
                 )
                 # FAR-197: surface WHY the agent failed. The captured
                 # stdout/stderr tails plus the E2B log tail (the only place
@@ -7146,6 +7208,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stdout_length=_stdout_len,
                 stderr_length=_stderr_len,
                 delivery_sentinel=delivery_sentinel,
+                max_artifact_bytes=_stdout_cap,
             )
 
         if sandbox_mode == "script":
@@ -7303,6 +7366,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     stderr_length=_stderr_len,
                     delivery_sentinel=delivery_sentinel,
                     status=status,
+                    max_artifact_bytes=_stdout_cap,
                 )
             except asyncio.CancelledError:
                 raise
@@ -7328,6 +7392,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 agent_stderr=agent_stderr,
                 stdout_length=_stdout_len,
                 stderr_length=_stderr_len,
+                stdout_truncated=stdout_truncated,
                 attempt_key=attempt_key,
                 agent_status=agent_status,
                 agent_outcome=agent_outcome,
@@ -7367,7 +7432,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         "Sandbox agent cancelled after delivery sentinel observed — "
                         "delivery_done retained (idempotency gate)"
                     ),
-                    "raw_output": _redact_raw_output(_drained_tail)[:_MAX_ARTIFACT_LOG],
+                    "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
                     "parse_error": "",
                     "pr_url": _extract_pr_url(_drained_tail),
                     "exit_code": -1,
@@ -7566,6 +7631,48 @@ def _coerce_stdout_percentage_delta(raw: Any) -> float | None:
     return value if 0.0 < value <= 1.0 else None
 
 
+_STDOUT_RETENTION_MODES = ("tail", "full")
+
+
+def _coerce_stdout_retention_mode(raw: Any) -> str:
+    """Coerce a node's ``stdout_retention_mode`` to ``"tail"`` | ``"full"``.
+
+    Anything other than the two recognised modes falls back to the legacy
+    ``"tail"`` behaviour (512KB cap) so a smuggled value can never silently
+    raise the retention cap (FAR-792).
+    """
+    return raw if raw in _STDOUT_RETENTION_MODES else "tail"
+
+
+def _coerce_stdout_max_bytes(raw: Any) -> int | None:
+    """Coerce a node's ``stdout_max_bytes`` to a positive int or None.
+
+    Non-positive, non-integral, non-finite and boolean values are rejected
+    (None) so only a genuine positive byte count can raise the retention cap.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not value.is_integer() or value <= 0 or value == float("inf"):
+        return None
+    return int(value)
+
+
+def _resolve_stdout_cap(stdout_retention_mode: str, stdout_max_bytes: int | None) -> int:
+    """Resolve the effective stdout/stderr retention cap for a run (FAR-792).
+
+    ``"tail"`` keeps the legacy bounded 512KB artifact cap
+    (``_MAX_ARTIFACT_LOG``). ``"full"`` retains up to ``stdout_max_bytes`` when
+    set, defaulting to ``_FULL_MODE_DEFAULT_MAX_BYTES`` when absent.
+    """
+    if stdout_retention_mode == "full":
+        return stdout_max_bytes if stdout_max_bytes is not None else _FULL_MODE_DEFAULT_MAX_BYTES
+    return _MAX_ARTIFACT_LOG
+
+
 def _filter_watch_globs(raw: Any) -> list[str]:
     """Filter a node's ``watch_globs`` to non-empty string entries."""
     if not isinstance(raw, (list, tuple)):
@@ -7650,6 +7757,12 @@ def _build_sandbox_node_config(
     watch_log_path = watch_log_path if isinstance(watch_log_path, str) and watch_log_path else None
     stdout_percentage_delta: float | None = _coerce_stdout_percentage_delta(node_def.get("stdout_percentage_delta"))
     watch_globs: list[str] = _filter_watch_globs(node_def.get("watch_globs"))
+    # FAR-792: per-node stdout/stderr retention. ``stdout_retention_mode`` is
+    # "tail" (legacy 512KB cap) by default; "full" raises the cap to
+    # ``stdout_max_bytes`` (or the 5MB default). Coercers fall back silently to
+    # the safe legacy defaults on any malformed value.
+    stdout_retention_mode: str = _coerce_stdout_retention_mode(node_def.get("stdout_retention_mode"))
+    stdout_max_bytes: int | None = _coerce_stdout_max_bytes(node_def.get("stdout_max_bytes"))
     # FAR-228: the opt-in delivery sentinel (full-line marker in sandbox output
     # that proves the side effect — e.g. an email — was sent) and the
     # single-node guard (the gate is inert on multi-node graphs).
@@ -7698,6 +7811,8 @@ def _build_sandbox_node_config(
         watch_log_path=watch_log_path,
         stdout_percentage_delta=stdout_percentage_delta,
         watch_globs=watch_globs,
+        stdout_retention_mode=stdout_retention_mode,
+        stdout_max_bytes=stdout_max_bytes,
         delivery_sentinel=delivery_sentinel,
         loop_intercept_config=loop_intercept_config,
         session_factory=session_factory,
