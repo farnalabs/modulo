@@ -219,31 +219,33 @@ If you cannot log in via the UI but the application is running, create a
 long-lived admin token directly in the database:
 
 ```sql
--- Generate a random token (e.g., 64 hex chars)
--- In production, use a proper UUID-based token:
-INSERT INTO api_tokens (id, user_id, name, token, scopes, expires_at, created_at, organisation_id)
+-- Generate a random hashed secret (e.g., 64 hex chars)
+-- In production, use a proper UUID-based lookup prefix:
+INSERT INTO org_api_keys (id, name, lookup_prefix, hashed_secret, role, scope, expires_at, created_at, organisation_id, account_id)
 SELECT
     gen_random_uuid(),
-    id,
     'emergency-bypass-token',
+    substr(encode(gen_random_bytes(4), 'hex'), 1, 8),
     encode(gen_random_bytes(32), 'hex'),
-    '["admin:full"]',
+    'operator',
+    'org',
     NOW() + INTERVAL '1 hour',
     NOW(),
-    organisation_id
+    organisation_id,
+    account_id
 FROM users
 WHERE is_admin = true
 LIMIT 1;
 ```
 
-Then use the token returned to authenticate API calls:
+Then use the lookup prefix + secret to construct a bearer token (`mk_<lookup_prefix><secret>`) and authenticate API calls:
 ```bash
-curl -H "Authorization: Bearer <token>" https://modulo.example.com/api/v1/admin/settings
+curl -H "Authorization: Bearer mk_<lookup_prefix><secret>" https://modulo.example.com/api/v1/admin/settings
 ```
 
 **Safeguards:**
 - Set a short expiry (1 hour in the example above).
-- Delete the token after use: `DELETE FROM api_tokens WHERE name = 'emergency-bypass-token';`
+- Delete the token after use: `DELETE FROM org_api_keys WHERE name = 'emergency-bypass-token';`
 - Audit the action in the admin bypass log (see §6).
 
 ### 5.3 Rate-Limit Self-Lockout
