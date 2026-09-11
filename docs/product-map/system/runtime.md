@@ -59,6 +59,16 @@ purging old run data.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+  app-layout DB-capacity banner (`DbCapacityBanner.vue` static testids
+  `db-capacity-banner`, `db-capacity-usage`, `db-capacity-run-retention-link`,
+  `db-capacity-housekeeping-link`) on the `/admin/housekeeping` and
+  `/admin/run-retention` manifest `elements:` inventories — the banner renders
+  organisation-wide via `AppLayout.vue` and its links land on those two pages,
+  but its surface had no product-map home.
+  `test_mapped_route_elements_cover_owning_view_testids` now maps both routes to
+  their page views + `DbCapacityBanner.vue`, so the capacity banner cannot ship
+  invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-09-11: **improve-architecture (product-map walk)** — closed the
   `feat-runtime` element-inventory drift on the Runners concurrency tab: the
   effective-cap and preflight panels (`runner-concurrency-effective`,
