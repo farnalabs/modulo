@@ -202,17 +202,19 @@ def _reassembled_bytes_expr(node_side: Any, empty_flag: Any) -> Any:
       left).
 
     Case order mirrors the repo reader: the metadata empty-flag wins, then
-    the node-row aggregation, else SQL NULL (the fact column stores 0 via
-    its COALESCE - no pre-cutoff side is unrepresented after the B2b
-    repair; the EMPTY fallback term referencing the dropped runs column was
-    removed with migration 0212).
+    the node-row aggregation, else SQL NULL — the ABSENT-side semantic,
+    byte-identical to the live writer (:func:`_fact_output_bytes` stores
+    NULL for an absent side; no COALESCE wraps the backfill byte columns,
+    so the NULL flows straight into the fact). No pre-cutoff side is
+    unrepresented after the B2b repair; the EMPTY fallback term referencing
+    the dropped runs column was removed with migration 0212.
     """
     agg = _side_agg_subq(node_side)
     return sa.case(
         (empty_flag.is_(True), sa.func.length(sa.cast(sa.literal("{}"), sa.Text))),
         (agg.is_not(None), sa.func.length(sa.cast(agg, sa.Text))),
-        # else: SQL NULL -> the caller's COALESCE keeps the fact at 0.
-        else_=sa.func.length(sa.cast(sa.literal("0"), sa.Text)),
+        # else: SQL NULL (absent side) — the live writer's semantic.
+        else_=sa.null(),
     )
 
 
@@ -325,10 +327,10 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.parent_run_id.label("parent_run_id"),
             Run.snapshot_id.label("snapshot_id"),
             Run.run_number.label("run_number"),
-            # FAR-583: bytes are computed from the reassembled run_node_outputs
-            # rows (see _reassembled_bytes_expr — both byte formulas documented
-            # there), falling back to the legacy runs column (raw Core legacy
-            # table since B1's ORM cut) until B2b.
+            # FAR-583 B2b: bytes are computed from the reassembled
+            # run_node_outputs rows ONLY (see _reassembled_bytes_expr — both
+            # byte formulas documented there); the legacy runs-column fallback
+            # term died with migration 0212.
             _reassembled_bytes_expr(RunNodeOutput.outputs_json, _meta_flag_subq("empty_outputs")).label("output_bytes"),
             _reassembled_bytes_expr(RunNodeOutput.node_telemetry_json, _meta_flag_subq("empty_telemetry")).label(
                 "telemetry_bytes"
