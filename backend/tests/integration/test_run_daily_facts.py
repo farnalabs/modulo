@@ -954,10 +954,10 @@ class TestLiveWriterEnrichment:
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
                     "status, input_hash, langgraph_thread_id, run_number, started_at, completed_at, "
                     "dispatched_at, heartbeat_at, claim_count, cancellation_requested, error_code, "
-                    "outputs_json, rate_limit_key, parent_run_id, dispatcher) "
+                    "rate_limit_key, parent_run_id, dispatcher) "
                     "VALUES (:id, :oid, :pid, :sid, 'cron', 'failed', :hash, :thread, 42, "
                     ":started, :completed, :dispatched, :heartbeat, 7, true, 'executor_stalled', "
-                    ":outjson, 'rl:key', :parent, 'saq')"
+                    "'rl:key', :parent, 'saq')"
                 ),
                 {
                     "id": str(run_id),
@@ -970,9 +970,22 @@ class TestLiveWriterEnrichment:
                     "dispatched": datetime(2026, 8, 7, 10, 0, tzinfo=UTC),
                     "completed": datetime(2026, 8, 7, 11, 0, 0, tzinfo=UTC),
                     "heartbeat": datetime(2026, 8, 7, 10, 59, 0, tzinfo=UTC),
-                    "outjson": '{"node_a": {"result": "ok"}}',
                     "parent": str(parent_run_id),
                 },
+            )
+        # Seed the run's node output on the new run_node_outputs store (FAR-583):
+        # record_run_facts reads output_bytes from there, not runs.outputs_json.
+        from modulo.db.crud.run_node_outputs import replace_run_node_outputs
+        from modulo.db.rls import set_rls_org
+
+        async with db_session.begin():
+            await set_rls_org(db_session, org)
+            await replace_run_node_outputs(
+                db_session,
+                run_id=run_id,
+                organisation_id=org,
+                outputs={"node_a": {"result": "ok"}},
+                telemetry=None,
             )
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
