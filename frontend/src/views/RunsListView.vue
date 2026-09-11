@@ -25,6 +25,7 @@
               { value: TRIGGER_TYPE.AGENT_SIGNAL, label: $t('views.RunsListView.trigger_agent_signal') },
               { value: TRIGGER_TYPE.ONGOING, label: $t('views.RunsListView.trigger_ongoing') },
               { value: TRIGGER_TYPE.CORRECTION, label: $t('views.RunsListView.trigger_correction') },
+              { value: TRIGGER_TYPE.RERUN, label: $t('views.RunsListView.trigger_rerun') },
             ]},
           ]"
           :filter-values="{ status: filterStatus, trigger_type: filterTriggerType }"

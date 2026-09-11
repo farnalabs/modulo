@@ -31,6 +31,7 @@ export const TRIGGER_TYPE = {
   AGENT_SIGNAL: 'agent_signal',
   ONGOING: 'ongoing',
   CORRECTION: 'correction',
+  RERUN: 'rerun',
 } as const;
 
 export type TriggerType = typeof TRIGGER_TYPE[keyof typeof TRIGGER_TYPE];
