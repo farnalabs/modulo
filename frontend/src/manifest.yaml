@@ -1727,6 +1727,21 @@ elements:
       - testid: runner-status-error
         type: element
         dynamic_testid: false
+      - testid: runner-status-strip
+        type: element
+        dynamic_testid: false
+      - testid: runner-status-strip-state
+        type: element
+        dynamic_testid: false
+      - testid: runner-status-strip-machines
+        type: element
+        dynamic_testid: false
+      - testid: runner-concurrency-effective
+        type: element
+        dynamic_testid: false
+      - testid: runner-concurrency-preflight
+        type: element
+        dynamic_testid: false
     /admin/users:
       - testid: admin-users-add-user
         type: button
@@ -1931,6 +1946,27 @@ elements:
         dynamic_testid: false
       - testid: envprofile-test-dismiss
         type: button
+        dynamic_testid: false
+      - testid: envprofile-list-tier-badge
+        type: element
+        dynamic_testid: false
+      - testid: runner-profile-detail
+        type: element
+        dynamic_testid: false
+      - testid: runner-profile-drift
+        type: element
+        dynamic_testid: false
+      - testid: runners-profiles-apply
+        type: button
+        dynamic_testid: false
+      - testid: runner-status-strip
+        type: element
+        dynamic_testid: false
+      - testid: runner-status-strip-state
+        type: element
+        dynamic_testid: false
+      - testid: runner-status-strip-machines
+        type: element
         dynamic_testid: false
       - testid: runner-status-error
         type: element

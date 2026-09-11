@@ -59,6 +59,15 @@ purging old run data.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — closed the
+  `feat-runtime` element-inventory drift on the Runners concurrency tab: the
+  effective-cap and preflight panels (`runner-concurrency-effective`,
+  `runner-concurrency-preflight` in `RunnersConcurrencyTab.vue`) and the shared
+  runner status strip (`runner-status-strip*` in `RunnerStatusStrip.vue`) that
+  renders above both runner tabs are now registered on `/admin/runners/concurrency`;
+  `test_mapped_route_elements_cover_owning_view_testids` now maps that route to
+  the layout + tab + status-strip owning views so the surface can no longer ship
+  invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-09-07: **improve-architecture (product-map walk)** — added this
   behaviour-tracker for `feat-runtime`, which previously had no
   `docs/product-map/` entry. Behaviours verified against the runtime config,
