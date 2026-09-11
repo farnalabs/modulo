@@ -693,7 +693,7 @@ async def test_run_node_outputs_repo_module_org_gates(
     the database does not). READ paths skip the consistency check when the
     session has no org context and raise on a mismatched one.
     """
-    from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback, replace_run_node_outputs
+    from modulo.db.crud.run_node_outputs import read_run_blobs, replace_run_node_outputs
     from modulo.db.rls import OutputsRlsMismatch
 
     org_id, _pipeline_id, _snapshot_id, run_id = await _seed_outputs_tenant(db_engine, test_user, label="gates")
@@ -759,7 +759,7 @@ async def test_run_node_outputs_repo_module_org_gates(
                     {"rid": str(run_id), "oid": str(org_id), "oj": '{"a": 1}'},
                 )
             async with seed_factory() as session, session.begin():
-                blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=org_id)
+                blobs = await read_run_blobs(session, run_id=run_id, organisation_id=org_id)
             assert blobs.outputs == {"n1": {"a": 1}}
 
         # READ with a MISMATCHED org context → OutputsRlsMismatch (the NOBYPASSRLS
@@ -768,7 +768,7 @@ async def test_run_node_outputs_repo_module_org_gates(
         async with factory() as session, session.begin():
             await set_rls_org(session, uuid.uuid4())
             with pytest.raises(OutputsRlsMismatch, match="org mismatch"):
-                await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=org_id)
+                await read_run_blobs(session, run_id=run_id, organisation_id=org_id)
     finally:
         await _cleanup_outputs_tenants(db_engine, [org_id], [run_id])
 

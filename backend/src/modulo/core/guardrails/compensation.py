@@ -75,9 +75,9 @@ async def _normalise_executed_nodes(
     the legacy fallback) — the caller's RLS org context must already be set.
     """
     if executed_nodes is None:
-        from modulo.db.crud.run_node_outputs import read_run_outputs_with_fallback
+        from modulo.db.crud.run_node_outputs import read_run_outputs
 
-        outputs = await read_run_outputs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+        outputs = await read_run_outputs(session, run_id=run.id, organisation_id=run.organisation_id)
         raw = dict(outputs or {})
     else:
         raw = dict(executed_nodes)

@@ -117,7 +117,6 @@ from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
 from modulo.db.crud.hitl_gate_config import human_only_effective
 from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
-from modulo.db.sqlstates import MARKER_TXN_ABORTING_SQLSTATES
 
 _log = logging.getLogger(__name__)
 
@@ -1292,17 +1291,11 @@ async def _persist_raw_output_marker(
     return True
 
 
-# qa rider f: SQLSTATEs whose failure aborts the WHOLE Postgres transaction
-# (deadlock 40P01, admin shutdown 57P01, crash shutdown 57P02, connection-loss
-# 08xxx classes — 08000/08001/08003/08004/08006/08007). A marker-savepoint
-# failure with one of these has ALSO lost the legacy marker write (the outer
-# transaction rolls back), so the "legacy survives, repair migrates" claim is
-# false — the failure logs ``legacy_marker_also_lost``.
-#
-# B1 (FAR-583): the vocabulary lives ONLY in the shared leaf
-# :mod:`modulo.db.sqlstates` — every read site below consumes the imported
-# constant directly (the B1 note in that file said this is where all
-# SQLSTATE vocabularies consolidate).
+# B2c (FAR-583): a marker-savepoint transaction-aborting failure loses the
+# persist for the attempt and is claimed loudly as
+# sandbox_agent.raw_output_marker_persist_uncommitted - there is no legacy
+# fallback leg any more (B2c readers are new-table-only; the columns die in
+# the follow-up drop migration 0212).
 
 
 async def _write_raw_output_marker(
@@ -1327,8 +1320,7 @@ async def _write_raw_output_marker(
     from sqlalchemy import select as _sql_select
 
     from modulo.db.crud.run_node_outputs import (
-        read_legacy_raw_output_markers,
-        write_legacy_raw_output_markers,
+        read_run_node_outputs_raw,
         write_run_markers,
     )
     from modulo.db.models.run import Run as _RunModel
@@ -1357,13 +1349,14 @@ async def _write_raw_output_marker(
                     },
                 )
                 return
-            # FAR-583 B1: the legacy blob columns' ORM mapping is cut — the
-            # legacy read-merge-write runs through the repo's raw parameterised
-            # SQL helpers instead of the ``run.raw_output_markers`` attribute
+            # B2c (FAR-583): the writers no longer touch the runs blob
+            # columns (drop migration 0212 in the follow-up PR) - the markers
+            # merge reads the CURRENT new-table state
             # (the run row is still locked FOR UPDATE, so the read-merge-write
-            # serialises exactly like the former ORM leg).
+            # serialises exactly like the former ORM leg). One reassembly
+            # call, then the REPLACE write below.
             markers = dict(
-                (await read_legacy_raw_output_markers(session, run_id=run.id, organisation_id=org_uuid)) or {}
+                (await read_run_node_outputs_raw(session, run_id=run.id, organisation_id=org_uuid)).markers or {}
             )
             key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
             # FAR-438 read-before-write: stamp the derived per-node idempotency key
@@ -1395,24 +1388,19 @@ async def _write_raw_output_marker(
                 preserve_delivery_done=preserve_delivery_done,
             )
             markers[key] = persisted_marker
-            await write_legacy_raw_output_markers(session, run_id=run.id, markers=markers)
-            # FAR-583: post-merge marker row into run_node_outputs inside a
-            # SAVEPOINT. The MERGED dict is stored (prior pr_url preserved,
-            # delivery_done monotone) — one row per attempt key, delete-absent.
-            # A savepoint-SCOPED failure rolls back ONLY the new-table insert;
-            # the legacy write above still commits. Log, never raise (the
-            # persist's never-raise contract is preserved); B2b's repair
-            # migrates the missing row. THE EXCEPTION is a transaction-aborting
-            # failure (deadlock / shutdown / connection loss, classified
-            # below): that poisons the WHOLE transaction, so the legacy write
-            # is rolled back too — claimed loudly as ``legacy_marker_also_lost``.
             if org_uuid is None:
-                # qa rider e: an explicit guard instead of `assert` — asserts
+                # qa rider e: an explicit guard instead of `assert` - asserts
                 # vanish under -O and the failure mode would be an opaque
                 # None-org write into the repo gate.
                 raise RuntimeError(
                     "raw-output marker persist requires a parsed organisation id for the run_node_outputs leg"
                 )
+            # FAR-583: post-merge marker REPLACE into run_node_outputs. The
+            # MERGED dict is stored (prior pr_url preserved, delivery_done
+            # monotone) - one row per attempt key, delete-absent. B2c: there
+            # is no legacy copy any more, so a savepoint-scoped failure loses
+            # the persist for this attempt and is claimed loudly (the next
+            # marker persist re-merges from the durable rows).
             try:
                 async with session.begin_nested():
                     await write_run_markers(
@@ -1432,22 +1420,19 @@ async def _write_raw_output_marker(
                 # savepoint's 25P02 rollback-wrapper failure (raised by the
                 # __aexit__ of an already-aborted savepoint) does NOT mask
                 # the ORIGINAL transaction-aborting state (40P01 etc.).
+                # B2c claimer: a transaction-aborting failure loses this
+                # persist AND poisons the whole transaction - without a
+                # legacy fallback leg the 'legacy survives' fallback is gone, so
+                # the claim is loud and named honestly. The outer handler
+                # still swallows (the persist never-raise contract).
                 sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                if sqlstate in MARKER_TXN_ABORTING_SQLSTATES:
-                    # qa rider f: a transaction-aborting failure (deadlock,
-                    # admin shutdown, connection loss) poisons the WHOLE
-                    # transaction — the legacy marker write above is rolled
-                    # back with it, so "legacy survives, repair migrates" is
-                    # FALSE here. The outer handler logs the lost persist;
-                    # the claim must be loud.
-                    _log.exception(
-                        "sandbox_agent.raw_output_marker_legacy_marker_also_lost "
-                        "run=%s node_id=%s attempt_key=%s sqlstate=%s",
-                        run_id,
-                        node_id,
-                        key,
-                        sqlstate,
-                    )
+                _log.exception(
+                    "sandbox_agent.raw_output_marker_persist_uncommitted run=%s node_id=%s attempt_key=%s sqlstate=%s",
+                    run_id,
+                    node_id,
+                    key,
+                    sqlstate,
+                )
             _log.info(
                 "sandbox_agent.raw_output_marker_persisted",
                 extra={
@@ -1595,8 +1580,9 @@ async def _read_run_raw_output_markers_for_gate(
     the per-node hot path) is replaced by the repo's SINGLE fenced
     markers-scoped reader :func:`modulo.db.crud.run_node_outputs.read_run_markers_fenced`
     — the fence predicates (id + org + claim_token + ``status='running'``)
-    moved INTO that one statement, which reassembles the markers with the
-    direction-aware legacy fallback and serves ``None`` on a fence miss
+    moved INTO that one statement, which reassembles the markers
+    (new-table-only since B2c - the legacy fallback leg is removed) and
+    serves ``None`` on a fence miss
     (byte-for-byte the same visibility the fenced single-column gate read
     had). LOCK-FREE exactly as before (no FOR UPDATE on this read).
     """

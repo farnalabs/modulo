@@ -72,10 +72,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run_node_outputs import (
-    QUARANTINE_TABLE,  # NOTE: remove when the quarantine table drops (B2b+)
+    # KEPT through the drop (FAR-694): after migration 0212 (follow-up PR)
+    # drops the runs blob columns these rows are the pre-B1 quarantined
+    # blobs' ONLY surviving copy, so the purge's delete stays live.
+    QUARANTINE_TABLE,
     RunBlobs,
     read_node_output_blob_bytes,
-    read_run_blobs_with_fallback,
+    read_run_blobs,
 )
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -380,9 +383,12 @@ def _serialize_run(run: Run, *, checkpoint_count: int, checkpoint_bytes: int, bl
     """Serialise a run row for the export stream.
 
     FAR-583: the three blob fields are the REASSEMBLED legacy-dict shapes
-    from the ``run_node_outputs`` store (repo reader with the EMPTY/MISMATCH
-    fallback to the legacy columns), so the export keeps serving the exact
-    pre-FAR-583 payload across the backfill window.
+    from the ``run_node_outputs`` store (repo reader, new-table-only since
+    B2c), so the export keeps serving the exact pre-FAR-583 payload shape.
+    DISPOSITION (M6, for the follow-up drop migration 0212): 0192-quarantined
+    runs' blobs live in the quarantine table (ops SQL), NOT in
+    ``run_node_outputs``, so after the drop these readers serve an
+    absent-side shape for them — accepted, evidence is preserved elsewhere.
     """
 
     return {
@@ -822,6 +828,11 @@ async def iter_run_export(
     a second pass, so nothing accumulates in memory. ``date_from``/``date_to``
     are applied to ``runs.created_at``. Any status may be exported; it is the
     operator's decision whether an exported run was later purged.
+
+    DISPOSITION (M6, for the follow-up drop migration 0212): the blob fields
+    reassemble from ``run_node_outputs`` only (B2c readers); 0192-quarantined
+    runs' blobs live in the quarantine table, so after the drop they export
+    with absent blob sides — accepted, see :func:`_serialize_run`.
     """
 
     offset = 0
@@ -843,7 +854,7 @@ async def iter_run_export(
             session, [r.langgraph_thread_id for r in page], org_id
         )
         for run in page:
-            blobs = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=org_id)
+            blobs = await read_run_blobs(session, run_id=run.id, organisation_id=org_id)
             yield (
                 json.dumps(
                     _serialize_run(
@@ -1115,8 +1126,10 @@ async def _delete_quarantine_rows(session: AsyncSession, run_ids: list[Any]) -> 
     delete cannot leak across orgs regardless of the table's missing RLS
     policy.
 
-    NOTE: remove this helper (and the ``QUARANTINE_TABLE`` import) when the
-    quarantine table itself drops (B2b+).
+    NOTE (FAR-694): the quarantine table is KEPT - after migration 0212 (the
+    follow-up drop PR) drops the runs blob columns these rows are the ONLY
+    surviving copy of the 0192-quarantined legacy blobs, so the delete stays
+    live.
     """
 
     if not run_ids:

@@ -400,7 +400,7 @@ async def test_read_gate_markers_returns_dict_on_hit():
         # the run_node_outputs rows via a single .all() (legacy column +
         # attempt_key + new-table markers). The reassembled flat dict
         # {"m": {...}} is keyed by the marker key itself.
-        r.all.return_value = [(None, "m", {"delivery_done": True})]
+        r.all.return_value = [("m", {"delivery_done": True})]
         return r
 
     got = await nr._read_run_raw_output_markers_for_gate(
@@ -482,7 +482,7 @@ async def test_read_connector_gate_state_returns_markers_and_key():
         # SELECT (id, idempotency_key) consumed via .fetchone(), then the
         # fenced markers read (read_run_markers_fenced) consumed via .all().
         r.fetchone.return_value = (None, "persisted-key")
-        r.all.return_value = [(None, "m", {"delivery_done": True})]
+        r.all.return_value = [("m", {"delivery_done": True})]
         return r
 
     got_markers, got_key = await nr._read_connector_idempotency_gate_state(
@@ -2284,16 +2284,25 @@ async def test_sandbox_success_delivery_marker_prefers_drained_stdout():
     sandbox.commands.run = AsyncMock(return_value=handle)
     sandbox.kill = AsyncMock()
 
-    async def _mirror_legacy_write(session: Any, *, run_id: str, markers: dict[str, Any]) -> None:
-        # FAR-583 B1: the legacy leg writes the runs row via raw parameterised
-        # SQL — the in-memory fake row has no schema to UPDATE, so the test
-        # mirrors the merged dict onto it for the assertion (the raw write
-        # itself is exercised on the repo-module tests).
+    class _EmptyBlobs:
+        """The merge source reads EMPTY (no new-table markers) - the merged
+        marker is a fresh dict the (patched) writer stores."""
+
+        markers = None
+        markers_or_none = None
+
+    async def _read_empty(*args: Any, **kwargs: Any) -> Any:
+        return _EmptyBlobs()
+
+    def _mirror_legacy_write(session: Any, *, run_id: str, organisation_id: Any, markers: dict[str, Any]) -> None:
+        # B2b: the new-table writer stores the merged markers - mirror
+        # them onto the in-memory fake row for the assertion.
         row.raw_output_markers = dict(markers)
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.db.crud.run_node_outputs.write_legacy_raw_output_markers", _mirror_legacy_write),
+        patch("modulo.db.crud.run_node_outputs.read_run_node_outputs_raw", _read_empty),
+        patch("modulo.db.crud.run_node_outputs.write_run_markers", _mirror_legacy_write),
     ):
         result = await fn(_run_state())
     assert result["output"]["status"] == "completed"

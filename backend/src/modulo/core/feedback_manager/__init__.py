@@ -109,7 +109,7 @@ from modulo.core.feedback_manager.status import (
 )
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.run import create_run, get_run
-from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.utils.uuid import coerce_uuid
 
@@ -694,9 +694,9 @@ class FeedbackManager:
             )
 
         engine = eval_engine or EvalEngine()
-        # FAR-583 read-switch: the blobs reassemble from run_node_outputs (with
-        # the legacy fallback) in the SAME transaction that loaded the run.
-        blobs = await read_run_blobs_with_fallback(
+        # FAR-583 read-switch: the blobs reassemble from run_node_outputs
+        # (new-table-only reader) in the SAME transaction that loaded the run.
+        blobs = await read_run_blobs(
             self._session,
             run_id=record.correction_run_id,
             organisation_id=correction_run.organisation_id,

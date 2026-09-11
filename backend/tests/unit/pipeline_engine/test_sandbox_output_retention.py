@@ -106,49 +106,50 @@ class _FakeRunRow:
         self.raw_output_markers: dict | None = None
 
 
+class _MarkerRow(SimpleNamespace):
+    """The batched repo readers read the run_node_outputs row surfaces
+    (attribute access); the fenced reader is fed the same object pair."""
+
+    def __init__(self, key: str, value: Any) -> None:
+        super().__init__(
+            attempt_key=key,
+            raw_output_markers=value,
+            organisation_id=None,
+            node_id=key.rsplit(":node:", maxsplit=1)[-1].rsplit(":", 1)[0],
+            outputs_json=None,
+            node_telemetry_json=None,
+            outputs_absent=True,
+            telemetry_absent=True,
+            markers_absent=False,
+            run_id=None,
+        )
+        self.key = key
+        self.value = value
+        self._pair = (key, value)
+
+    def __getitem__(self, index: int) -> Any:
+        return self._pair[index]
+
+
 class _RetentionResult:
-    def __init__(self, row: _FakeRunRow | None, statement: str = "") -> None:
+    def __init__(self, row: _FakeRunRow | None, statement: str = "", marker_rows: list[Any] | None = None) -> None:
         self._row = row
         self._statement = statement
+        self._marker_rows = marker_rows
 
     def scalar_one_or_none(self) -> _FakeRunRow | None:
-        # FAR-583 B1: the marker path's legacy read (
-        # ``read_legacy_raw_output_markers``) is a single-column SELECT served
-        # through ``scalar_one_or_none`` — serve the fake row's markers dict
-        # (SQL NULL = the fake row's None = no markers).
-        if (
-            self._row is not None
-            and "runs.raw_output_markers" in self._statement
-            and "run_node_outputs" not in self._statement
-        ):
-            markers = self._row.raw_output_markers
-            return dict(markers) if isinstance(markers, dict) else None
         return self._row
 
     def all(self) -> list[Any]:
-        # The FAR-583 fenced JOIN read (``read_run_markers_fenced`` — qa M4/M5
-        # gate reads) selects the runs row LEFT-JOINed to its new-table marker
-        # rows; the fake serves the legacy column as the runs side with NO
-        # new-table marker rows (markers reassemble from the legacy fallback).
-        if "FROM runs" in self._statement and "run_node_outputs" in self._statement:
-            if self._row is None or "raw_output_markers" not in self._statement:
-                return []
-            return [(self._row.raw_output_markers, None, None)]
-        # The FAR-583 repo readers batch the new-table rows via .all(); the
-        # fake serves an EMPTY new table (markers reassemble from the legacy
-        # fallback below).
+        # The batched run_node_outputs SELECT serves the fake's captured
+        # marker rows (B2b: markers live ONLY on the new table now).
+        if self._marker_rows is not None:
+            return list(self._marker_rows)
         return []
 
     def first(self) -> Any:
-        # The FAR-583 legacy fallback reads the three blob columns; serve the
-        # fake row's values (the gate then reassembles the markers dict).
-        if self._row is None or "raw_output_markers" not in self._statement:
-            return None
-        return SimpleNamespace(
-            outputs_json=self._row.outputs_json,
-            node_telemetry_json=self._row.node_telemetry_json,
-            raw_output_markers=self._row.raw_output_markers,
-        )
+        # The B1-era legacy fallback reads are gone (B2b); serves None.
+        return None
 
     def fetchone(self) -> tuple[Any] | None:
         # The dispatch-marker fenced UPDATE (sandbox_dispatch_state ...
@@ -157,8 +158,6 @@ class _RetentionResult:
             return ("granted",)
         if self._row is None:
             return None
-        # FAR-228 guard A reads the run's raw_output_markers column directly;
-        # the dispatch-marker acquire reads claim_count.
         if "raw_output_markers" in self._statement:
             return (self._row.raw_output_markers,)
         if "claim_count" in self._statement:
@@ -179,6 +178,8 @@ class _RetentionSession:
     def __init__(self, row: _FakeRunRow | None) -> None:
         self._row = row
         self.info: dict = {}
+        if row is not None and row.raw_output_markers is None:
+            row.raw_output_markers = {}
 
     async def __aenter__(self) -> Self:
         return self
@@ -197,27 +198,55 @@ class _RetentionSession:
     def in_transaction(self) -> bool:
         return True
 
-    async def get_bind(self) -> MagicMock:
+    def get_bind(self) -> MagicMock:
         bind = MagicMock()
         bind.dialect.name = "sqlite"
         return bind
 
     async def execute(self, stmt: object, params: dict | None = None) -> _RetentionResult:
+        is_insert = bool(getattr(stmt, "is_insert", False))
+        is_delete = bool(getattr(stmt, "is_delete", False))
+        table_name = getattr(getattr(stmt, "table", None), "name", None)
+        if is_insert and table_name == "run_node_outputs" and self._row is not None:
+            items: list[dict | tuple] = params or []
+            for item in items:
+                values = item[1] if isinstance(item, tuple) else item
+                key = values.get("attempt_key") if isinstance(values, dict) else None
+                if key is not None and "raw_output_markers" in values:
+                    self._row.raw_output_markers[key] = values["raw_output_markers"]
+            return _RetentionResult(self._row, statement="insert")
+        if is_delete and table_name == "run_node_outputs" and self._row is not None:
+            keep: set[str] | None = None
+            try:
+                for bound in (stmt.compile().params or {}).values():  # type: ignore[attr-defined]
+                    if isinstance(bound, list):
+                        keep = {str(item) for item in bound}
+            except Exception:  # pragma: no cover - the fake never blocks on compile drift
+                keep = None
+            if keep is not None:
+                for stale in set(self._row.raw_output_markers) - keep:
+                    self._row.raw_output_markers.pop(stale, None)
+            return _RetentionResult(self._row, statement="delete")
         stmt_text = str(stmt)
-        # FAR-583 B1: the marker path's legacy write (
-        # ``write_legacy_raw_output_markers``) is a parameterised UPDATE of the
-        # runs row — apply the bound markers onto the in-memory row (there is
-        # no schema to UPDATE here).
         if "UPDATE runs" in stmt_text and "raw_output_markers" in stmt_text and self._row is not None:
             markers: Any = None
             try:
                 markers = stmt.compile().params.get("raw_output_markers")  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover — the fake never blocks on compile drift
+            except Exception:  # pragma: no cover - the fake never blocks on compile drift
                 markers = None
             if isinstance(markers, dict):
                 self._row.raw_output_markers = dict(markers)
             return _RetentionResult(self._row, statement=stmt_text)
-        return _RetentionResult(self._row if "FROM runs" in stmt_text else None, statement=stmt_text)
+        marker_rows = (
+            [_MarkerRow(key, value) for key, value in (self._row.raw_output_markers or {}).items()]
+            if "run_node_outputs" in stmt_text
+            else None
+        )
+        return _RetentionResult(
+            self._row if "FROM runs" in stmt_text else None,
+            statement=stmt_text,
+            marker_rows=marker_rows,
+        )
 
     async def flush(self) -> None:
         return None
@@ -473,7 +502,9 @@ async def test_db_hang_persist_fails_open_and_node_stays_retryable(caplog):
     ):
         await hang_fn(_run_state())
 
-    assert row.raw_output_markers is None, "the hung write must not land"
+    # B2b: markers live on the new table keyed by attempt_key - the hung
+    # write leaves NOTHING keyed there (None or an empty dict).
+    assert row.raw_output_markers is None or not row.raw_output_markers, "the hung write must not land"
     assert any("raw_output_marker_persist_timeout_or_error" in r.message for r in caplog.records), (
         "the timeout must be logged (fail open), not silently swallowed"
     )

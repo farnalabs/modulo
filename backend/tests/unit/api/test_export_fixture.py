@@ -85,8 +85,8 @@ def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
         return blobs.markers
 
     monkeypatch.setattr(runs_module, "get_run", _recording_get_run)
-    monkeypatch.setattr(runs_module, "read_run_blobs_with_fallback", _stub)
-    monkeypatch.setattr(runs_module, "read_run_markers_with_fallback", _markers_stub)
+    monkeypatch.setattr(runs_module, "read_run_blobs", _stub)
+    monkeypatch.setattr(runs_module, "read_run_markers", _markers_stub)
 
 
 def _make_mock_session() -> AsyncMock:

@@ -98,13 +98,12 @@ def _rls_probe_result() -> SimpleNamespace:
 
 
 def _blob_read_results() -> list[SimpleNamespace]:
-    """The executes the single re-pointed blobs read issues (qa M14 — ONE
-    read_run_blobs_with_fallback call feeds BOTH byte facts): rows fetch +
-    the read_rls_org GUC probe + the legacy fallback = 3."""
+    """The executes the single blobs read issues (qa M14 — ONE read_run_blobs
+    call feeds BOTH byte facts): rows fetch + the read_rls_org GUC probe = 2.
+    B2b: the legacy fallback summary is GONE with the dropped columns."""
     return [
         _empty_rows_result(),
         _rls_probe_result(),
-        _empty_rows_result(),
     ]
 
 

@@ -95,7 +95,7 @@ from modulo.core.spend_ceiling import (
     evaluate_spend_ceilings,
 )
 from modulo.db.crud.run import update_run_status
-from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs_with_fallback
+from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
 from modulo.db.models.agent import Agent
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.journey import Journey
@@ -1728,10 +1728,10 @@ async def finalize_cost(
 
     merged_usage = _merge(run.node_token_usage, segment_node_token_usage, segment_wins=True)
     # FAR-583 read-switch: the stored cumulative blobs reassemble from
-    # run_node_outputs via the repo reader (with the empty/mismatch legacy
-    # fallback) inside the caller's SAME transaction — one batched repo query,
+    # run_node_outputs via the repo reader (new-table-only) inside the
+    # caller's SAME transaction — one batched repo query,
     # never a per-node lazy load. The merge/write ordering is unchanged.
-    stored_blobs = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+    stored_blobs = await read_run_blobs(session, run_id=run.id, organisation_id=run.organisation_id)
     merged_outputs, merged_telemetry = _split_merge_outputs(
         stored_blobs.outputs,
         stored_blobs.telemetry,
@@ -2109,15 +2109,15 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
     outputs as the segment and the reassembled telemetry as the split signal
     read inside ``finalize_cost``, so already-pure rows are idempotent no-ops
     and legacy rows are split exactly once. Both reassemble from
-    ``run_node_outputs`` via the repo reader (FAR-583 read-switch, with the
-    legacy fallback) in the SAME transaction.
+    ``run_node_outputs`` via the repo reader (FAR-583 read-switch,
+    new-table-only since B2c) in the SAME transaction.
     """
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         return
-    # FAR-583 read-switch: ONE batched repo read (legacy fallback included)
+    # FAR-583 read-switch: ONE batched repo read (new-table-only reader)
     # for the re-feed decision + the segment payload below.
-    stored_blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=run.organisation_id)
+    stored_blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
     if not (stored_blobs.outputs or run.node_token_usage or stored_blobs.telemetry):
         _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
         return

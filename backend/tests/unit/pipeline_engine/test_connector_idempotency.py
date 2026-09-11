@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import types
 import warnings
+from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, patch
 
@@ -554,11 +555,47 @@ class _FakeConnectorRun:
 
 
 class _FakeConnectorResult:
-    def __init__(self, run: _FakeConnectorRun) -> None:
+    def __init__(self, run: _FakeConnectorRun, marker_rows: list[Any] | None = None) -> None:
         self._run = run
+        self._marker_rows = marker_rows
 
     def scalar_one_or_none(self) -> _FakeConnectorRun:
         return self._run
+
+    def scalar(self) -> str:
+        # The read_rls_org GUC probe (set_rls_org stores on the fake session;
+        # the probe result is the bound org string) - serve an empty string.
+        return ""
+
+    def all(self) -> list[Any]:
+        # The batched run_node_outputs SELECT: one _MarkerRow per captured marker.
+        if self._marker_rows is None:
+            return []
+        return [_MarkerRow(key, value) for key, value in self._marker_rows]
+
+
+class _MarkerRow(SimpleNamespace):
+    """The run_node_outputs row surface: the readers use attribute access
+    (the batched reader) or 2-tuple indexing (the fenced reader)."""
+
+    def __init__(self, key: str, value: Any) -> None:
+        super().__init__(
+            attempt_key=key,
+            raw_output_markers=value,
+            organisation_id=None,
+            node_id=key.rsplit(":node:", maxsplit=1)[-1].rsplit(":", 1)[0],
+            outputs_json=None,
+            node_telemetry_json=None,
+            outputs_absent=True,
+            telemetry_absent=True,
+            markers_absent=False,
+            run_id=None,
+        )
+        self.key = key
+        self.value = value
+
+    def __getitem__(self, index: int) -> Any:
+        return (self.key, self.value)[index]
 
 
 class _FakeLegacyMarkersResult:
@@ -584,6 +621,7 @@ class _FakeConnectorSession:
 
     def __init__(self, run: _FakeConnectorRun) -> None:
         self._run = run
+        self.info: dict = {}
 
     async def __aenter__(self) -> Self:
         return self
@@ -597,19 +635,35 @@ class _FakeConnectorSession:
     def begin_nested(self) -> Self:
         return self
 
+    class _FakeBind:
+        name = "sqlite"
+
+        @property
+        def dialect(self) -> Any:
+            return self
+
+    def get_bind(self) -> Any:
+        """resolve_dialect reads get_bind().dialect.name (B2b: the store write)."""
+        return self._FakeBind()
+
     async def execute(self, statement: object, *args: object, **kwargs: object) -> Any:
-        stmt_text = str(statement)
-        if "UPDATE runs" in stmt_text and "raw_output_markers" in stmt_text:
-            markers: Any = None
-            try:
-                markers = statement.compile().params.get("raw_output_markers")  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover — the fake never blocks on compile drift
-                markers = None
-            if isinstance(markers, dict):
-                self._run.raw_output_markers = dict(markers)
+        is_insert = bool(getattr(statement, "is_insert", False))
+        is_delete = bool(getattr(statement, "is_delete", False))
+        table_name = getattr(getattr(statement, "table", None), "name", "")
+        if is_insert and table_name == "run_node_outputs":
+            if self._run.raw_output_markers is None:
+                self._run.raw_output_markers = {}
+            items: list[dict | tuple] = (args[0] or []) if args else []
+            for item in items:
+                values = item[1] if isinstance(item, tuple) else item
+                key = values.get("attempt_key") if isinstance(values, dict) else None
+                if key is not None and "raw_output_markers" in values:
+                    self._run.raw_output_markers[key] = values["raw_output_markers"]
+            return _FakeConnectorResult(self._run, marker_rows=list(self._run.raw_output_markers.items()))
+        if is_delete and table_name == "run_node_outputs":
             return _FakeConnectorResult(self._run)
-        if "raw_output_markers" in stmt_text and "FROM runs" in stmt_text:
-            return _FakeLegacyMarkersResult(self._run.raw_output_markers)
+        if "raw_output_markers" in str(statement) and "run_node_outputs" in str(statement):
+            return _FakeConnectorResult(self._run, marker_rows=list((self._run.raw_output_markers or {}).items()))
         return _FakeConnectorResult(self._run)
 
     async def flush(self) -> None:
@@ -630,7 +684,7 @@ class TestConnectorNewestKeyPromotion:
         # Run 1 delivers P1 (content v1) -> marker key K1.
         # Run 2 (content edit) delivers P2 (content v2) -> marker key K2 promoted.
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _stamp_connector_write_delivered(
@@ -787,7 +841,7 @@ class TestConnectorFailedWriteRoutesToNoDelivery:
         connector = _shell_connector()
         data = {"command": "exit 1"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
             patch(
                 "modulo.settings.get_settings",
@@ -863,7 +917,7 @@ class TestConnectorFailedWriteRoutesToNoDelivery:
 
         connector = _shell_connector()
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _resolve_connector_write_outcome(
@@ -896,7 +950,7 @@ class TestConnectorFailedWriteRoutesToNoDelivery:
         data = {"command": "killed-command"}
         none_result = {"stdout": "", "stderr": "", "exit_code": None, "duration_ms": 0}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             # Without intent markers: no stamp at all (main's not-delivered
@@ -956,7 +1010,7 @@ class TestConnectorIntentMarkerLifecycle:
 
         data = {"name": "n1"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _persist_connector_write_intent(
@@ -1024,7 +1078,7 @@ class TestConnectorIntentMarkerLifecycle:
 
         data = {"name": "n1"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _persist_connector_write_intent(
@@ -1067,7 +1121,7 @@ class TestConnectorIntentMarkerLifecycle:
             return _FakeConnectorSession(fake_run)
 
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             # Attempt 1 delivers v1 (slot carries K1 + delivery_done).
@@ -1185,7 +1239,7 @@ class TestConnectorNoDeliveryResolution:
 
         data = {"name": "n1"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _persist_connector_write_intent(
@@ -1332,7 +1386,7 @@ class TestRaisedConnectorErrorAmbiguous:
 
         data = {"command": "slow-write"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _persist_connector_write_intent(
@@ -1413,7 +1467,7 @@ class TestRaisedConnectorErrorAmbiguous:
             return _FakeConnectorSession(fake_run)
 
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _resolve_connector_write_outcome(
@@ -1446,7 +1500,7 @@ class TestSameKeyDeliveryEvidencePreserved:
 
         data = {"command": "echo hi"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             # Attempt A genuinely delivered.
@@ -1489,7 +1543,7 @@ class TestSameKeyDeliveryEvidencePreserved:
 
         data = {"command": "echo hi"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _stamp_connector_write_delivered(
@@ -1525,7 +1579,7 @@ class TestSameKeyDeliveryEvidencePreserved:
 
         data = {"command": "echo hi"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _stamp_connector_write_delivered(
@@ -1580,7 +1634,7 @@ class TestSameKeyDeliveryEvidencePreserved:
             return _FakeConnectorSession(fake_run)
 
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _stamp_connector_write_delivered(
@@ -1643,7 +1697,7 @@ class TestGateEligibilityPairing:
 
         data = {"name": "n1"}
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
             patch(
                 "modulo.settings.get_settings",
@@ -1828,7 +1882,7 @@ class TestSuccessfulWriteStamp:
             return _FakeConnectorSession(fake_run)
 
         with (
-            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=AsyncMock()),
+            patch("modulo.core.pipeline_engine.node_runner.set_rls_org", new=_bind_org_stub),
             patch("modulo.core.pipeline_engine.node_runner.set_rls_execution_context", new=AsyncMock()),
         ):
             await _stamp_connector_write_delivered(
@@ -2042,3 +2096,12 @@ class TestPayloadHashDeterminism:
             return proc.stdout.strip()
 
         assert _hash_under_seed("0") == _hash_under_seed("1")
+
+
+async def _bind_org_stub(session: Any, org_id: Any) -> None:
+    """B2b stub: store the org on session.info (assert_write_org
+    requires it); the call sites mocked set_rls_org to AsyncMock, which
+    since B2b leaves the store write unbound (fail-closed)."""
+    session_info = getattr(session, "info", None)
+    if session_info is not None:
+        session_info["org_id"] = org_id

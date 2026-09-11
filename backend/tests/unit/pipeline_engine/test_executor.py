@@ -3721,8 +3721,8 @@ def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
         blobs = await _blobs(session, run_id=run_id, organisation_id=organisation_id)
         return blobs.markers
 
-    monkeypatch.setattr(executor_module, "read_run_blobs_with_fallback", _blobs)
-    monkeypatch.setattr(executor_module, "read_run_markers_with_fallback", _markers)
+    monkeypatch.setattr(executor_module, "read_run_blobs", _blobs)
+    monkeypatch.setattr(executor_module, "read_run_markers", _markers)
 
 
 def _finalize_executor_with_session() -> tuple[PipelineExecutor, MagicMock]:

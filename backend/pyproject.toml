@@ -150,10 +150,6 @@ dev = [
     "schemathesis>=3.30.0",
     "pytest-recording>=0.13.0",
     "mutmut>=3.6.0",
-    # Pre-push impacted-tests gate (.pre-commit-config.yaml prepush-impacted-tests):
-    # first run in a fresh worktree profiles the full suite into .testmondata
-    # (gitignored); subsequent runs run only tests impacted by changed code.
-    "pytest-testmon>=2.1.0",
 ]
 
 docker = ["aiodocker>=0.21.0"]
