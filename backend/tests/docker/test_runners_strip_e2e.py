@@ -78,6 +78,28 @@ def session_monkeypatch() -> Generator[pytest.MonkeyPatch, None, None]:
     mp.undo()
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _provide_required_settings_env(
+    session_monkeypatch: pytest.MonkeyPatch,
+) -> Generator[None, None, None]:
+    """Make ``Settings()`` constructible at app-import time in the rig.
+
+    ``modulo.api.main`` calls ``get_settings()`` at module import
+    (api/main.py:1048). The runner-ci rig exports ``DATABASE_URL`` but not
+    ``FERNET_KEY``/``SECRET_KEY``, so the import would raise a ValidationError
+    before the ``client`` fixture can install its ``get_settings`` override.
+    The ``client`` fixture supplies explicit settings regardless; this only
+    lets the app module import cleanly in the harness.
+    """
+    from modulo.settings import get_settings
+
+    session_monkeypatch.setenv("FERNET_KEY", _VALID_32)
+    session_monkeypatch.setenv("SECRET_KEY", _VALID_32)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Generator[None, None, None]:
     """Keep settings derived from one test out of the next."""
