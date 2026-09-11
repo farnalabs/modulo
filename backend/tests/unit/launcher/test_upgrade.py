@@ -969,6 +969,10 @@ def test_check_no_downgrade_falls_back_to_the_snapshot_when_live_unknown(tmp_pat
         upgrade_module.check_no_downgrade(["unknown"], None, bundle_dir)
 
 
+@pytest.mark.skipif(
+    not _settings_env_ready(),
+    reason="modulo.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import — exported by CI",
+)
 def test_cli_upgrade_surfaces_a_clean_click_exception(monkeypatch, tmp_path):
     """Finding 7 (CLI level): a verification security error (even one
     leaked past the internal conversion) is reported as `Error: ...` - never
