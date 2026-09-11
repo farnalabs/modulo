@@ -39,6 +39,12 @@ htmlcov/
 test-results/
 .hypothesis/
 
+# pytest-testmon (pre-push impacted-tests gate; incremental profile database)
+/.testmondata
+/.testmondata-new
+backend/.testmondata
+backend/.testmondata-new
+
 # ruff
 .ruff_cache/
 
