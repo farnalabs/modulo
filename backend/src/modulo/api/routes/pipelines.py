@@ -822,6 +822,50 @@ class PipelineGraphNode(BaseModel):
         description="Output ports. Each entry: {port: str, schema_ref?: str}. "
         "None => backfilled with a single default 'out' port at compile time.",
     )
+    # FAR-792: per-node sandbox stdout/stderr retention. ``stdout_retention_mode``
+    # selects "tail" (legacy 512KB bound, the default) or "full" (retain up to
+    # ``stdout_max_bytes``). Declared here so the API does NOT silently drop the
+    # key on save — a silently-dropped declarative field would create permanent
+    # plan drift (the runtime would never see it). ``stdout_max_bytes`` is only
+    # meaningful when mode=="full"; it is validated in ``_validate_stdout_retention``.
+    stdout_retention_mode: Literal["tail", "full"] | None = Field(
+        default=None,
+        description="Per-node stdout/stderr retention mode: 'tail' (legacy 512KB bound, default) "
+        "or 'full' (retain up to stdout_max_bytes). Only valid on sandbox_agent nodes.",
+    )
+    stdout_max_bytes: int | None = Field(
+        default=None,
+        description="Max retained stdout/stderr bytes when stdout_retention_mode=='full'. "
+        "Ignored in 'tail' mode. Must be a positive integer. Only valid on sandbox_agent nodes.",
+    )
+
+    @field_validator("stdout_max_bytes", mode="before")
+    @classmethod
+    def _validate_stdout_max_bytes(cls, v: Any) -> Any:
+        """Mirror of node_runner._coerce_stdout_max_bytes but as a save-time gate.
+
+        Reject bools (``isinstance(bool, int)``), non-positive, non-integer and
+        non-finite values so a smuggled value can never raise the retention cap.
+        Ints are taken exactly (no float coercion) so values above 2**53 do not
+        lose precision.
+        """
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            raise ValueError("stdout_max_bytes must be a positive integer")
+        try:
+            if isinstance(v, int):
+                value = v
+            else:
+                f = float(v)
+                if not f.is_integer():
+                    raise ValueError
+                value = int(f)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("stdout_max_bytes must be a positive integer") from None
+        if value <= 0:
+            raise ValueError("stdout_max_bytes must be a positive integer")
+        return value
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod
@@ -851,6 +895,7 @@ class PipelineGraphNode(BaseModel):
         node_validators[self.node_type]()
         self._validate_fan_out_cross_checks()
         self._validate_sandbox_only_fields()
+        self._validate_stdout_retention()
         self._validate_agent_only_fields()
         self._validate_output_schema_pin_consistency()
         return self
@@ -888,6 +933,22 @@ class PipelineGraphNode(BaseModel):
     def _validate_agent_only_fields(self) -> None:
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
+
+    def _validate_stdout_retention(self) -> None:
+        """FAR-792: per-node stdout/stderr retention is a sandbox_agent-only surface.
+
+        A non-sandbox node that sets either field is rejected — the runtime only
+        reads them in ``_build_sandbox_node_config`` (sandbox_agent), so a declared
+        value on another node type would be a silent no-op. ``stdout_max_bytes`` is
+        only meaningful in "full" mode; a non-positive/non-integer value is already
+        rejected by the ``_validate_stdout_max_bytes`` field validator.
+        """
+        if self.node_type == "sandbox_agent":
+            return
+        if self.stdout_retention_mode is not None:
+            raise ValueError("Only sandbox_agent nodes can set stdout_retention_mode")
+        if self.stdout_max_bytes is not None:
+            raise ValueError("Only sandbox_agent nodes can set stdout_max_bytes")
 
     def _validate_output_schema_pin_consistency(self) -> None:
         if (

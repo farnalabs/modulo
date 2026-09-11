@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from modulo.api.routes.pipelines import PipelineGraphNode
+from modulo.cli.apply.models import ApplyGraphNode
 from modulo.core.cost_controller.breakdown.params import MAX_REPORTABLE_TOKEN_COUNT, REPORTED_TOKEN_CHAIN
 from modulo.core.pipeline_engine import node_runner as nr
 from modulo.core.pipeline_engine.node_runner import (
@@ -625,3 +627,94 @@ class TestStdoutTruncatedEnvelopeKey:
             output=self._output(stdout_truncated=False),
         )
         assert "stdout_truncated" not in envelope["output"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-792: per-node stdout retention must be reachable through REAL config paths
+# (API PipelineGraphNode + CLI ApplyGraphNode), not just a hand-built node_def
+# dict in tests. These prove the declared fields survive save + round-trip into
+# _build_sandbox_node_config (the reviewer's prove-the-fix gap).
+# ---------------------------------------------------------------------------
+
+
+def _sandbox_node_kwargs(**overrides: Any) -> dict[str, Any]:
+    """Minimal valid sandbox_agent PipelineGraphNode kwargs."""
+    kwargs: dict[str, Any] = {
+        "id": uuid.uuid4(),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0.0, "y": 0.0},
+        "template_id": "opencode",
+        "agent_command": "echo hi",
+        "agent_prompt": "Do the thing",
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_api_node_persists_stdout_retention_fields():
+    """The API model keeps stdout_retention_mode / stdout_max_bytes on save so
+    the runtime can actually read them (no silent drop)."""
+    node = PipelineGraphNode(**_sandbox_node_kwargs(stdout_retention_mode="full", stdout_max_bytes=2048))
+    dumped = node.model_dump(mode="json")
+    assert dumped["stdout_retention_mode"] == "full"
+    assert dumped["stdout_max_bytes"] == 2048
+
+
+def test_api_node_rejects_stdout_retention_off_sandbox():
+    """stdout retention is sandbox_agent-only — a declared value on another node
+    type would be a silent no-op, so it is rejected at save time."""
+    with pytest.raises(ValueError, match="sandbox_agent"):
+        PipelineGraphNode(**_sandbox_node_kwargs(node_type="agent", stdout_retention_mode="full"))
+    with pytest.raises(ValueError, match="sandbox_agent"):
+        PipelineGraphNode(**_sandbox_node_kwargs(node_type="agent", stdout_max_bytes=2048))
+
+
+def test_api_node_rejects_bad_stdout_max_bytes():
+    """The positive-integer gate rejects bools / negatives / non-integers."""
+    for bad in (0, -1, 1.5, "abc", True, False):
+        with pytest.raises(ValueError, match="positive integer"):
+            PipelineGraphNode(**_sandbox_node_kwargs(stdout_max_bytes=bad))
+
+
+def test_apply_node_accepts_and_round_trips_stdout_retention():
+    """The CLI mirror accepts the fields (extra='forbid' must NOT reject them)
+    and round-trips them into the API payload the executor normalises."""
+    node = ApplyGraphNode(**_sandbox_node_kwargs(stdout_retention_mode="full", stdout_max_bytes=2048))
+    assert node.stdout_retention_mode == "full"
+    assert node.stdout_max_bytes == 2048
+    payload = node.api_node_payload()
+    assert payload["stdout_retention_mode"] == "full"
+    assert payload["stdout_max_bytes"] == 2048
+
+
+def test_apply_node_rejects_bad_stdout_max_bytes():
+    """The CLI mirror shares the API's positive-integer gate."""
+    for bad in (0, -1, 1.5, "abc", True, False):
+        with pytest.raises(ValueError, match="positive integer"):
+            ApplyGraphNode(**_sandbox_node_kwargs(stdout_max_bytes=bad))
+
+
+def test_saved_graph_round_trips_into_sandbox_node_config():
+    """A graph saved via the API model (mode='full', 2048 bytes) carries the
+    values through model_dump into _build_sandbox_node_config, which the runtime
+    uses to set the retention cap."""
+    node = PipelineGraphNode(**_sandbox_node_kwargs(stdout_retention_mode="full", stdout_max_bytes=2048))
+    config = nr._build_sandbox_node_config(
+        node.model_dump(mode="json"),
+        session_factory=None,
+        single_sandbox_node=True,
+    )
+    assert config.stdout_retention_mode == "full"
+    assert config.stdout_max_bytes == 2048
+
+
+def test_saved_graph_defaults_to_tail():
+    """A graph saved without the fields falls back to the legacy 'tail' mode."""
+    node = PipelineGraphNode(**_sandbox_node_kwargs())
+    config = nr._build_sandbox_node_config(
+        node.model_dump(mode="json"),
+        session_factory=None,
+        single_sandbox_node=True,
+    )
+    assert config.stdout_retention_mode == "tail"
+    assert config.stdout_max_bytes is None
