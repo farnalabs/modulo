@@ -98,11 +98,13 @@ jobs:
       - name: Boot-import proof in min-glibc container, --network none
         run: |
           set -euo pipefail
-          # Resolve the interpreter through the uv-synced venv; the venv's
-          # python symlink targets the uv-managed CPython under
-          # UV_PYTHON_INSTALL_DIR, which is mounted at the SAME path inside
-          # the container, so the symlink resolves despite --network none.
-          python_bin="$(cd backend && uv run --offline which python)"
+          # Resolve the interpreter through the uv-synced venv. `uv run which
+          # python` reports the venv's python *symlink* (a host-absolute path
+          # that does not exist inside the container, where the repo is mounted
+          # at /repo). Follow the symlink with readlink -f to the real CPython,
+          # which lives under UV_PYTHON_INSTALL_DIR and is mounted at the SAME
+          # path inside the container - so it resolves despite --network none.
+          python_bin="$(cd backend && readlink -f "$(uv run --offline which python)")"
           if [ ! -x "${python_bin}" ]; then
             echo "::error::precondition violated: offline python interpreter not found at '${python_bin}'"
             exit 1
