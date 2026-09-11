@@ -10,11 +10,12 @@ Behaviour (mirrors the `schema-freshness` job in `.github/workflows/ci.yml`):
    FERNET_KEY / MODULO_CSRF_ENABLED set to template values (so no real backend
    or DB is needed to build the schema - same template env CI uses).
 2. Runs it from backend/ with the backend uv venv interpreter.
-3. Runs ``pnpm dlx openapi-typescript@7.13.0 <schema> --output <output>``
-   from frontend/ (version pinned to the one in frontend/package.json and the
-   pnpm lockfile, matching CI exactly - a bare `npx --yes openapi-typescript`
-   resolved unsupported releases and crashed on Node 22 with a broken
-   @redocly core). Output: ``frontend/src/lib/api/schema.ts``.
+ 3. Runs ``<pkg-manager> dlx openapi-typescript@7.13.0 <schema> --output <output>``
+    from frontend/ (pnpm preferred, npm accepted as a fallback), version pinned
+    to the one in frontend/package.json and the pnpm lockfile, matching CI
+    exactly - a bare `npx --yes openapi-typescript` resolved unsupported
+    releases and crashed on Node 22 with a broken @redocly core. Output:
+    ``frontend/src/lib/api/schema.ts``.
 4. Cleans up all temp files.
 
 With ``--check`` (the local equivalent of CI's schema-freshness gate):
@@ -65,7 +66,13 @@ def _run(cmd: list[str], cwd: str) -> int:
     return subprocess.run(cmd, cwd=cwd, check=False).returncode
 
 
-def _find_pnpm() -> str | None:
+def _find_pkg_manager() -> str | None:
+    """Resolve the package manager binary used to drive `dlx`.
+
+    pnpm is preferred; npm is accepted as a fallback (both support the `dlx`
+    subcommand with the same openapi-typescript invocation). Returns the
+    resolved binary so the command is actually built from it - not just gated.
+    """
     if sys.platform == "win32":
         return shutil.which("pnpm.cmd") or shutil.which("pnpm") or shutil.which("npm.cmd") or shutil.which("npm")
     return shutil.which("pnpm") or shutil.which("npm")
@@ -110,12 +117,12 @@ def _generate_schema(tempdir: str) -> tuple[int, str]:
         return 1, out_path
 
     print("=== Generating TypeScript types with openapi-typescript...")
-    pnpm = _find_pnpm()
-    if pnpm is None:
+    pkg_manager = _find_pkg_manager()
+    if pkg_manager is None:
         print("Neither pnpm nor npm found on PATH", file=sys.stderr)
         return 1, out_path
     rc = _run(
-        ["pnpm", "dlx", f"openapi-typescript@{OPENAPI_TYPESCRIPT_VERSION}", schema_path, "--output", out_path],
+        [pkg_manager, "dlx", f"openapi-typescript@{OPENAPI_TYPESCRIPT_VERSION}", schema_path, "--output", out_path],
         FRONTEND_DIR,
     )
     return rc, out_path
@@ -132,7 +139,7 @@ def main() -> int:
     try:
         rc, generated_path = _generate_schema(tempdir)
         if rc != 0:
-            print("openapi-typescript failed", file=sys.stderr)
+            print("API type generation failed (see step messages above)", file=sys.stderr)
             return rc
 
         if check_mode:
