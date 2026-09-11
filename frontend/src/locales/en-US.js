@@ -1265,6 +1265,7 @@ export default {
       "trigger_agent_signal": "Agent Signal",
       "trigger_ongoing": "Ongoing",
       "trigger_correction": "Correction",
+      "trigger_rerun": "Rerun",
     },
     "AuthCallbackView": {
       "signing_in": "Signing you in..."
