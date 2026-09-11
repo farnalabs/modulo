@@ -5,26 +5,24 @@ Revises: 0211_variant_batch_state
 Create Date: 2026-09-11
 
 The ``VariantBatchState`` model uses ``TimestampMixin``, which declares both
-``created_at`` and ``updated_at``. Migration ``0211_variant_batch_state`` created
-the table with ``created_at`` but omitted ``updated_at``, so the migrated schema
-drifts from the ORM metadata (caught by
+``created_at`` and ``updated_at``. Migration ``0211_variant_batch_state`` now
+creates the table including ``updated_at``, so the migrated schema matches the
+ORM metadata (verified by
 ``tests/integration/test_initial_migration.py::test_migrated_schema_matches_orm_metadata``).
 
-Because ``0211`` is already applied on production, this follow-up migration is
-the correct place to add the missing column (editing ``0211`` would not re-run on
-an existing DB). The column mirrors the ``TimestampMixin`` declaration:
-``DateTime(timezone=True)``, ``nullable=False``, ``server_default=now()``.
-
-The ``ADD COLUMN`` is guarded so the migration is idempotent: if ``0211`` already
-creates ``updated_at`` (or the migration is re-run), the column is left untouched
-rather than raising ``DuplicateColumn``.
+This follow-up exists to *guarantee* the column is present on deployments whose
+``0211`` predates the column-drift fix. The ADD is guarded with ``IF NOT EXISTS``
+so it is a no-op when ``0211`` already created the column, keeping the chain
+idempotent across fresh DBs and production replays alike. The column mirrors the
+``TimestampMixin`` declaration: ``DateTime(timezone=True)``, ``nullable=False``,
+``server_default=now()``.
 
 Ownership ceremony (the 0066/0134 pattern, in spirit from 0209): on a DB where
 the table is already owned by ``modulo_migrate`` (production, bootstrap ran
-before alembic), ``SET ROLE modulo_migrate`` before ``ADD COLUMN`` so column
-ownership stays with the migrate role; on a fresh DB where the caller owns the
-table the ceremony is skipped. No RLS/policy change — the table already carries
-org-isolation RLS + DML grants from ``0211``.
+before alembic), ``SET ROLE modulo_migrate`` before the guarded ``ADD COLUMN`` so
+column ownership stays with the migrate role; on a fresh DB where the caller owns
+the table the ceremony is skipped. No RLS/policy change — the table already
+carries org-isolation RLS + DML grants from ``0211``.
 """
 
 from __future__ import annotations
@@ -58,19 +56,6 @@ def _table_owner(bind, table: str) -> str | None:
     ).scalar_one_or_none()
 
 
-def _column_exists(bind, table: str, column: str) -> bool:
-    """Return True if ``column`` already exists on ``table``."""
-    if bind.dialect.name == "postgresql":
-        return bool(
-            bind.execute(
-                sa.text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
-                {"table": table, "column": column},
-            ).first()
-        )
-    rows = bind.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
-    return any(row[1] == column for row in rows)
-
-
 def upgrade() -> None:
     bind = op.get_bind()
     pg = _is_postgres(bind)
@@ -88,18 +73,15 @@ def upgrade() -> None:
     if migrate_owns_table:
         op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-    # Idempotent: 0211 may already create updated_at (or the migration may be
-    # re-run), so only add the column when it is genuinely missing.
-    if not _column_exists(bind, _TABLE, _COLUMN):
-        op.add_column(
-            _TABLE,
-            sa.Column(
-                _COLUMN,
-                sa.DateTime(timezone=True),
-                nullable=False,
-                server_default=sa.func.now(),
-            ),
-        )
+    # Guarded DDL: 0211_variant_batch_state now creates variant_batch_state WITH
+    # updated_at (FAR-775 column-drift fix), so this follow-up must not re-add a
+    # column that already exists. ADD COLUMN IF NOT EXISTS keeps the chain
+    # idempotent across fresh DBs and production replays alike.
+    op.execute(
+        f'ALTER TABLE public."{_TABLE}" '
+        f'ADD COLUMN IF NOT EXISTS "{_COLUMN}" timestamp with time zone '
+        f"NOT NULL DEFAULT now()"
+    )
 
     if pg and migrate_owns_table:
         op.execute("RESET ROLE")
@@ -107,11 +89,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    pg = _is_postgres(bind)
-
-    if pg:
-        op.execute("SET search_path TO public")
-
-    if _column_exists(bind, _TABLE, _COLUMN):
-        op.drop_column(_TABLE, _COLUMN)
+    # updated_at is owned by 0211_variant_batch_state (created via create_table);
+    # this reconciliation follow-up must not drop a column it does not own.
+    # Downgrade is a deliberate no-op (reconciliation is not reversible in
+    # general), matching the guarded ADD COLUMN IF NOT EXISTS above.
+    pass

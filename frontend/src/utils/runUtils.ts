@@ -53,6 +53,7 @@ const triggerTypeLabelKeys: Record<string, string> = {
   ongoing: 'common.trigger_types.ongoing',
   correction: 'common.trigger_types.correction',
   slack_app_mention: 'common.trigger_types.slack_app_mention',
+  rerun: 'common.trigger_types.rerun',
 }
 
 export function triggerTypeLabel(type: string | null | undefined, t: (key: string) => string): string {
