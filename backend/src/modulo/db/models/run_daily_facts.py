@@ -24,7 +24,7 @@ parse-failure ratio after the source ``runs`` rows are swept.
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -158,9 +158,9 @@ class RunDailyFact(OrgScoped):
         comment="Run.started_at - Run.created_at (full wait from creation to start), else NULL",
     )
 
-    team: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_id])
-    pipeline: Mapped[Optional["Pipeline"]] = relationship(foreign_keys=[pipeline_id])
-    folder: Mapped[Optional["PipelineFolder"]] = relationship(foreign_keys=[folder_id])
+    team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])
+    pipeline: Mapped["Pipeline | None"] = relationship(foreign_keys=[pipeline_id])
+    folder: Mapped["PipelineFolder | None"] = relationship(foreign_keys=[folder_id])
 
 
 class JourneyFact(OrgScoped):

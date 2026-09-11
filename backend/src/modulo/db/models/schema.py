@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -26,7 +26,7 @@ class SchemaFolder(OrgScoped):
         Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True
     )
 
-    parent: Mapped[Optional["SchemaFolder"]] = relationship(
+    parent: Mapped["SchemaFolder | None"] = relationship(
         "SchemaFolder", remote_side="SchemaFolder.id", back_populates="children"
     )
     children: Mapped[list["SchemaFolder"]] = relationship(
@@ -53,7 +53,7 @@ class Schema(OrgScoped):
     deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     system: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
-    folder: Mapped[Optional["SchemaFolder"]] = relationship("SchemaFolder")
+    folder: Mapped["SchemaFolder | None"] = relationship("SchemaFolder")
 
 
 class SchemaVersion(OrgScoped):
