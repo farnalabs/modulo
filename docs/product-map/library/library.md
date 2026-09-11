@@ -84,6 +84,21 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
+  `/library/:id/create-pipeline`: the whole-page view(s) `LibraryPipelineWizard.vue` render static `data-testid`s that the
+  product map `elements:` inventory already documents, but the surface was not yet
+  guarded against drift. The route now maps to its owning view so a newly shipped
+  testid can no longer silently stay invisible to Remy's docs indexer /
+  `/api/v1/manifest`.
+
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
+  search-bar surface (`components/shared/FilterBar.vue` static testids
+  `filter-bar-search` / `filter-bar-search-wrapper`) in the `/library` manifest
+  `elements:` inventory and wired the component into the reverse testid-coverage
+  guard, so the search control the page ships stays visible to Remy's docs indexer
+  and `/api/v1/manifest`.
+
 - 2026-09-10: **improve-architecture (product-map walk)** — registered the
   `library-collection-badge` testid of `LibraryPrimitiveCard.vue` in the `/library`
   manifest `elements:` inventory, so the collection-membership badge on library
