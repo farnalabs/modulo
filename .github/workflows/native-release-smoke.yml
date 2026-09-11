@@ -150,7 +150,7 @@ jobs:
             fi
             sleep 2
           done
-          if [ ! -f "$(dirname "${DATA_DIR}")/data.lock" ] && [ -z "${BASE:-}" ]; then
+          if [ -z "${BASE:-}" ]; then
             echo "::error::state.json never appeared - boot failed"; exit 1
           fi
           modulo status
@@ -443,7 +443,7 @@ jobs:
             fi
             sleep 2
           done
-          if [ ! -f "$(dirname "${DATA_DIR}")/data.lock" ] && [ -z "${BASE:-}" ]; then
+          if [ -z "${BASE:-}" ]; then
             echo "::error::state.json never appeared - boot failed"; exit 1
           fi
           modulo status
