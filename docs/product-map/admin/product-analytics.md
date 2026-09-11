@@ -53,6 +53,14 @@ an eligible tier.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+  consent prompt surface (`product-analytics/ProductAnalyticsConsentPrompt.vue`
+  static testid `product-analytics-consent-prompt`) in the `/admin/product-analytics`
+  manifest `elements:` inventory — the prompt renders organisation-wide via
+  `AppLayout.vue` (alongside the page's existing `consent-level` indicator) but
+  had no product-map home. `test_mapped_route_elements_cover_owning_view_testids`
+  now maps the route to its page view + the prompt component, so the consent
+  surface cannot drift invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-product-analytics`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/product_analytics*.py`,

@@ -325,12 +325,20 @@ def test_mapped_route_elements_cover_owning_view_testids():
     surface is part of every route that renders the gate card.
     """
     owned_pages = {
+        "/": (
+            "frontend/src/views/DashboardView.vue",
+            "frontend/src/components/onboarding/OnboardingBanner.vue",
+            "frontend/src/components/onboarding/SpotlightOverlay.vue",
+        ),
         "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
         "/admin/connectors": "frontend/src/views/AdminConnectorsView.vue",
         "/admin/costs/limits": "frontend/src/views/AdminSpendLimitsView.vue",
         "/admin/errors": "frontend/src/views/AdminErrorsView.vue",
         "/admin/feature-flags": "frontend/src/views/AdminFeatureFlagsView.vue",
-        "/admin/housekeeping": "frontend/src/views/AdminHousekeepingView.vue",
+        "/admin/housekeeping": (
+            "frontend/src/views/AdminHousekeepingView.vue",
+            "frontend/src/components/DbCapacityBanner.vue",
+        ),
         "/admin/notification-delivery": "frontend/src/views/AdminNotificationDeliveryLogView.vue",
         "/admin/remy": "frontend/src/views/AdminRemyView.vue",
         "/admin/runners/profiles": (
@@ -345,7 +353,10 @@ def test_mapped_route_elements_cover_owning_view_testids():
         ),
         "/admin/runners/profiles/new": "frontend/src/views/environment-profiles/EnvironmentProfileForm.vue",
         "/admin/runners/profiles/:id/edit": "frontend/src/views/environment-profiles/EnvironmentProfileForm.vue",
-        "/admin/run-retention": "frontend/src/views/AdminRunRetentionView.vue",
+        "/admin/run-retention": (
+            "frontend/src/views/AdminRunRetentionView.vue",
+            "frontend/src/components/DbCapacityBanner.vue",
+        ),
         "/admin/system/config": "frontend/src/views/AdminSystemConfigView.vue",
         "/admin/users": "frontend/src/views/AdminUsersView.vue",
         "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
@@ -369,11 +380,27 @@ def test_mapped_route_elements_cover_owning_view_testids():
         ),
         "/settings/mcp": "frontend/src/views/SettingsMcpView.vue",
         "/admin/model-backends": "frontend/src/views/AdminModelBackendsView.vue",
+        "/admin/product-analytics": (
+            "frontend/src/views/AdminProductAnalyticsView.vue",
+            "frontend/src/components/product-analytics/ProductAnalyticsConsentPrompt.vue",
+        ),
         "/library": "frontend/src/views/LibraryView.vue",
         "/library/collections/new": "frontend/src/views/CollectionCreateView.vue",
         "/lifecycle-maps/:id": (
             "frontend/src/views/lifecycle-map/LifecycleMapView.vue",
             "frontend/src/components/lifecycle-map/LifecycleMapRenderer.vue",
+        ),
+        "/pipelines": (
+            "frontend/src/views/PipelineListView.vue",
+            "frontend/src/components/pipelines/FolderTree.vue",
+        ),
+        "/remy": (
+            "frontend/src/views/RemyOnlyView.vue",
+            "frontend/src/components/remy/RemyChat.vue",
+        ),
+        "/schemas": (
+            "frontend/src/views/SchemaListView.vue",
+            "frontend/src/components/pipelines/FolderTree.vue",
         ),
     }
     elements = _load_elements()
