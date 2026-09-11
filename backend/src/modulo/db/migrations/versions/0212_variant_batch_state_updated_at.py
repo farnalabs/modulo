@@ -60,9 +60,18 @@ def upgrade() -> None:
 
     if pg:
         op.execute("SET search_path TO public")
-        migrate_role = _role_exists(bind, _MIGRATE_ROLE)
-    else:
-        migrate_role = False
+
+    # 0211_variant_batch_state now also declares ``updated_at`` in its
+    # create_table (added by #363), so on a fresh DB the column already
+    # exists. This migration therefore only adds it when it is genuinely
+    # missing (e.g. a production DB that applied the pre-#363 0211) —
+    # making it idempotent and fixing the DuplicateColumn failure that
+    # occurred when both 0211 and 0212 tried to add the column.
+    existing = {c["name"] for c in sa.inspect(bind).get_columns(_TABLE)}
+    if _COLUMN in existing:
+        return
+
+    migrate_role = _role_exists(bind, _MIGRATE_ROLE) if pg else False
 
     # Only SET ROLE where the table is already owned by modulo_migrate (prod);
     # on a fresh DB the caller owns the table and SET ROLE would fail the ADD.
@@ -92,5 +101,11 @@ def downgrade() -> None:
 
     if pg:
         op.execute("SET search_path TO public")
+
+    # Symmetric guard: only drop the column if this migration actually
+    # added it (it is absent on a fresh DB where 0211 owns the column).
+    existing = {c["name"] for c in sa.inspect(bind).get_columns(_TABLE)}
+    if _COLUMN not in existing:
+        return
 
     op.drop_column(_TABLE, _COLUMN)

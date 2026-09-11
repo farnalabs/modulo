@@ -48,6 +48,9 @@ jobs:
       UV_CACHE_DIR: /mod-uv-cache
       UV_PYTHON_INSTALL_DIR: /mod-uv-pythons
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Assert the checked-in paths filter mirrors this trigger
         run: |
           set -euo pipefail
@@ -69,9 +72,6 @@ jobs:
             exit 1
           fi
           echo "paths filter mirror OK"
-
-      - name: Checkout
-        uses: actions/checkout@v7
 
       - name: Warm uv cache (the ONLY networked dependency step)
         run: |
