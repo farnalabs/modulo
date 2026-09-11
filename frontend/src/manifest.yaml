@@ -1724,6 +1724,9 @@ elements:
       - testid: admin-sandbox-concurrency-limit
         type: input
         dynamic_testid: false
+      - testid: runner-status-error
+        type: element
+        dynamic_testid: false
     /admin/users:
       - testid: admin-users-add-user
         type: button
@@ -1945,6 +1948,9 @@ elements:
       - testid: envprofile-form-provider
         type: select
         dynamic_testid: false
+      - testid: envprofile-form-tier-badge
+        type: element
+        dynamic_testid: false
       - testid: envprofile-form-image
         type: input
         dynamic_testid: false
@@ -1975,6 +1981,9 @@ elements:
         dynamic_testid: false
       - testid: envprofile-form-provider
         type: select
+        dynamic_testid: false
+      - testid: envprofile-form-tier-badge
+        type: element
         dynamic_testid: false
       - testid: envprofile-form-image
         type: input

@@ -93,6 +93,16 @@ into the Runners page as redirects.)
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — closed the
+  remaining element-inventory drift on the Runners page: `runner-status-error`
+  (the `AdminRunnersView.vue` reload-error surface) is now registered on
+  `/admin/runners/concurrency` as well as `/admin/runners/profiles`, and the
+  tier badge of the profile form (`envprofile-form-tier-badge`,
+  `EnvironmentProfileForm.vue`) is now registered on `/admin/runners/profiles/new`
+  and `/admin/runners/profiles/:id/edit`. Both whole-page views were added to the
+  reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`)
+  so a newly shipped Runners-page testid can no longer drift invisible to Remy's
+  docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **improve-architecture (product-map walk)** — registered the
   `runner-status-error` testid of the `AdminRunnersView.vue` layout on
   `/admin/runners/profiles` and added that whole-page view to the reverse
