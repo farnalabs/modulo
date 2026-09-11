@@ -93,6 +93,22 @@ into the Runners page as redirects.)
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — finished the
+  Runners-page element-inventory walk by registering the TAB-surface testids
+  that lived in the route-per-tab leaf components rather than the layout: the
+  profiles tab's tier badge, template detail box, drift banner and apply control
+  (`envprofile-list-tier-badge`, `runner-profile-detail`, `runner-profile-drift`,
+  `runners-profiles-apply` in `RunnersProfilesTab.vue`) and the concurrency
+  tab's effective-cap + preflight panels (`runner-concurrency-effective`,
+  `runner-concurrency-preflight` in `RunnersConcurrencyTab.vue`), plus the
+  persistent runner status strip (`runner-status-strip`,
+  `runner-status-strip-state`, `runner-status-strip-machines`,
+  `RunnerStatusStrip.vue`) that renders above both tabs. All are now registered
+  on `/admin/runners/profiles` / `/admin/runners/concurrency`, and the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`)
+  now maps those two routes to the layout + tab + status-strip owning views, so
+  a newly shipped Runners-page testid can no longer drift invisible to Remy's
+  docs indexer / `/api/v1/manifest`.
 - 2026-09-11: **improve-architecture (product-map walk)** — closed the
   remaining element-inventory drift on the Runners page: `runner-status-error`
   (the `AdminRunnersView.vue` reload-error surface) is now registered on

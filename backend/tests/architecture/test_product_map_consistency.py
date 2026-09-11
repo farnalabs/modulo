@@ -307,6 +307,13 @@ def test_mapped_route_elements_cover_owning_view_testids():
     component: each view's static ``data-testid`` literals must be registered
     in the product map ``elements`` inventory, or the surface it ships stays
     invisible to Remy's docs indexer and to ``/api/v1/manifest``.
+
+    Routes that compose a page from a layout plus route-per-tab (or per-tab
+    leaf) components — e.g. the FAR-591 D5 Runners page — map to a tuple of
+    owning views so every static testid of the tab surface is registered, not
+    just the layout's. The status strip of the Runners page
+    (``components/runners/RunnerStatusStrip.vue``) renders on both tabs and is
+    part of each tab's page surface, so it is listed with both.
     """
     owned_pages = {
         "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
@@ -317,8 +324,16 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/admin/housekeeping": "frontend/src/views/AdminHousekeepingView.vue",
         "/admin/notification-delivery": "frontend/src/views/AdminNotificationDeliveryLogView.vue",
         "/admin/remy": "frontend/src/views/AdminRemyView.vue",
-        "/admin/runners/profiles": "frontend/src/views/AdminRunnersView.vue",
-        "/admin/runners/concurrency": "frontend/src/views/AdminRunnersView.vue",
+        "/admin/runners/profiles": (
+            "frontend/src/views/AdminRunnersView.vue",
+            "frontend/src/views/runners/RunnersProfilesTab.vue",
+            "frontend/src/components/runners/RunnerStatusStrip.vue",
+        ),
+        "/admin/runners/concurrency": (
+            "frontend/src/views/AdminRunnersView.vue",
+            "frontend/src/views/runners/RunnersConcurrencyTab.vue",
+            "frontend/src/components/runners/RunnerStatusStrip.vue",
+        ),
         "/admin/runners/profiles/new": "frontend/src/views/environment-profiles/EnvironmentProfileForm.vue",
         "/admin/runners/profiles/:id/edit": "frontend/src/views/environment-profiles/EnvironmentProfileForm.vue",
         "/admin/run-retention": "frontend/src/views/AdminRunRetentionView.vue",
@@ -338,12 +353,18 @@ def test_mapped_route_elements_cover_owning_view_testids():
     }
     elements = _load_elements()
     for route, view_rel in owned_pages.items():
-        view = REPO_ROOT / view_rel
-        view_testids = set(_TESTID_LITERAL.findall(view.read_text(encoding="utf-8")))
+        view_rels = view_rel if isinstance(view_rel, (tuple, list)) else (view_rel,)
         documented = {item.get("testid") for item in elements.get(route, [])}
-        missing = sorted(view_testids - documented)
+        missing = sorted(
+            {
+                testid
+                for view_rel in view_rels
+                for testid in _TESTID_LITERAL.findall((REPO_ROOT / view_rel).read_text(encoding="utf-8"))
+            }
+            - documented
+        )
         assert not missing, (
-            f"static data-testids in {view_rel} are missing from the product map "
+            f"static data-testids in {', '.join(view_rels)} are missing from the product map "
             f"elements for {route} (invisible to Remy's docs indexer / /api/v1/manifest):\n"
             + "\n".join(f"  {t}" for t in missing)
         )
