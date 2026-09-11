@@ -1603,10 +1603,10 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID, *, organisation_id: 
 # Deliberately NOT deferred:
 # * ``input_payload`` — masked into every REST list item (runs.py _build_list_item).
 #
-# FAR-583 (B2b): the three runs blob columns (outputs_json / node_telemetry_json /
-# raw_output_markers) are GONE from the database entirely (migration 0212 -
-# after B1 cut the ORM mapping); the run_node_outputs store carries the
-# payloads now.
+# FAR-583 (B2c): the three runs blob columns (outputs_json / node_telemetry_json /
+# raw_output_markers) are NOT part of this ORM's select surface (B1 cut the ORM
+# mapping; the follow-up drop migration 0212 removes the columns from the DB);
+# the run_node_outputs store carries the payloads now.
 #
 # ``cost_breakdown`` IS deferred. Its only list-path reader is the MCP
 # ``modulo://pipelines/{id}/runs`` resource (mcp_server._format_run_line), which
@@ -1933,8 +1933,9 @@ def _apply_run_cost_fields(run: Run, update: _RunStatusUpdate) -> None:
 def _apply_run_output_fields(run: Run, update: _RunStatusUpdate) -> None:
     """Apply the token-usage payload.
 
-    FAR-583 B2b: the outputs/telemetry payloads have NO whole-run storage on
-    ``runs`` (the columns are dropped) - the incoming dicts are persisted on
+    FAR-583 B2c: the outputs/telemetry payloads have NO whole-run storage on
+    ``runs`` (B1 cut the ORM mapping; the drop migration 0212 lands in the
+    follow-up PR - the incoming dicts are persisted on
     ``run_node_outputs`` by the primary repo write the caller performs right
     after (:func:`write_run_outputs_from_run`).
     """
@@ -1980,9 +1981,11 @@ async def write_run_outputs_from_run(
 ) -> None:
     """The PRIMARY repo store write of a run's outputs/telemetry blobs.
 
-    B1 contract cut (FAR-583): this is not a dual-write. And B2b the ``runs``
-    blob columns are GONE (their SET clauses are absent from the fenced
-    UPDATE as well) - the ``run_node_outputs`` REPLACE write
+    B1 contract cut (FAR-583): this is not a dual-write. And B2c the writers
+    no longer touch the ``runs`` blob columns at all (their SET clauses are
+    absent from the fenced UPDATE as well; the DB columns persist unwritten
+    until the drop migration 0212 in the follow-up PR) - the
+    ``run_node_outputs`` REPLACE write
     (:func:`replace_run_node_outputs` - upsert ``__final__``/metadata rows
     + delete-absent ordered AFTER upserts, metadata flags re-derived) inside
     a SAVEPOINT in the caller's transaction is the ONLY store, and it FAILS
@@ -1993,7 +1996,7 @@ async def write_run_outputs_from_run(
 
     * ``inherited_outputs`` / ``inherited_telemetry`` still carry the
       caller-captured PRE-WRITE stored dicts (qa M19 - read from the
-      CURRENT new-table state since B2b) so inherited ``__``-prefixed
+      CURRENT new-table state since B2c) so inherited ``__``-prefixed
       keys are filtered from the store write instead of raising (their
       rows SURVIVE the REPLACE).
     * On store failure: ONE bounded in-session retry for the retryable
@@ -2174,11 +2177,13 @@ async def update_run_status(
         )
         return run
     run.status = status
-    # FAR-583 qa-M19 (B2b): capture the PRE-WRITE stored blob dicts BEFORE — the primary store write filters inherited
-    # ``__``-prefixed keys against exactly these (kept on the legacy column,
-    # which the repair migration re-mapped into the new table) so an
+    # FAR-583 qa-M19 (B2c): capture the PRE-WRITE stored blob dicts BEFORE — the primary store write filters inherited
+    # ``__``-prefixed keys against exactly these (B1-era legacy rows carry
+    # sentinels on the legacy column; the follow-up drop migration's repair
+    # re-maps them into the new table — they never reach the new-table
+    # capture) so an
     # inherited sentinel id can never wedge the run's terminalization.
-    # B2b: the capture reads the CURRENT new-table state via the repo reader — one extra SELECT, only when the
+    # B2c: the capture reads the CURRENT new-table state via the repo reader — one extra SELECT, only when the
     # payload actually carries blobs (same shape as the fenced branch).
     pre_write_outputs: Any = None
     pre_write_telemetry: Any = None
@@ -2186,8 +2191,10 @@ async def update_run_status(
         # getattr mirrors the store write below (a fake Run stand-in in unit
         # tests carries no organisation_id; an org-less capture reads across
         # the row set the reader's tenant compensation covers).
-        # B2b: the capture reads the CURRENT new-table state (the runs blob
-        # columns are gone; the inherited-sentinel filter speaks new-table
+        # B2c: the capture reads the CURRENT new-table state (readers are
+        # new-table-only; the runs blob columns are unwritten since B1 and
+        # drop in the follow-up migration 0212; the inherited-sentinel filter
+        # speaks new-table
         # row ids now).
         stored = await read_run_node_outputs_raw(
             session, run_id=run_id, organisation_id=getattr(run, "organisation_id", None)
@@ -2317,13 +2324,13 @@ async def _update_run_status_fenced(
     refreshed_run = refreshed.scalar_one_or_none()
     if refreshed_run is None:
         return None
-    # The pre-write capture (FAR-583 qa-M19, B2b): the inherited-key filter
+    # The pre-write capture (FAR-583 qa-M19, B2c): the inherited-key filter
     # compares against the CURRENT new-table state; the tenant predicate
     # binds the row's org.
     pre_write_outputs: Any = None
     pre_write_telemetry: Any = None
     if update.outputs_json is not None or update.node_telemetry_json is not None:
-        # B2b: the capture reads the CURRENT new-table state (see the ORM
+        # B2c: the capture reads the CURRENT new-table state (see the ORM
         # branch comment).
         stored = await read_run_node_outputs_raw(session, run_id=run_id, organisation_id=refreshed_run.organisation_id)
         pre_write_outputs = stored.outputs

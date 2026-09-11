@@ -18,11 +18,13 @@ module. It provides:
   ``json.dumps`` bytes (PG jsonb orders keys length-then-bytewise; the
   server-side ``ORDER BY length(key), key COLLATE "C"`` is PG-only, so the
   ordering happens in Python — dialect-neutral);
-* Reads are NEW-TABLE-ONLY: B2b (migration 0212) dropped the legacy
-   ``runs`` blob columns; the EMPTY/MISMATCH fallback machinery died with
-   them. The only cross-table reader left is the fenced markers gate, which
-   fences on ``runs.status`` / ``claim_token`` / ``organisation_id`` (ordinary
-   columns the ORM still maps) without touching any blob column.
+* Reads are NEW-TABLE-ONLY (B2c, FAR-583): the readers no longer consult the
+  legacy ``runs`` blob columns — the EMPTY/MISMATCH fallback machinery is
+  removed in code. The columns themselves still EXIST in the database until
+  the follow-up drop migration (0212) lands; nothing here reads them. The
+  only cross-table reader left is the fenced markers gate, which
+  fences on ``runs.status`` / ``claim_token`` / ``organisation_id`` (ordinary
+  columns the ORM still maps) without touching any blob column.
 
 Representation invariants (the lossless mapping):
 
@@ -270,10 +272,10 @@ def dialect_insert(dialect: str) -> Any:
 
 
 # The 0192 quarantine side table as a CORE-ONLY Table - deliberately NOT an
-# ORM model (ops/remediation surface). **KEPT at B2b** (migration 0212 does
-# NOT drop it): its rows are the only surviving copy of the 0192-quarantined
-# legacy blobs (sentinel ``__``-prefixed keys could never be represented),
-# and after 0212 the runs columns are gone. The retention purge's delete
+# ORM model (ops/remediation surface). KEPT through the drop (migration 0212
+# does NOT drop it): its rows are the only surviving copy of the
+# 0192-quarantined legacy blobs (sentinel ``__``-prefixed keys could never be
+# represented) once the legacy runs columns go; the retention purge's delete
 # stays live; ops SQL still reads it.
 
 _QUARANTINE_METADATA = MetaData()
@@ -780,8 +782,8 @@ async def _read_run_markers_fenced_rows(
     connector-caller path (preserving the old connector rewrite read's
     no-status-predicate semantics — a concurrent cancel still serves the
     suppression evidence instead of a fence-miss None). The id + org
-    predicates are ALWAYS applied. B2b: the legacy joined leg is gone —
-    the runs row is fetched through the ORM (:class:`modulo.db.models.run.Run`),
+    predicates are ALWAYS applied.     reconciliation). B2c: the legacy joined blob leg is removed — the
+    runs row is fetched through the ORM (:class:`modulo.db.models.run.Run`),
     whose status/claim_token/organisation_id columns are ordinary
     non-blob columns.
     """
@@ -812,6 +814,11 @@ async def _read_run_markers_fenced_rows(
     if for_update:
         stmt = stmt.with_for_update(of=Run)
     joined = (await session.execute(stmt)).all()
+    # Defense-in-depth org assert (restored from the pre-rewrite fenced
+    # reader): a mismatched session/request org pair must fail loudly, not
+    # degrade silently to a fence miss.
+    session_org = await read_rls_org(session)
+    _assert_read_org(session_org, organisation_id, run_id)
     if not joined:
         return []
     return [(row[0], row[1]) for row in joined]
@@ -823,9 +830,19 @@ async def read_run_blobs(
     run_id: uuid.UUID,
     organisation_id: uuid.UUID | None = None,
 ) -> RunBlobs:
-    """The reassembled legacy dict shapes ? new-table-only (B2b: the runs
-    blob columns are gone; the EMPTY/MISMATCH fallback machinery died with
-    them)."""
+    """The reassembled legacy dict shapes — new-table-only (B2c).
+
+    Readers no longer consult the legacy ``runs`` blob columns (the
+    EMPTY/MISMATCH fallback machinery is removed; the columns themselves are
+    dropped later by the follow-up drop migration 0212).
+
+    DISPOSITION NOTE for that drop (M6): after migration 0212 lands, runs
+    whose legacy blobs were 0192-QUARANTINED are under-served here — their
+    evidence lives in ``run_node_outputs_quarantine`` (ops SQL), not in
+    ``run_node_outputs``, so these readers serve an absent-side shape for
+    them. That is accepted: quarantine is the remediation surface, and the
+    disposition is recorded before the drop.
+    """
     return await read_run_node_outputs_raw(session, run_id=run_id, organisation_id=organisation_id)
 
 
@@ -868,10 +885,10 @@ async def read_run_markers_fenced(
     for_update: bool = False,
     fence_status: bool = True,
 ) -> dict[str, Any] | None:
-    """Fenced, single-statement markers read (B2b: new-table-only).
+    """Fenced, single-statement markers read (B2c: new-table-only).
 
     A fence miss (wrong claim token / wrong status / missing run) yields
-    ZERO rows ? the caller gets ``None``, byte-for-byte the same visibility
+    ZERO rows — the caller gets ``None``, byte-for-byte the same visibility
     the predicate-fenced gate read always had (FAR-228 gate). A fence HIT
     with no marker rows is a run with no markers: ``None`` markers too.
     Reassembly is jsonb-canonical (:func:`_reassemble_markers`).

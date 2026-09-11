@@ -11,8 +11,9 @@ ids / sentinel-named ids / ``__unknown__`` keys / multi-attempt markers /
 order-hostile key ordering / shrinking REPLACE / the fenced markers reader /
 malformed-metadata fail-open / inherited-sentinel filtering.
 
-B2b: the legacy runs blob columns are DROPPED (migration 0212) - the
-DIRECTION-AWARE fallback classes are gone with them; seeding is new-table
+B2c: the readers no longer consult the legacy runs blob columns (the
+DIRECTION-AWARE fallback classes are removed; the columns drop later in
+migration 0212, the follow-up drop PR) - seeding is new-table
 work through the repo writers.
 """
 
@@ -68,9 +69,9 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
         tables = [t for t in Base.metadata.sorted_tables if t.name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
         # The quarantine side table has NO ORM model (migration-0192-owned,
-        # Core-only in the repo module) - created here so the B2b-era parity
-        # surface stays exercisable. B2b KEPT this table (post-0212 it is the
-        # 0192-quarantined evidence's only surviving copy).
+        # Core-only in the repo module) - created here so the parity
+        # surface stays exercisable. KEPT through the drop (post-0212 it is
+        # the 0192-quarantined evidence's only surviving copy).
         await conn.run_sync(lambda sync_conn: QUARANTINE_TABLE.create(sync_conn, checkfirst=True))
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
@@ -110,8 +111,9 @@ async def _seed_run(
     async with session.begin():
         session.add(run)
         await session.flush()
-        # B2b: the blob STORE is run_node_outputs - seeding goes through the
-        # repo writers (the legacy runs columns are gone with migration 0212).
+        # B2c: the blob STORE is run_node_outputs - seeding goes through the
+        # repo writers (nothing reads the legacy runs columns; they are
+        # unwritten since B1 and drop in migration 0212, the follow-up PR).
         if outputs is not None or telemetry is not None:
             await set_rls_org(session, run.organisation_id)
             await replace_run_node_outputs(

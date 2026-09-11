@@ -1552,8 +1552,8 @@ async def _load_node_sample_output(
 ) -> dict[str, Any]:
     """Read the flagged node's output, wrapped as a dict sample for the eval.
 
-    FAR-583 read-switch: the blobs reassemble from run_node_outputs (with the
-    legacy fallback) inside the caller's transaction.
+    FAR-583 read-switch: the blobs reassemble from run_node_outputs
+    (new-table-only reader) inside the caller's transaction.
     """
     blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
     outputs = blobs.outputs or {}

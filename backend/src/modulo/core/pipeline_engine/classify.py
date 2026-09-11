@@ -669,7 +669,7 @@ async def classify_and_persist_run(
         return False
     try:
         # FAR-583 read-switch: the blobs reassemble from run_node_outputs via
-        # the repo reader (with the empty/mismatch legacy fallback) inside the
+        # the repo reader (new-table-only since B2c) inside the
         # caller's SAME transaction — the dual-write leg has already mirrored
         # this terminalization's outputs/telemetry, and every caller reads
         # flushed/committed state (update_run_status flushes before this hook;

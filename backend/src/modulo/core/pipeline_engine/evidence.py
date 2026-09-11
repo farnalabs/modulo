@@ -523,7 +523,7 @@ def build_default_evidence_provider(
             if run is None:
                 return None
             # FAR-583 read-switch: the blobs reassemble from run_node_outputs
-            # (with the empty/mismatch legacy fallback) in this SAME
+            # (new-table-only reader) in this SAME
             # transaction — one batched repo query.
             blobs = await read_run_blobs(session, run_id=run_id, organisation_id=org_id)
             return extract_stored_output_json(blobs.outputs, blobs.telemetry, node_id)
@@ -828,8 +828,8 @@ async def reconcile_noop_evidence(
                 select(RunEvidence.run_id, RunEvidence.node_id).where(RunEvidence.run_id.in_([run.id for run in runs]))
             )
             existing = {(row.run_id, str(row.node_id)) for row in evidence_rows.all()}
-        # FAR-583 read-switch: the blobs reassemble from run_node_outputs (with
-        # the legacy fallback) INSIDE this transaction — one batched repo read
+        # FAR-583 read-switch: the blobs reassemble from run_node_outputs
+        # (new-table-only reader) INSIDE this transaction — one batched repo read
         # per scanned run (bounded by max_runs), because the probe loop below
         # runs after the transaction closes.
         from modulo.db.crud.run_node_outputs import read_run_blobs

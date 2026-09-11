@@ -694,8 +694,8 @@ class FeedbackManager:
             )
 
         engine = eval_engine or EvalEngine()
-        # FAR-583 read-switch: the blobs reassemble from run_node_outputs (with
-        # the legacy fallback) in the SAME transaction that loaded the run.
+        # FAR-583 read-switch: the blobs reassemble from run_node_outputs
+        # (new-table-only reader) in the SAME transaction that loaded the run.
         blobs = await read_run_blobs(
             self._session,
             run_id=record.correction_run_id,

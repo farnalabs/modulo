@@ -229,8 +229,9 @@ def _require_node_not_completed(run: Run, run_id: uuid.UUID, node_id: str, blobs
     The node may hold a PURE return on its *outputs* side (a replay marker)
     or ONLY a telemetry record (a skip marker omits the outputs key — Agent
     Return Contract, FAR-125 P1c), so both sides must be checked. FAR-583 B1:
-    the check reads through the repo's blobs reader (new table + legacy
-    fallback) instead of the cut ORM mapping — post-B1 completions live ONLY
+    the check reads through the repo's blobs reader (new-table-only since B2c,
+    legacy fallback removed) instead of the cut ORM mapping — post-B1
+    completions live ONLY
     in ``run_node_outputs``, so a legacy-only read would silently let a
     recovered node replay twice.
     """

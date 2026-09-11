@@ -1,7 +1,8 @@
-"""B2b seeding helper (FAR-583): stores blobs on the new table.
+"""B2c seeding helper (FAR-583): stores blobs on the new table.
 
-The B1-era ``seed_legacy_blobs`` helper died with the legacy ``runs`` blob
-columns (migration 0212 drops them) - tests seed the ``run_node_outputs``
+The B1-era ``seed_legacy_blobs`` helper is retired with the legacy read
+fallback (B2c removes it; migration 0212 — the follow-up drop PR — drops
+the columns themselves) - tests seed the ``run_node_outputs``
 store through the repo writers directly.
 """
 

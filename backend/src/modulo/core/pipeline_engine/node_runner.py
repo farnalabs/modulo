@@ -1284,10 +1284,11 @@ async def _persist_raw_output_marker(
     return True
 
 
-# B2b (FAR-583): a marker-savepoint transaction-aborting failure loses the
+# B2c (FAR-583): a marker-savepoint transaction-aborting failure loses the
 # persist for the attempt and is claimed loudly as
 # sandbox_agent.raw_output_marker_persist_uncommitted - there is no legacy
-# column for a pre-B2b legacy-survives-repair-migrates fallback any more.
+# fallback leg any more (B2c readers are new-table-only; the columns die in
+# the follow-up drop migration 0212).
 
 
 async def _write_raw_output_marker(
@@ -1341,8 +1342,9 @@ async def _write_raw_output_marker(
                     },
                 )
                 return
-            # B2b (FAR-583): the runs blob columns are GONE (migration
-            # 0212) - the markers merge reads the CURRENT new-table state
+            # B2c (FAR-583): the writers no longer touch the runs blob
+            # columns (drop migration 0212 in the follow-up PR) - the markers
+            # merge reads the CURRENT new-table state
             # (the run row is still locked FOR UPDATE, so the read-merge-write
             # serialises exactly like the former ORM leg). One reassembly
             # call, then the REPLACE write below.
@@ -1388,7 +1390,7 @@ async def _write_raw_output_marker(
                 )
             # FAR-583: post-merge marker REPLACE into run_node_outputs. The
             # MERGED dict is stored (prior pr_url preserved, delivery_done
-            # monotone) - one row per attempt key, delete-absent. B2b: there
+            # monotone) - one row per attempt key, delete-absent. B2c: there
             # is no legacy copy any more, so a savepoint-scoped failure loses
             # the persist for this attempt and is claimed loudly (the next
             # marker persist re-merges from the durable rows).
@@ -1411,9 +1413,9 @@ async def _write_raw_output_marker(
                 # savepoint's 25P02 rollback-wrapper failure (raised by the
                 # __aexit__ of an already-aborted savepoint) does NOT mask
                 # the ORIGINAL transaction-aborting state (40P01 etc.).
-                # B2b claimer: a transaction-aborting failure loses this
-                # persist AND poisons the whole transaction - without the
-                # legacy column the 'legacy survives' fallback is gone, so
+                # B2c claimer: a transaction-aborting failure loses this
+                # persist AND poisons the whole transaction - without a
+                # legacy fallback leg the 'legacy survives' fallback is gone, so
                 # the claim is loud and named honestly. The outer handler
                 # still swallows (the persist never-raise contract).
                 sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
@@ -1571,8 +1573,9 @@ async def _read_run_raw_output_markers_for_gate(
     the per-node hot path) is replaced by the repo's SINGLE fenced
     markers-scoped reader :func:`modulo.db.crud.run_node_outputs.read_run_markers_fenced`
     — the fence predicates (id + org + claim_token + ``status='running'``)
-    moved INTO that one statement, which reassembles the markers with the
-    direction-aware legacy fallback and serves ``None`` on a fence miss
+    moved INTO that one statement, which reassembles the markers
+    (new-table-only since B2c - the legacy fallback leg is removed) and
+    serves ``None`` on a fence miss
     (byte-for-byte the same visibility the fenced single-column gate read
     had). LOCK-FREE exactly as before (no FOR UPDATE on this read).
     """

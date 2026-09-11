@@ -149,8 +149,9 @@ async def _fetch_run_row(db_engine: AsyncEngine, run_id: uuid.UUID) -> dict[str,
         row = (
             await conn.execute(
                 text(
-                    # B2b: the runs blob columns are GONE (migration 0212) -
-                    # only the status surface remains on the runs row.
+                    # B2c: reads after the write-cut consult the status
+                    # surface only (the blob legs are unwritten since B1; the
+                    # columns drop in migration 0212, the follow-up PR).
                     "SELECT status, error_code, completed_at FROM runs WHERE id = :rid"
                 ),
                 {"rid": str(run_id)},

@@ -544,7 +544,7 @@ async def compute_coverage_gap(
     eval_names = await _load_eval_names(session, org_id=org_id, eval_ids={e for e in eval_ids if e is not None})
 
     # FAR-583 read-switch: the per-run outputs reassemble from
-    # run_node_outputs (with the legacy fallback) in the SAME transaction,
+    # run_node_outputs (new-table-only reader) in the SAME transaction,
     # one batched repo read per run — the pure evaluator below never touches
     # the legacy columns.
     from modulo.db.crud.run_node_outputs import read_run_blobs
