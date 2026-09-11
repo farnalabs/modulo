@@ -15794,6 +15794,10 @@ export interface components {
             capacity?: {
                 [key: string]: unknown;
             } | null;
+            /** Input Payload */
+            input_payload?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** RunSummary */
         RunSummary: {

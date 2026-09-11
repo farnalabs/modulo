@@ -728,6 +728,11 @@ class RunResponse(BaseModel):
     work_item_refs: list[dict[str, Any]] | None = None
     child_runs: list[dict[str, Any]] | None = None
     capacity: dict[str, Any] | None = None
+    # Masked input payload, matching the list endpoint shape (_build_list_item).
+    # Safe to expose post-redaction: input_payload is persisted post-redaction
+    # by the guardrails module, AND re-masked defensively here via
+    # _mask_output_value so no unmasked input is ever served.
+    input_payload: dict[str, Any] | None = None
 
 
 async def _run_gate_fired(session: AsyncSession, run: Any) -> bool:
@@ -853,6 +858,14 @@ def _build_run_response(
     _raw_snapshot_id = getattr(run, "snapshot_id", None)
     snapshot_id = _raw_snapshot_id if isinstance(_raw_snapshot_id, (uuid.UUID, str)) else None
 
+    # Masked input payload, mirroring the list shape (_build_list_item). Same
+    # defensive coercion as run_classification/snapshot_id above: a non-dict
+    # column value (or a MagicMock in test fakes) degrades to None, never a 500.
+    _raw_input_payload = getattr(run, "input_payload", None)
+    input_payload = (
+        _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
+    )
+
     return RunResponse(
         run_id=run.id,
         status=run.status,
@@ -887,6 +900,7 @@ def _build_run_response(
         child_runs=ctx.child_runs,
         capacity=ctx.capacity,
         warnings=compute_run_warnings(run.cost_breakdown),
+        input_payload=input_payload,
     )
 
 

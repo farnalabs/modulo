@@ -126,6 +126,8 @@ def _make_run(
     r.parent_run_id = None
     # FAR-490 run→snapshot linkage
     r.snapshot_id = None
+    # Masked input payload on the detail response (no sentinel MagicMock)
+    r.input_payload = None
     return r
 
 
@@ -1526,6 +1528,54 @@ def test_list_runs_input_payload_none_when_absent(client: TestClient) -> None:
 
     assert resp.status_code == 200
     assert resp.json()["items"][0]["input_payload"] is None
+
+
+def test_get_run_includes_masked_input_payload(client: TestClient) -> None:
+    """The run-detail response includes the masked input_payload, matching the
+    list-shape parity. Sensitive-looking keys are masked, never leaked."""
+    run = _make_run(status="eval_failed", error_code="eval_failed")
+    run.input_payload = {"task": "fix bug", "api_key": "sk-secret"}
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["input_payload"]["task"] == "fix bug"
+    assert body["input_payload"]["api_key"] == SENSITIVE_VALUE_MASK
+
+
+def test_get_run_input_payload_none_when_absent(client: TestClient) -> None:
+    run = _make_run(status="running")
+    run.input_payload = None
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["input_payload"] is None
+
+
+def test_get_run_input_payload_non_dict_defensive_none(client: TestClient) -> None:
+    """Defensive coercion: a corrupt / non-dict input_payload column value
+    (e.g. a MagicMock in test fakes) degrades to null, never a 500."""
+    run = _make_run(status="running")
+    run.input_payload = "not-a-dict"
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["input_payload"] is None
 
 
 def test_run_response_all_new_fields_present_in_trigger_endpoint(client: TestClient) -> None:
