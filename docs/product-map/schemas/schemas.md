@@ -82,6 +82,14 @@ applied migration between versions (`core/schema_registry/*`).
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
+  `/admin/parameter-schemas, /schemas/editor/:id, /schemas/infer`: the whole-page view(s) `ParameterSchemasView.vue, SchemaEditorView.vue, SchemaInferenceView.vue` render static `data-testid`s that the
+  product map `elements:` inventory already documents, but the surface was not yet
+  guarded against drift. The route now maps to its owning view so a newly shipped
+  testid can no longer silently stay invisible to Remy's docs indexer /
+  `/api/v1/manifest`.
+
 - 2026-09-11: **improve-architecture (product-map walk)** — registered the
   schema folder tree (`pipelines/FolderTree.vue` static testids `folder-tree`,
   `folder-tree-new`, `folder-tree-all-pipelines`) in the `/schemas` manifest

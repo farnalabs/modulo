@@ -78,6 +78,14 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
+  `/settings/sso`: the whole-page view(s) `SettingsSsoView.vue` render static `data-testid`s that the
+  product map `elements:` inventory already documents, but the surface was not yet
+  guarded against drift. The route now maps to its owning view so a newly shipped
+  testid can no longer silently stay invisible to Remy's docs indexer /
+  `/api/v1/manifest`.
+
 - 2026-08-25: **improve-architecture (product-map walk)** — shipped the login-page SSO
   provider buttons (``LoginView.vue`` consumes ``GET /api/v1/auth/sso/providers`` and
   renders OIDC/SAML buttons that link to the existing login endpoints). Coverage added in
