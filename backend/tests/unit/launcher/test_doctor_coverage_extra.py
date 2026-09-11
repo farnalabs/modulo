@@ -12,6 +12,8 @@ paths are asserted directly rather than against external services.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -516,9 +518,13 @@ def test_default_probes_real(tmp_path: Path):
     # The writable probe creates then removes a probe file.
     probes.assert_writable(tmp_path)
 
-    # uid / username / file_owner resolve on POSIX.
+    # uid resolves to an int on POSIX and to None on Windows (os.getuid is
+    # POSIX-only; _effective_uid's contract is `int | None`).
     uid = probes.effective_uid()
-    assert isinstance(uid, int)
+    if hasattr(os, "getuid"):
+        assert isinstance(uid, int)
+    else:
+        assert uid is None
     assert probes.username_of_uid(uid) is not None or probes.username_of_uid(uid) is None
     assert probes.file_owner(tmp_path) is not None or probes.file_owner(tmp_path) is None
 
@@ -561,9 +567,14 @@ def test_default_probes_real(tmp_path: Path):
     probes2 = default_probes(tmp_path, state_with_backup)
     assert probes2.last_backup_at() is not None
 
-    # secrets mode reflects the real file
+    # secrets mode reflects the real file (POSIX bit view; the documented
+    # contract is None on Windows where the ACL seam is a TODO(P3)).
     (tmp_path / "secrets.json").chmod(0o600)
-    assert probes.secrets_mode(tmp_path) == 0o600
+    secrets_mode_on_windows = sys.platform == "win32"
+    if not secrets_mode_on_windows:
+        assert probes.secrets_mode(tmp_path) == 0o600
+    else:
+        assert probes.secrets_mode(tmp_path) is None
 
     # bundled binaries / bundle version resolve (may be empty if no bundle)
     assert isinstance(probes.bundled_binaries(), list)
