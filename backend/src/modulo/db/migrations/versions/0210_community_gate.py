@@ -11,6 +11,10 @@ primitives).  ``agents_granted`` starts False and is flipped True by the
 operator via the ``POST /library/collections/{id}/installs/{install_id}/grant``
 endpoint.  Until granted, community-sourced agents run under a default-deny
 tool/connector scope (enforced at execution time in node_runner).
+
+Chains on top of main's ``0209_collection_install_id_entity_columns`` (which
+adds the denormalised ``collection_install_id`` provenance columns to the
+entity tables).  This revision is the single head of the migration chain.
 """
 
 from __future__ import annotations

@@ -911,6 +911,16 @@ elements:
       - testid: stat-no-baseline
         type: element
         dynamic_testid: false
+    /library/collections/:id:
+      - testid: collection-publish
+        type: button
+        dynamic_testid: false
+      - testid: collection-grant-agents
+        type: button
+        dynamic_testid: false
+      - testid: collection-create-connector
+        type: button
+        dynamic_testid: false
     /accept-invite:
       - testid: accept-invite-missing-token
         type: element
@@ -2146,16 +2156,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: collection-create-submit
-        type: button
-        dynamic_testid: false
-    /library/collections/:id:
-      - testid: collection-publish
-        type: button
-        dynamic_testid: false
-      - testid: collection-grant-agents
-        type: button
-        dynamic_testid: false
-      - testid: collection-create-connector
         type: button
         dynamic_testid: false
     /library/:id/create-pipeline:

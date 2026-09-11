@@ -855,7 +855,7 @@ def test_single_migration_head() -> None:
     # 0210_community_gate (FAR-764) chains off 0209_collection_install_id_entity_columns.
     chaining_off_0209 = [p for p in revisions if parents[p] == "0209_collection_install_id_entity_columns"]
     assert [_basename(p) for p in chaining_off_0209] == ["0210_community_gate.py"]
-    # Nothing chains off 0210 -> it is the single head.
+    # Nothing chains off 0210_community_gate -> it is the single head.
     chaining_off_0210 = [p for p in revisions if parents[p] == "0210_community_gate"]
     assert not chaining_off_0210
 
