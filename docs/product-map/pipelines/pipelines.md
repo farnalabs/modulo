@@ -118,6 +118,14 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+  editor's command-management editor (`pipeline/SandboxCommandsEditor.vue`) static
+  testids (`pipeline-editor-node-commands-editor`,
+  `pipeline-editor-node-command-{add,empty,joiner,preview,scalar}`) in the
+  `/pipelines/:id/editor` manifest `elements:` inventory and extended
+  `test_mapped_route_elements_cover_owning_view_testids` to map that route to the
+  owning component, so the command surface can no longer ship controls invisible
+  to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-09-10: **improve-architecture (product-map walk)** — registered the
   editor's runner-binding (`AgentRunnerBindings.vue`) and snapshot-timeline
   (`PipelineSnapshotTimeline.vue`) static testids (`pipeline-editor-runner-binding-*`,

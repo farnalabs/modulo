@@ -320,6 +320,9 @@ def test_mapped_route_elements_cover_owning_view_testids():
     detail page (``/runs/:id``, ``RunDetailView.vue``) surfaces
     ``shared/JsonViewer.vue``, ``shared/ErrorAlert.vue`` and
     ``hitl/HitlGateCard.vue``, whose shipped testids are part of its surface.
+    Components that render children own those children's testids as well —
+    ``hitl/HitlGateCard.vue`` embeds ``HitlBriefing.vue``, so its briefing
+    surface is part of every route that renders the gate card.
     """
     owned_pages = {
         "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
@@ -346,21 +349,32 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/admin/system/config": "frontend/src/views/AdminSystemConfigView.vue",
         "/admin/users": "frontend/src/views/AdminUsersView.vue",
         "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
-        "/pipelines/:id/editor": "frontend/src/views/PipelineEditorView.vue",
+        "/pipelines/:id/editor": (
+            "frontend/src/views/PipelineEditorView.vue",
+            "frontend/src/components/pipeline/SandboxCommandsEditor.vue",
+        ),
         "/runs": "frontend/src/views/RunsListView.vue",
         "/runs/:id": (
             "frontend/src/views/RunDetailView.vue",
             "frontend/src/components/shared/JsonViewer.vue",
             "frontend/src/components/shared/ErrorAlert.vue",
             "frontend/src/components/hitl/HitlGateCard.vue",
+            "frontend/src/components/HitlBriefing.vue",
         ),
         "/settings/email": "frontend/src/views/SettingsEmailView.vue",
-        "/settings/hitl-review": "frontend/src/views/SettingsHitlReviewView.vue",
+        "/settings/hitl-review": (
+            "frontend/src/views/SettingsHitlReviewView.vue",
+            "frontend/src/components/hitl/HitlGateCard.vue",
+            "frontend/src/components/HitlBriefing.vue",
+        ),
         "/settings/mcp": "frontend/src/views/SettingsMcpView.vue",
         "/admin/model-backends": "frontend/src/views/AdminModelBackendsView.vue",
         "/library": "frontend/src/views/LibraryView.vue",
         "/library/collections/new": "frontend/src/views/CollectionCreateView.vue",
-        "/lifecycle-maps/:id": "frontend/src/views/lifecycle-map/LifecycleMapView.vue",
+        "/lifecycle-maps/:id": (
+            "frontend/src/views/lifecycle-map/LifecycleMapView.vue",
+            "frontend/src/components/lifecycle-map/LifecycleMapRenderer.vue",
+        ),
     }
     elements = _load_elements()
     for route, view_rel in owned_pages.items():

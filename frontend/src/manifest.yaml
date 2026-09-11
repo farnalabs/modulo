@@ -2290,6 +2290,9 @@ elements:
       - testid: lifecycle-map-journeys-pagination
         type: element
         dynamic_testid: false
+      - testid: journey-overflow-chip
+        type: element
+        dynamic_testid: false
     /notifications:
       - testid: notifications-apply-filters
         type: button
@@ -2604,6 +2607,24 @@ elements:
       - testid: pipeline-editor-node-commands-readonly
         type: element
         dynamic_testid: false
+      - testid: pipeline-editor-node-commands-editor
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-node-command-scalar
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-node-command-add
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-node-command-empty
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-node-command-joiner
+        type: input
+        dynamic_testid: false
+      - testid: pipeline-editor-node-command-preview
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-runner-bindings
         type: element
         dynamic_testid: false
@@ -2784,6 +2805,27 @@ elements:
         dynamic_testid: false
       - testid: hitl-gate-foreign-claim
         type: element
+        dynamic_testid: false
+      - testid: hitl-briefing
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-condition-result
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-condition-result-expression
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-description
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-description-fallback
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-details
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-toggle
+        type: button
         dynamic_testid: false
       - testid: run-detail-trigger-actor
         type: element
@@ -3197,6 +3239,30 @@ elements:
         dynamic_testid: false
       - testid: hitl-gate-message
         type: element
+        dynamic_testid: false
+      - testid: hitl-gate-foreign-claim
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-condition-result
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-condition-result-expression
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-description
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-description-fallback
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-details
+        type: element
+        dynamic_testid: false
+      - testid: hitl-briefing-toggle
+        type: button
         dynamic_testid: false
       - testid: hitl-review-claim-failure-banner
         type: element
