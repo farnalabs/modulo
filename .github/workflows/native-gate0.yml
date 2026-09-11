@@ -51,6 +51,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Install uv (no cache restore - see below)
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          enable-cache: false
+
       - name: Assert the checked-in paths filter mirrors this trigger
         run: |
           set -euo pipefail
