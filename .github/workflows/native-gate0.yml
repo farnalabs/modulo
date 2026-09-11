@@ -103,20 +103,24 @@ jobs:
       - name: Boot-import proof in min-glibc container, --network none
         run: |
           set -euo pipefail
-          # Resolve the interpreter through the uv-synced venv. `uv run which
-          # python` reports the venv's python *symlink* (a host-absolute path
-          # that does not exist inside the container, where the repo is mounted
-          # at /repo). Follow the symlink with readlink -f to the real CPython,
-          # which lives under UV_PYTHON_INSTALL_DIR and is mounted at the SAME
-          # path inside the container - so it resolves despite --network none.
-          python_bin="$(cd backend && readlink -f "$(uv run --offline which python)")"
+          # Resolve the interpreter through the uv-synced venv. UV_PYTHON_PREFERENCE
+          # is set to only-managed (job env) so the venv's python is a symlink into
+          # UV_PYTHON_INSTALL_DIR, which we mount into the container at the same path.
+          # We run the VENV python (not the bare interpreter) so the venv's
+          # site-packages - including the editable 'modulo' install, whose .pth
+          # records the host-absolute source path - are on sys.path.
+          #
+          # The repo is mounted at its real path ($PWD) - NOT /repo - so the
+          # host-absolute paths recorded in the venv (the editable .pth and the
+          # venv directory itself) resolve inside the container despite --network none.
+          python_bin="$(cd backend && uv run --offline which python)"
           if [ ! -x "${python_bin}" ]; then
             echo "::error::precondition violated: offline python interpreter not found at '${python_bin}'"
             exit 1
           fi
           export python_bin
           docker run --rm --network none \
-            -v "$PWD:/repo" -w /repo/backend \
+            -v "$PWD:$PWD" -w "$PWD/backend" \
             -v "${UV_CACHE_DIR}:${UV_CACHE_DIR}" \
             -v "${UV_PYTHON_INSTALL_DIR}:${UV_PYTHON_INSTALL_DIR}" \
             -e UV_CACHE_DIR -e UV_PYTHON_INSTALL_DIR -e python_bin \
