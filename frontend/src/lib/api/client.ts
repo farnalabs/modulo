@@ -61,9 +61,13 @@ const _origPut = api.PUT
 const _origPatch = api.PATCH
 const _origDelete = api.DELETE
 
-function withAuth(fn: (...args: any[]) => any) {
-  return async (...args: any[]) => {
-    const [url, options] = args
+type HttpMethod = <Url extends keyof paths>(
+  url: Url,
+  init?: Record<string, unknown>,
+) => Promise<{ data?: unknown; error?: unknown; response?: Response }>
+
+function withAuth(fn: HttpMethod): HttpMethod {
+  return async (url, options) => {
     const headers = { ...getAuthHeaders(), ...options?.headers }
     let resp = await fn(url, { ...options, headers })
     if (resp.response?.status === 401) {
@@ -75,20 +79,20 @@ function withAuth(fn: (...args: any[]) => any) {
       if (!refreshed || resp.response?.status === 401) {
         clearAccessToken()
         exitToLogin()
-        return { response: undefined, data: undefined, error: undefined } as any
+        return { response: undefined, data: undefined, error: undefined }
       }
     }
     if (resp.error && typeof resp.error === 'object') {
-      resp.error = toProblemDetail(resp.error) as any
+      resp.error = toProblemDetail(resp.error as Record<string, unknown>)
     }
     return resp
   }
 }
 
-api.GET = withAuth(_origGet) as any
-api.POST = withAuth(_origPost) as any
-api.PUT = withAuth(_origPut) as any
-api.PATCH = withAuth(_origPatch) as any
-api.DELETE = withAuth(_origDelete) as any
+api.GET = withAuth(_origGet)
+api.POST = withAuth(_origPost)
+api.PUT = withAuth(_origPut)
+api.PATCH = withAuth(_origPatch)
+api.DELETE = withAuth(_origDelete)
 
 export type { paths, components } from './schema'
