@@ -16,6 +16,44 @@ Supported platforms, minimum resources, and database backends for running Modulo
 
 ---
 
+## Native Single-Install Bundle (Linux)
+
+The native installer (`scripts/install.sh`) distributes a self-contained
+bundle: the backend, a bundled CPython runtime, PostgreSQL 16, Redis 8, and
+the built SPA, laid out under `~/.local/opt/modulo/`. The table below is
+the honest v1 envelope (ADR 031; recentre on what `bundle-v*` artifacts
+actually ship - do not widen these rows until the packaging tickets land):
+
+| OS | glibc floor | Status |
+|----|-------------|--------|
+| Debian 13+ | 2.41 | Supported |
+| Ubuntu 26.04+ | 2.39+ | Supported |
+| Ubuntu 20.04-25.04 | 2.31-2.35 | Not supported (glibc below the bundled floor) |
+| macOS | - | Planned (P2) |
+| Windows | - | Planned (P3) |
+
+### Supported architectures
+
+| Architecture | Status |
+|--------------|--------|
+| linux-amd64 (x86_64) | Supported |
+| linux-arm64 | Planned (P2) |
+| macOS / Windows | Planned (P2/P3) |
+
+### Disk and RAM envelope
+
+The native bundle is roughly the same footprint as Compose, minus Docker
+itself: ~2 GB for the install roots, and the bundled Postgres data dir
+grows with run history.
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| RAM | 4 GB | 8 GB |
+| Disk (install + data dir) | 10 GB | 20 GB |
+| Swap | Required (Postgres needs commit headroom) | - |
+
+---
+
 ## Minimum Resources
 
 ### Development / Evaluation
@@ -135,6 +173,7 @@ With default settings and no connectors configured, Modulo makes **zero external
 | Deployment guide | [`docs/deployment.md`](./deployment.md) |
 | Deployment journeys | [`docs/deployment-journey.md`](./deployment-journey.md) |
 | Configuration reference | [`docs/configuration-reference.md`](./configuration-reference.md) |
+| Configuration precedence (native installs) | [`docs/configuration-precedence.md`](./configuration-precedence.md) |
 | Public launch checklist | [`docs/public-launch-checklist.md`](./public-launch-checklist.md) |
 | Upgrade process | [`docs/upgrade-process.md`](./upgrade-process.md) |
 | Troubleshooting | [`docs/troubleshooting.md`](./troubleshooting.md) |

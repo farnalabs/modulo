@@ -1,0 +1,124 @@
+name: "Gate 0: native bundle offline boot proof (PR)"
+
+# FAR-673 / ADR 031 Decision 10: the per-PR verification gate for the
+# native single-install bundle. Linux-only; runs when a PR touches a path
+# on the launcher's direct boot path. The always-run paths list is checked
+# in (.github/native-gate0-paths.txt) and asserted by
+# backend/tests/unit/tools/test_gate0_paths.py, so the filter cannot rot
+# silently; the trigger list below must mirror that file, and the first
+# job asserts the mirror.
+#
+# What it proves:
+#   1. The locked dependency set resolves OFFLINE (uv --offline): any
+#      no-wheel dependency that requires a source-build network fetch
+#      fails HERE - fail the release, never the install.
+#   2. The launcher boot import graph loads inside a minimum-glibc
+#      container with --network none (true zero egress).
+#
+# Every guard step asserts its own precondition LOUDLY (::error:: or
+# ::warning:: plus a hard failure), never a silent skip: a gate that
+# exits success without proving anything is worse than one that fails.
+
+on:
+  pull_request:
+    paths:
+      # MUST stay in sync with .github/native-gate0-paths.txt (asserted below).
+      - ".github/native-gate0-paths.txt"
+      - "backend/src/modulo/db/**"
+      - "backend/src/modulo/settings.py"
+      - "backend/src/modulo/db/url_utils.py"
+      - "backend/src/modulo/api/main.py"
+      - "deploy/fly/**"
+      - ".github/workflows/native-gate0.yml"
+
+concurrency:
+  group: native-gate0-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gate0:
+    name: Offline uv sync + no-egress boot proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      UV_CACHE_DIR: /mod-uv-cache
+      UV_PYTHON_INSTALL_DIR: /mod-uv-pythons
+    steps:
+      - name: Assert the checked-in paths filter mirrors this trigger
+        run: |
+          set -euo pipefail
+          filter_file=".github/native-gate0-paths.txt"
+          workflow=".github/workflows/native-gate0.yml"
+          if [ ! -f "${filter_file}" ] || [ ! -f "${workflow}" ]; then
+            echo "::error::precondition violated: ${filter_file} or ${workflow} missing from the checkout"
+            exit 1
+          fi
+          missed=0
+          while IFS= read -r pattern; do
+            if ! grep -qF -- "- \"${pattern}\"" "${workflow}"; then
+              echo "::warning::always-run pattern '${pattern}' is not mirrored in pull_request.paths; the gate would not fire for it"
+              missed=1
+            fi
+          done < <(grep -vE '^[[:space:]]*(#|$)' "${filter_file}")
+          if [ "${missed}" -ne 0 ]; then
+            echo "::error::checked-in filter and workflow trigger have drifted - fix the mirror before merging"
+            exit 1
+          fi
+          echo "paths filter mirror OK"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Warm uv cache (the ONLY networked dependency step)
+        run: |
+          set -euo pipefail
+          cd backend
+          # Deliberately no actions/setup-uv cache restore: a warm cache from
+          # a previous run could mask a no-wheel regression.
+          uv sync --frozen --group dev --quiet
+          echo "cache warmed (uvlock-resolved, wheels only)"
+
+      - name: Offline resolution proof (uv --offline, zero egress)
+        run: |
+          set -euo pipefail
+          cd backend
+          uv sync --frozen --group dev --offline --quiet
+          echo "offline uv sync OK: the locked dependency set is fully wheel-resolvable"
+
+      - name: Boot-import proof in min-glibc container, --network none
+        run: |
+          set -euo pipefail
+          # Resolve the interpreter through the uv-synced venv; the venv's
+          # python symlink targets the uv-managed CPython under
+          # UV_PYTHON_INSTALL_DIR, which is mounted at the SAME path inside
+          # the container, so the symlink resolves despite --network none.
+          python_bin="$(cd backend && uv run --offline which python)"
+          if [ ! -x "${python_bin}" ]; then
+            echo "::error::precondition violated: offline python interpreter not found at '${python_bin}'"
+            exit 1
+          fi
+          export python_bin
+          docker run --rm --network none \
+            -v "$PWD:/repo" -w /repo/backend \
+            -v "${UV_CACHE_DIR}:${UV_CACHE_DIR}" \
+            -v "${UV_PYTHON_INSTALL_DIR}:${UV_PYTHON_INSTALL_DIR}" \
+            -e UV_CACHE_DIR -e UV_PYTHON_INSTALL_DIR -e python_bin \
+            ubuntu:20.04 \
+            /bin/bash -euc '
+              echo "container glibc: $(ldd --version | head -n1)"
+              "${python_bin:?precondition: python_bin env is not propagated into the container}" --version || {
+                echo "::error::venv interpreter does not run inside ubuntu:20.04 (glibc/glibc-linked deps mismatch) - fail the release"
+                exit 1
+              }
+              "${python_bin}" - <<PYEOF
+          import modulo.launcher.entry
+          import modulo.launcher.config_source
+          import modulo.launcher.upgrade
+          import modulo.launcher.doctor
+          print("launcher boot import graph OK (offline, network none)")
+          PYEOF
+            '
