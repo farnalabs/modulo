@@ -149,7 +149,7 @@ from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGate
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import get_run
-from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs_with_fallback
+from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
@@ -2762,8 +2762,8 @@ def _run_status_detail(run: Run, blobs: RunBlobs) -> dict[str, Any]:
     from modulo.api.routes.runs import _clamp_node_token_usage_union
 
     token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
-    # FAR-583 read-switch: the blobs reassemble from run_node_outputs (with
-    # the legacy fallback) by the caller, inside the run-load transaction.
+    # FAR-583 read-switch: the blobs reassemble from run_node_outputs
+    # (new-table-only reader) by the caller, inside the run-load transaction.
     outputs_json = blobs.outputs or {}
     telemetry_json = blobs.telemetry
     if not isinstance(telemetry_json, dict):
@@ -2828,10 +2828,10 @@ async def _get_run_status_impl(run_id: str, detail: bool) -> dict[str, Any]:
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         # FAR-583 read-switch: reassemble the blobs INSIDE the run-load
-        # transaction (one batched repo query + the legacy fallback SELECT);
+        # transaction (one batched repo query, new-table-only reader);
         # the detail body is built after the session closes. Read only when
         # detail is requested (the base response never touches the blobs).
-        blobs = await read_run_blobs_with_fallback(s, run_id=rid, organisation_id=org_id) if detail else None
+        blobs = await read_run_blobs(s, run_id=rid, organisation_id=org_id) if detail else None
     result = _run_status_base(run)
     if detail and blobs is not None:
         result.update(_run_status_detail(run, blobs))
@@ -2910,8 +2910,8 @@ async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
         if _team_scoped_key_mismatch(run_owner_team_id):
             return _team_scope_error("run", run_id)
         # FAR-583 read-switch: reassemble the blobs INSIDE the run-load
-        # transaction (one batched repo query + the legacy fallback SELECT).
-        blobs = await read_run_blobs_with_fallback(s, run_id=rid, organisation_id=org_id)
+        # transaction (one batched repo query, new-table-only reader).
+        blobs = await read_run_blobs(s, run_id=rid, organisation_id=org_id)
     outputs = blobs.outputs or {}
     telemetry = blobs.telemetry
     if not isinstance(telemetry, dict):

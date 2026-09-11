@@ -119,6 +119,14 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
 ## QA History
 
 - 2026-09-11: **improve-architecture (product-map walk)** — registered the
+  pipeline folder tree (`pipelines/FolderTree.vue` static testids `folder-tree`,
+  `folder-tree-new`, `folder-tree-all-pipelines`) in the `/pipelines` manifest
+  `elements:` inventory: the page already documented the folder row/toggle
+  (`pipeline-tree-folder-*`), so the tree's own container and its new/all-pipelines
+  actions were the remaining drift. `test_mapped_route_elements_cover_owning_view_testids`
+  now maps `/pipelines` to `PipelineListView.vue` + `FolderTree.vue` so the folder
+  surface cannot ship invisible to Remy's docs indexer / `/api/v1/manifest`.
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the
   editor's command-management editor (`pipeline/SandboxCommandsEditor.vue`) static
   testids (`pipeline-editor-node-commands-editor`,
   `pipeline-editor-node-command-{add,empty,joiner,preview,scalar}`) in the

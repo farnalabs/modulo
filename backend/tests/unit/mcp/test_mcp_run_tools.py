@@ -32,7 +32,7 @@ def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
         telemetry = run.node_telemetry_json if run is not None and isinstance(run.node_telemetry_json, dict) else {}
         return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
 
-    monkeypatch.setattr(mcp_module, "read_run_blobs_with_fallback", _stub)
+    monkeypatch.setattr(mcp_module, "read_run_blobs", _stub)
 
 
 def _make_session_context(session: AsyncMock) -> AsyncMock:

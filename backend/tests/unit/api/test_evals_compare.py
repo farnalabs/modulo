@@ -5,6 +5,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -71,18 +72,51 @@ def _make_result(scalar_one_value=None, scalar_value=None, all_value=None, one_v
 
 
 def _blob_read_results(run: MagicMock) -> list[MagicMock]:
-    """The two execute() results the FAR-583 repo blob read consumes: the
-    run_node_outputs rows page (empty — the mocked session serves no
-    new-table rows) and the legacy fallback SELECT carrying the run's
-    reassembled legacy-dict shapes."""
-    rows_result = _make_result(all_value=[])
-    legacy_row = MagicMock()
-    legacy_row.outputs_json = run.outputs_json
-    legacy_row.node_telemetry_json = run.node_telemetry_json
-    legacy_row.raw_output_markers = None
-    legacy_result = _make_result()
-    legacy_result.first = MagicMock(return_value=legacy_row)
-    return [rows_result, legacy_result]
+    """The two execute() results the B2b repo blob read consumes: the
+    run_node_outputs rows page built from the run's mocked blob dicts
+    (the per-``__final__`` row shape incl. the *_absent flags) and the
+    ``read_rls_org`` org probe (empty string => no org bound)."""
+    rows: list[Any] = []
+    outputs = getattr(run, "outputs_json", None)
+    telemetry = getattr(run, "node_telemetry_json", None)
+    for node_id, value in (outputs or {}).items():
+        rows.append(
+            SimpleNamespace(
+                run_id=str(run.id),
+                node_id=node_id,
+                attempt_key="__final__",
+                organisation_id=None,
+                outputs_json=value,
+                node_telemetry_json=None,
+                raw_output_markers=None,
+                outputs_absent=False,
+                telemetry_absent=True,
+                markers_absent=True,
+            )
+        )
+    for node_id, value in (telemetry or {}).items():
+        existing = next((r for r in rows if r.node_id == node_id), None)
+        if existing is not None:
+            existing.node_telemetry_json = value
+            existing.telemetry_absent = False
+        else:
+            rows.append(
+                SimpleNamespace(
+                    run_id=str(run.id),
+                    node_id=node_id,
+                    attempt_key="__final__",
+                    organisation_id=None,
+                    outputs_json=None,
+                    node_telemetry_json=value,
+                    raw_output_markers=None,
+                    outputs_absent=True,
+                    telemetry_absent=False,
+                    markers_absent=True,
+                )
+            )
+    rows_result = _make_result(all_value=rows)
+    rls_result = _make_result(scalar_value="")
+    return [rows_result, rls_result]
 
 
 def _blob_aware_side_effects(run: MagicMock, scripted: list[MagicMock]) -> Any:
@@ -91,14 +125,14 @@ def _blob_aware_side_effects(run: MagicMock, scripted: list[MagicMock]) -> Any:
     fallback SELECT) are served from the run's reassembled shapes; every
     other execute pops the test's scripted sequence in order (order-proof
     against the endpoint's internal read count)."""
-    rows_result, legacy_result = _blob_read_results(run)
+    rows_result, rls_result = _blob_read_results(run)
     iterator = iter(scripted)
 
     async def _route(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         if "FROM run_node_outputs" in str(stmt):
             return rows_result
-        if "runs.outputs_json, runs.node_telemetry_json, runs.raw_output_markers" in str(stmt):
-            return legacy_result
+        if "current_setting('app.organisation_id', true)" in str(stmt):
+            return rls_result
         return next(iterator)
 
     return _route

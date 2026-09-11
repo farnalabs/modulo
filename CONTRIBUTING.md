@@ -300,16 +300,15 @@ installed as a global uv tool):
 
 ```powershell
 pre-commit install
-# CI-parity pre-push gate (mypy, vue-tsc, schema freshness, impacted tests,
-# rebase-before-first-push check) — must be installed separately:
+# CI-parity pre-push gate (mypy, vue-tsc, schema freshness, full backend unit
+# suite, rebase-before-first-push check) — must be installed separately:
 pre-commit install --hook-type pre-push
 ```
 
 The pre-push gate mirrors the exact commands PR CI runs so a branch that fails
-CI is caught locally before the push. Note: `prepush-impacted-tests` uses
-pytest-testmon — the **first push from a fresh worktree builds
-`backend/.testmondata`** (profiles the full suite; gitignored); subsequent
-pushes are incremental.
+CI is caught locally before the push. Note: `prepush-unit-tests` runs the full
+backend unit suite (~20–40 min) — the same suite the CI Test (Backend) job runs
+minus the coverage-threshold enforcement, which stays CI-only.
 
 ### Commit guidelines
 

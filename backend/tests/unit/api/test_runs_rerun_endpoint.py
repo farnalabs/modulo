@@ -165,7 +165,7 @@ def _stub_run_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _markers(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         return None
 
-    monkeypatch.setattr(runs_module, "read_run_markers_with_fallback", _markers)
+    monkeypatch.setattr(runs_module, "read_run_markers", _markers)
 
 
 @pytest.fixture

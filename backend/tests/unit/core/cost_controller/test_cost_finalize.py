@@ -622,7 +622,7 @@ async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
             side_effect=RuntimeError("boom"),
         ),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            "modulo.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
@@ -673,7 +673,7 @@ async def test_finalize_cost_fallback_runs_ledger_block() -> None:
             side_effect=RuntimeError("boom"),
         ),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            "modulo.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()),
@@ -737,7 +737,7 @@ async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> N
     )
     with (
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            "modulo.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
         patch("modulo.core.cost_controller.finalize.finalize_cost", new=AsyncMock()) as mock_finalize,

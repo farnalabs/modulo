@@ -58,6 +58,16 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+  app-layout onboarding surface in the `/` manifest `elements:` inventory: the
+  produced/consumed banner (`onboarding/OnboardingBanner.vue` static testids
+  `onboarding-banner-trigger`, `onboarding-banner-checklist`,
+  `onboarding-skip-action`, `onboarding-dismiss`, `onboarding-seed-examples`)
+  and the first-run spotlight (`onboarding/SpotlightOverlay.vue`'s
+  `spotlight-overlay`) render on the dashboard via `AppLayout.vue` but had no
+  product-map home. `test_mapped_route_elements_cover_owning_view_testids` now
+  maps `/` to both components so a newly shipped banner/spotlight testid cannot
+  drift invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-onboarding`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/onboarding.py` and

@@ -911,6 +911,24 @@ elements:
       - testid: stat-no-baseline
         type: element
         dynamic_testid: false
+      - testid: onboarding-banner-trigger
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-banner-checklist
+        type: element
+        dynamic_testid: false
+      - testid: onboarding-skip-action
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: onboarding-seed-examples
+        type: button
+        dynamic_testid: false
+      - testid: spotlight-overlay
+        type: element
+        dynamic_testid: false
     /library/collections/:id:
       - testid: collection-publish
         type: button
@@ -1273,6 +1291,18 @@ elements:
       - testid: hk-ckpt-error
         type: element
         dynamic_testid: false
+      - testid: db-capacity-banner
+        type: element
+        dynamic_testid: false
+      - testid: db-capacity-usage
+        type: element
+        dynamic_testid: false
+      - testid: db-capacity-run-retention-link
+        type: link
+        dynamic_testid: false
+      - testid: db-capacity-housekeeping-link
+        type: link
+        dynamic_testid: false
     /admin/model-backends:
       - testid: admin-model-backends-add
         type: button
@@ -1527,6 +1557,9 @@ elements:
       - testid: enforcement-enabled
         type: element
         dynamic_testid: false
+      - testid: product-analytics-consent-prompt
+        type: element
+        dynamic_testid: false
     /admin/remy:
       - testid: remy-providers
         type: element
@@ -1716,6 +1749,18 @@ elements:
         dynamic_testid: false
       - testid: admin-run-retention-reset
         type: button
+        dynamic_testid: false
+      - testid: db-capacity-banner
+        type: element
+        dynamic_testid: false
+      - testid: db-capacity-usage
+        type: element
+        dynamic_testid: false
+      - testid: db-capacity-run-retention-link
+        type: link
+        dynamic_testid: false
+      - testid: db-capacity-housekeeping-link
+        type: link
         dynamic_testid: false
     /admin/runners/concurrency:
       - testid: admin-sandbox-concurrency-save
@@ -2402,6 +2447,15 @@ elements:
       - testid: pipeline-tree-folder-toggle
         type: button
         dynamic_testid: false
+      - testid: folder-tree
+        type: element
+        dynamic_testid: false
+      - testid: folder-tree-new
+        type: button
+        dynamic_testid: false
+      - testid: folder-tree-all-pipelines
+        type: button
+        dynamic_testid: false
       - testid: pipeline-list-action-menu
         type: button
         dynamic_testid: false
@@ -2750,6 +2804,9 @@ elements:
       - testid: remy-only-chat
         type: element
         dynamic_testid: false
+      - testid: remy-analytics-card
+        type: element
+        dynamic_testid: false
     /runs:
       - testid: runs-list-aggregate-cost
         type: element
@@ -3037,6 +3094,15 @@ elements:
         type: button
         dynamic_testid: false
       - testid: schema-move-confirm
+        type: button
+        dynamic_testid: false
+      - testid: folder-tree
+        type: element
+        dynamic_testid: false
+      - testid: folder-tree-new
+        type: button
+        dynamic_testid: false
+      - testid: folder-tree-all-pipelines
         type: button
         dynamic_testid: false
     /schemas/editor/:id:

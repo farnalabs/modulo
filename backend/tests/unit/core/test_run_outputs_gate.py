@@ -40,7 +40,6 @@ import pytest_asyncio
 from sqlalchemy import event, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
-from tests.unit._legacy_seed import seed_legacy_blobs
 
 from modulo.core.pipeline_engine.node_runner import (
     _read_connector_idempotency_gate_state,
@@ -79,12 +78,6 @@ async def sqlite_engine() -> AsyncGenerator[AsyncEngine, None]:
     await _now_sqlite(eng)
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_RUN_AND_ORG_TABLES))
-        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
-        # IN THE DATABASE until B2b — the marker path's raw-SQL legacy leg
-        # (read_legacy_raw_output_markers / write_legacy_raw_output_markers)
-        # selects them, so the test schema reproduces the migrated shape.
-        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
-            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -213,17 +206,19 @@ class TestMarkerSavepointLegacyLostClassification:
                 attempt_key=None,
                 marker={"status": "failed", "raw_output": "raw"},
             )
-        assert any("raw_output_marker_legacy_marker_also_lost" in r.message for r in caplog.records)
+        assert any("raw_output_marker_persist_uncommitted" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_savepoint_scoped_failure_keeps_the_legacy_claim(
+    async def test_savepoint_scoped_failure_is_swallowed(
         self,
         sqlite_sessionmaker: async_sessionmaker[AsyncSession],
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """A savepoint-SCOPED failure (hard SQLSTATE) does NOT fire the
-        legacy-lost log — the legacy marker write above the savepoint still
-        commits."""
+        """A savepoint-SCOPED failure (hard SQLSTATE, e.g. 42501) still
+        swallows (the persist never-raise contract) and logs the same
+        loud ``persist_uncommitted`` claim - there is no legacy leg whose
+        survival distinguishes the failure classes any more, but the
+        caller still sees no exception."""
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
 
@@ -242,14 +237,13 @@ class TestMarkerSavepointLegacyLostClassification:
                 attempt_key=None,
                 marker={"status": "failed", "raw_output": "raw"},
             )
-        assert not any("legacy_marker_also_lost" in r.message for r in caplog.records)
-        # FAR-583 B1: the legacy column's ORM mapping is cut — read it through
-        # the repo's raw parameterised-SQL helper.
-        from modulo.db.crud.run_node_outputs import read_legacy_raw_output_markers
+        assert any("raw_output_marker_persist_uncommitted" in r.message for r in caplog.records)
+        # ...and no marker row survived the failed savepoint.
+        from modulo.db.crud.run_node_outputs import read_run_blobs
 
         async with sqlite_sessionmaker() as check, check.begin():
-            legacy = await read_legacy_raw_output_markers(check, run_id=run_id)
-        assert legacy is not None, "the legacy marker survives a savepoint-scoped failure"
+            stored = await read_run_blobs(check, run_id=run_id)
+        assert stored.markers is None
 
 
 # ---------------------------------------------------------------------------
@@ -397,11 +391,14 @@ class TestFenceStatusVisibilityDuringCancel:
     async def _seed_cancelled_run(self, maker: async_sessionmaker[AsyncSession]) -> uuid.UUID:
         run_id = uuid.uuid4()
         await _seed_run(maker, run_id, status="cancelled")
-        # The markers land via the repo's raw Core legacy table (FAR-583 B1 —
-        # the ORM mapping of the column is cut) so the raw-SQL fenced reader
-        # sees the JSON payload exactly as the migrated database stores it.
+        # B2b: the markers land on the run_node_outputs store (the runs
+        # columns are gone) through the repo writer - the fenced reader
+        # reassembles exactly what the database stores.
+        from modulo.db.crud.run_node_outputs import write_run_markers
+
         async with maker() as session, session.begin():
-            await seed_legacy_blobs(session, run_id, raw_output_markers=self._MARKERS)
+            await set_rls_org(session, _ORG)
+            await write_run_markers(session, run_id=run_id, organisation_id=_ORG, markers=self._MARKERS)
         return run_id
 
     @pytest.mark.asyncio
@@ -666,42 +663,47 @@ class TestRecoveryInheritedSentinelKeys:
     async def test_recovery_on_an_inherited_sentinel_run_is_filtered_not_failed(
         self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
     ) -> None:
-        """End-to-end through the REAL chokepoint: a run whose legacy blobs
-        carry a pre-0176 ``__sneaky__`` key recovers successfully — the
-        sentinel is filtered from the new-table leg (kept on the legacy
-        column) and counted, instead of raising
+        """End-to-end through the REAL chokepoint: a run whose STORED blobs
+        carry a pre-0176 re-mapped ``__sneaky__`` key (the B2b repair wrote it
+        into the new table verbatim) recovers successfully - the sentinel is
+        FILTERED from the REPLACE upserts (its row survives the blanking;
+        there is no legacy column any more) and counted, instead of raising
         :class:`OutputsSentinelViolation` and wedging the recovery."""
-        from modulo.core.pipeline_engine.recovery import _apply_recovery_markers
+        from modulo.db.crud.run_node_outputs import FINAL_ATTEMPT_KEY, NodeOutputWrite, upsert_rows
 
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
-        # Pre-0176 inherited junk lands in the legacy blobs through the raw
-        # Core legacy table (FAR-583 B1 — the ORM mapping is cut).
-        from modulo.db.crud.run_node_outputs import read_legacy_run_blobs
+        # Pre-0176 inherited junk re-mapped into the new table by the B2b
+        # repair (inserted at the Core row level, bypassing the writers).
 
         async with sqlite_sessionmaker() as seed_session, seed_session.begin():
-            await seed_legacy_blobs(
+            await set_rls_org(seed_session, _ORG)
+            await upsert_rows(
                 seed_session,
-                run_id,
-                outputs_json={"__sneaky__": {"v": 0}, "a": {"v": 1}},
-                node_telemetry_json={"a": {"ms": 1}},
+                run_id=run_id,
+                organisation_id=_ORG,
+                rows=[
+                    NodeOutputWrite(node_id="__sneaky__", outputs={"v": 0}),
+                    NodeOutputWrite(node_id="a", outputs={"v": 1}),
+                ],
+                ignore_conflicts=False,
             )
         async with sqlite_sessionmaker() as session, session.begin():
             loaded = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
             await set_rls_org(session, _ORG)
-            # MUST NOT raise OutputsSentinelViolation — the M19 wedge this
+            # MUST NOT raise OutputsSentinelViolation - the M19 wedge this
             # fix removes from the recovery path.
+            from modulo.core.pipeline_engine.recovery import _apply_recovery_markers
+
             await _apply_recovery_markers(session, loaded, "n1", {"recovered": True})
         async with sqlite_sessionmaker() as check, check.begin():
             rows = (await check.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run_id))).scalars().all()
-        final_nodes = {row.node_id for row in rows if row.attempt_key == "__final__"}
-        assert "__sneaky__" not in final_nodes, "the sentinel is filtered from the new-table leg"
-        assert "a" in final_nodes
-        assert "n1" in final_nodes
-        # The legacy column is NEVER written post-B1 (the store write is the
-        # only store) — the inherited key survives there untouched until B2b's
-        # repair migrates it into the new table.
-        async with sqlite_sessionmaker() as check_legacy, check_legacy.begin():
-            legacy = await read_legacy_run_blobs(check_legacy, run_id=run_id)
-        assert legacy.outputs is not None
-        assert "__sneaky__" in legacy.outputs
+        final_nodes = {row.node_id for row in rows if row.attempt_key == FINAL_ATTEMPT_KEY}
+        # The recovered node lands; the inherited sentinel row SURVIVES (the
+        # new table is the only store - evidence kept).
+        assert "n1" in final_nodes, "the recovery marker lands"
+        assert "a" in final_nodes, "the pre-existing row is untouched"
+        assert "__sneaky__" in final_nodes, "the inherited sentinel row survives the blanking"
+        # The recovery marker is present on the new row.
+        n1_row = next(row for row in rows if row.node_id == "n1")
+        assert n1_row.outputs_json == {"recovered": True}

@@ -107,7 +107,7 @@ def _stub_blob_reader(run: Any) -> Any:
     """FAR-583 B1 stub for the recovery paths' blob reads.
 
     ``recover_node`` reads the completed-marker check and the pre-mutation
-    dicts through :func:`read_run_blobs_with_fallback` (new table + legacy
+    dicts through :func:`read_run_blobs` (new table + legacy
     fallback); the mocked sessions here have no schema, so the stub serves
     the run's PRE-state from the mock attrs — mirroring the pre-B1 ORM read
     the assertions were written against.
@@ -153,8 +153,8 @@ async def test_recover_node_with_valid_input():
         patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
         # Two binding points consume the reader: the module-level import in
         # recover_node and the in-function import in _apply_recovery_markers.
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
         patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
         patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write(captured := {})),
     ):
@@ -214,8 +214,8 @@ async def test_skip_node_on_awaiting_human():
 
     with (
         patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
         patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()),
         patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write(captured := {})),
     ):
@@ -263,8 +263,8 @@ async def test_recovery_audit_without_actor_resolves_to_system():
         # Two binding points consume the reader: the module-level import in
         # recover_node and the in-function import in _apply_recovery_markers
         # (same shape as test_recover_node_with_valid_input).
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
         patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
         patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write({})),
     ):
@@ -450,7 +450,7 @@ async def test_recover_already_completed_node():
 
         with (
             patch(
-                "modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback",
+                "modulo.core.pipeline_engine.recovery.read_run_blobs",
                 _stub_blob_reader(run),
             ),
             pytest.raises(NodeAlreadyCompletedError) as exc_info,
@@ -488,7 +488,7 @@ async def test_recover_skipped_node_not_recoverable():
 
         with (
             patch(
-                "modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback",
+                "modulo.core.pipeline_engine.recovery.read_run_blobs",
                 _stub_blob_reader(run),
             ),
             pytest.raises(NodeAlreadyCompletedError) as exc_info,
@@ -529,7 +529,7 @@ async def test_concurrent_recovery_race():
 
         with (
             patch(
-                "modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback",
+                "modulo.core.pipeline_engine.recovery.read_run_blobs",
                 _stub_blob_reader(run),
             ),
             pytest.raises(ConcurrentRecoveryError) as exc_info,
@@ -606,8 +606,8 @@ async def test_recover_node_audit_failure_is_logged_not_fatal():
 
     with (
         patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.recovery.read_run_blobs_with_fallback", _stub_blob_reader(run)),
-        patch("modulo.db.crud.run_node_outputs.read_run_blobs_with_fallback", _stub_blob_reader(run)),
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
         patch(
             "modulo.core.pipeline_engine.recovery.append_audit_event",
             AsyncMock(side_effect=RuntimeError("db down")),

@@ -65,6 +65,13 @@ listed org roles always granted).
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+  Remy chat surface on the `/remy` manifest `elements:` inventory: the page
+  already documented its `RemyOnlyView.vue` chrome (`remy-only-*`) but not the
+  `remy-analytics-card` static testid its embedded chat panel
+  (`components/remy/RemyChat.vue`) ships. `test_mapped_route_elements_cover_owning_view_testids`
+  now maps `/remy` to `RemyOnlyView.vue` + `RemyChat.vue` so the chat surface
+  cannot drift invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-08-28: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-remy`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/remy.py`,

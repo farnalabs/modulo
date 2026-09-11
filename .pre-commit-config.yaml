@@ -189,13 +189,13 @@
         files: ^(backend/src/.+\.py$)
         pass_filenames: false
         stages: [pre-push]
-      # Impacted-test selection via pytest-testmon. NOTE: the FIRST run in a
-      # fresh worktree builds backend/.testmondata (profiles the full suite —
-      # slow, gitignored); subsequent runs are incremental and only execute
-      # tests impacted by changed code.
-      - id: prepush-impacted-tests
-        name: prepush impacted tests (pytest-testmon)
-        entry: uv --directory backend run --no-sync pytest --testmon -q --timeout=120
+      # Full backend unit suite — mirrors CI's "Test (Backend)" job
+      # (coverage-thresholds.sh runs `uv run --no-sync pytest tests/unit/ -n auto
+      # --cov=... -q` from backend/; coverage flags omitted locally as they are
+      # CI-only enforcement, the suite itself is identical).
+      - id: prepush-unit-tests
+        name: prepush unit tests (full backend suite, CI parity)
+        entry: uv --directory backend run --no-sync pytest tests/unit/ -n auto -q --timeout=120
         language: system
         files: ^backend/(src|tests)/.*\.py$
         pass_filenames: false

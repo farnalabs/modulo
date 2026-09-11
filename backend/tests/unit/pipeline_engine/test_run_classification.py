@@ -51,7 +51,7 @@ from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
-from tests.unit._legacy_seed import seed_legacy_blobs
+from tests.unit._store_seed import seed_run_blobs
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -565,11 +565,6 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
-        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
-        # IN THE DATABASE until B2b — the repo's raw Core legacy-table readers
-        # select them; reproduce the migrated shape.
-        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
-            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -613,21 +608,15 @@ async def _seed_run(
     )
     session.add(run)
     await session.flush()
-    # FAR-583 B1: the legacy blob columns no longer map on the ORM — the
-    # seeding writes them through the repo's raw Core legacy table (the same
-    # parameterised-SQL surface the production fallback readers use).
-    await seed_legacy_blobs(
+    # B2b: the legacy blob columns are gone - the blobs land on the
+    # run_node_outputs store through the repo writer.
+    await seed_run_blobs(
         session,
         run.id,
-        **{
-            key: value
-            for key, value in (
-                ("outputs_json", outputs),
-                ("node_telemetry_json", telemetry),
-                ("raw_output_markers", markers),
-            )
-            if value is not None
-        },
+        outputs=outputs,
+        telemetry=telemetry,
+        markers=markers,
+        organisation_id=_ORG,
     )
     return run
 

@@ -133,10 +133,12 @@ class RunDailyFact(OrgScoped):
     )
     run_number: Mapped[int | None] = mapped_column(Integer)
     output_bytes: Mapped[int | None] = mapped_column(
-        BigInteger, comment="serialised size of Run.outputs_json (json.dumps length) when present"
+        BigInteger,
+        comment="serialised size of the run's run_node_outputs outputs reassembly (Python json.dumps length)",
     )
     telemetry_bytes: Mapped[int | None] = mapped_column(
-        BigInteger, comment="serialised size of Run.node_telemetry_json (json.dumps length) when present"
+        BigInteger,
+        comment="serialised size of the run's run_node_outputs telemetry reassembly (Python json.dumps length)",
     )
     rate_limited: Mapped[bool | None] = mapped_column(Boolean, comment="True when Run.rate_limit_key is not null")
     # FAR-134 concurrency/slot-utilization columns (migration 0075) — absolute
