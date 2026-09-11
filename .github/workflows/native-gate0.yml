@@ -31,6 +31,18 @@ on:
       - "backend/src/modulo/api/main.py"
       - "deploy/fly/**"
       - ".github/workflows/native-gate0.yml"
+  push:
+    branches:
+      - "deliver/FAR-673"
+    paths:
+      # MUST stay in sync with .github/native-gate0-paths.txt (asserted below).
+      - ".github/native-gate0-paths.txt"
+      - "backend/src/modulo/db/**"
+      - "backend/src/modulo/settings.py"
+      - "backend/src/modulo/db/url_utils.py"
+      - "backend/src/modulo/api/main.py"
+      - "deploy/fly/**"
+      - ".github/workflows/native-gate0.yml"
 
 concurrency:
   group: native-gate0-${{ github.ref }}
