@@ -5,15 +5,19 @@ Revises: 0211_variant_batch_state
 Create Date: 2026-09-11
 
 The ``VariantBatchState`` model uses ``TimestampMixin``, which declares both
-``created_at`` and ``updated_at``. Migration ``0211_variant_batch_state`` created
-the table with ``created_at`` but omitted ``updated_at``, so the migrated schema
-drifts from the ORM metadata (caught by
+``created_at`` and ``updated_at``. Migration ``0211_variant_batch_state`` was
+meant to create the table with ``created_at`` but omit ``updated_at``, so this
+follow-up migration added the missing column (caught by
 ``tests/integration/test_initial_migration.py::test_migrated_schema_matches_orm_metadata``).
 
-Because ``0211`` is already applied on production, this follow-up migration is
-the correct place to add the missing column (editing ``0211`` would not re-run on
-an existing DB). The column mirrors the ``TimestampMixin`` declaration:
-``DateTime(timezone=True)``, ``nullable=False``, ``server_default=now()``.
+PR #363 later retrofitted ``updated_at`` directly into ``0211``'s table creation.
+As a result, on a fresh DB ``0211`` already provides the column and re-adding it
+here would raise ``DuplicateColumn``. This migration is therefore idempotent: it
+only adds ``updated_at`` when the column is genuinely absent (the original
+production case, where ``0211`` was applied before the retrofit). On a fresh DB
+the column already exists and the ``ADD COLUMN`` is skipped. The column mirrors
+the ``TimestampMixin`` declaration: ``DateTime(timezone=True)``, ``nullable=False``,
+``server_default=now()``.
 
 Ownership ceremony (the 0066/0134 pattern, in spirit from 0209): on a DB where
 the table is already owned by ``modulo_migrate`` (production, bootstrap ran
@@ -54,6 +58,19 @@ def _table_owner(bind, table: str) -> str | None:
     ).scalar_one_or_none()
 
 
+def _column_exists(bind, table: str, column: str) -> bool:
+    """Return True when ``column`` already exists on ``table``."""
+    return bool(
+        bind.execute(
+            sa.text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = :table AND column_name = :column"
+            ),
+            {"table": table, "column": column},
+        ).scalar_one_or_none()
+    )
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     pg = _is_postgres(bind)
@@ -71,15 +88,20 @@ def upgrade() -> None:
     if migrate_owns_table:
         op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-    op.add_column(
-        _TABLE,
-        sa.Column(
-            _COLUMN,
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-    )
+    # 0211_variant_batch_state now creates the table with updated_at already
+    # (see PR #363), so only add the column if it is genuinely missing — this
+    # keeps the migration safe on the database it was originally written for
+    # while not double-adding on a fresh DB where 0211 already provides it.
+    if not (pg and _column_exists(bind, _TABLE, _COLUMN)):
+        op.add_column(
+            _TABLE,
+            sa.Column(
+                _COLUMN,
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+        )
 
     if pg and migrate_owns_table:
         op.execute("RESET ROLE")
