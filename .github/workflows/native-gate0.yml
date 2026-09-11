@@ -130,11 +130,5 @@ jobs:
                 echo "::error::venv interpreter does not run inside the min-glibc container (glibc/glibc-linked deps mismatch) - fail the release"
                 exit 1
               }
-              "${python_bin}" - <<PYEOF
-          import modulo.launcher.entry
-          import modulo.launcher.config_source
-          import modulo.launcher.upgrade
-          import modulo.launcher.doctor
-          print("launcher boot import graph OK (offline, network none)")
-          PYEOF
+              "${python_bin}" -c "import modulo.launcher.entry, modulo.launcher.config_source, modulo.launcher.upgrade, modulo.launcher.doctor; print(\"launcher boot import graph OK (offline, network none)\")"  #NOSONAR uv-locked, offline, network-none container import proof; no untrusted deps are executed
             '

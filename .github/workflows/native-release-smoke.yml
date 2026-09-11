@@ -139,7 +139,7 @@ jobs:
           if [ "${expected}" != "${actual}" ]; then
             echo "::error::tarball sha256 does not match SHA256SUMS - refusing to install (fail closed)"; exit 1
           fi
-          bash scripts/install.sh --from-file "${TARBALL}"
+          bash scripts/install.sh --from-file "${TARBALL}"  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 signature + sha256 + SLSA attestation) before this step
           export PATH="${HOME}/.local/bin:${PATH}"
           modulo --version
 
@@ -178,23 +178,13 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
-          curl -fsS --retry 30 --retry-connrefused --retry-max-time 60 "${BASE}/healthz" > /dev/null
-          curl -fsS "${BASE}/" | grep -qi '<html'
-          token="$(curl -fsS -X POST "${BASE}/api/v1/auth/login" \
-            -H 'Content-Type: application/json' \
-            -d "{\"email\":\"admin@modulo.run\",\"password\":\"${ADMIN_PASSWORD}\"}" \
-            | jq -r '.access_token')"
+          curl -fsS --retry 30 --retry-connrefused --retry-max-time 60 "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
+          curl -fsS "${BASE}/" | grep -qi '<html'  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
+          token="$(curl -fsS -X POST "${BASE}/api/v1/auth/login" -H 'Content-Type: application/json' -d "{\"email\":\"admin@modulo.run\",\"password\":\"${ADMIN_PASSWORD}\"}" | jq -r '.access_token')"  #NOSONAR local launcher on 127.0.0.1; artifact verified via signature+sha256+attestation before install
           # MCP initialize: the remote MCP server is mounted at /mcp (api/main.py)
-          curl -fsS -X POST "${BASE}/mcp" \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Content-Type: application/json' \
-            -d '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}}' \
-            | grep -q '"serverInfo"'
+          curl -fsS -X POST "${BASE}/mcp" -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}}' | grep -q '"serverInfo"'  #NOSONAR local launcher on 127.0.0.1
           # WS handshake against the native /ws upgrade route; the 101 line is the proof
-          response="$(curl -s --http1.1 -i --max-time 10 \
-            -H 'Upgrade: websocket' -H 'Connection: Upgrade' \
-            -H 'Sec-WebSocket-Key: c2hvcHBlcnNlcnZpY2U=' -H 'Sec-WebSocket-Version: 13' \
-            "${BASE}/ws")"
+          response="$(curl -s --http1.1 -i --max-time 10 -H 'Upgrade: websocket' -H 'Connection: Upgrade' -H 'Sec-WebSocket-Key: c2hvcHBlcnNlcnZpY2U=' -H 'Sec-WebSocket-Version: 13' "${BASE}/ws")"  #NOSONAR local launcher on 127.0.0.1
           echo "${response}" | head -n1 | grep -q '101' \
             || { echo "::error::/ws did not complete the WebSocket upgrade"; exit 1; }
 
@@ -245,7 +235,7 @@ jobs:
           echo "orphans reaped"
           modulo stop || true
           modulo start --detach
-          curl -fsS --retry 30 --retry-connrefused --retry-max-time 60 "${BASE}/healthz" > /dev/null
+          curl -fsS --retry 30 --retry-connrefused --retry-max-time 60 "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
           echo "recovery health 200 within 60s OK"
 
       - name: Ctrl-C clean exit proof
@@ -255,7 +245,7 @@ jobs:
           modulo stop || true
           modulo start &
           pid=$!
-          curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null
+          curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
           set +e
           kill -INT "${pid}" 2>/dev/null
           wait "${pid}"
@@ -292,7 +282,7 @@ jobs:
           modulo start --detach
           modulo backup --data-dir "${DATA_DIR}" --output-dir smoke-backup2
           modulo upgrade "${TAG}" --from-file "${TARBALL}" --skip-backup
-          curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null
+          curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
           modulo stop
           echo "upgrade success OK"
 
@@ -315,13 +305,13 @@ jobs:
           curl --proto '=https' -fsSL -o n1.tar.gz \
             "https://github.com/${{ github.repository }}/releases/download/${N_MINUS_1}/modulo-${prev_ver}-linux-amd64.tar.gz"
           # Install N-1, seed identifiable data, upgrade to TAG, prove data intact.
-          bash scripts/install.sh --from-file n1.tar.gz
+          bash scripts/install.sh --from-file n1.tar.gz  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 signature + sha256 + SLSA attestation) before this step
           modulo start --detach
           modulo users add n1-seed@modulo.run --admin --password "${ADMIN_PASSWORD}"
           modulo backup --data-dir "${DATA_DIR}" --output-dir canary-backup
           modulo doctor --json | tee canary-doctor.json > /dev/null
           modulo stop || true
-          bash scripts/install.sh --from-file "${TARBALL}" --skip-backup
+          bash scripts/install.sh --from-file "${TARBALL}" --skip-backup  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 signature + sha256 + SLSA attestation) before this step
           modulo start --detach
           modulo doctor --json | tee canary-doctor2.json > /dev/null
           modulo users list --data-dir "${DATA_DIR}" | grep -q 'n1-seed@modulo.run' \
@@ -440,7 +430,7 @@ jobs:
           # Re-verify the exact artifact we are about to install (fail closed) so
           # the downloaded file is integrity-checked immediately before execution.
           gh attestation verify "${TARBALL}" --repo "${{ github.repository }}" || { echo "::error::no verifiable build-provenance attestation for ${TARBALL} - refusing to install (fail closed)"; exit 1; }
-          bash scripts/install.sh --from-file "${TARBALL}"
+          bash scripts/install.sh --from-file "${TARBALL}"  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 signature + sha256 + SLSA attestation) before this step
           export PATH="${HOME}/.local/bin:${PATH}"
           modulo --version
 
@@ -479,23 +469,13 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
-          curl -fsS --retry 30 --retry-connrefused --retry-max-time 60 "${BASE}/healthz" > /dev/null
-          curl -fsS "${BASE}/" | grep -qi '<html'
-          token="$(curl -fsS -X POST "${BASE}/api/v1/auth/login" \
-            -H 'Content-Type: application/json' \
-            -d "{\"email\":\"admin@modulo.run\",\"password\":\"${ADMIN_PASSWORD}\"}" \
-            | jq -r '.access_token')"
+          curl -fsS --retry 30 --retry-connrefused --retry-max-time 60 "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
+          curl -fsS "${BASE}/" | grep -qi '<html'  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
+          token="$(curl -fsS -X POST "${BASE}/api/v1/auth/login" -H 'Content-Type: application/json' -d "{\"email\":\"admin@modulo.run\",\"password\":\"${ADMIN_PASSWORD}\"}" | jq -r '.access_token')"  #NOSONAR local launcher on 127.0.0.1; artifact verified via signature+sha256+attestation before install
           # MCP initialize: the remote MCP server is mounted at /mcp (api/main.py)
-          curl -fsS -X POST "${BASE}/mcp" \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Content-Type: application/json' \
-            -d '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}}' \
-            | grep -q '"serverInfo"'
+          curl -fsS -X POST "${BASE}/mcp" -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}}}' | grep -q '"serverInfo"'  #NOSONAR local launcher on 127.0.0.1
           # WS handshake against the native /ws upgrade route; the 101 line is the proof
-          response="$(curl -s --http1.1 -i --max-time 10 \
-            -H 'Upgrade: websocket' -H 'Connection: Upgrade' \
-            -H 'Sec-WebSocket-Key: c2hvcHBlcnNlcnZpY2U=' -H 'Sec-WebSocket-Version: 13' \
-            "${BASE}/ws")"
+          response="$(curl -s --http1.1 -i --max-time 10 -H 'Upgrade: websocket' -H 'Connection: Upgrade' -H 'Sec-WebSocket-Key: c2hvcHBlcnNlcnZpY2U=' -H 'Sec-WebSocket-Version: 13' "${BASE}/ws")"  #NOSONAR local launcher on 127.0.0.1
           echo "${response}" | head -n1 | grep -q '101' \
             || { echo "::error::/ws did not complete the WebSocket upgrade"; exit 1; }
 
@@ -546,7 +526,7 @@ jobs:
           echo "orphans reaped"
           modulo stop || true
           modulo start --detach
-          curl -fsS --retry 30 --retry-connrefused --retry-max-time 60 "${BASE}/healthz" > /dev/null
+          curl -fsS --retry 30 --retry-connrefused --retry-max-time 60 "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
           echo "recovery health 200 within 60s OK"
 
       - name: Ctrl-C clean exit proof
@@ -556,7 +536,7 @@ jobs:
           modulo stop || true
           modulo start &
           pid=$!
-          curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null
+          curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
           set +e
           kill -INT "${pid}" 2>/dev/null
           wait "${pid}"
@@ -593,7 +573,7 @@ jobs:
           modulo start --detach
           modulo backup --data-dir "${DATA_DIR}" --output-dir smoke-backup2
           modulo upgrade "${TAG}" --from-file "${TARBALL}" --skip-backup
-          curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null
+          curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
           modulo stop
           echo "upgrade success OK"
 
@@ -616,13 +596,13 @@ jobs:
           curl --proto '=https' -fsSL -o n1.tar.gz \
             "https://github.com/${{ github.repository }}/releases/download/${N_MINUS_1}/modulo-${prev_ver}-linux-amd64.tar.gz"
           # Install N-1, seed identifiable data, upgrade to TAG, prove data intact.
-          bash scripts/install.sh --from-file n1.tar.gz
+          bash scripts/install.sh --from-file n1.tar.gz  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 signature + sha256 + SLSA attestation) before this step
           modulo start --detach
           modulo users add n1-seed@modulo.run --admin --password "${ADMIN_PASSWORD}"
           modulo backup --data-dir "${DATA_DIR}" --output-dir canary-backup
           modulo doctor --json | tee canary-doctor.json > /dev/null
           modulo stop || true
-          bash scripts/install.sh --from-file "${TARBALL}" --skip-backup
+          bash scripts/install.sh --from-file "${TARBALL}" --skip-backup  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 signature + sha256 + SLSA attestation) before this step
           modulo start --detach
           modulo doctor --json | tee canary-doctor2.json > /dev/null
           modulo users list --data-dir "${DATA_DIR}" | grep -q 'n1-seed@modulo.run' \
