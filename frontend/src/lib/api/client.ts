@@ -61,20 +61,33 @@ const _origPut = api.PUT
 const _origPatch = api.PATCH
 const _origDelete = api.DELETE
 
-type HttpMethod = <Url extends keyof paths>(
-  url: Url,
-  init?: Record<string, unknown>,
-) => Promise<{ data?: unknown; error?: unknown; response?: Response }>
+type AnyClientMethod = (
+  url: never,
+  init?: never,
+) => Promise<{ data?: unknown; error?: unknown; response?: Response | undefined }>
 
-function withAuth(fn: HttpMethod): HttpMethod {
-  return async (url, options) => {
-    const headers = { ...getAuthHeaders(), ...options?.headers }
-    let resp = await fn(url, { ...options, headers })
+type CallableMethod = (
+  url: string,
+  init?: Record<string, unknown>,
+) => Promise<{ data?: unknown; error?: unknown; response?: Response | undefined }>
+
+function withAuth<M extends AnyClientMethod>(fn: M): M {
+  const call = fn as unknown as CallableMethod
+  const wrapped = (async (url: string, options?: Record<string, unknown>) => {
+    const optionsRecord = (options ?? {}) as Record<string, unknown>
+    const headers: Record<string, unknown> = {
+      ...getAuthHeaders(),
+      ...(optionsRecord.headers as Record<string, unknown> | undefined),
+    }
+    let resp = await call(url, { ...optionsRecord, headers })
     if (resp.response?.status === 401) {
       const refreshed = await attemptTokenRefresh()
       if (refreshed) {
-        const newHeaders = { ...getAuthHeaders(), ...options?.headers }
-        resp = await fn(url, { ...options, headers: newHeaders })
+        const newHeaders: Record<string, unknown> = {
+          ...getAuthHeaders(),
+          ...(optionsRecord.headers as Record<string, unknown> | undefined),
+        }
+        resp = await call(url, { ...optionsRecord, headers: newHeaders })
       }
       if (!refreshed || resp.response?.status === 401) {
         clearAccessToken()
@@ -86,7 +99,8 @@ function withAuth(fn: HttpMethod): HttpMethod {
       resp.error = toProblemDetail(resp.error as Record<string, unknown>)
     }
     return resp
-  }
+  }) as unknown as M
+  return wrapped
 }
 
 api.GET = withAuth(_origGet)
