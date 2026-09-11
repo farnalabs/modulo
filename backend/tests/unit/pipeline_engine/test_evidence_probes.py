@@ -248,10 +248,18 @@ def _local_lister(root: Path):
 
 def _scan_files(root: Path) -> list[FileInfo]:
     files: list[FileInfo] = []
-    for dirpath, _dirnames, filenames in os.walk(str(root)):
+    for dirpath, dirnames, filenames in os.walk(str(root)):
+        # Never descend into git internals: concurrent `git gc` on the fixture
+        # repo creates and removes files like `.git/objects/maintenance.lock`,
+        # which makes an os.walk entry disappear before stat() (FileNotFoundError).
+        # Git internals are also not work product, so they must not be probed.
+        dirnames[:] = [d for d in dirnames if d != ".git"]
         for fname in filenames:
             full = Path(dirpath) / fname
-            files.append(FileInfo(name=os.path.relpath(full, root), size=Path(full).stat().st_size))
+            try:
+                files.append(FileInfo(name=os.path.relpath(full, root), size=full.stat().st_size))
+            except FileNotFoundError:
+                continue
     return files
 
 
