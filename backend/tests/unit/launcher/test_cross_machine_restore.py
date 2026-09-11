@@ -10,8 +10,8 @@ the simulation lives entirely in this test file):
 * machine B (a fresh runner) restores from the archive into a fresh data
   dir and must boot healthy with the data intact: the identity fingerprint
   exemption admits the fresh target, the launcher artefacts are adopted,
-  and the adopted secrets CONTINUE (never regenerated), with a FERNET
-  round-trip confirmed at the conf level.
+  the adopted secrets CONTINUE (never regenerated), and the unchanged
+  FERNET_KEY is recognised (no re-encryption needed).
 * populated-mismatch refusal: restoring A's backup onto a POPULATED B
   (a different instance with its own fingerprint) refuses without
   ``--replace-cluster`` — nothing touches B.
@@ -175,6 +175,9 @@ def test_machine_b_restores_machine_a_backup_onto_a_fresh_target(tmp_path: Path)
     assert state_b.last_backup_at is not None  # the persisted record rides along
     # Fresh-target identity exemption: the restore ran WITHOUT any refusal.
     assert "Instance identity MISMATCH" not in result.output
+    # FERNET round-trip: the restore recognised the unchanged key and the
+    # adopted credentials carry through (no re-encryption was needed).
+    assert "FERNET_KEY unchanged" in result.output
 
 
 @requires_posix
@@ -195,21 +198,3 @@ def test_cross_machine_instance_identity_mismatch_refuses_populated_target(
     # Nothing was replaced: machine B's state + secrets are untouched bytes.
     assert (machine_b / "state.json").read_bytes() == original_state_bytes
     assert (machine_b / "secrets.json").read_bytes() == original_secrets_bytes
-
-
-@requires_posix
-@requires_cli_env
-def test_fernet_round_trip_survives_the_cross_machine_restore(tmp_path: Path) -> None:
-    """The FERNET hash round-trips: the same key encrypts on A, reads on B."""
-    from cryptography.fernet import Fernet
-
-    machine_a, _secrets_a = _boot_machine(tmp_path, "machine-a")
-    archive = _fabricate_machine_backup(machine_a, tmp_path / "archive-fern")
-    machine_b = tmp_path / "machine-b-fern"
-    machine_b.mkdir()
-    result = _restore_invocation(archive, machine_b)
-    assert result.exit_code == 0, result.output
-    assert "FERNET_KEY unchanged" in result.output
-    cipher = Fernet(_FERNET_KEY.encode())
-    sealed = cipher.encrypt(b"cross-machine-secret")
-    assert cipher.decrypt(sealed) == b"cross-machine-secret"

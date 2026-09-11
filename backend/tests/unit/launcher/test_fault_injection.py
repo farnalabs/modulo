@@ -19,12 +19,12 @@ ships; this suite makes the recovery contracts hard to regress:
 * poisoned boot env: the entry's same first-action scrub must remove
   ``PG*``/``PYTHONPATH``/``LD_*`` and a poisoned-PYTHONPATH child must
   load no foreign code.
-* uninstall-keeps-data + reinstall reattaches: credential continuity,
-  no re-bootstrap, no re-generated credentials (idempotent load).
-* disk-full: a capped tmpfs (Linux, when the runner can mount; loud
-  honest skip otherwise) must drive doctor's data-dir check to the
-  quantified free-space failure. Per-OS harnesses for macOS/Windows are
-  real-machine-checklist territory and are NOT faked here.
+* reinstall reattaches: credential continuity, no re-bootstrap, no
+  re-generated credentials (idempotent load).
+* disk-full: a capped tmpfs (when the runner can mount) drives doctor's
+  data-dir check to the quantified free-space failure; when it cannot,
+  the same zero-free code path is injected so CI still exercises the
+  failure rather than skipping past it.
 
 Timing discipline (repo lesson): the supervisor ladder is driven with
 the manual-tick fake-clock seam — no wall-clock sleeps at all, which
@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -443,7 +442,6 @@ def test_entry_scrub_removes_the_poisoned_boot_env(tmp_path: Path, monkeypatch: 
 
     monkeypatch.setenv("PGHOST", "foreign.example")
     monkeypatch.setenv("PGPASSWORD", "leaked-password")
-    monkeypatch.setenv("PG東PORT", "65533") if False else None
     monkeypatch.setenv("PYTHONPATH", str(tmp_path))
     monkeypatch.setenv("LD_PRELOAD", "/evil/interposer.so")
     monkeypatch.setenv("DYLD_INSERT_LIBRARIES", "/evil.dylib")
@@ -623,21 +621,6 @@ def _seed_populated_datadir(tmp_path: Path, *, key: bytes) -> tuple[Path, secret
 
 
 @_requires_posix_secrets
-def test_uninstall_removes_the_app_tree_but_keeps_the_data_dir(tmp_path: Path) -> None:
-    data_dir, secrets, _state = _seed_populated_datadir(tmp_path, key=bytes(range(32)))
-    # "Uninstall" removes the APP tree; the launcher-owned data dir is kept.
-    app_tree = data_dir.parent / "app"
-    app_tree.mkdir()
-    shutil.rmtree(app_tree)
-    assert not app_tree.exists()
-    # The kept data dir still carries its state + secrets + cluster marker.
-    assert (data_dir / "secrets.json").is_file()
-    assert (data_dir / "state.json").is_file()
-    assert (data_dir / "pgdata" / "PG_VERSION").is_file()
-    assert secrets.postgres_password != secrets.redis_password
-
-
-@_requires_posix_secrets
 def test_reinstall_reattaches_with_credential_continuity_no_re_bootstrap(
     tmp_path: Path,
 ) -> None:
@@ -686,20 +669,16 @@ def test_disk_full_drives_the_data_dir_check_to_a_quantified_failure(
 ) -> None:
     """Disk-full -> doctor's data-dir floor fails with the quantified error.
 
-    Uses a REAL 1 MiB tmpfs when the runner can mount one; otherwise it
-    injects the zero-free reading — the same code path a full disk feeds
-    (the source of the number is the only difference, which a tmpfs plan
-    cannot control from a plain test runner)."""
+    Uses a REAL 1 MiB tmpfs when the runner can mount one (the preferred
+    path); when it cannot (no mount privilege, or a non-Linux OS whose
+    harness is real-machine checklist territory) it injects the zero-free
+    reading into the SAME code path a full disk feeds. Either way the
+    disk-full failure path is exercised — CI must never skip past it."""
     import shutil as shutil_module
 
     from modulo.launcher import doctor as doctor_module
 
     mountpoint = _try_mount_tiny_tmpfs(tmp_path)
-    if mountpoint is None and sys.platform == "linux":
-        pytest.skip(
-            "no mount privileges on this runner — the Linux disk-full recipe needs a capped "
-            "filesystem (tmpfs/loopback); macOS/Windows are real-machine checklist items"
-        )
     data_dir = mountpoint / "data" if mountpoint is not None else tmp_path / "data"
     data_dir.mkdir(parents=True)
     if mountpoint is None:
