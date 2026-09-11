@@ -438,6 +438,9 @@ class TestRevealEndpoint:
 
         assert resp.status_code == 200
         assert resp.json()["value"] == (stored.decode() if isinstance(stored, bytes) else stored)
+        # Degraded path: Redis is offline so no server-side token is stored;
+        # expires_in_seconds must be 0 to signal "no expiry exists".
+        assert resp.json()["expires_in_seconds"] == 0
 
     def test_reveal_decrypts_sso_secret(self, client: TestClient) -> None:
         provider_id = uuid.uuid4()
@@ -453,6 +456,9 @@ class TestRevealEndpoint:
 
         assert resp.status_code == 200
         assert resp.json()["value"] == "encrypted-secret"
+        # Degraded path: Redis is offline so no server-side token is stored;
+        # expires_in_seconds must be 0 to signal "no expiry exists".
+        assert resp.json()["expires_in_seconds"] == 0
 
     @pytest.mark.parametrize("stored", [object(), b"\xff\xfe"])
     def test_reveal_rejects_invalid_sso_secret_forms(self, client: TestClient, stored: object) -> None:
@@ -537,6 +543,9 @@ class TestRevealEndpoint:
 
         assert resp.status_code == 200
         assert resp.json()["value"] == "sso-secret-value"
+        # Degraded path: Redis is unavailable so no server-side token is stored;
+        # expires_in_seconds must be 0 to signal "no expiry exists".
+        assert resp.json()["expires_in_seconds"] == 0
 
 
 # ---------------------------------------------------------------------------

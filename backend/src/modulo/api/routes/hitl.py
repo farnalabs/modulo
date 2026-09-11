@@ -90,6 +90,8 @@ from modulo.settings import get_settings
 
 _CODE_HITL_APPROVE = "hitl.approve"
 
+logger = logging.getLogger(__name__)
+
 
 def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
     """Build a resume executor wired with the ``hitl_awaiting`` notifier.
@@ -110,8 +112,6 @@ def _build_resume_executor(engine: AsyncEngine) -> PipelineExecutor:
         notifier=notifier,
     )
 
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["hitl"])
 

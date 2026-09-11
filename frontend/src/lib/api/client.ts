@@ -61,34 +61,52 @@ const _origPut = api.PUT
 const _origPatch = api.PATCH
 const _origDelete = api.DELETE
 
-function withAuth(fn: (...args: any[]) => any) {
-  return async (...args: any[]) => {
-    const [url, options] = args
-    const headers = { ...getAuthHeaders(), ...options?.headers }
-    let resp = await fn(url, { ...options, headers })
+type AnyClientMethod = (
+  url: never,
+  init?: never,
+) => Promise<{ data?: unknown; error?: unknown; response?: Response | undefined }>
+
+type CallableMethod = (
+  url: string,
+  init?: Record<string, unknown>,
+) => Promise<{ data?: unknown; error?: unknown; response?: Response | undefined }>
+
+function withAuth<M extends AnyClientMethod>(fn: M): M {
+  const call = fn as unknown as CallableMethod
+  const wrapped = (async (url: string, options?: Record<string, unknown>) => {
+    const optionsRecord = (options ?? {}) as Record<string, unknown>
+    const headers: Record<string, unknown> = {
+      ...getAuthHeaders(),
+      ...(optionsRecord.headers as Record<string, unknown> | undefined),
+    }
+    let resp = await call(url, { ...optionsRecord, headers })
     if (resp.response?.status === 401) {
       const refreshed = await attemptTokenRefresh()
       if (refreshed) {
-        const newHeaders = { ...getAuthHeaders(), ...options?.headers }
-        resp = await fn(url, { ...options, headers: newHeaders })
+        const newHeaders: Record<string, unknown> = {
+          ...getAuthHeaders(),
+          ...(optionsRecord.headers as Record<string, unknown> | undefined),
+        }
+        resp = await call(url, { ...optionsRecord, headers: newHeaders })
       }
       if (!refreshed || resp.response?.status === 401) {
         clearAccessToken()
         exitToLogin()
-        return { response: undefined, data: undefined, error: undefined } as any
+        return { response: undefined, data: undefined, error: undefined }
       }
     }
     if (resp.error && typeof resp.error === 'object') {
-      resp.error = toProblemDetail(resp.error) as any
+      resp.error = toProblemDetail(resp.error as Record<string, unknown>)
     }
     return resp
-  }
+  }) as unknown as M
+  return wrapped
 }
 
-api.GET = withAuth(_origGet) as any
-api.POST = withAuth(_origPost) as any
-api.PUT = withAuth(_origPut) as any
-api.PATCH = withAuth(_origPatch) as any
-api.DELETE = withAuth(_origDelete) as any
+api.GET = withAuth(_origGet)
+api.POST = withAuth(_origPost)
+api.PUT = withAuth(_origPut)
+api.PATCH = withAuth(_origPatch)
+api.DELETE = withAuth(_origDelete)
 
 export type { paths, components } from './schema'
