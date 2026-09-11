@@ -7,7 +7,7 @@ API key; the default model id is pre-filled.
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ModelBackendPreset(BaseModel):
@@ -19,7 +19,7 @@ class ModelBackendPreset(BaseModel):
     default_model_id: str
     description: str
     api_key_docs_url: str
-    default_params: dict[str, Any] = {}
+    default_params: dict[str, Any] = Field(default_factory=dict)
 
 
 MODEL_BACKEND_PRESETS: list[ModelBackendPreset] = [
