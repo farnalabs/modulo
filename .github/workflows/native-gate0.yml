@@ -48,6 +48,11 @@ jobs:
     env:
       UV_CACHE_DIR: /tmp/uv-cache
       UV_PYTHON_INSTALL_DIR: /tmp/uv-pythons
+      # Force uv to install a managed CPython into UV_PYTHON_INSTALL_DIR rather
+      # than reusing the runner's system python. The venv's python symlink must
+      # point at that managed interpreter so it is present inside the
+      # --network none container (which mounts UV_PYTHON_INSTALL_DIR).
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - name: Checkout
         uses: actions/checkout@v7
