@@ -314,6 +314,12 @@ def test_mapped_route_elements_cover_owning_view_testids():
     just the layout's. The status strip of the Runners page
     (``components/runners/RunnerStatusStrip.vue``) renders on both tabs and is
     part of each tab's page surface, so it is listed with both.
+
+    A detail page that renders shared components owns those components' static
+    testids too, so they are listed alongside the page view — e.g. the run
+    detail page (``/runs/:id``, ``RunDetailView.vue``) surfaces
+    ``shared/JsonViewer.vue``, ``shared/ErrorAlert.vue`` and
+    ``hitl/HitlGateCard.vue``, whose shipped testids are part of its surface.
     """
     owned_pages = {
         "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
@@ -342,7 +348,12 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
         "/pipelines/:id/editor": "frontend/src/views/PipelineEditorView.vue",
         "/runs": "frontend/src/views/RunsListView.vue",
-        "/runs/:id": "frontend/src/views/RunDetailView.vue",
+        "/runs/:id": (
+            "frontend/src/views/RunDetailView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
+            "frontend/src/components/shared/ErrorAlert.vue",
+            "frontend/src/components/hitl/HitlGateCard.vue",
+        ),
         "/settings/email": "frontend/src/views/SettingsEmailView.vue",
         "/settings/hitl-review": "frontend/src/views/SettingsHitlReviewView.vue",
         "/settings/mcp": "frontend/src/views/SettingsMcpView.vue",

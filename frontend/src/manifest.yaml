@@ -2779,6 +2779,12 @@ elements:
       - testid: hitl-gate-message
         type: element
         dynamic_testid: false
+      - testid: hitl-gate-run-link
+        type: link
+        dynamic_testid: false
+      - testid: hitl-gate-foreign-claim
+        type: element
+        dynamic_testid: false
       - testid: run-detail-trigger-actor
         type: element
         dynamic_testid: false
@@ -2906,6 +2912,27 @@ elements:
         type: element
         dynamic_testid: false
       - testid: run-rerun
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
         type: button
         dynamic_testid: false
     /runs/diff:
