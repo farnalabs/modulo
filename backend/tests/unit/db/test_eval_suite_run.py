@@ -852,7 +852,7 @@ def test_single_migration_head() -> None:
     # 0211_variant_batch_state chains off 0210 -> it is the single head.
     chaining_off_0207 = [p for p in revisions if parents[p] == "0207_collection_install_tracking"]
     assert [_basename(p) for p in chaining_off_0207] == ["0208_notification_indexes_and_constraint.py"]
-    # 0209_collection_install_id_entity_columns (#352) chains off 0208_notification_indexes_and_constraint.
+    # 0209_collection_install_id_entity_columns chains off 0208_notification_indexes_and_constraint.
     chaining_off_0208 = [p for p in revisions if parents[p] == "0208_notification_indexes_and_constraint"]
     assert [_basename(p) for p in chaining_off_0208] == ["0209_collection_install_id_entity_columns.py"]
     # 0210_community_gate (FAR-764) chains off 0209_collection_install_id_entity_columns.

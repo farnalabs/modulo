@@ -38,7 +38,18 @@ _COMMUNITY_BY_ID_BASELINE = dict(_COMMUNITY_BY_ID)
 _COMMUNITY_BY_SLUG_BASELINE = dict(_COMMUNITY_BY_SLUG)
 
 _EXPECTED_MODULO_SLUGS = {
-    "agent": {"prd-ingestion", "requirements-writer", "spec-implementer", "pr-review-agent"},
+    "agent": {
+        "prd-ingestion",
+        "requirements-writer",
+        "spec-implementer",
+        "changelog-agent",
+        "issue-triage-agent",
+        "license-checker-agent",
+        "pr-description-agent",
+        "pr-review-agent",
+        "prompt-to-pr-implement-agent",
+        "release-notes-agent",
+    },
     "composite": {
         "approver",
         "booleaner",
@@ -48,15 +59,29 @@ _EXPECTED_MODULO_SLUGS = {
         "structured-output-enforcer",
         "triage",
     },
+    "library_collection": {
+        "changelog-generator",
+        "github-pr-reviewer",
+        "issue-triage",
+        "license-checker",
+        "pr-description-writer",
+        "prompt-to-pr",
+        "release-notes-generator",
+    },
     "pipeline_template": {
         "incident-response-pipeline",
         "pr-review-pipeline",
         "release-checklist-pipeline",
+        "changelog-pipeline",
+        "issue-triage-pipeline",
+        "license-checker-pipeline",
+        "pr-description-pipeline",
+        "prompt-to-pr-pipeline",
+        "release-notes-pipeline",
     },
     "schema": {"prd-input", "requirements-output", "pr-review-decision"},
     "test_fixture": {"example-test-fixture"},
     "workflow": {"prd-to-requirements", "simplest-workflow"},
-    "library_collection": {"github-pr-reviewer"},
 }
 _EXPECTED_COMMUNITY_SLUGS = {
     "commit-message-linter",
