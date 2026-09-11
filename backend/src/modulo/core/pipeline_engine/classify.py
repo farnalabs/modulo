@@ -1,10 +1,13 @@
 """Run-outcome classification persisted at terminalization (FAR-189).
 
 Stage 2 of the ongoing-trigger no-delivery auto-deactivation feature. FAR-188
-added ``runs.raw_output_markers`` (JSONB keyed by attempt_key, each marker
-carrying ``pr_url``); the streak engine (FAR-190) will query classification
-records instead of raw run status. THIS module computes and persists a
-classification record when a run reaches a terminal status.
+added the raw-output retention markers (JSONB keyed by attempt_key, each
+marker carrying ``pr_url`` — today ``run_node_outputs`` marker ROWS, the
+reassembly reader's store leg; until migration 0215 dropped the legacy runs
+columns they lived inside ``runs.raw_output_markers``); the streak engine
+(FAR-190) will query classification records instead of raw run status.
+THIS module computes and persists a classification record when a run reaches
+a terminal status.
 
 The classifier is a pure function over EXISTING terminalization facts — it
 never re-implements or re-scans anything:
@@ -20,7 +23,9 @@ never re-implements or re-scans anything:
   in node_telemetry_json is a real delivery signal too).
 * ``evidence._declared_success_nodes`` counts declared-success nodes (recorded
   as metadata) without re-deriving the split/legacy shapes.
-* ``runs.raw_output_markers`` supplies the FAR-188 ``pr_url`` per attempt_key —
+* The reassembled raw-output markers (``run_node_outputs`` marker rows
+  — the store leg since B2c, reads via the reassembly reader) supply the
+  FAR-188 ``pr_url`` per attempt_key —
   a pr_url recovered from ANY attempt key is a valid delivery signal
   (first-attempt PRs created before a sandbox stall/retry are real deliveries).
 

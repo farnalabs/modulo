@@ -30,6 +30,19 @@ fi
 python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 # Run migrations ONCE with a bounded retry loop (3 attempts, 5s apart).
+#
+# DISPOSITION (FAR-694, explicit): the migrator is bare-FATAL after its 3
+# attempts — it does NOT implement the design doc's "skip-on-unknown-revision"
+# invariant (a DB at a revision this image's chain does not know, i.e. the
+# DB is AHEAD of the image). bare-FATAL was chosen deliberately: a
+# newer-DB/older-image deploy is a broken deploy matrix that the deploy
+# workflow's build-SHA match is supposed to prevent, and by the time
+# migration 0215 (FAR-583) has dropped the runs blob columns, "skipping"
+# migrations to let an older image boot would hide a schema the image cannot
+# safely serve (the drop is never rewound). Failing loudly here is the safe
+# default; the rollback path for an image rollback is the documented
+# emergency re-add-columns snippet (migration 0215's downgrade docstring +
+# docs/operations/drop-runs-blob-columns.md), never a revision skip.
 MIGRATIONS_OK=0
 for attempt in $(seq 1 3); do
     if alembic upgrade heads; then

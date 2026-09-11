@@ -1605,7 +1605,7 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID, *, organisation_id: 
 #
 # FAR-583 (B2c): the three runs blob columns (outputs_json / node_telemetry_json /
 # raw_output_markers) are NOT part of this ORM's select surface (B1 cut the ORM
-# mapping; the follow-up drop migration 0212 removes the columns from the DB);
+# mapping; the drop migration 0215 removed the columns from the DB);
 # the run_node_outputs store carries the payloads now.
 #
 # ``cost_breakdown`` IS deferred. Its only list-path reader is the MCP
@@ -2179,7 +2179,7 @@ async def update_run_status(
     run.status = status
     # FAR-583 qa-M19 (B2c): capture the PRE-WRITE stored blob dicts BEFORE — the primary store write filters inherited
     # ``__``-prefixed keys against exactly these (B1-era legacy rows carry
-    # sentinels on the legacy column; the follow-up drop migration's repair
+    # sentinels on the legacy column; the drop migration 0215's repair
     # re-maps them into the new table — they never reach the new-table
     # capture) so an
     # inherited sentinel id can never wedge the run's terminalization.

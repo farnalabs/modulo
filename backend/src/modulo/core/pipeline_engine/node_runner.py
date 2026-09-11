@@ -1202,11 +1202,14 @@ async def _persist_raw_output_marker(
     promote_newest_key: bool = False,
     preserve_delivery_done: bool = True,
 ) -> bool:
-    """Best-effort persist of a raw-output retention marker onto ``runs.raw_output_markers``.
+    """Best-effort persist of a raw-output retention marker
+    (a ``run_node_outputs`` marker ROW keyed by the original attempt_key —
+    the store leg since B2c; the legacy runs blob columns it used to share
+    the ``runs`` table with are dropped by migration 0215).
 
-    FAR-188 (QA round 1): the marker lives in a DEDICATED column keyed by
-    ``attempt_key`` — NEVER in ``outputs_json`` / ``node_telemetry_json``. This
-    keeps the Agent Return Contract columns clean: the node-output endpoint can
+    FAR-188 (QA round 1): the marker lives in a DEDICATED store keyed by
+    ``attempt_key`` — NEVER inside the outputs/telemetry dicts. This
+    keeps the Agent Return Contract clean: the node-output endpoint can
     never serve raw stdout, ``recover_node``'s already-completed guard never
     sees a fake completed node, and finalize's split-output machinery never
     touches the marker.
@@ -1287,8 +1290,8 @@ async def _persist_raw_output_marker(
 # B2c (FAR-583): a marker-savepoint transaction-aborting failure loses the
 # persist for the attempt and is claimed loudly as
 # sandbox_agent.raw_output_marker_persist_uncommitted - there is no legacy
-# fallback leg any more (B2c readers are new-table-only; the columns die in
-# the follow-up drop migration 0212).
+# fallback leg any more (B2c readers are new-table-only; the columns died
+# with the drop migration 0215).
 
 
 async def _write_raw_output_marker(
@@ -7281,10 +7284,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # FAR-228 success-path marker: when opt-in AND the sentinel is a
         # FULL-LINE match in the FULL pre-truncation stdout (``agent_stdout_raw``,
         # NOT the head-truncated ``agent_stdout``), persist a delivery_done
-        # marker onto ``raw_output_markers`` — the ONLY column guard A /
+        # marker into the marker-row store — the ONLY store guard A /
         # guard B / classification / gate_fired read. The envelope stamp
         # alone was unobservable (nothing reads delivery_done from
-        # outputs_json); the marker is the durable record that closes the
+        # the outputs dicts); the marker is the durable record that closes the
         # completed-node-then-process-death gap. Best-effort and fail-open:
         # a persist failure must never break a successful run.
         if delivery_sentinel and _source_contains_delivery_sentinel(agent_stdout_raw, delivery_sentinel):
