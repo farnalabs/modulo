@@ -1697,6 +1697,7 @@ export default {
       "limits_summary": "{cpu} CPU / {mem} MiB per container",
       "limits_unset": "unset",
       "limits_unset_value": "unset",
+      "active_workspaces": "Active workspaces",
       "last_error": "Last probe error",
       "remediation_hint": "Check that the Docker engine is reachable through the socket proxy and that the pinned image is pulled on this machine.",
       "operator_guide_ref": "See the Bundled Runner operator guide (docs/security/bundled-runner-operator-guide.md).",

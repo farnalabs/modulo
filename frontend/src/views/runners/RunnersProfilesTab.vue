@@ -141,6 +141,8 @@
               <dd>{{ row.health?.persistence_policy ?? '—' }}</dd>
               <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.resource_limits') }}</dt>
               <dd>{{ resourceSummary(row) }}</dd>
+              <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.active_workspaces') }}</dt>
+              <dd data-testid="runner-profile-active-workspaces">{{ row.health?.active_workspaces ?? 0 }}</dd>
               <template v-if="row.probeError">
                 <dt class="text-muted-foreground">{{ $t('views.RunnersProfilesTab.last_error') }}</dt>
                 <dd class="text-destructive truncate" :title="row.probeError">{{ row.probeError }}</dd>
