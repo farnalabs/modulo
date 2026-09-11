@@ -77,8 +77,9 @@ _MIGRATION_PATH = (
 # 0208_notification_indexes_and_constraint chained onto 0207, 0209_collection_install_id_entity_columns
 # chained onto 0208, FAR-764's 0210_community_gate chained onto 0209, and FAR-775's
 # 0211_variant_batch_state chained onto 0210, and 0212_variant_batch_state_updated_at
-# chained onto 0211, and FAR-788's 0213_runs_rerun_trigger_type chained onto 0212 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0213_runs_rerun_trigger_type"
+# chained onto 0211, and FAR-788's 0213_runs_rerun_trigger_type chained onto 0212, and
+# 0214_connector_instance_indexes_unique chained onto 0213 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0214_connector_instance_indexes_unique"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
