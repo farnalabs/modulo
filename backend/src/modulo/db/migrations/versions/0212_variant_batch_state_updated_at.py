@@ -15,6 +15,10 @@ the correct place to add the missing column (editing ``0211`` would not re-run o
 an existing DB). The column mirrors the ``TimestampMixin`` declaration:
 ``DateTime(timezone=True)``, ``nullable=False``, ``server_default=now()``.
 
+The ``ADD COLUMN`` is guarded so the migration is idempotent: if ``0211`` already
+creates ``updated_at`` (or the migration is re-run), the column is left untouched
+rather than raising ``DuplicateColumn``.
+
 Ownership ceremony (the 0066/0134 pattern, in spirit from 0209): on a DB where
 the table is already owned by ``modulo_migrate`` (production, bootstrap ran
 before alembic), ``SET ROLE modulo_migrate`` before ``ADD COLUMN`` so column
@@ -54,6 +58,19 @@ def _table_owner(bind, table: str) -> str | None:
     ).scalar_one_or_none()
 
 
+def _column_exists(bind, table: str, column: str) -> bool:
+    """Return True if ``column`` already exists on ``table``."""
+    if bind.dialect.name == "postgresql":
+        return bool(
+            bind.execute(
+                sa.text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
+                {"table": table, "column": column},
+            ).first()
+        )
+    rows = bind.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
+    return any(row[1] == column for row in rows)
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     pg = _is_postgres(bind)
@@ -71,15 +88,18 @@ def upgrade() -> None:
     if migrate_owns_table:
         op.execute(f"SET ROLE {_MIGRATE_ROLE}")
 
-    op.add_column(
-        _TABLE,
-        sa.Column(
-            _COLUMN,
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-    )
+    # Idempotent: 0211 may already create updated_at (or the migration may be
+    # re-run), so only add the column when it is genuinely missing.
+    if not _column_exists(bind, _TABLE, _COLUMN):
+        op.add_column(
+            _TABLE,
+            sa.Column(
+                _COLUMN,
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+        )
 
     if pg and migrate_owns_table:
         op.execute("RESET ROLE")
@@ -93,4 +113,5 @@ def downgrade() -> None:
     if pg:
         op.execute("SET search_path TO public")
 
-    op.drop_column(_TABLE, _COLUMN)
+    if _column_exists(bind, _TABLE, _COLUMN):
+        op.drop_column(_TABLE, _COLUMN)
