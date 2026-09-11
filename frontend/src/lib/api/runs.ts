@@ -82,3 +82,23 @@ export async function requestRunCancellation(runId: string, errorPrefix: string)
     return { error: `${errorPrefix} ${formatApiError(e)}` }
   }
 }
+
+/**
+ * Reruns a completed or failed run with its original snapshot and payload.
+ * The new run is stamped with trigger_type "rerun" and lineage via parent_run_id.
+ * Never throws — returns the new run id, or a formatted error string so callers
+ * can render it directly in their inline error UI.
+ * @param errorPrefix the already-translated user-facing prefix for error
+ *   messages, e.g. `t('views.RunDetailView.rerun_failed')`.
+ */
+export async function requestRunRerun(runId: string, errorPrefix: string): Promise<{ runId?: string; error?: string }> {
+  try {
+    const { data, error } = await api.POST('/api/v1/runs/{run_id}/rerun', {
+      params: { path: { run_id: runId } },
+    })
+    if (error) return { error: `${errorPrefix} ${formatApiError(error)}` }
+    return { runId: data?.run_id ?? undefined }
+  } catch (e: unknown) {
+    return { error: `${errorPrefix} ${formatApiError(e)}` }
+  }
+}
