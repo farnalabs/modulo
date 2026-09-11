@@ -219,28 +219,49 @@ If you cannot log in via the UI but the application is running, create a
 long-lived admin token directly in the database:
 
 ```sql
--- Generate a random hashed secret (e.g., 64 hex chars)
--- In production, use a proper UUID-based lookup prefix:
+-- Requires pgcrypto (gen_random_bytes / digest). The schema has no `users`
+-- table: identity lives in `accounts`, and org membership in `org_memberships`.
+-- `org_api_keys.account_id` is a NOT NULL FK to `accounts.id`, so the key must
+-- be owned by a real, active admin/break-glass account.
+--
+-- validate_api_key requires key = 'mk_' + 32-char urlsafe token, where
+-- lookup_prefix = left(token, 8) and hashed_secret = SHA-256 hex of the FULL
+-- key ('mk_' || token). The recipe stores exactly those values and returns the
+-- one-time bearer token the admin must use.
+WITH admin AS (
+    SELECT a.id AS account_id, om.organisation_id AS org_id
+    FROM accounts a
+    JOIN org_memberships om ON om.account_id = a.id
+    WHERE a.active AND (a.is_system_admin OR a.is_break_glass)
+    ORDER BY a.is_break_glass DESC, a.email
+    LIMIT 1
+),
+new_key AS (
+    SELECT replace(replace(encode(gen_random_bytes(24), 'base64'), '+', '-'), '/', '_') AS token,
+           gen_random_uuid() AS kid
+    FROM admin
+)
 INSERT INTO org_api_keys (id, name, lookup_prefix, hashed_secret, role, scope, expires_at, created_at, organisation_id, account_id)
 SELECT
-    gen_random_uuid(),
+    n.kid,
     'emergency-bypass-token',
-    substr(encode(gen_random_bytes(4), 'hex'), 1, 8),
-    encode(gen_random_bytes(32), 'hex'),
+    left(n.token, 8),
+    encode(digest('mk_' || n.token, 'sha256'), 'hex'),
     'operator',
     'org',
     NOW() + INTERVAL '1 hour',
     NOW(),
-    organisation_id,
-    account_id
-FROM users
-WHERE is_admin = true
-LIMIT 1;
+    a.org_id,
+    a.account_id
+FROM new_key n, admin a
+RETURNING name, ('mk_' || (SELECT token FROM new_key)) AS bearer_token;
 ```
 
-Then use the lookup prefix + secret to construct a bearer token (`mk_<lookup_prefix><secret>`) and authenticate API calls:
+The `RETURNING` clause prints the one-time `Bearer` token (`mk_<token>`). Use it
+directly in the `Authorization` header — there is no separate prefix/secret to
+concatenate, exactly like a normally minted key:
 ```bash
-curl -H "Authorization: Bearer mk_<lookup_prefix><secret>" https://modulo.example.com/api/v1/admin/settings
+curl -H "Authorization: Bearer mk_<token>" https://modulo.example.com/api/v1/admin/settings
 ```
 
 **Safeguards:**

@@ -91,7 +91,7 @@ creation is the DEFAULT posture; org-wide is the deliberate opt-in
    `api_key_created`/`api_key_revoked` (exact REST event_type strings).
    Payloads on BOTH events on BOTH surfaces gain `auth_type` + `key_scope`
    + masked prefix (`mk_<prefix>****`). Adjacent, out-of-scope:
-   admin regenerate key lacks audit (own ticket); the audit-viewer filter
+    admin regenerate key lacks audit (own ticket); the audit-viewer filter
     drifted from the event types (`api_key.created`/`deleted` vs
     `api_key_created`/`revoked`) -- pre-existing defect, untouched.
 
