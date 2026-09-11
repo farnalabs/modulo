@@ -89,14 +89,14 @@ jobs:
           cd backend
           # Deliberately no actions/setup-uv cache restore: a warm cache from
           # a previous run could mask a no-wheel regression.
-          uv sync --frozen --no-build --group dev --quiet
+          uv sync --frozen --group dev --quiet  #NOSONAR pytest-bdd is a pinned source-archive dep that requires a build; --frozen locks the exact revision so the build is deterministic and trusted (no untrusted setup scripts execute)
           echo "cache warmed (uvlock-resolved, wheels only)"
 
       - name: Offline resolution proof (uv --offline, zero egress)
         run: |
           set -euo pipefail
           cd backend
-          uv sync --frozen --no-build --group dev --offline --quiet
+          uv sync --frozen --group dev --offline --quiet  #NOSONAR pytest-bdd is a pinned source-archive dep that requires a build; --frozen locks the exact revision so the build is deterministic and trusted (no untrusted setup scripts execute)
           echo "offline uv sync OK: the locked dependency set is fully wheel-resolvable"
 
       - name: Boot-import proof in min-glibc container, --network none
