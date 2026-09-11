@@ -76,7 +76,7 @@ def _matrix_probes() -> DoctorProbes:
         service_linger=lambda: False,
         available_memory_bytes=lambda: 8 * 1024 * 1024 * 1024,
         data_dir_pg_version=lambda: "16",
-        bundle_pg_version=lambda: "16.4",
+        bundle_pg_version=lambda: "16",
         installed_bundle_pg_version=lambda: "16",
         bundled_binaries=list,
         port_owner_description=lambda _port: None,
@@ -438,10 +438,11 @@ def test_retention_across_repeated_upgrades_never_touches_the_referenced_dir(
     assert current_link.resolve(strict=True) == new_version_dir.resolve(strict=True)
     assert protected_target.is_dir()
     assert new_version_dir.is_dir()
-    # The oldest two unprotected dirs fell off the retention window.
-    assert sorted(pruned) == ["1.1.0", "1.2.0"]
+    # The oldest unprotected dir fell off the retention window (the last two
+    # unprotected dirs are kept, per _RETAINED_VERSIONS = 2).
+    assert sorted(pruned) == ["1.1.0"]
     assert not (versions / "1.1.0").exists()
-    assert not (versions / "1.2.0").exists()
-    latest_nonprotected = ["1.3.0"]
+    # The two newest unprotected dirs (1.2.0, 1.3.0) survive the retention sweep.
+    latest_nonprotected = ["1.2.0", "1.3.0"]
     for name in latest_nonprotected:
         assert (versions / name).is_dir(), f"retention must keep {name}"

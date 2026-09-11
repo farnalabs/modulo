@@ -109,6 +109,9 @@ def _spawn_kill_driver(pgdata: Path, extra_env: dict[str, str]) -> Popen[str]:
     """
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
+    # Arm the deterministic initdb pause gate so the child blocks at
+    # PAUSED:initdb_pre_rename (the point the test SIGKILLs / resumes at).
+    env["MODULO_TEST_PAUSE_AT"] = GATE_INITDB_PRE_RENAME
     env.update(extra_env)
     return Popen(  # noqa: S603 — fixed argv, trusted synthesized test driver
         [sys.executable, "-c", _KILL_DRIVER, str(pgdata)],
@@ -662,12 +665,16 @@ def _try_mount_tiny_tmpfs(base: Path) -> Path | None:
         return None
     mountpoint = base / "capped-tmpfs"
     mountpoint.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(  # noqa: S603 — resolved PATH lookup, pinned argv
-        ["/usr/sbin/mount", "-t", "tmpfs", "-o", "size=1m", "tmpfs", str(mountpoint)],
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(  # noqa: S603 — resolved PATH lookup, pinned argv
+            ["/usr/sbin/mount", "-t", "tmpfs", "-o", "size=1m", "tmpfs", str(mountpoint)],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        # mount binary absent from this runner's PATH — cannot cap a filesystem.
+        return None
     if completed.returncode != 0:
         return None
     return mountpoint

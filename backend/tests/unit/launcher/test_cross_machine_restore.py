@@ -58,7 +58,7 @@ def _reset_launcher_state() -> Iterator[None]:
     get_settings.cache_clear()
 
 
-_FERNET_KEY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+_FERNET_KEY = "9u9GToDRLOtSKkZGkZlFnXlJpNdIay2y5vUsVC5J0Bk="
 
 
 def real_snapshot_files(data_dir: Path, backup_dir: Path) -> tuple[dict[str, Any], list[str]]:
