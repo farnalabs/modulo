@@ -41,7 +41,7 @@
         @move-pipeline="onMovePipeline"
       />
       <p v-if="folderError" class="px-4 py-2 text-xs text-destructive">
-        Failed to load folders: {{ folderError }}
+        {{ $t('views.PipelineListView.failed_to_load_folders', { error: folderError }) }}
       </p>
 
       <main class="flex-1 page-wide min-w-0 overflow-y-auto">
@@ -91,7 +91,7 @@
         </div>
 
         <div v-else-if="allPipelines.length === 0 && !search" class="text-center py-16">
-          <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="mx-auto mb-4 text-muted-foreground/40"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          <FileStack :size="48" class="mx-auto mb-4 text-muted-foreground/40" aria-hidden="true" />
           <p class="text-lg font-medium text-foreground">{{ $t('views.PipelineListView.no_pipelines_yet') }}</p>
           <p class="text-sm text-muted-foreground mt-1 mb-6">
             {{ $t('views.PipelineListView.empty_description') }}
@@ -368,7 +368,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTrap'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { ChevronRight, Folder, FolderOpen, MoreVertical, X } from '@lucide/vue'
+import { ChevronRight, Folder, FolderOpen, MoreVertical, X, FileStack } from '@lucide/vue'
 import { formatApiError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from 'primevue/select'
