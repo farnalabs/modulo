@@ -2899,6 +2899,12 @@ elements:
       - testid: run-detail-hitl-message
         type: element
         dynamic_testid: false
+      - testid: run-detail-rerun
+        type: element
+        dynamic_testid: false
+      - testid: run-rerun
+        type: button
+        dynamic_testid: false
     /runs/diff:
       - testid: diff-loading
         type: element
