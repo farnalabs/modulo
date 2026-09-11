@@ -172,12 +172,12 @@ jobs:
           done
       - name: Sync backend deps
         if: steps.changed.outputs.changed == 'true'
-        # NOTE: do NOT pass --no-build here. pytest-bdd is intentionally pinned
-        # to a GitHub source archive (no wheel) in backend/pyproject.toml; uv
-        # must be allowed to build it from sdist, or `uv sync --frozen --no-build`
-        # fails with "no binary distribution" and the harness never runs. The
-        # downstream `uv run --no-build --no-sync pytest ...` step relies on this
-        # sync having installed the package into the venv, so it is unaffected.
+        # FAR-791: pytest-bdd in uv.lock is a direct GitHub-archive sdist with no
+        # binary distribution, so `--no-build` hard-fails the sync on a cold uv
+        # cache (~40s in). The sdist builds a wheel once and caches it; keep the
+        # flag OFF here (this deliberately differs from main's speed-oriented
+        # --no-build, added in 3c083191d, so a rebase east of main does not
+        # silently re-introduce the cold-cache break).
         run: uv sync --frozen
       - name: Run the docker-marked harness suite
         if: steps.changed.outputs.changed == 'true'
