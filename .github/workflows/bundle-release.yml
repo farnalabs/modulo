@@ -275,7 +275,7 @@ jobs:
             exit 1
           fi
           cd backend
-          uv run --no-sync python - <<'PYEOF'
+          uv run --no-sync --no-build python - <<'PYEOF'
           import hashlib, json, os, sys
 
           sys.path.insert(0, "src")

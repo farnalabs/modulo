@@ -694,7 +694,7 @@ def read_proc_starttime(pid: int) -> int | None:
         # TODO(P3): Windows exposes no /proc; the P3 shim uses Job Objects.
         return None
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")  # NOSONAR — pid is int, not user-controlled string
     except (OSError, ValueError):
         return None
     tail = raw.rpartition(")")[2].split()
@@ -833,7 +833,7 @@ def child_shim_main(argv: list[str]) -> int:
     signal.signal(signal.SIGTERM, _forward_signal)
     signal.signal(signal.SIGINT, _forward_signal)
     preexec = _set_pdeathsig if sys.platform == "linux" else None
-    child_proc = subprocess.Popen(  # noqa: S603 — argv built by the supervisor, never shell
+    child_proc = subprocess.Popen(  # noqa: S603 — argv built by the supervisor, never shell  # NOSONAR — supervisor-built argv, not user input
         child_argv,
         preexec_fn=preexec,
     )
