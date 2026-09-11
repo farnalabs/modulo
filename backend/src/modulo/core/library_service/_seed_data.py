@@ -194,8 +194,9 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         name="PR Review Decision",
         slug="pr-review-decision",
         description=(
-            "Structured verdict for automated PR reviews: APPROVE or"
-            " REQUEST_CHANGES plus summary and per-finding details."
+            "Output schema for PR-review inline-prompt agents: an APPROVE or"
+            " REQUEST_CHANGES verdict, a one-paragraph summary, and optional"
+            " per-finding details."
         ),
         content_json={
             "fields": [
@@ -210,7 +211,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "name": "findings",
                     "type": "array",
                     "items": {
-                        "severity": {"type": "string", "enum": ["critical", "major", "minor", "nit"]},
+                        "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
                         "file": {"type": "string"},
                         "line": {"type": "integer"},
                         "comment": {"type": "string"},
@@ -219,7 +220,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                 },
             ]
         },
-        tags=["schema", "code-review", "pr", "decision"],
+        tags=["schema", "pr", "review", "github", "decision"],
     ),
     _make_modulo(
         pid="00000000-0000-0000-0000-000000000020",
@@ -1205,7 +1206,7 @@ _MODULO_PRIMITIVES.extend(
                     " GitHub PR diff for bugs, security issues, style"
                     " violations, and correctness problems.\n\n"
                     "For each issue found, provide:\n"
-                    "- severity: critical, major, minor, or nit\n"
+                    "- severity: critical, major, or minor\n"
                     "- file: the file path\n"
                     "- line: the line number (approximate is fine)\n"
                     "- message: a clear description of the issue\n\n"
