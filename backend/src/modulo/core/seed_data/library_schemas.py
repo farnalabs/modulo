@@ -652,14 +652,16 @@ SCHEMAS: list[dict[str, object]] = [
     {
         "name": "pr-review-decision",
         "description": (
-            "Structured verdict for automated PR reviews: APPROVE or"
-            " REQUEST_CHANGES plus summary and per-finding details"
+            "Output schema for PR-review inline-prompt agents: an APPROVE or"
+            " REQUEST_CHANGES verdict, a one-paragraph summary, and optional"
+            " per-finding details"
         ),
         "definition": {
             "title": "PR Review Decision",
             "description": (
-                "Structured verdict for automated PR reviews: APPROVE or"
-                " REQUEST_CHANGES plus summary and per-finding details"
+                "Output schema for PR-review inline-prompt agents: an APPROVE or"
+                " REQUEST_CHANGES verdict, a one-paragraph summary, and optional"
+                " per-finding details"
             ),
             "type": "object",
             "additionalProperties": False,
@@ -679,7 +681,7 @@ SCHEMAS: list[dict[str, object]] = [
                         "properties": {
                             "severity": {
                                 "type": "string",
-                                "enum": ["critical", "major", "minor", "nit"],
+                                "enum": ["critical", "major", "minor"],
                                 "description": "Finding severity",
                             },
                             "file": {"type": "string", "description": "File path"},

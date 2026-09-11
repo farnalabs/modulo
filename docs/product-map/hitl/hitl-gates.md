@@ -240,6 +240,15 @@ may decide.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — closed the
+  `/settings/hitl-review` element-inventory drift for the shared gate-card
+  surface: the page renders `hitl/HitlGateCard.vue` (whose `hitl-gate-foreign-claim`
+  state was never registered here) and the `HitlBriefing.vue` briefing embedded in
+  the card. The shipped static testids (`hitl-gate-foreign-claim`, `hitl-briefing*`)
+  are now registered on `/settings/hitl-review`, and
+  `test_mapped_route_elements_cover_owning_view_testids` maps the route to the view
+  plus `HitlGateCard.vue` / `HitlBriefing.vue`, so a newly shipped gate/briefing
+  testid can no longer drift invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-08-29: **improve-architecture (product-map walk)** — new behaviour
   tracker for the registered `feat-hitl` manifest feature (route
   `/settings/hitl-review`, previously absent from the feature graph).

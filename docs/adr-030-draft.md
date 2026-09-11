@@ -1,18 +1,18 @@
-# ADR 030 — User-scoped MCP keys: per-user key issuance; MCP calls operate under the key owner's identity
+# ADR 030 -- User-scoped MCP keys: per-user key issuance; MCP calls operate under the key owner's identity
 
 > **CONDUCTOR NOTE:** This file is a TRANSPLANT DRAFT. ADRs live in
 > `Repos/devtools/adr/` (migrated out of modulo in FAR-434, where they are
-> numbered by sequence — this lands as `030-user-scoped-mcp-keys.md`,
+> numbered by sequence -- this lands as `030-user-scoped-mcp-keys.md`,
 > cross-referencing ADR 014/017/018). When transplanting, also apply the
 > one-line reciprocal edit to ADR 017 named in the amendment below.
 
 **Status:** Accepted (Phase 1 mechanism shipped; FAR-620)
 **Date:** 2026-09-06
-**Related:** ADR 014 (MCP server as agents), ADR 017 (centralized authorization, Founder Decision 1), ADR 018 (duplicate numbering noted — the room's ADR sequence has two 018s; this file does not renumber), FAR-602 (HITL email alerts), FAR-614 (user-scoped MCP preference tools)
+**Related:** ADR 014 (MCP server as agents), ADR 017 (centralized authorization, Founder Decision 1), ADR 018 (duplicate numbering noted; the room's ADR sequence has two 018s; this file does not renumber), FAR-602 (HITL email alerts), FAR-614 (user-scoped MCP preference tools)
 
 ## Context
 
-Modulo's MCP server (ADR 014/017) is the control plane for external agents —
+Modulo's MCP server (ADR 014/017) is the control plane for external agents,
 Claude Code, IDE agents, Remy sessions, CI automation. Today every MCP API
 key is an ORG-LEVEL credential: it carries an org role (operator/runner), a
 team boundary, and optionally a run binding (sandbox keys), but it has no
@@ -38,7 +38,7 @@ creation is the DEFAULT posture; org-wide is the deliberate opt-in
    server default `'org'`, CHECK mirroring the role CHECK nested DDL.
    IMMUTABLE post-mint (update payloads reject an explicit `scope` with 422;
    `update_api_key` accepts no scope parameter). The historical `OrgApiKey`
-   table name is acknowledged — the org-key mint path now defaults the
+   table name is acknowledged; the org-key mint path now defaults the
    column, it is not renamed.
 
 2. **Caller-scope classification (3-value map beside
@@ -53,28 +53,28 @@ creation is the DEFAULT posture; org-wide is the deliberate opt-in
    `set_hitl_email_alerts`).
 
 4. **Claims of identity:** the target of a caller-scoped tool is
-   `_ctx_user_id_val()` BY CONSTRUCTION — the no-target-param invariant.
+   `_ctx_user_id_val()` BY CONSTRUCTION, the no-target-param invariant.
    Registry-introspection tests pin the allowed-parameters map for the
    new/changed tools so no target field can be introduced silently.
 
 5. **`create_api_key` MCP tool stays ORG-ONLY.** Minting is an org-level
    operation; user-scoped key minting is REST-JWT-only (single-tenant
-   dogfood: one surface, one matrix cell — no scope-conditional branch in
+   dogfood: one surface, one matrix cell, no scope-conditional branch in
    the tool body). Under a user-scoped key the MCP mint tool is DENIED.
 
 6. **All `Account.preferences` writes are row-locked** through the shared
    helpers in `db/crud/account.py` (`set_hitl_email_preference` is the
    SINGLE writer of the `hitl_email` key; `update_account_preferences` takes
-   the FOR UPDATE lock and merges per-top-level-key). Begin-agnostic — both
+   the FOR UPDATE lock and merges per-top-level-key). Begin-agnostic; both
    the REST DI session (autobegin=False) and the MCP `_session` wrapper
    (caller's `s.begin()`) work identically. The 365-day-old lost-update race
    documented in me.py is closed. Accepted debt: `Account.preferences` is a
    single-tenant-per-user JSON document in ONE COLUMN shared across orgs
-   (accounts are global) — a cross-org inherited preference is possible on
+   (accounts are global), a cross-org inherited preference is possible on
    multi-org accounts; accepted for this dogfood deployment.
 
 7. **Run attribution.** Manual runs are stamped with the account of the
-   authenticating credential — MCP `_create_manual_run` and REST
+   authenticating credential; MCP `_create_manual_run` and REST
    `POST /api/v1/runs` now pass `account_id`; the trigger test path already
    did (`triggers.py`). Attribution semantics: `run.account_id` = the
    account of the credential, NOT the human operator behind it. Webhook /
@@ -84,24 +84,24 @@ creation is the DEFAULT posture; org-wide is the deliberate opt-in
 8. **Rate buckets.** The in-app `trigger_pipeline` limiter buckets
    user-scoped keys as `user:{account_id}` (a user-scoped key is one client);
    org/team/run-scoped keys keep `ak:{key_id}` (the org-key multiplication
-   hole is pre-existing and accepted). The middleware bucket stays per-key —
+   hole is pre-existing and accepted). The middleware bucket stays per-key,
    accepted asymmetry, documented.
 
 9. **Audit.** MCP `create_api_key`/`revoke_api_key` emit
    `api_key_created`/`api_key_revoked` (exact REST event_type strings).
    Payloads on BOTH events on BOTH surfaces gain `auth_type` + `key_scope`
    + masked prefix (`mk_<prefix>****`). Adjacent, out-of-scope:
-   admin regenerate key lacks audit (own ticket); the audit-viewer filter
-   drifted from the event types (`api_key.created`/`deleted` vs
-   `api_key_created`/`revoked`) — pre-existing defect, untouched.
+    admin regenerate key lacks audit (own ticket); the audit-viewer filter
+    drifted from the event types (`api_key.created`/`deleted` vs
+    `api_key_created`/`revoked`) -- pre-existing defect, untouched.
 
 ## The ceiling is REUSE, not amendment
 
 ADR-017's mint ceiling is unchanged: `min(minted role, live role)` per
 call, resolved from live membership. User-scoped keys never exceed
-operator. Runner key + live viewer DEGRADES to viewer (min(1,0) — degraded,
+operator. Runner key + live viewer DEGRADES to viewer (min(1,0), degraded,
 not dead); death happens only on missing/deactivated membership. The
-live-role clamp makes an expires_at extension (TTL risk below) tolerable —
+live-role clamp makes an expires_at extension (TTL risk below) tolerable;
 a stale key cannot out-live its owner's live role.
 
 | Minted | Live role | Result |
@@ -110,7 +110,7 @@ a stale key cannot out-live its owner's live role.
 | runner | viewer | **degrades to viewer** (test-pinned cell) |
 | any | None (removed/deactivated) | dies (401) |
 
-## ADR 017 Founder Decision 1 — amendment
+## ADR 017 Founder Decision 1 -- amendment
 
 ADR 017 DECISION 1 reads "Machine clients use org API keys". This ADR
 amends it to:
@@ -129,7 +129,7 @@ remain the default for shared machine identities."
 
 `hitl.claim`'s `claimant_id` stays KEY-SCOPED (the original decision, not
 changed to user-scoped). Team-gated HITL gates are therefore MCP-unclaimable
-by design — an agent credential cannot silently claim for a human. If team
+by design; an agent credential cannot silently claim for a human. If team
 members are gate owners, the gate must be claimed through the REST UI.
 This is fail-closed and accepted.
 
@@ -148,7 +148,7 @@ compensating controls.
 ## Bootstrap recipe (first user key)
 
 ```bash
-# 1. Log in (JWT — the REST route is JWT-only)
+# 1. Log in (JWT -- the REST route is JWT-only)
 curl -X POST https://app.modulo.run/api/v1/auth/login \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'username=admin@modulo.run&password=***'
@@ -168,7 +168,7 @@ curl -X POST https://app.modulo.run/api/v1/api-keys \
 decides the final policy). Compensating controls that hold TODAY: the
 live-role clamp (a stale key cannot out-live its owner's live role), the
 per-account active-key quota, and per-key revocation. The named risk:
-`expires_at` extension would unbind the credential from those controls —
+`expires_at` extension would unbind the credential from those controls;
 the update path accepts no scope and the extension risk is deferred to the
 Phase 2 TTL policy decision.
 
@@ -176,22 +176,22 @@ Phase 2 TTL policy decision.
 
 Org-level `user_scoped_mcp_keys` flag. OFF-state semantics (pinned):
 (1) mint of scope='user' is DENIED (never silently downgraded to org);
-(2) a STORED user-scoped key is DENIED AT AUTH (401) — disabling revokes,
+(2) a STORED user-scoped key is DENIED AT AUTH (401); disabling revokes,
 never broadens; (3) JWT/OAuth callers unaffected; (4) org-key behavior is
 byte-identical. The caller-scope gate is kill-switch-INELIGIBLE (the
 tenant-boundary precedent): an org-wide key stays denied user-state writes
 even with authz-enforce off. The flag read failure is fail-closed. Deploy
 ordering: old-code + new-column is safe (column is additive with server
-default); new-code + old-column fails at the resolver read — model and
+default); new-code + old-column fails at the resolver read, model and
 migration land in the same PR. Migration downgrade: former user-scoped
-keys re-read as 'org' — silent widening on rollback is PINNED as accepted
+keys re-read as 'org', silent widening on rollback is PINNED as accepted
 (0126 round-trip template).
 
 ## Observability notes
 
 - **Bucket-string shift:** Remy's JWT callers now carry auth_type 'jwt'
   (previously 'oauth'), so the trigger_pipeline bucket string shifts
-  `trigger_pipeline:{org}:oauth:user:{uid}` → `...:jwt:user:{uid}` — a
+  `trigger_pipeline:{org}:oauth:user:{uid}` → `...:jwt:user:{uid}`, a
   one-time in-memory budget reset for those callers (fresh empty buckets).
   User-scope API keys likewise newly share the account bucket. Watch 429
   logs across the deploy window and do not treat aggregate 429 dips as a
@@ -206,14 +206,14 @@ keys re-read as 'org' — silent widening on rollback is PINNED as accepted
 
 ## Alternatives considered
 
-- **Parallel "user API keys" table**: rejected — a second credential model
+- **Parallel "user API keys" table**: rejected, a second credential model
   duplicates validation, RLS, mint/quota/audit plumbing; the scope axis
   composes with the existing role + team + run binding axes instead.
-- **Greedy org-key user-delegation header (`X-Modulo-Act-As`)**: rejected —
+- **Greedy org-key user-delegation header (`X-Modulo-Act-As`)**: rejected,
   gives exactly the configuration-forge capability the design principle
   forbids, guarded only by a convention.
 - **Per-key user binding on every key** (stamping account on every mint):
-  conflates "owned by" with "acts as" — every key is owned by someone, but
+  conflates "owned by" with "acts as"; every key is owned by someone, but
   only service keys need the caller scope.
 - **OAuth device flow for headless agents**: browser-consent-gated and
   short-lived; does not cover scheduled long-lived agents.

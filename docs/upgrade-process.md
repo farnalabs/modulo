@@ -22,6 +22,48 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
 
 ## Upgrade Paths
 
+### Native single-install (Linux)
+
+The native upgrade swaps the `current` symlink after a verified data
+snapshot; migrations run through the new bundle's boot lifespan. Two entry
+points perform the same swap:
+
+- the published installer (`bash scripts/install.sh`), and
+- the launcher command (`modulo upgrade <target-version>`).
+
+`modulo upgrade` flow:
+
+1. **Enforced pre-upgrade dump.** The bundled pg_dump writes a versioned
+   snapshot dir under the data dir (`pre-upgrade-dump-<ts>/`) with a
+   restore manifest, and verifies the dump is non-empty. A failed dump
+   aborts the upgrade - NO binary swap happens without a verified
+   snapshot. The dump needs the bundled Postgres reachable, so run the
+   upgrade command while the stack is running.
+2. Stop + swap. The data dir must not be locked for the swap; the command
+   stops the stack, re-points `current` to the new bundle, then boots the
+   new bundle's migrations and gates on health.
+3. Failure output carries the snapshot path and the EXACT manual restore
+   command - v1 does NOT auto-restore on a failed upgrade.
+
+`--skip-backup` skips the enforced dump. This flag is the loud, explicit
+acknowledgement that a verified snapshot already exists (the
+stop-then-rerun flow used by the published installer); the upgrade
+refuses when no snapshot is present.
+
+### Signed-manifest provisioning state (honest note)
+
+`modulo upgrade` and `scripts/install.sh` both refuse to install from an
+unsigned or unverifiable release manifest (an ed25519 signature over the
+manifest's exact bytes). The trust store ships in a PROVISIONING state:
+production signing keys are NOT yet provisioned (the release pipeline's
+`BUNDLE_MANIFEST_SIGNING_KEY` Actions secret must be set, and the
+installer's production trust slots `TRUST_KEY_CURRENT_B64` /
+`TRUST_KEY_NEXT_B64` in `backend/src/modulo/launcher/manifest.py`
+`_TRUST_ROWS` mirror it). Until a human provisions those keys, signed
+releases cannot be produced and unsigned ones fail closed at install -
+deliberate: an unsigned release must never install silently. Provisions
+are a manual, keys-in-vault operation tracked as needs-human.
+
 ### Docker Compose
 
 ```bash
@@ -91,6 +133,36 @@ between machine groups.
 ---
 
 ## Rollback
+
+### Native single-install rollback playbook
+
+The manual playbook. Run it when either trigger fires:
+
+**Triggers**
+1. A reproducible data-loss report against a released `bundle-vX.Y.Z`
+   (failed upgrade, dropped data after restore, anything where the
+   release artifact is the proximate cause).
+2. A failed release - the nightly canary red for that release, or the
+   release smoke failing on the tagged artifact.
+
+**Actions (in order)**
+1. **Unlist the failing release.** `gh release delete <tag> --yes` (or
+   make it a draft). Published release assets are immutable, so a bad
+   artifact must be removed from the download surface, not replaced.
+2. **Re-point the install one-liner.** The installer resolves
+   `releases/latest`; unlisting the bad release is usually sufficient.
+   When you need an EXPLICIT re-point, run the rollback-verify target:
+   `gh workflow run "Native: release smoke + canary (bundle-v*)" -f rollback_version=bundle-v<good>`.
+   This verifies the target release exists with its artifact servable.
+3. **Cut a patch.** Branch, fix, tag `bundle-v<somer+1>`; the release
+   smoke runs against the exact artifact before Merge Queue can bless it.
+4. **Operator-side recovery.** Any operator already holding the bad
+   bundle restores from their pre-upgrade snapshot: the upgrade refusal
+   output prints the snapshot dir and the exact `modulo restore` command.
+
+**Triggers rule:** if the canary is red and no customer report exists,
+treat 1-3 as REQUIRED, not optional - an endangered release stays listed
+only while it is being rolled forward.
 
 ### Application Rollback
 

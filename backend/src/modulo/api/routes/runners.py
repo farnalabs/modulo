@@ -48,7 +48,7 @@ from modulo.db.crud.environment_profile import (
     apply_bundled_runner_template,
     list_environment_profiles,
 )
-from modulo.db.crud.run import get_sandbox_concurrency_limit
+from modulo.db.crud.run import count_active_runner_dispatches_for_org, get_sandbox_concurrency_limit
 from modulo.db.crud.runner_probe import (
     PROBE_INTERVAL_SECONDS,
     PROBE_RETENTION_SECONDS,
@@ -129,6 +129,12 @@ class ProfileHealthResponse(BaseModel):
     available: bool
     placeholder_digest: bool = False
     drift: ProfileDriftResponse = Field(default_factory=ProfileDriftResponse)
+    #: How many live workspaces are currently provisioned against this
+    #: profile. Markers carry NO profile id (node-level binding is post-GA),
+    #: so this is the ORG-scoped count of active (running) runs bearing a
+    #: live ``runner_docker`` dispatch marker — the same value on every
+    #: Bundled profile of the org until per-profile markers land.
+    active_workspaces: int = 0
 
 
 class RunnersStatusResponse(BaseModel):
@@ -190,6 +196,7 @@ def _preflight(limit_cap: int | None, engine_infos: list[dict[str, Any]]) -> Con
 def _profile_health(
     profile: EnvironmentProfile,
     worst_state: StripState | None,
+    active_workspaces: int = 0,
 ) -> ProfileHealthResponse:
     from modulo.db.bundled_runner_template import is_placeholder_bundled_runner_image_ref
 
@@ -219,6 +226,7 @@ def _profile_health(
         available=available,
         placeholder_digest=placeholder,
         drift=ProfileDriftResponse(**drift),
+        active_workspaces=active_workspaces if is_runner else 0,
     )
 
 
@@ -252,6 +260,12 @@ async def get_runners_status(
                     break
                 page += 1
             contract = await get_sandbox_concurrency_limit(session, principal.organisation_id)
+            # FAR-771: active workspace count = org-scoped running runs with
+            # a live runner_docker dispatch marker. Markers carry NO profile
+            # id (node-level binding is post-GA), so the value is the same on
+            # every Bundled profile of the org — computed once here and
+            # threaded through the per-profile detail response.
+            active_workspaces = await count_active_runner_dispatches_for_org(session, principal.organisation_id)
     except ProgrammingError:
         _log.exception(_CODE_RUNNERS_STATUS)
         raise HTTPException(
@@ -304,7 +318,10 @@ async def get_runners_status(
     # NO machine rows at all (the probe never ran) the aggregate reads
     # "stale" — absent cache must NOT read healthy (the strip shows
     # "status unknown", and the profile row shows the same unknown state).
-    profiles = [_profile_health(p, aggregate if p.provider_type == "runner_docker" else None) for p in profiles_page]
+    profiles = [
+        _profile_health(p, aggregate if p.provider_type == "runner_docker" else None, active_workspaces)
+        for p in profiles_page
+    ]
 
     engine_infos = [m.engine_info for m in machines if m.engine_info]
     concurrency = ConcurrencyContractResponse(

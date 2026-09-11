@@ -911,8 +911,11 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         return os.getuid() if hasattr(os, "getuid") else None
 
     def _username_of_uid(uid: int) -> str | None:
-        if os.name != "posix":
-            return None  # TODO(P3): Windows SID → account mapping
+        # sys.platform (not os.name) so mypy narrows the non-Windows branch:
+        # the stdlib `pwd` module has no attributes in typeshed on win32, and
+        # `warn_unused_ignores` (strict) forbids a platform-specific type:ignore.
+        if sys.platform == "win32":
+            return None  # TODO(P3): Windows SID — account mapping
         try:
             import pwd
         except ImportError:

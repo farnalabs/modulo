@@ -7,7 +7,7 @@ Scheduled for removal once composite templates are migrated to use PipelineEdge 
 """
 
 import uuid
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -57,7 +57,7 @@ class Node(OrgScoped):
         lazy="selectin",
         order_by="Node.name",
     )
-    parent: Mapped[Optional["Node"]] = relationship(
+    parent: Mapped["Node | None"] = relationship(
         "Node",
         back_populates="children",
         remote_side="Node.id",

@@ -82,6 +82,14 @@ applied migration between versions (`core/schema_registry/*`).
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — registered the
+  schema folder tree (`pipelines/FolderTree.vue` static testids `folder-tree`,
+  `folder-tree-new`, `folder-tree-all-pipelines`) in the `/schemas` manifest
+  `elements:` inventory — `SchemaListView.vue` renders the shared folder tree on the
+  schema library page, but none of its static testids were in the product map.
+  `test_mapped_route_elements_cover_owning_view_testids` now maps `/schemas` to
+  `SchemaListView.vue` + `FolderTree.vue` so the folder surface cannot drift
+  invisible to Remy's docs indexer / `/api/v1/manifest`.
 - 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-schemas`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/schemas.py`,

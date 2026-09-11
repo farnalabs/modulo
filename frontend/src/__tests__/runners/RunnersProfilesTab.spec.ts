@@ -83,6 +83,7 @@ function makeStatus(profileOverrides: Record<string, unknown> = {}): RunnersStat
         available: true,
         placeholder_digest: false,
         drift: { is_seeded: true, drifted: false, drifted_fields: [] },
+        active_workspaces: 3,
         ...profileOverrides,
       },
       {
@@ -99,6 +100,7 @@ function makeStatus(profileOverrides: Record<string, unknown> = {}): RunnersStat
         available: true,
         placeholder_digest: false,
         drift: { is_seeded: false, drifted: false, drifted_fields: [] },
+        active_workspaces: 0,
       },
     ],
     concurrency: {
@@ -216,6 +218,36 @@ describe('RunnersProfilesTab', () => {
     expect(detail.text()).toContain('modulo-runner:opencode')
     expect(detail.text()).toContain('1 CPU / 1024 MiB per container')
     expect(detail.text()).toContain('bundled-runner-operator-guide.md')
+  })
+
+  it('surfaces the active workspace count on the bundled profile detail', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const wrapper = mount(RunnersProfilesTab, { props: { status: makeStatus({ active_workspaces: 3 }), reloadStatus } })
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const dd = wrapper.find('[data-testid="runner-profile-active-workspaces"]')
+    expect(dd.exists()).toBe(true)
+    expect(dd.text()).toBe('3')
+  })
+
+  it('shows zero active workspaces when the count is absent from the status payload', async () => {
+    const status = makeStatus()
+    delete (status.profiles?.[0] as Record<string, unknown>)['active_workspaces']
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="runner-profile-active-workspaces"]').text()).toBe('0')
   })
 
   it('search filters rows by query', async () => {

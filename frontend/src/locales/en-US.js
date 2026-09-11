@@ -361,7 +361,8 @@ export default {
       "visibility_org": "Org",
       "visibility_team": "Team",
       "pipeline_name_placeholder": "Pipeline name",
-      "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs."
+      "delete_confirm": "Are you sure? This permanently deletes the pipeline and all its runs.",
+      "failed_to_load_folders": "Failed to load folders: {error}"
     },
     "SettingsRateLimitsView": {
       "rate_limits": "Rate Limits",
@@ -1706,6 +1707,7 @@ export default {
       "limits_summary": "{cpu} CPU / {mem} MiB per container",
       "limits_unset": "unset",
       "limits_unset_value": "unset",
+      "active_workspaces": "Active workspaces",
       "last_error": "Last probe error",
       "remediation_hint": "Check that the Docker engine is reachable through the socket proxy and that the pinned image is pulled on this machine.",
       "operator_guide_ref": "See the Bundled Runner operator guide (docs/security/bundled-runner-operator-guide.md).",

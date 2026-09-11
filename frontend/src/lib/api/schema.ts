@@ -13326,6 +13326,10 @@ export interface components {
             description: string;
             /** Api Key Docs Url */
             api_key_docs_url: string;
+            /** Default Params */
+            default_params: {
+                [key: string]: unknown;
+            };
         };
         /** ModelBackendResponse */
         ModelBackendResponse: {
@@ -14795,6 +14799,11 @@ export interface components {
              */
             placeholder_digest: boolean;
             drift?: components["schemas"]["ProfileDriftResponse"];
+            /**
+             * Active Workspaces
+             * @default 0
+             */
+            active_workspaces: number;
         };
         /** ProfileListResponse */
         ProfileListResponse: {
@@ -15817,6 +15826,10 @@ export interface components {
             }[] | null;
             /** Capacity */
             capacity?: {
+                [key: string]: unknown;
+            } | null;
+            /** Input Payload */
+            input_payload?: {
                 [key: string]: unknown;
             } | null;
         };

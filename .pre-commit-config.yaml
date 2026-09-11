@@ -151,6 +151,62 @@
         files: ^(backend/src/modulo/core/pipeline_engine/node_runner\.py|backend/src/modulo/api/mcp_server\.py|scripts/validate_pipeline_configs\.py)$
         pass_filenames: false
 
+  # CI-parity pre-push gate: mirrors the commands the PR CI actually runs, so a
+  # red-PR push is caught locally before the CI round-trip (the PR Reviewer
+  # mostly CHANGES_REQUESTED on "CI red at PR time": Test Backend 67, Integration
+  # 33, BDD 20, Lint Backend 18, Schema freshness 15, migration heads 12).
+  # Install: pre-commit install --hook-type pre-push (see CONTRIBUTING.md).
+  - repo: local
+    hooks:
+      # EXACT `Lint (Backend)` mypy invocation (ci.yml backend-lint job,
+      # working-directory: backend):  uv run --no-build --no-sync mypy src/modulo/
+      # NOT `--strict --ignore-missing-imports` — those flags change what mypy
+      # reports and mask failures CI doesn't (and vice versa). See the
+      # "Diagnose CI failures with the EXACT CI command" lesson.
+      - id: prepush-mypy
+        name: prepush mypy (exact CI Lint Backend command)
+        entry: uv --directory backend run --no-build --no-sync mypy src/modulo/
+        language: system
+        files: ^backend/src/
+        pass_filenames: false
+        stages: [pre-push]
+      # EXACT frontend type-check invocation (ci.yml frontend job):
+      #   pnpm run type-check    (frontend/package.json: "vue-tsc --noEmit")
+      # run_frontend_npm.py runs `pnpm run type-check` in frontend/ — same command.
+      - id: prepush-vue-tsc
+        name: prepush vue-tsc (exact CI type-check command)
+        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
+        language: system
+        files: \.(vue|ts)$
+        pass_filenames: false
+        stages: [pre-push]
+      # Local equivalent of CI's schema-freshness job: regenerate to a temp
+      # file and fail if it differs from the committed schema.ts (never touches it).
+      - id: prepush-schema-freshness
+        name: prepush schema freshness (openapi-typescript@7.13.0 --check)
+        entry: uv run --project backend --no-sync python scripts/run_generate_api_types.py --check
+        language: system
+        files: ^(backend/src/.+\.py$)
+        pass_filenames: false
+        stages: [pre-push]
+      # Impacted-test selection via pytest-testmon. NOTE: the FIRST run in a
+      # fresh worktree builds backend/.testmondata (profiles the full suite —
+      # slow, gitignored); subsequent runs are incremental and only execute
+      # tests impacted by changed code.
+      - id: prepush-impacted-tests
+        name: prepush impacted tests (pytest-testmon)
+        entry: uv --directory backend run --no-sync pytest --testmon -q --timeout=120
+        language: system
+        files: ^backend/(src|tests)/.*\.py$
+        pass_filenames: false
+        stages: [pre-push]
+      - id: prepush-rebase-check
+        name: prepush rebase-before-first-push check
+        entry: uv run --project backend --no-sync python scripts/run_check_rebase_before_push.py
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:

@@ -143,6 +143,7 @@ def _patch_status(
     profiles: list[MagicMock] | None = None,
     cap: int | None = None,
     is_default: bool = False,
+    active_workspaces: int = 0,
 ):
     contract = SimpleNamespace(cap=cap, is_default=is_default)
     return (
@@ -154,6 +155,7 @@ def _patch_status(
             ),
         ),
         patch(f"{_ROUTES}.get_sandbox_concurrency_limit", new=AsyncMock(return_value=contract)),
+        patch(f"{_ROUTES}.count_active_runner_dispatches_for_org", new=AsyncMock(return_value=active_workspaces)),
         patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
         patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
     )
@@ -257,6 +259,25 @@ class TestRunnersStatusProfiles:
         assert runner["placeholder_digest"] is True
         assert runner["available"] is False
 
+    def test_active_workspace_count_surfaces_on_runner_profile(self, client: TestClient) -> None:
+        """FAR-771: the org-scoped active-workspace count rides the profile
+        detail response — a running run with a live marker (count=2) shows up
+        on the runner_docker profile."""
+        profile = _profile_row()
+        with _enter_patchers(_patch_status(rows=[_probe_row()], profiles=[profile], active_workspaces=2)):
+            resp = client.get(self.URL)
+        runner = resp.json()["profiles"][0]
+        assert runner["active_workspaces"] == 2
+
+    def test_non_runner_profiles_never_surface_the_count(self, client: TestClient) -> None:
+        """E2B / local profiles have no Bundled provisioning — the count is
+        runner_docker-only (0 everywhere a live marker cannot exist)."""
+        profile = _profile_row(provider_type="e2b", image_ref=None)
+        with _enter_patchers(_patch_status(rows=[_probe_row()], profiles=[profile], active_workspaces=2)):
+            resp = client.get(self.URL)
+        runner = resp.json()["profiles"][0]
+        assert runner["active_workspaces"] == 0
+
 
 class TestRunnersStatusConcurrency:
     URL = "/api/v1/runners/status"
@@ -354,6 +375,7 @@ class TestRunnersStatusConcurrency:
                 patch(f"{_ROUTES}.list_runner_probe_cache", new=AsyncMock(return_value=[])),
                 patch(f"{_ROUTES}.list_environment_profiles", new=AsyncMock(side_effect=_paged)),
                 patch(f"{_ROUTES}.get_sandbox_concurrency_limit", new=AsyncMock(return_value=contract)),
+                patch(f"{_ROUTES}.count_active_runner_dispatches_for_org", new=AsyncMock(return_value=0)),
                 patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
                 patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             )

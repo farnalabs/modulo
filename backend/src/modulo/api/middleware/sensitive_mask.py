@@ -357,7 +357,16 @@ async def reveal_sensitive_value(
     try:
         redis = Redis.from_url(settings.redis_url, decode_responses=True)
     except Exception:
-        return RevealResponse(token="", value=actual_value, expires_in_seconds=30)  # nosec B106 -- empty-string token on Redis failure is a degrade-to-no-token sentinel, NOT a hardcoded password
+        _log.warning(
+            "middleware.sensitive_mask.reveal_no_redis: Redis unavailable; "
+            "reveal token cannot be persisted. Returning value without "
+            "server-side expiry — caller must not cache beyond the displayed "
+            "value.",
+        )
+        # Empty-string token signals "no server-side expiry exists" to the
+        # client.  expires_in_seconds=0 makes the absence explicit so callers
+        # do not rely on a token that was never stored.
+        return RevealResponse(token="", value=actual_value, expires_in_seconds=0)  # nosec B106 -- empty-string token on Redis failure is a degrade-to-no-token sentinel, NOT a hardcoded password
 
     reveal_token = str(uuid.uuid4())
     try:

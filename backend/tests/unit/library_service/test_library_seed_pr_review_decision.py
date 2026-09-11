@@ -11,7 +11,7 @@ from modulo.core.seed_data.library_schemas import SCHEMAS
 
 _PRIMITIVE_SLUG = "pr-review-decision"
 _PRIMITIVE_TYPE = "schema"
-_EXPECTED_TAGS = ["schema", "code-review", "pr", "decision"]
+_EXPECTED_TAGS = ["schema", "pr", "review", "github", "decision"]
 
 _VALID_VERDICT: dict = {
     "decision": "APPROVE",
@@ -37,7 +37,7 @@ _REVIEW_VERDICT: dict = {
             "comment": "SQL injection vulnerability.",
         },
         {
-            "severity": "nit",
+            "severity": "minor",
             "comment": "Missing trailing newline.",
         },
     ],

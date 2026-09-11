@@ -1,5 +1,21 @@
 # Deployment Guide
 
+## Which deployment to use
+
+| Requirement | Use |
+|-------------|-----|
+| Server or production deployment, multiple operators, replicas, reverse proxy | **Docker Compose** (this guide's main path) |
+| Workstation or single-machine evaluation, no Docker installed | **Native install** (`scripts/install.sh`) |
+
+The support split is deliberate: Compose is the server/production path
+(vertical scaling, reverse proxy, observability stack), while the native
+bundle is the workstation/evaluation path (self-contained, no container
+runtime, per-user install root). The native path's requirements and
+limitations are in [system-requirements.md](./system-requirements.md) and
+the launcher command surface starts at `modulo start`.
+
+---
+
 ## Prerequisites
 
 - Python 3.12+

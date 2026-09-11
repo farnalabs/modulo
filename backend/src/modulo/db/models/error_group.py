@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -33,7 +33,7 @@ class ErrorGroup(OrgScoped):
     sample_event_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("error_events.id", ondelete="SET NULL"), index=True
     )
-    sample_event: Mapped[Optional["ErrorEvent"]] = relationship(
+    sample_event: Mapped["ErrorEvent | None"] = relationship(
         "ErrorEvent", foreign_keys=[sample_event_id], lazy="joined"
     )
     assigned_to: Mapped[uuid.UUID | None] = mapped_column(

@@ -5,7 +5,9 @@ user create a working model backend by picking a provider and pasting only an
 API key; the default model id is pre-filled.
 """
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class ModelBackendPreset(BaseModel):
@@ -17,6 +19,7 @@ class ModelBackendPreset(BaseModel):
     default_model_id: str
     description: str
     api_key_docs_url: str
+    default_params: dict[str, Any] = Field(default_factory=dict)
 
 
 MODEL_BACKEND_PRESETS: list[ModelBackendPreset] = [
@@ -27,6 +30,7 @@ MODEL_BACKEND_PRESETS: list[ModelBackendPreset] = [
         default_model_id="gpt-4o",
         description="GPT-4o — fast, multimodal flagship model from OpenAI.",
         api_key_docs_url="https://platform.openai.com/api-keys",
+        default_params={"temperature": 0.7},
     ),
     ModelBackendPreset(
         id="anthropic",
@@ -35,6 +39,7 @@ MODEL_BACKEND_PRESETS: list[ModelBackendPreset] = [
         default_model_id="claude-sonnet-4-20250514",
         description="Claude Sonnet 4 — balanced performance and speed from Anthropic.",
         api_key_docs_url="https://console.anthropic.com/settings/keys",
+        default_params={"temperature": 0.7},
     ),
     ModelBackendPreset(
         id="gemini",
@@ -43,6 +48,7 @@ MODEL_BACKEND_PRESETS: list[ModelBackendPreset] = [
         default_model_id="gemini-2.5-pro",
         description="Gemini 2.5 Pro — Google's most capable multimodal model.",
         api_key_docs_url="https://aistudio.google.com/apikey",
+        default_params={"temperature": 0.7},
     ),
     ModelBackendPreset(
         id="deepseek",
@@ -57,7 +63,8 @@ MODEL_BACKEND_PRESETS: list[ModelBackendPreset] = [
         provider="groq",
         display_name="Groq",
         default_model_id="llama-3.3-70b-versatile",
-        description="Llama 3.3 70B — ultra-fast inference on Groq hardware.",
+        description="Llama 3.3 70B — ultra-fast inference on Groq hardware with a generous free tier.",
         api_key_docs_url="https://console.groq.com/keys",
+        default_params={"temperature": 0.6},
     ),
 ]

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlalchemy import (
     JSON,
@@ -379,4 +379,4 @@ class Run(OrgScoped):
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
     snapshot: Mapped["PipelineSnapshot"] = relationship()
-    owner_team: Mapped[Optional["Team"]] = relationship()
+    owner_team: Mapped["Team | None"] = relationship()

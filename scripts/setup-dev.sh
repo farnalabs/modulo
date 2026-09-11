@@ -25,4 +25,11 @@ if [ "$1" = "--full" ]; then
     docker compose -f "$ROOT/docker-compose.yml" up -d
 fi
 
+# Pre-commit hooks (commit-stage + CI-parity pre-push gate)
+if command -v pre-commit >/dev/null 2>&1; then
+    (cd "$ROOT" && pre-commit install && pre-commit install --hook-type pre-push)
+else
+    echo "pre-commit not found — run 'pre-commit install && pre-commit install --hook-type pre-push' from the repo root manually."
+fi
+
 echo "Done!"

@@ -66,7 +66,10 @@ def test_log_paths(tmp_path: Path):
 def test_read_log_tail(tmp_path: Path):
     log = tmp_path / "launcher.log"
     log.write_text("line1\nline2\nline3\n", encoding="utf-8")
-    assert read_log_tail(log).endswith("line3\n")
+    # read_log_tail returns raw bytes; Windows text-mode writes normalise
+    # "\n" to CRLF, so normalize before asserting the tail.
+    tail = read_log_tail(log).replace("\r\n", "\n")
+    assert tail.endswith("line3\n")
     # Missing file -> empty string (no crash).
     assert not read_log_tail(tmp_path / "absent.log")
 
