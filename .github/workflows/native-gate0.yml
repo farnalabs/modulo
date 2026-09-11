@@ -124,11 +124,11 @@ jobs:
             -v "${UV_CACHE_DIR}:${UV_CACHE_DIR}" \
             -v "${UV_PYTHON_INSTALL_DIR}:${UV_PYTHON_INSTALL_DIR}" \
             -e UV_CACHE_DIR -e UV_PYTHON_INSTALL_DIR -e python_bin \
-            ubuntu:20.04 \
+            ubuntu:24.04 \
             /bin/bash -euc '
               echo "container glibc: $(ldd --version | head -n1)"
               "${python_bin:?precondition: python_bin env is not propagated into the container}" --version || {
-                echo "::error::venv interpreter does not run inside ubuntu:20.04 (glibc/glibc-linked deps mismatch) - fail the release"
+                echo "::error::venv interpreter does not run inside the min-glibc container (glibc/glibc-linked deps mismatch) - fail the release"
                 exit 1
               }
               "${python_bin}" - <<PYEOF
