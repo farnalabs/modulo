@@ -391,7 +391,7 @@ def _upgrade_release_fixture(staging, target_version="1.2.0"):
         extra_path = bundle_root / extra
         extra_path.parent.mkdir(parents=True, exist_ok=True)
         extra_path.write_bytes(b"bundled binary bytes\n")
-    artifact_names = ("launcher", "VERSION", "SHA256SUMS", "pg/bin/postgres", "redis/redis-server")
+    artifact_names = ("launcher", "VERSION", "pg/bin/postgres", "redis/redis-server")
     (bundle_root / "SHA256SUMS").write_text("", encoding="utf-8")
     digests = {
         artifact: hashlib.sha256((bundle_root / artifact).read_bytes()).hexdigest() for artifact in artifact_names
@@ -502,8 +502,13 @@ def _upgrade_poisoned_boot_seam(record):
 
 def _upgrade_restore_head(text):
     """The 'Exact manual restore command:' line's full payload."""
-    marker_line = next(line for line in text.splitlines() if line.strip().startswith("Exact manual restore command:"))
-    return marker_line.strip().removeprefix("Exact manual restore command:").strip()
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("Exact manual restore command:"):
+            for subsequent in lines[i + 1 :]:
+                if subsequent.strip():
+                    return subsequent.strip()
+    raise ValueError("no restore command found in refusal text")
 
 
 def _upgrade_seed_install_root(install_root, previous_version="1.1.0"):
@@ -552,6 +557,8 @@ def upgrade_plant(tmp_path, monkeypatch):
     monkeypatch.setattr(upgrade_module, "assert_upgrade_platform", lambda: None)
     monkeypatch.setattr(upgrade_module, "stop_running_stack", lambda data_dir, **kwargs: None)
     monkeypatch.setattr(upgrade_module, "no_live_process_inside", lambda root: None)
+    monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _upgrade_dump_seam(tmp_path / "data"))
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
     data_dir = tmp_path / "data"
     _upgrade_seed_data_dir(data_dir)
     install_root = tmp_path / "install-root"
@@ -570,7 +577,7 @@ def upgrade_plant(tmp_path, monkeypatch):
     )
 
 
-def test_perform_upgrade_full_flow(upgrade_plant):
+def test_perform_upgrade_full_flow(upgrade_plant, patched_trust_store):
     """Fetch -> verify -> pre-flight -> dump -> stop -> swap -> marker -> boot."""
     boot_record = []
 
@@ -609,7 +616,7 @@ def test_perform_upgrade_full_flow(upgrade_plant):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
-def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path):
+def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path, monkeypatch, patched_trust_store):
     """PG major (17 target) vs the data dir's PG_VERSION (16): HARD refusal."""
     from modulo.launcher import upgrade as upgrade_module
 
@@ -617,12 +624,21 @@ def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path):
     install_root = tmp_path / "install-root"
     _upgrade_seed_data_dir(data_dir)
     _upgrade_seed_install_root(install_root)
+    monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _upgrade_dump_seam(data_dir))
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
     staging = tmp_path / "releases"
     staging.mkdir()
     release_fixture = _upgrade_release_fixture(staging)
+    from modulo.launcher import manifest as manifest_module
+
     manifest_body = json.loads(release_fixture.manifest.read_text(encoding="utf-8"))
     manifest_body["components"]["postgres"] = "17"
-    release_fixture.manifest.write_bytes(json.dumps(manifest_body, indent=2, sort_keys=True).encode("utf-8"))
+    new_payload = json.dumps(manifest_body, indent=2, sort_keys=True).encode("utf-8")
+    release_fixture.manifest.write_bytes(new_payload)
+    _new_signature = manifest_module.sign_release_bytes(
+        new_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX
+    )
+    release_fixture.signature.write_text(json.dumps(_new_signature), encoding="utf-8")
     with pytest.raises(upgrade_module.UpgradeError, match="major mismatch"):
         upgrade_module.perform_upgrade(
             data_dir,
@@ -635,7 +651,7 @@ def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
-def test_perform_upgrade_downgrade_refuses(tmp_path, monkeypatch):
+def test_perform_upgrade_downgrade_refuses(tmp_path, monkeypatch, patched_trust_store):
     from modulo.launcher import upgrade as upgrade_module
 
     data_dir = tmp_path / "data"
@@ -662,7 +678,7 @@ def test_perform_upgrade_downgrade_refuses(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
-def test_perform_upgrade_disk_preflight_refuses(tmp_path, monkeypatch):
+def test_perform_upgrade_disk_preflight_refuses(tmp_path, monkeypatch, patched_trust_store):
     from types import SimpleNamespace
 
     from modulo.launcher import upgrade as upgrade_module
@@ -674,6 +690,8 @@ def test_perform_upgrade_disk_preflight_refuses(tmp_path, monkeypatch):
     staging = tmp_path / "releases"
     staging.mkdir()
     release_fixture = _upgrade_release_fixture(staging)
+    monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _upgrade_dump_seam(data_dir))
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
 
     def _disk_usage(_path):
         return SimpleNamespace(free=0)
@@ -691,7 +709,7 @@ def test_perform_upgrade_disk_preflight_refuses(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
-def test_perform_upgrade_live_process_aborts(tmp_path, monkeypatch):
+def test_perform_upgrade_live_process_aborts(tmp_path, monkeypatch, patched_trust_store):
     from modulo.launcher import upgrade as upgrade_module
 
     def _no_live_refusing(_root):
@@ -702,6 +720,8 @@ def test_perform_upgrade_live_process_aborts(tmp_path, monkeypatch):
     install_root = tmp_path / "install-root"
     _upgrade_seed_data_dir(data_dir)
     _upgrade_seed_install_root(install_root)
+    monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _upgrade_dump_seam(data_dir))
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
     staging = tmp_path / "releases"
     staging.mkdir()
     release_fixture = _upgrade_release_fixture(staging)
@@ -718,7 +738,7 @@ def test_perform_upgrade_live_process_aborts(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks + sh (the verbatim-restore E2E)")
-def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monkeypatch):
+def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monkeypatch, patched_trust_store):
     """The refusal names the snapshot + the exact restore; the EMITTED command
     executes VERBATIM end-to-end (the PATH shim's `modulo` records its argv)."""
     import subprocess
@@ -736,6 +756,7 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
     def _dump(data_dir, *, bin_dir=None):
         return _upgrade_dump_seam(data_dir)(data_dir)
 
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
     monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _dump)
     boot_record = []
 
@@ -760,7 +781,7 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
     shim_file = shim_dir / "modulo"
-    shim_file.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
+    shim_file.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\"\n", encoding="utf-8")
     shim_file.chmod(0o755)
     run_env = dict(os.environ, PATH=f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     captured = subprocess.run(  # noqa: S603 - the emitted line, the test-controlled shim path
@@ -777,7 +798,7 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
 
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
-def test_upgrade_marker_written_before_boot(tmp_path, monkeypatch):
+def test_upgrade_marker_written_before_boot(tmp_path, monkeypatch, patched_trust_store):
     from modulo.launcher import upgrade as upgrade_module
 
     data_dir = tmp_path / "data"
@@ -791,6 +812,7 @@ def test_upgrade_marker_written_before_boot(tmp_path, monkeypatch):
     def _dump(data_dir, *, bin_dir=None):
         return _upgrade_dump_seam(data_dir)(data_dir)
 
+    monkeypatch.setattr(upgrade_module, "_bundle_alembic_revisions", lambda _bundle: {"3ab2c1d"})
     monkeypatch.setattr(upgrade_module, "pre_upgrade_dump", _dump)
     with pytest.raises(upgrade_module.UpgradeError):
         upgrade_module.perform_upgrade(
@@ -974,6 +996,7 @@ def test_no_live_process_excludes_the_upgrading_process_itself(tmp_path, monkeyp
     cwd sits inside the scanned incumbent dir on every self-upgrade: without
     the self-exclusion the flow aborts on ITSELF. A real child process with
     cwd inside the scanned dir STILL refuses."""
+    import signal
     import subprocess as subprocess_module
 
     inside = tmp_path / "incumbent"
@@ -983,12 +1006,16 @@ def test_no_live_process_excludes_the_upgrading_process_itself(tmp_path, monkeyp
         cwd=str(inside),
         stdout=subprocess_module.DEVNULL,
         stderr=subprocess_module.DEVNULL,
+        start_new_session=True,
     )
     try:
         with pytest.raises(upgrade_module.UpgradeError, match="live processes remain inside"):
             upgrade_module.no_live_process_inside(inside)
     finally:
-        live_child.terminate()
+        try:
+            subprocess_module.os.killpg(live_child.pid, signal.SIGKILL)
+        except (ProcessLookupError, subprocess_module.OSError):
+            live_child.kill()
         live_child.wait(timeout=10)
     # The self-exclusion: the UPGRADING process's own cwd inside the dir is
     # NOT an offender.

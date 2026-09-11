@@ -664,11 +664,11 @@ def no_live_process_inside(target_root: Path) -> None:
     POSIX-only (the /proc scan); the flow's own platform gate refuses the
     remaining platforms before reaching here.
     """
-    if sys.platform != "posix":
+    if os.name != "posix":
         # The flow's own platform gate refuses non-POSIX first; nothing on
         # that path reads /proc (the Linux-first P1a scan shape).
         return
-    resolved_root = str(target_root)
+    resolved_root = os.path.realpath(str(target_root))
     own_pid = os.getpid()
     own_exe = os.path.realpath(sys.executable)
     offenders: list[str] = []
@@ -677,13 +677,19 @@ def no_live_process_inside(target_root: Path) -> None:
             continue
         pid = int(proc_entry.name)
         try:
-            exe = (proc_entry / "exe").readlink()
-            cwd = (proc_entry / "cwd").readlink()
+            exe = str((proc_entry / "exe").readlink())
+            cwd = str((proc_entry / "cwd").readlink())
         except OSError:
             continue
         if pid == own_pid or os.path.realpath(str(exe)) == own_exe:
             continue
-        if exe.startswith(resolved_root + os.sep) or cwd.startswith(resolved_root + os.sep):
+        cwd_real = os.path.realpath(str(cwd))
+        if (
+            exe == resolved_root
+            or exe.startswith(resolved_root + os.sep)
+            or cwd_real == resolved_root
+            or cwd_real.startswith(resolved_root + os.sep)
+        ):
             offenders.append(f"pid {proc_entry.name} (cwd={cwd}, exe={exe})")
     if offenders:
         raise UpgradeError(
@@ -1001,7 +1007,8 @@ def check_no_downgrade(
     db_heads = list(current_heads)
     if snapshot_dir is not None and (not db_heads or "unknown" in db_heads):
         db_heads = _snapshot_schema_versions(snapshot_dir)
-    if not db_heads or all(head == "unknown" for head in db_heads):
+    unknown = [head for head in db_heads if head == "unknown"]
+    if not db_heads or len(unknown) == len(db_heads):
         raise UpgradeError(
             "cannot verify the database's migration revision(s): neither the live probe nor "
             "the pre-upgrade snapshot recorded them - refusing the downgrade check blind"
