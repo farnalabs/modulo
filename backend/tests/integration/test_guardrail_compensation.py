@@ -254,9 +254,9 @@ class TestCompensateBlockedRunAgainstRealDB:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, test_org)
-            # Seed the executed node output on the new run_node_outputs store
-            # (FAR-583): compensate_blocked_run reads executed nodes from there,
-            # not the legacy runs.outputs_json blob column.
+            # Write the executed-node output to the run_node_outputs store.
+            # Post-B2c/FAR-583 the compensation path reads executed outputs from
+            # that table, not the legacy runs.outputs_json column.
             await replace_run_node_outputs(
                 session,
                 run_id=run_id,

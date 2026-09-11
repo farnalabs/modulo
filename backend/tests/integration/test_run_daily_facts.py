@@ -989,6 +989,18 @@ class TestLiveWriterEnrichment:
             )
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            # Post-B2c/FAR-583 record_run_facts derives output_bytes from the
+            # run_node_outputs store, not the legacy runs.outputs_json column,
+            # so write the run's output there.
+            from modulo.db.crud.run_node_outputs import replace_run_node_outputs
+
+            await replace_run_node_outputs(
+                db_session,
+                run_id=run_id,
+                organisation_id=org,
+                outputs={"node_a": {"result": "ok"}},
+                telemetry=None,
+            )
             run = await db_session.get(Run, run_id)
             assert run is not None
             await record_run_facts(db_session, run)
