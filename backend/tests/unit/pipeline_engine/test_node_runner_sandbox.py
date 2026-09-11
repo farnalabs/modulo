@@ -2166,18 +2166,21 @@ async def test_output_read_failure_still_kills_sandbox():
 
 
 async def test_schema_validation_failure_still_kills_sandbox():
-    """A schema-rejected output returns the failed envelope AND the sandbox is
-    still killed in the finally block (FAR-488b)."""
+    """A schema-rejected output raises the retryable SandboxNodeFailedError AND
+    the sandbox is still killed in the finally block (FAR-488b / FAR-780)."""
     node_def = _base_node_def(timeout_seconds=30)
     node_def["output_schema_json"] = {"required": ["status", "summary"]}
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock(output_json='{"summary": "done"}')
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_run_state())
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
 
-    assert result["output"]["status"] == "failed"
-    assert "schema validation" in result["output"]["summary"]
+    assert "schema validation" in str(excinfo.value)
+    assert "'status'" in str(excinfo.value)
     sandbox.kill.assert_awaited()
 
 
@@ -2339,20 +2342,49 @@ async def test_json_null_output_message_says_null():
 
 
 async def test_schema_validation_summary_names_missing_field():
-    """FAR-487: the schema-rejection summary names the rejected field so an
+    """FAR-487: the schema-rejection message names the rejected field so an
     operator can align the agent's output shape with the schema (no schema
-    loosening)."""
+    loosening). FAR-780: the schema-rejected output RAISES retryably rather
+    than returning a completed-node envelope."""
     node_def = _base_node_def(timeout_seconds=30)
     node_def["output_schema_json"] = {"required": ["status", "summary"]}
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock(output_json='{"summary": "done"}')
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_run_state())
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
 
-    summary = result["output"]["summary"]
-    assert "schema validation" in summary
-    assert "'status'" in summary
+    message = str(excinfo.value)
+    assert "schema validation" in message
+    assert "'status'" in message
+
+
+async def test_schema_validation_missing_pr_url_raises_retryable():
+    """FAR-780 E2B-parity regression: an llm-mode output that lacks a
+    schema-required field (``pr_url``) must fail RETRYABLY — ``runtime_retry``
+    re-dispatches the node in a fresh sandbox — instead of returning the
+    synthetic ``status="failed"`` envelope (modulo_synthetic_failure=True) that
+    completed the node non-retryably and eval-blocked the run
+    (``EvalBlockedError`` is a never-retryable control-flow fault)."""
+    from modulo.core.pipeline_engine import runtime_retry
+
+    node_def = _base_node_def(timeout_seconds=30)
+    node_def["output_schema_json"] = {"required": ["pr_url"]}
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock(output_json='{"summary": "done"}')
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
+
+    assert "pr_url" in str(excinfo.value)
+    assert runtime_retry.failure_event(excinfo.value) == "error"
+    sandbox.kill.assert_awaited()
 
 
 # ---------------------------------------------------------------------------

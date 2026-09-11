@@ -981,6 +981,45 @@ def _build_no_output_message(
     return "\n".join(parts)
 
 
+def _build_schema_failure_message(
+    *,
+    schema_exc: str,
+    sandbox_id: str | None,
+    stdout_raw: str,
+    stderr_raw: str,
+    log_tail: str = "",
+) -> str:
+    """Compose the FAR-780 diagnostic for an output that failed schema validation.
+
+    Mirrors ``_build_no_output_message``'s bounded-tail shape so the raised
+    retryable ``SandboxNodeFailedError`` keeps the schema-rejection reason
+    (which names the rejected field — FAR-487) plus the captured agent
+    stdout/stderr and the E2B log tail visible in the executor's error-detail
+    surface (the message stays under the sanitizer's 5000-char hard cap).
+    """
+    schema_exc = str(schema_exc)
+    stdout_raw = str(stdout_raw)
+    stderr_raw = str(stderr_raw)
+    log_tail = str(log_tail)
+
+    parts = [f"Sandbox agent output failed declared output schema validation: {schema_exc}"]
+    if isinstance(sandbox_id, str) and sandbox_id:
+        parts.append(f"sandbox id: {sandbox_id}")
+    log_tail_cap = _bounded_tail(log_tail, _NO_OUTPUT_LOG_TAIL)
+    if log_tail_cap:
+        parts.append("--- sandbox log tail ---")
+        parts.append(log_tail_cap)
+    stderr_tail = _bounded_tail(stderr_raw, _NO_OUTPUT_STDERR_TAIL)
+    if stderr_tail:
+        parts.append("--- stderr tail ---")
+        parts.append(stderr_tail)
+    stdout_tail = _bounded_tail(stdout_raw, _NO_OUTPUT_STDOUT_TAIL)
+    if stdout_tail:
+        parts.append("--- stdout tail ---")
+        parts.append(stdout_tail)
+    return "\n".join(parts)
+
+
 _PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+")
 
 # Credential redaction for retained raw output (FAR-188 QA round 2): sandbox
@@ -7208,30 +7247,46 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     raise ScriptInvalidOutputError(
                         f"Script-mode output failed schema validation for node '{node_id}': {_schema_exc}"
                     ) from None
-                elapsed = time.monotonic() - start_time
-                _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
-                return _build_sandbox_node_envelope(
+                # FAR-780 (E2B parity — mirrors the bundled runner): an
+                # llm-mode output that violates the node's DECLARED output
+                # contract (a missing schema-required field such as pr_url)
+                # must fail RETRYABLY so runtime_retry re-dispatches the node
+                # in a fresh sandbox. The previous synthetic ``status="failed"``
+                # envelope (modulo_synthetic_failure=True) completed the node
+                # non-retryably: the run proceeded to a blocking eval
+                # (eval.blocked) with the sandbox destroyed and tokens burned,
+                # and the retryable ``sandbox.no_output_json`` path never
+                # fired. The raw agent evidence is retained via the raw-output
+                # marker exactly as the no-output path above (the union of the
+                # output.json file content and the captured stdout), and the
+                # E2B log tail is fetched while the sandbox is STILL ALIVE —
+                # the finally block kills it next.
+                _schema_raw_parts = [p for p in (_normalize_marker_text(raw_output), agent_stdout_raw) if p]
+                await _retain_raw_output_marker(
+                    session_factory,
+                    run_id=run_id,
+                    org_id_raw=org_id,
                     node_id=node_id,
-                    output=_SandboxNodeOutput(
-                        status="failed",
-                        # FAR-487: name the rejected field so an operator can
-                        # align the agent's output shape (e.g. a synthesized
-                        # failed-output) with what the schema accepts —
-                        # without loosening the schema itself.
-                        summary=f"Output failed schema validation: {_schema_exc}",
-                        exit_code=exit_code,
-                        wall_clock_time_ms=int(elapsed * 1000),
-                        cost_estimate_usd=_cost_estimate_usd,
-                        cost_source=output_json,
-                        output_json=output_json,
-                        agent_stdout=agent_stdout,
-                        agent_stderr=agent_stderr,
-                        stdout_length=_stdout_len,
-                        stderr_length=_stderr_len,
-                        attempt_key=attempt_key,
-                        modulo_synthetic_failure=True,
-                    ),
+                    attempt_key=attempt_key,
+                    summary=("Sandbox agent output failed declared output schema validation — raw output retained"),
+                    source="\n".join(_schema_raw_parts),
+                    parse_error=str(_schema_exc),
+                    exit_code=exit_code,
+                    stdout_length=_stdout_len,
+                    stderr_length=_stderr_len,
+                    delivery_sentinel=delivery_sentinel,
                 )
+                _schema_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
+                raise SandboxNodeFailedError(
+                    _build_schema_failure_message(
+                        schema_exc=str(_schema_exc),
+                        sandbox_id=_sandbox_id,
+                        stdout_raw=agent_stdout_raw,
+                        stderr_raw=agent_stderr_raw,
+                        log_tail=_schema_log_tail,
+                    ),
+                    node_id=node_id,
+                ) from None
 
         status: str = "completed" if exit_code == 0 else "failed"
         result_summary: str = ""
