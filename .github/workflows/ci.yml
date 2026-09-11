@@ -751,6 +751,55 @@ jobs:
         if: success()
         run: echo "Branch Fixer trigger check passed (all required checks green or fixer dispatched)."
 
+  notify-main-failure:
+    name: Trigger Branch Fixer on main CI failure
+    # When CI fails on a push or workflow_dispatch to main, dispatch the
+    # Branch Fixer so it creates a fix branch, diagnoses, and raises a PR.
+    # This closes the gap where main CI failures outside the deploy
+    # pre-deploy gate (e.g. SonarCloud, schema freshness, secret scan)
+    # had no automated fix mechanism. The Branch Fixer creates its own
+    # fix branch from main — branchName: main, prNumber: 0 signals this.
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
+    needs: [backend-lint, backend-test, integration-changed, frontend, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    runs-on: ubicloud-standard-2
+    permissions:
+      actions: write
+    steps:
+      - name: Trigger Modulo Branch Fixer
+        # Only dispatch on a real failure. A manually cancelled main run is an
+        # intentional action, not a CI break, so we must not dispatch the
+        # Branch Fixer for it.
+        if: failure()
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          TIMESTAMP=$(date +%s)
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY=$(jq -n \
+            --arg branchName "main" \
+            --argjson prNumber 0 \
+            --arg runUrl "${RUN_URL}" \
+            --arg failureDescription "CI checks failed on main at ${{ github.sha }}. The Branch Fixer should create a fix branch from main, diagnose the failure, fix it, and raise a PR." \
+            '{branchName: $branchName, prNumber: $prNumber, runUrl: $runUrl, failureDescription: $failureDescription}')
+          echo "CI checks failed on main (${{ github.sha }}) -- dispatching Branch Fixer."
+          HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "${BODY}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+          if [ "$HTTP_CODE" = "202" ]; then
+            echo "Branch Fixer accepted (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+          elif [ "$HTTP_CODE" = "429" ]; then
+            echo "::warning::Branch Fixer rate-limited -- $(echo $BODY_RESP | jq -r '.detail // "too many requests"')"
+          else
+            echo "::warning::Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+          fi
+
   notify-pr-review:
     name: Trigger PR Reviewer
     # Mirror the notify-pr-failure pattern above: a job-level `success()`
