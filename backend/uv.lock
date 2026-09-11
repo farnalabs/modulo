@@ -1221,7 +1221,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-playwright" },
     { name = "pytest-recording" },
-    { name = "pytest-testmon" },
     { name = "pytest-xdist" },
     { name = "requests" },
     { name = "respx" },
@@ -1335,7 +1334,6 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "pytest-playwright", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "pytest-recording", marker = "extra == 'dev'", specifier = ">=0.13.0" },
-    { name = "pytest-testmon", marker = "extra == 'dev'", specifier = ">=2.1.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "python-json-logger", specifier = ">=3.1.0" },
     { name = "python-multipart", specifier = ">=0.0.32" },
@@ -4795,19 +4793,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/32/9c/f4027c5f1693847b06d11caf4b4f6bb09f22c1581ada4663877ec166b8c6/pytest_recording-0.13.4.tar.gz", hash = "sha256:568d64b2a85992eec4ae0a419c855d5fd96782c5fb016784d86f18053792768c", size = 26576, upload-time = "2025-05-08T10:41:11.231Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/42/c2/ce34735972cc42d912173e79f200fe66530225190c06655c5632a9d88f1e/pytest_recording-0.13.4-py3-none-any.whl", hash = "sha256:ad49a434b51b1c4f78e85b1e6b74fdcc2a0a581ca16e52c798c6ace971f7f439", size = 13723, upload-time = "2025-05-08T10:41:09.684Z" },
-]
-
-[[package]]
-name = "pytest-testmon"
-version = "2.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "coverage" },
-    { name = "pytest" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4d/1d/3e4230cc67cd6205bbe03c3527500c0ccaf7f0c78b436537eac71590ee4a/pytest_testmon-2.2.0.tar.gz", hash = "sha256:01f488e955ed0e0049777bee598bf1f647dd524e06f544c31a24e68f8d775a51", size = 23108, upload-time = "2025-12-01T07:30:24.76Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/55/ebb3c2f59fb089f08d00f764830d35780fc4e4c41dffcadafa3264682b65/pytest_testmon-2.2.0-py3-none-any.whl", hash = "sha256:2604ca44a54d61a2e830d9ce828b41a837075e4ebc1f81b148add8e90d34815b", size = 25199, upload-time = "2025-12-01T07:30:23.623Z" },
 ]
 
 [[package]]
