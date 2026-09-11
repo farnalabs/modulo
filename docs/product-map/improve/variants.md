@@ -43,6 +43,14 @@ per node, prompt diffs and eval coverage gaps, and a batch-compare flow
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
+  `/variants/compare, /variants/compare/:batchId, /variants/ab-test`: the whole-page view(s) `VariantCompareView.vue, VariantBatchCompareView.vue, ABTestModelsView.vue` render static `data-testid`s that the
+  product map `elements:` inventory already documents, but the surface was not yet
+  guarded against drift. The route now maps to its owning view so a newly shipped
+  testid can no longer silently stay invisible to Remy's docs indexer /
+  `/api/v1/manifest`.
+
 - 2026-08-27: **improve-architecture (product-map walk)** — added this behaviour-tracker
   for the registered manifest feature `feat-variants`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/variants.py` and

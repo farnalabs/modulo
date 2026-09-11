@@ -58,6 +58,14 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
+  `/onboarding`: the whole-page view(s) `OnboardingWizard.vue` render static `data-testid`s that the
+  product map `elements:` inventory already documents, but the surface was not yet
+  guarded against drift. The route now maps to its owning view so a newly shipped
+  testid can no longer silently stay invisible to Remy's docs indexer /
+  `/api/v1/manifest`.
+
 - 2026-09-11: **improve-architecture (product-map walk)** — registered the
   app-layout onboarding surface in the `/` manifest `elements:` inventory: the
   produced/consumed banner (`onboarding/OnboardingBanner.vue` static testids

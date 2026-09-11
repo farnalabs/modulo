@@ -103,6 +103,14 @@ rate-limited by the `TriggerEngine`.
 
 ## QA History
 
+- 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
+  `/settings/triggers`: the whole-page view(s) `SettingsTriggersView.vue` render static `data-testid`s that the
+  product map `elements:` inventory already documents, but the surface was not yet
+  guarded against drift. The route now maps to its owning view so a newly shipped
+  testid can no longer silently stay invisible to Remy's docs indexer /
+  `/api/v1/manifest`.
+
 - 2026-08-29: **improve-architecture (product-map walk)** — new behaviour
   tracker for the registered `feat-triggers` manifest feature (route
   `/settings/triggers`, previously absent from the feature graph). Behaviours
