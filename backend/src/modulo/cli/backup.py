@@ -32,8 +32,10 @@ Data-safety semantics (FAR-672 / ADR 031 Decision 6/7):
   uninitialized targets are exempt — disaster recovery and machine
   migration must keep working.
 * After the database restore, the promoted bootstrap/bootstrap_role posture
-  path re-runs, and the Postgres collation-version table is checked with a
-  hard warning on drift (the compose musl -> native glibc path).
+  path re-runs, and the Postgres collation-version table is checked:
+  an INCOMPATIBLE collation-version drift (different libc family, e.g.
+  the compose musl -> native glibc path) HARD REFUSES the restore, while
+  a compatible-but-older same-family drift warns and proceeds.
 """
 
 from __future__ import annotations
@@ -1083,15 +1085,34 @@ def _ensure_restore_posture(admin_url: str, app_url: str) -> None:
         )
 
 
+def _collation_versions_same_family(stored: str, detected: str) -> bool:
+    """True when two collation versions likely belong to the same family.
+
+    Major-version parity (e.g. glibc 2.28 vs 2.35) is compatible drift —
+    warn and proceed. A family change (e.g. musl 1.2.x -> glibc 2.x) is
+    INCOMPATIBLE: the ordering semantics changed wholesale. Versions that
+    cannot be parsed conservatively refuse (treated as incompatible).
+    """
+    stored_major = stored.split(".", 1)[0]
+    detected_major = detected.split(".", 1)[0]
+    if not (stored_major.isdigit() and detected_major.isdigit()):
+        return False
+    return stored_major == detected_major
+
+
 def _check_collation_versions_sync(raw_url: str) -> None:
-    """Hard warning when pg_collation's stored versions drifted (musl->glibc).
+    """Refuse INCOMPATIBLE collation-version drift; warn and proceed on same-family drift.
 
     The compose -> native path moves a cluster built against an alpine/musl
     Postgres onto a Debian/glibc one: every text index built under the old
     collation version may sort differently under the new one, which corrupts
     index scans silently. Postgres records each collation's creation version
-    in ``pg_collation`` and refuses to notice until asked — ask, and refuse
-    to stay quiet about drift.
+    in ``pg_collation`` and refuses to notice until asked — ask, and:
+
+    * a DIFFERENT version family (musl -> glibc, or an unparsable version)
+      is a HARD REFUSAL with the mismatch and the remediation named;
+    * a compatible-but-older same-family version (glibc 2.28 -> 2.35) warns
+      and proceeds.
     """
     if psycopg is None:
         return
@@ -1107,14 +1128,25 @@ def _check_collation_versions_sync(raw_url: str) -> None:
         _log.warning("collation_version_check_failed error=%s", exc)
         return
     for row in rows:
-        click.echo(
-            f"COLLATION VERSION MISMATCH on collation {row[0]!r} (provider {row[3]}): the cluster was "
-            f"built with collation version {row[1]} but this Postgres runs {row[2]}. This is exactly "
-            "the alpine/musl -> glibc (compose -> native) drift case — text indexes created under the "
-            "old version may be in the wrong order under this libc. Run 'reindexdb --all' after "
-            "verifying the data, or restore onto a cluster matching the original collation version. "
-            "See the postgres 'locale provider / ICU & libc collation versions' documentation.",
-            err=True,
+        name, stored, detected, provider = row[0], str(row[1]), str(row[2]), row[3]
+        if _collation_versions_same_family(stored, detected):
+            click.echo(
+                f"COLLATION VERSION MISMATCH on collation {name!r} (provider {provider}): the cluster was "
+                f"built with collation version {stored} but this Postgres runs {detected}. Text indexes "
+                "created under the old version may be in the wrong order under this libc. Run 'reindexdb "
+                "--all' after verifying the data. See the postgres 'locale provider / ICU & libc collation "
+                "versions' documentation.",
+                err=True,
+            )
+            continue
+        raise click.ClickException(
+            f"COLLATION VERSION INCOMPATIBLE on collation {name!r} (provider {provider}): the cluster was "
+            f"built under collation version {stored} but this Postgres runs {detected} — a DIFFERENT "
+            "collation family (the alpine/musl -> glibc compose -> native drift case). Text indexes built "
+            "under the source collation can be silently mis-ordered, so the restore is REFUSED. Remediation: "
+            "restore onto a target cluster whose libc/collation family matches the source, or rebuild every "
+            "text index ('reindexdb --all') after reviewing the restored data. See the postgres 'locale "
+            "provider / ICU & libc collation versions' documentation."
         )
 
 
@@ -1430,8 +1462,9 @@ def restore(
     transaction, re-inserts checkpoint_blobs from the JSON export,
     re-encrypts credentials if the FERNET_KEY has changed, re-ADOPTS the
     launcher artefacts only after the database restore SUCCEEDS, re-runs the
-    promoted bootstrap role-posture check, and hard-warns on collation-version
-    drift. With --dry-run, validates integrity and previews every step
+    promoted bootstrap role-posture check, and checks collation-version drift
+    (incompatible families REFUSE the restore; same-family drift warns and
+    proceeds). With --dry-run, validates integrity and previews every step
     without touching the database. Against a launcher data dir, takes the
     exclusive lock (a still running launcher refuses with its holder PID).
     """

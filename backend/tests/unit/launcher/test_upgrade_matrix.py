@@ -12,9 +12,10 @@ green, every refusal keeping the swap pointer on the previous release:
   restoring the previous version; doctor stays green.
 * downgrade refusal (a db revision ahead of the target's head).
 * PG-major mismatch refusal (17 vs the data dir's 16).
-* compose->native collation drift: an incompatible cluster hard-warns
-  (the FAR-672 contract), a compatible one stays silent, and a broken
-  probe degrades to an honest logged skip (never crash).
+* compose->native collation drift: an incompatible cluster (different libc
+  family, FAR-672 contract) REFUSES the restore, a compatible-but-older
+  same-family drift warns and proceeds, a no-drift cluster stays silent,
+  and a broken probe degrades to an honest logged skip (never crash).
 * retention across repeated upgrades: the last two version dirs are
   kept, the state.json-referenced dir and the resolved ``current``
   target are never deleted, and the old end rotates away.
@@ -31,6 +32,7 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
 
 from modulo.launcher import upgrade as upgrade_module
@@ -374,8 +376,23 @@ def _run_collation_check(rows: list[tuple[Any, ...]]) -> None:
 
 
 @_requires_cli_env
-def test_collation_incompatible_drift_hard_warns_then_proceeds(capsys: pytest.CaptureFixture[str]) -> None:
-    """The incompatible case: MISMATCH is printed (hard warning), no raise."""
+def test_collation_incompatible_drift_hards_refuses_the_restore() -> None:
+    """The incompatible case: a DIFFERENT collation family (musl 1.2.x stored
+    vs glibc 2.35 detected — the compose -> native drift) hard-refuses with
+    the mismatch and the remediation named."""
+    with pytest.raises(click.ClickException, match=r"COLLATION VERSION INCOMPATIBLE.*REFUSED") as excinfo:
+        _run_collation_check([("en_US.UTF-8", "1.2.5", "2.35", "c")])
+    message = str(excinfo.value)
+    assert "en_US.UTF-8" in message
+    assert "1.2.5" in message
+    assert "2.35" in message
+    assert "reindexdb" in message
+
+
+@_requires_cli_env
+def test_collation_compatible_drift_warns_then_proceeds(capsys: pytest.CaptureFixture[str]) -> None:
+    """The compatible-but-older case: same family (glibc 2.28 -> 2.35) prints
+    the MISMATCH warning and RAISES NOTHING (proceeds)."""
     _run_collation_check([("en_US.UTF-8", "2.28", "2.35", "c")])
     output = capsys.readouterr()
     assert "COLLATION VERSION MISMATCH" in output.err
@@ -383,7 +400,7 @@ def test_collation_incompatible_drift_hard_warns_then_proceeds(capsys: pytest.Ca
 
 
 @_requires_cli_env
-def test_collation_compatible_stays_quiet(capsys: pytest.CaptureFixture[str]) -> None:
+def test_collation_no_drift_stays_quiet(capsys: pytest.CaptureFixture[str]) -> None:
     """No drift rows -> no output at all (silent pass)."""
     _run_collation_check([])
     output = capsys.readouterr()
