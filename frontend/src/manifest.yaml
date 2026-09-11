@@ -3958,6 +3958,8 @@ features:
             - "[x] The run detail response (GET /api/v1/runs/{id}) surfaces a structured warnings list ({\"code\", \"severity\", \"message\"}) derived from the run's cost_breakdown; a missing agent model-cost self-report emits code missing_self_report with severity warning"
             - "[x] The runs-list item (GET /api/v1/runs) carries warnings_count so the runs table renders a warning badge without loading the full run (computed from a single deferred cost_breakdown load, never N+1)"
             - "[x] The run detail page surfaces run-level warnings in a single top strip (id=warnings) that scrolls into view when navigated from the list badge (?warn=1) or a #warnings deep link"
+            # Masked input payload on run detail (list-shape parity)
+            - "[x] The run detail response (GET /api/v1/runs/{id}) includes the run's input_payload masked through the same sensitive-key mask as the list item's input_payload (parity with GET /api/v1/runs) — persisted state is already post-redaction and the mask is applied again defensively at serialization; a Null or corrupt (non-dict) stored value degrades to null, never a 500"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered
