@@ -1761,8 +1761,7 @@ def _watchdog(
         stdout_percentage_delta=stdout_ratio,
         stream_broker=None,
         drained_chunks=[],
-        wallclock_budget_seconds=wallclock_budget_seconds,
-        start_time=time.monotonic(),
+        wall_clock=nr._WatchdogWallClock(wallclock_budget_seconds, time.monotonic()),
     )
 
 

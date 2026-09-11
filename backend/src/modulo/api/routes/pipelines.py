@@ -65,6 +65,7 @@ from modulo.core.reports.quality_report import (
 from modulo.core.run_context.autonomy import (
     autonomy_change_payload,
 )
+from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
 from modulo.core.team_visibility import (
     connector_team_mismatch_detail,
     extract_connector_bindings,
@@ -657,7 +658,7 @@ class CapabilityScope(BaseModel):
     )
 
 
-class PipelineGraphNode(BaseModel):
+class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     id: uuid.UUID
     node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join"] = "agent"
     agent_id: uuid.UUID | None = None
@@ -838,34 +839,6 @@ class PipelineGraphNode(BaseModel):
         description="Max retained stdout/stderr bytes when stdout_retention_mode=='full'. "
         "Ignored in 'tail' mode. Must be a positive integer. Only valid on sandbox_agent nodes.",
     )
-
-    @field_validator("stdout_max_bytes", mode="before")
-    @classmethod
-    def _validate_stdout_max_bytes(cls, v: Any) -> Any:
-        """Mirror of node_runner._coerce_stdout_max_bytes but as a save-time gate.
-
-        Reject bools (``isinstance(bool, int)``), non-positive, non-integer and
-        non-finite values so a smuggled value can never raise the retention cap.
-        Ints are taken exactly (no float coercion) so values above 2**53 do not
-        lose precision.
-        """
-        if v is None:
-            return v
-        if isinstance(v, bool):
-            raise ValueError("stdout_max_bytes must be a positive integer")
-        try:
-            if isinstance(v, int):
-                value = v
-            else:
-                f = float(v)
-                if not f.is_integer():
-                    raise ValueError
-                value = int(f)
-        except (TypeError, ValueError, OverflowError):
-            raise ValueError("stdout_max_bytes must be a positive integer") from None
-        if value <= 0:
-            raise ValueError("stdout_max_bytes must be a positive integer")
-        return value
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod

@@ -5190,6 +5190,18 @@ def _emit_script_span_event(name: str, attrs: dict[str, Any]) -> None:
         pass
 
 
+@dataclass(frozen=True)
+class _WatchdogWallClock:
+    """Wall-clock spend budget + node-start monotonic time (FAR-296 Phase 4a).
+
+    Bundled so ``_SandboxWatchdog.__init__`` does not take a separate parameter
+    for each loosely-related timing input.
+    """
+
+    budget_seconds: int | None
+    start_time: float
+
+
 class _SandboxWatchdog:
     """Per-run sandbox watchdog + live-streaming state (FAR-310 chunk 2b-2)."""
 
@@ -5207,8 +5219,7 @@ class _SandboxWatchdog:
         stdout_percentage_delta: float | None,
         stream_broker: RunEventBroker | None,
         drained_chunks: list[str],
-        wallclock_budget_seconds: int | None,
-        start_time: float,
+        wall_clock: _WatchdogWallClock,
         drain_window_bytes: int | None = None,
     ) -> None:
         if sandbox is None:
@@ -5239,8 +5250,8 @@ class _SandboxWatchdog:
         # the elapsed wall-clock against this budget and kills the sandbox when
         # exceeded (script mode only). ``start_time`` is the monotonic clock at
         # node start so the elapsed measurement survives the provisioning phase.
-        self._wallclock_budget_seconds = wallclock_budget_seconds
-        self._start_time = start_time
+        self._wallclock_budget_seconds = wall_clock.budget_seconds
+        self._start_time = wall_clock.start_time
         # FAR-792: the drain window scales with the per-node retention cap in
         # full mode so the retained tail can actually reach the configured
         # ``stdout_max_bytes`` (a 512KB drain window would starve a 5MB cap).
@@ -6752,8 +6763,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 stdout_percentage_delta=stdout_percentage_delta,
                 stream_broker=_stream_broker,
                 drained_chunks=_drained_chunks,
-                wallclock_budget_seconds=wallclock_budget_seconds,
-                start_time=start_time,
+                wall_clock=_WatchdogWallClock(wallclock_budget_seconds, start_time),
                 # FAR-792: only "full" mode widens the drain window to the node
                 # cap (so 5MB can actually be retained); "tail" keeps the legacy
                 # ``_MAX_DRAIN_WINDOW`` bound (and honors test patches of it).
@@ -7660,7 +7670,7 @@ def _coerce_stdout_max_bytes(raw: Any) -> int | None:
         value = float(raw)
     except (TypeError, ValueError):
         return None
-    if not value.is_integer() or not value > 0 or value == float("inf"):
+    if not value.is_integer() or value <= 0 or value == float("inf"):
         return None
     return int(value)
 

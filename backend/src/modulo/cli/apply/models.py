@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
+
 API_VERSION_PREFIX = "modulo.dev/v"
 API_VERSION_SUPPORTED_MAJOR = 1
 
@@ -226,7 +228,7 @@ class ApplyGraphCapabilityScope(BaseModel):
     context_scope: list[str] | None = None
 
 
-class ApplyGraphNode(BaseModel):
+class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     """A pipeline graph node in the apply config.
 
     Same shape as the API ``PipelineGraphNode`` EXCEPT the agent is referenced
@@ -302,28 +304,6 @@ class ApplyGraphNode(BaseModel):
     # the same positive-integer gate as the API model.
     stdout_retention_mode: Literal["tail", "full"] | None = None
     stdout_max_bytes: int | None = None
-
-    @field_validator("stdout_max_bytes", mode="before")
-    @classmethod
-    def _validate_stdout_max_bytes(cls, v: Any) -> Any:
-        """Mirror of the API PipelineGraphNode positive-integer gate (FAR-792)."""
-        if v is None:
-            return v
-        if isinstance(v, bool):
-            raise ValueError("stdout_max_bytes must be a positive integer")
-        try:
-            if isinstance(v, int):
-                value = v
-            else:
-                f = float(v)
-                if not f.is_integer():
-                    raise ValueError
-                value = int(f)
-        except (TypeError, ValueError, OverflowError):
-            raise ValueError("stdout_max_bytes must be a positive integer") from None
-        if value <= 0:
-            raise ValueError("stdout_max_bytes must be a positive integer")
-        return value
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod
