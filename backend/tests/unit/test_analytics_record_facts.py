@@ -38,7 +38,7 @@ from modulo.core.analytics import (
 from modulo.db.crud.run_node_outputs import RunBlobs
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
-from tests.unit._legacy_seed import seed_legacy_blobs
+from tests.unit._store_seed import seed_run_blobs
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
 
@@ -49,11 +49,6 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         tables = [t for t in Base.metadata.sorted_tables if t.name in _TABLE_NAMES]
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
-        # FAR-583 B1: the legacy blob columns left the ORM mapping but remain
-        # IN THE DATABASE until B2b — the repo's raw Core legacy-table readers
-        # select them; reproduce the migrated shape.
-        for legacy_col in ("outputs_json", "node_telemetry_json", "raw_output_markers"):
-            await conn.exec_driver_sql(f"ALTER TABLE runs ADD COLUMN {legacy_col} JSON")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield eng
     await eng.dispose()
@@ -78,17 +73,24 @@ async def _seed_run(session: AsyncSession, **blob_overrides: object) -> Run:
         "status": "complete",
     }
     values.update(blob_overrides)
-    # FAR-583 B1: the legacy blob columns no longer map on the ORM — the
-    # seeding writes them through the repo's raw Core legacy table (the same
-    # parameterised-SQL surface the production fallback readers use).
-    legacy_values = {
-        key: values.pop(key) for key in ("outputs_json", "node_telemetry_json", "raw_output_markers") if key in values
-    }
+    # B2b: the legacy blob columns are gone - the blobs land on the
+    # run_node_outputs store through the repo writer.
+    outputs = values.pop("outputs_json", None)
+    telemetry = values.pop("node_telemetry_json", None)
+    markers = values.pop("raw_output_markers", None)
+    org_id = values["organisation_id"]
     run = Run(**values)
     async with session.begin():
         session.add(run)
         await session.flush()
-        await seed_legacy_blobs(session, run.id, **legacy_values)
+        await seed_run_blobs(
+            session,
+            run.id,
+            outputs=outputs,
+            telemetry=telemetry,
+            markers=markers,
+            organisation_id=org_id,
+        )
     return run
 
 
@@ -224,7 +226,7 @@ class TestFactByteHelpers:
 
 
 class TestFactRunBlobs:
-    """qa M14: ONE read_run_blobs_with_fallback call serves BOTH byte facts —
+    """qa M14: ONE read_run_blobs call serves BOTH byte facts —
     the EMPTY fallback (legacy column when the new table has no rows) and the
     fail-open read-failure degrade are pinned against real SQLite."""
 

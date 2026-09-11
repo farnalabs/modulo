@@ -1096,7 +1096,7 @@ class TestRunPostCorrectionEval:
         reassembles from the mocked run's attributes, exactly as the real
         reader serves the reassembled legacy shapes."""
         return patch(
-            "modulo.core.feedback_manager.read_run_blobs_with_fallback",
+            "modulo.core.feedback_manager.read_run_blobs",
             new=AsyncMock(
                 return_value=RunBlobs(
                     outputs=run.outputs_json,

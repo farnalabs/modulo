@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.run_outputs_dualwrite import guard_dual_write
 from modulo.db.crud.run import update_run_status
-from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs_with_fallback
+from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
 from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
@@ -144,13 +144,14 @@ async def _insert_run(
 
 
 async def _fetch_run_row(db_engine: AsyncEngine, run_id: uuid.UUID) -> dict[str, Any]:
-    """Read the run row's status/blob columns over a superuser connection."""
+    """Read the run row's status columns over a superuser connection."""
     async with db_engine.connect() as conn:
         row = (
             await conn.execute(
                 text(
-                    "SELECT status, error_code, outputs_json, node_telemetry_json, completed_at "
-                    "FROM runs WHERE id = :rid"
+                    # B2b: the runs blob columns are GONE (migration 0212) -
+                    # only the status surface remains on the runs row.
+                    "SELECT status, error_code, completed_at FROM runs WHERE id = :rid"
                 ),
                 {"rid": str(run_id)},
             )
@@ -159,9 +160,7 @@ async def _fetch_run_row(db_engine: AsyncEngine, run_id: uuid.UUID) -> dict[str,
     return {
         "status": row[0],
         "error_code": row[1],
-        "outputs_json": row[2],
-        "node_telemetry_json": row[3],
-        "completed_at": row[4],
+        "completed_at": row[2],
     }
 
 
@@ -193,7 +192,7 @@ async def _fetch_error_events(db_engine: AsyncEngine, org_id: uuid.UUID, pattern
 async def _read_blobs(rls_session: AsyncSession, tenant: _Tenant, run_id: uuid.UUID) -> Any:
     async with rls_session.begin():
         await set_rls_org(rls_session, tenant.org_id)
-        return await read_run_blobs_with_fallback(rls_session, run_id=run_id, organisation_id=tenant.org_id)
+        return await read_run_blobs(rls_session, run_id=run_id, organisation_id=tenant.org_id)
 
 
 def _hard_failure() -> OperationalError:
@@ -251,8 +250,6 @@ async def test_success_path_populates_both_stores_byte_identical(
     # ``runs`` blob columns are never touched (they exist until B2b's migration
     # 0194 and stay NULL post-B1), and the reassembled read returns the written
     # payloads byte-identical through the JSONB round-trip.
-    assert legacy["outputs_json"] is None
-    assert legacy["node_telemetry_json"] is None
     assert json.dumps(blobs.outputs, default=str) == json.dumps(outputs, default=str)
     assert json.dumps(blobs.telemetry, default=str) == json.dumps(telemetry, default=str)
     assert blobs.outputs == outputs
@@ -288,11 +285,6 @@ async def test_shrinking_replace_through_orm_branch(
     rows = await _fetch_new_table_rows(db_engine, run_id)
     node_ids = sorted(r[0] for r in rows if r[1] == "__final__")
     assert node_ids == ["a"]
-    legacy = await _fetch_run_row(db_engine, run_id)
-    # FAR-583 B1: the REPLACE shrink deletes the absent store rows; the legacy
-    # column is never written (stays NULL until B2b drops it).
-    assert legacy["outputs_json"] is None
-    assert legacy["node_telemetry_json"] is None
 
 
 async def test_shrinking_replace_through_fenced_branch(
@@ -324,9 +316,6 @@ async def test_shrinking_replace_through_fenced_branch(
     rows = await _fetch_new_table_rows(db_engine, run_id)
     node_ids = sorted(r[0] for r in rows if r[1] == "__final__")
     assert node_ids == ["a"]
-    legacy = await _fetch_run_row(db_engine, run_id)
-    # FAR-583 B1: the fenced branch's store leg is the only write.
-    assert legacy["outputs_json"] is None
 
 
 async def test_fenced_rowcount_zero_writes_no_new_table_rows(
@@ -348,7 +337,6 @@ async def test_fenced_rowcount_zero_writes_no_new_table_rows(
     assert not await _fetch_new_table_rows(db_engine, run_id)
     legacy = await _fetch_run_row(db_engine, run_id)
     assert legacy["status"] == "running"
-    assert legacy["outputs_json"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -386,8 +374,6 @@ async def test_fail_closed_abort_legacy_row_survives_and_orchestration_terminali
     legacy = await _fetch_run_row(db_engine, run_id)
     assert legacy["status"] == "failed"
     assert legacy["error_code"] == "dual_write_failed"
-    assert legacy["outputs_json"] is None
-    assert legacy["node_telemetry_json"] is None
     assert legacy["completed_at"] is not None
     # NO orphan new-table row.
     assert not await _fetch_new_table_rows(db_engine, run_id)
@@ -439,7 +425,6 @@ async def test_fenced_abort_claim_token_fence_honored(
     legacy = await _fetch_run_row(db_engine, run_id)
     assert legacy["status"] == "failed"
     assert legacy["error_code"] == "dual_write_failed"
-    assert legacy["outputs_json"] is None
 
 
 async def test_unknown_run_is_never_transitioned_by_the_orchestration(
@@ -468,7 +453,6 @@ async def test_unknown_run_is_never_transitioned_by_the_orchestration(
 
     legacy = await _fetch_run_row(db_engine, run_id)
     assert legacy["status"] == "unknown"
-    assert legacy["outputs_json"] is None
     # The event still fires (evidence-only for an unknown run).
     events = await _fetch_error_events(db_engine, dual_write_tenant.org_id, "%dual-write failed%")
     assert len(events) == 1

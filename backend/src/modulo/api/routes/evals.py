@@ -47,7 +47,7 @@ from modulo.core.eval_engine.suite_run import (
 )
 from modulo.core.node_output_split import node_return
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
-from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
@@ -1555,7 +1555,7 @@ async def _load_node_sample_output(
     FAR-583 read-switch: the blobs reassemble from run_node_outputs (with the
     legacy fallback) inside the caller's transaction.
     """
-    blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=principal.organisation_id)
+    blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
     outputs = blobs.outputs or {}
     node_output = (
         node_return(outputs, blobs.telemetry, str(node_id)) or node_return(outputs, blobs.telemetry, node_id.hex) or {}

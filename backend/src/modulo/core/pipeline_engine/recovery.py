@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
 from modulo.db.crud.run import _input_hash, get_run
-from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
@@ -145,7 +145,7 @@ async def recover_node(
     run = await _fetch_locked_run(session, run_id)
     _require_recoverable_status(run, run_id)
     node_type = await _resolve_node_type(session, run, run_id, node_id)
-    blobs = await read_run_blobs_with_fallback(session, run_id=run_id, organisation_id=run.organisation_id)
+    blobs = await read_run_blobs(session, run_id=run_id, organisation_id=run.organisation_id)
     _require_node_not_completed(run, run_id, node_id, blobs)
     await _acquire_recovery_lock(session, run, run_id)
 
@@ -288,9 +288,9 @@ async def _apply_recovery_markers(
     chokepoints).
     """
     from modulo.db.crud.run import write_run_outputs_from_run
-    from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+    from modulo.db.crud.run_node_outputs import read_run_blobs
 
-    stored = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+    stored = await read_run_blobs(session, run_id=run.id, organisation_id=run.organisation_id)
     outputs: dict[str, Any] = dict(stored.outputs) if stored.outputs else {}
     telemetry: dict[str, Any] = dict(stored.telemetry) if stored.telemetry else {}
 

@@ -676,9 +676,9 @@ async def classify_and_persist_run(
         # the fenced / work-intact / reconcile paths re-read with
         # populate_existing or FOR UPDATE), so no in-session unsaved state is
         # relied on. ONE batched repo query — never per-node lazy loads.
-        from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+        from modulo.db.crud.run_node_outputs import read_run_blobs
 
-        blobs = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=run.organisation_id)
+        blobs = await read_run_blobs(session, run_id=run.id, organisation_id=run.organisation_id)
         result = await asyncio.to_thread(
             classify_run,
             run.status,

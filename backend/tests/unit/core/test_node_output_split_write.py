@@ -147,7 +147,7 @@ async def test_finalize_already_pure_rows_idempotent_noop() -> None:
     with (
         patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            "modulo.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
@@ -199,7 +199,7 @@ async def test_cancel_path_does_not_resplit_pure_rows() -> None:
     with (
         patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            "modulo.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
@@ -295,7 +295,7 @@ async def test_recovery_fields_survive_later_finalize_merge() -> None:
     with (
         patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs_with_fallback",
+            "modulo.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
         patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs2,

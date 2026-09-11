@@ -28,7 +28,7 @@ from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.crud.run_node_outputs import (
     DualWriteError,
-    read_legacy_run_blobs,
+    read_run_node_outputs_raw,
     replace_run_node_outputs,
 )
 from modulo.db.crud.team_scope import team_scope_clause
@@ -1603,10 +1603,10 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID, *, organisation_id: 
 # Deliberately NOT deferred:
 # * ``input_payload`` — masked into every REST list item (runs.py _build_list_item).
 #
-# FAR-583 B1: the three legacy blob columns (outputs_json / node_telemetry_json /
-# raw_output_markers) are gone from this tuple AND from the ORM model — their
-# mapping is cut, and B2b's migration 0194 drops them from the database; the
-# ``run_node_outputs`` store carries the payloads now.
+# FAR-583 (B2b): the three runs blob columns (outputs_json / node_telemetry_json /
+# raw_output_markers) are GONE from the database entirely (migration 0212 -
+# after B1 cut the ORM mapping); the run_node_outputs store carries the
+# payloads now.
 #
 # ``cost_breakdown`` IS deferred. Its only list-path reader is the MCP
 # ``modulo://pipelines/{id}/runs`` resource (mcp_server._format_run_line), which
@@ -1933,10 +1933,10 @@ def _apply_run_cost_fields(run: Run, update: _RunStatusUpdate) -> None:
 def _apply_run_output_fields(run: Run, update: _RunStatusUpdate) -> None:
     """Apply the token-usage payload.
 
-    FAR-583 B1: the outputs/telemetry payloads NO LONGER write the legacy
-    ``runs`` blob columns (the ORM mapping is cut) — the incoming dicts are
-    persisted on ``run_node_outputs`` by the primary repo write the caller
-    performs right after (:func:`write_run_outputs_from_run`).
+    FAR-583 B2b: the outputs/telemetry payloads have NO whole-run storage on
+    ``runs`` (the columns are dropped) - the incoming dicts are persisted on
+    ``run_node_outputs`` by the primary repo write the caller performs right
+    after (:func:`write_run_outputs_from_run`).
     """
     if update.node_token_usage is not None:
         run.node_token_usage = update.node_token_usage
@@ -1980,22 +1980,22 @@ async def write_run_outputs_from_run(
 ) -> None:
     """The PRIMARY repo store write of a run's outputs/telemetry blobs.
 
-    B1 contract cut (FAR-583): this is no longer a dual-write. The legacy
-    ``runs`` blob columns are no longer written (their ORM mapping is cut and
-    their SET clauses are removed from the fenced UPDATE) — the
-    ``run_node_outputs`` REPLACE write (:func:`replace_run_node_outputs` —
-    upsert ``__final__``/metadata rows + delete-absent ordered AFTER upserts,
-    metadata flags re-derived) inside a SAVEPOINT in the caller's transaction
-    is the ONLY store, and it FAILS LOUDLY when it fails. The pre-B1 name was
+    B1 contract cut (FAR-583): this is not a dual-write. And B2b the ``runs``
+    blob columns are GONE (their SET clauses are absent from the fenced
+    UPDATE as well) - the ``run_node_outputs`` REPLACE write
+    (:func:`replace_run_node_outputs` - upsert ``__final__``/metadata rows
+    + delete-absent ordered AFTER upserts, metadata flags re-derived) inside
+    a SAVEPOINT in the caller's transaction is the ONLY store, and it FAILS
+    LOUDLY when it fails. The pre-B1 name was
     ``dual_write_run_node_outputs``; renamed to reflect primacy.
 
     FAR-583-ERA semantics that survive the cut:
 
     * ``inherited_outputs`` / ``inherited_telemetry`` still carry the
-      caller-captured PRE-WRITE legacy dicts (qa M19) so inherited
-      ``__``-prefixed keys are filtered from the store write instead of
-      raising (kept on the legacy column — which only pre-B1 data carries
-      until B2b's repair migrates it).
+      caller-captured PRE-WRITE stored dicts (qa M19 - read from the
+      CURRENT new-table state since B2b) so inherited ``__``-prefixed
+      keys are filtered from the store write instead of raising (their
+      rows SURVIVE the REPLACE).
     * On store failure: ONE bounded in-session retry for the retryable
       SQLSTATEs (statement timeout only — see
       ``_DUAL_WRITE_RETRYABLE_SQLSTATES``); a transaction-aborting or hard
@@ -2004,8 +2004,8 @@ async def write_run_outputs_from_run(
       intact-but-poisoned so ITS rollback completes and the run is never
       half-written (the core-side orchestrator terminalizes the run and
       re-raises past the caller's transaction).
-    * The former org-less silent skip is GONE: with the legacy columns no
-      longer written, a silently skipped store write would be data loss. An
+    * The former org-less silent skip is GONE: with the store the only
+      holder of the payloads, a silently skipped store write would be data loss. An
       ORG-CONTEXT failure raises :class:`DualWriteError` too (qa iteration 1
       Major 1): a session with NO RLS org context or a MISMATCHED one is
       wrapped as ``DualWriteError(..., origin='rls_precheck')`` (carrying both
@@ -2014,11 +2014,9 @@ async def write_run_outputs_from_run(
       ``OutputsRlsMismatch`` escape (no terminalize, no event) would violate
       the guard obligation below. The raw
       :class:`OutputsRlsMismatch` is chained as ``__cause__`` for diagnostics.
-    * The kill-switch is GONE (removed with its machinery at B2a): per the B1
-      design there is no emergency OFF for this write — the fallback readers
-      still serve pre-B1 legacy rows so a genuinely broken store write
-      surfaces through the loud abort, and B2b's repair migrates
-      self-healable stragglers.
+    * The kill-switch is GONE (removed with its machinery at B2a): there is
+      no emergency OFF for this write - a failure surfaces through the
+      loud abort alone.
     """
     if outputs is None and telemetry is None:
         return
@@ -2176,13 +2174,11 @@ async def update_run_status(
         )
         return run
     run.status = status
-    # FAR-583 qa-M19: capture the PRE-WRITE legacy blob dicts BEFORE the
-    # assignments below — the primary store write filters inherited
+    # FAR-583 qa-M19 (B2b): capture the PRE-WRITE stored blob dicts BEFORE — the primary store write filters inherited
     # ``__``-prefixed keys against exactly these (kept on the legacy column,
-    # which only pre-B1 data still carries until B2b's repair) so a
-    # legacy-carried sentinel id can never wedge the run's terminalization.
-    # B1: the capture reads the legacy columns via the raw parameterised SQL
-    # reader (the ORM mapping is cut) — one extra SELECT, only when the
+    # which the repair migration re-mapped into the new table) so an
+    # inherited sentinel id can never wedge the run's terminalization.
+    # B2b: the capture reads the CURRENT new-table state via the repo reader — one extra SELECT, only when the
     # payload actually carries blobs (same shape as the fenced branch).
     pre_write_outputs: Any = None
     pre_write_telemetry: Any = None
@@ -2190,11 +2186,14 @@ async def update_run_status(
         # getattr mirrors the store write below (a fake Run stand-in in unit
         # tests carries no organisation_id; an org-less capture reads across
         # the row set the reader's tenant compensation covers).
-        legacy = await read_legacy_run_blobs(
+        # B2b: the capture reads the CURRENT new-table state (the runs blob
+        # columns are gone; the inherited-sentinel filter speaks new-table
+        # row ids now).
+        stored = await read_run_node_outputs_raw(
             session, run_id=run_id, organisation_id=getattr(run, "organisation_id", None)
         )
-        pre_write_outputs = legacy.outputs
-        pre_write_telemetry = legacy.telemetry
+        pre_write_outputs = stored.outputs
+        pre_write_telemetry = stored.telemetry
     _apply_run_claim_fields(run, status, update)
     _apply_run_error_fields(run, update)
     _apply_run_cost_fields(run, update)
@@ -2276,7 +2275,7 @@ async def _update_run_status_fenced(
     # FAR-583 qa-M19: the PRE-WRITE legacy blob dicts for the fenced branch
     # are captured AFTER the fenced UPDATE (just below, next to the store
     # write, where *refreshed_run* carries the row's organisation_id): the
-    # fenced UPDATE's SET clauses never touch the legacy blob columns, so the
+    # fenced UPDATE's SET clauses never touch the blob stores, so the
     # capture is pre-write-equivalent while still binding the tenant
     # predicate the raw reader compensates with. Only when the payload
     # actually carries blobs — a fenced write without outputs/telemetry never
@@ -2318,14 +2317,17 @@ async def _update_run_status_fenced(
     refreshed_run = refreshed.scalar_one_or_none()
     if refreshed_run is None:
         return None
-    # The pre-write legacy capture (FAR-583 qa-M19): the inherited-key filter
-    # compares against these; the tenant predicate binds the row's org.
+    # The pre-write capture (FAR-583 qa-M19, B2b): the inherited-key filter
+    # compares against the CURRENT new-table state; the tenant predicate
+    # binds the row's org.
     pre_write_outputs: Any = None
     pre_write_telemetry: Any = None
     if update.outputs_json is not None or update.node_telemetry_json is not None:
-        legacy = await read_legacy_run_blobs(session, run_id=run_id, organisation_id=refreshed_run.organisation_id)
-        pre_write_outputs = legacy.outputs
-        pre_write_telemetry = legacy.telemetry
+        # B2b: the capture reads the CURRENT new-table state (see the ORM
+        # branch comment).
+        stored = await read_run_node_outputs_raw(session, run_id=run_id, organisation_id=refreshed_run.organisation_id)
+        pre_write_outputs = stored.outputs
+        pre_write_telemetry = stored.telemetry
     # FAR-583 B1 primary write: fenced branch — the REPLACE leg runs ONLY when
     # the fence accepted the write (rowcount 1, checked above). The retry +
     # fail-loud contract is the shared helper's; a DualWriteError here rolls

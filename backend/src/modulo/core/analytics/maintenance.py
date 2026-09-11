@@ -186,45 +186,33 @@ def _side_agg_subq(side: Any) -> Any:
     )
 
 
-def _reassembled_bytes_expr(node_side: Any, legacy_side: Any, empty_flag: Any) -> Any:
-    """Byte size of one reassembled side — the SQL-site formula.
+def _reassembled_bytes_expr(node_side: Any, empty_flag: Any) -> Any:
+    """Byte size of one reassembled side - the SQL-site formula.
 
     BOTH formulas are deliberate (FAR-583) and documented here:
 
-    * THIS file (set-based SQL): ``length(cast(reassembled AS text))`` — the
+    * THIS file (set-based SQL): ``length(cast(reassembled AS text))`` - the
       reassembled jsonb rendered to text, keys in jsonb canonical order.
     * the live writer (core/analytics/__init__.py, Python site):
       ``len(json.dumps(reassembled, default=str))`` over the repo reader's
-      reassembled dict. The two are different measures (jsonb text spacing vs
-      json.dumps spacing) exactly as they were against the legacy columns;
-      a parity test pins the Python formula against legacy bytes.
+      reassembled dict. The two are different measures (jsonb text spacing
+      vs json.dumps spacing); a parity test pins the two against each other
+      for the simple-ASCII shape (the post-B2b LEGACY fallback is GONE with
+      the dropped columns, so the reader formula is the only reference
+      left).
 
     Case order mirrors the repo reader: the metadata empty-flag wins, then
-    the node-row aggregation, else the LEGACY column (the EMPTY fallback for
-    pre-sweep stragglers — this term MUST be dropped at B2b when the legacy
-    columns are dropped, or the fact backfill breaks on the missing column).
-
-    The legacy side is a ``literal_column`` referencing the OUTER ``runs``
-    table (FAR-583 B1: the ORM mapping is cut and the raw Core legacy table
-    is a separate Table object — a separate Table would render a SECOND
-    ``runs`` FROM entry and Postgres rejects "table name runs specified more
-    than once"; a literal column binds to the statement's existing runs
-    alias instead). Constant identifier text — never user input.
-
-    CONSTRAINT of this literal_column technique (qa iteration 1 rider): the host
-    statement must have exactly ONE, UNALIASED ``runs`` FROM entry — the
-    literal column text has no alias awareness and will bind to whatever
-    runs reference the compiled statement exposes. This module is
-    Postgres-only (AT TIME ZONE date math, jsonb operators), which keeps the
-    compilation surface predictable; never reuse the expression in a
-    statement that joins a second/aliased ``runs`` FROM.
+    the node-row aggregation, else SQL NULL (the fact column stores 0 via
+    its COALESCE - no pre-cutoff side is unrepresented after the B2b
+    repair; the EMPTY fallback term referencing the dropped runs column was
+    removed with migration 0212).
     """
     agg = _side_agg_subq(node_side)
     return sa.case(
         (empty_flag.is_(True), sa.func.length(sa.cast(sa.literal("{}"), sa.Text))),
         (agg.is_not(None), sa.func.length(sa.cast(agg, sa.Text))),
-        # literal_column → the OUTER unaliased runs FROM (see docstring above).
-        else_=sa.func.length(sa.cast(sa.literal_column(legacy_side), sa.Text)),
+        # else: SQL NULL -> the caller's COALESCE keeps the fact at 0.
+        else_=sa.func.length(sa.cast(sa.literal("0"), sa.Text)),
     )
 
 
@@ -341,12 +329,10 @@ async def backfill_facts(session: Any, day: date) -> int:
             # rows (see _reassembled_bytes_expr — both byte formulas documented
             # there), falling back to the legacy runs column (raw Core legacy
             # table since B1's ORM cut) until B2b.
-            _reassembled_bytes_expr(
-                RunNodeOutput.outputs_json, "runs.outputs_json", _meta_flag_subq("empty_outputs")
-            ).label("output_bytes"),
-            _reassembled_bytes_expr(
-                RunNodeOutput.node_telemetry_json, "runs.node_telemetry_json", _meta_flag_subq("empty_telemetry")
-            ).label("telemetry_bytes"),
+            _reassembled_bytes_expr(RunNodeOutput.outputs_json, _meta_flag_subq("empty_outputs")).label("output_bytes"),
+            _reassembled_bytes_expr(RunNodeOutput.node_telemetry_json, _meta_flag_subq("empty_telemetry")).label(
+                "telemetry_bytes"
+            ),
             Run.rate_limit_key.is_not(None).label("rate_limited"),
             # FAR-134 concurrency columns — absolute run-lifecycle instants +
             # the full queue wait, mirroring the live writer.

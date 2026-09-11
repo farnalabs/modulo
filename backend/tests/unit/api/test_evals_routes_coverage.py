@@ -522,18 +522,24 @@ def test_create_eval_from_run_returns_definition_with_sample(client: tuple[TestC
     # RLS org so read_rls_org short-circuits without consuming a queue slot;
     # the empty run_node_outputs row set falls back to the legacy runs row.
     session.info = {"org_id": _ORG_ID}
-    legacy_row = SimpleNamespace(
+    row = SimpleNamespace(
+        run_id=str(run.id),
+        node_id=node_id.hex,
+        attempt_key="__final__",
+        organisation_id=_ORG_ID,
         outputs_json={node_id.hex: "sample output"},
         node_telemetry_json=None,
         raw_output_markers=None,
+        outputs_absent=False,
+        telemetry_absent=True,
+        markers_absent=True,
     )
     _queue_execute(
         session,
         [
             _result(scalar_one_or_none=run),  # run lookup
             _result(scalar_one_or_none=pipeline),  # pipeline lookup
-            _result(rows=[]),  # run_node_outputs rows (empty -> legacy fallback)
-            _result(first=legacy_row),  # legacy runs blob columns
+            _result(rows=[row]),  # B2b: the run's __final__ rows page
         ],
     )
 

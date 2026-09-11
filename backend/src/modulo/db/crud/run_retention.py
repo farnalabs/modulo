@@ -72,10 +72,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run_node_outputs import (
-    QUARANTINE_TABLE,  # NOTE: remove when the quarantine table drops (B2b+)
+    # B2b (FAR-694): the quarantine table is KEPT - after migration 0212
+    # drops the runs blob columns these rows are the pre-B1 quarantined
+    # blobs' ONLY surviving copy, so the purge's delete stays live.
+    QUARANTINE_TABLE,
     RunBlobs,
     read_node_output_blob_bytes,
-    read_run_blobs_with_fallback,
+    read_run_blobs,
 )
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.run import TERMINAL_STATUSES, Run
@@ -843,7 +846,7 @@ async def iter_run_export(
             session, [r.langgraph_thread_id for r in page], org_id
         )
         for run in page:
-            blobs = await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=org_id)
+            blobs = await read_run_blobs(session, run_id=run.id, organisation_id=org_id)
             yield (
                 json.dumps(
                     _serialize_run(
@@ -1115,8 +1118,9 @@ async def _delete_quarantine_rows(session: AsyncSession, run_ids: list[Any]) -> 
     delete cannot leak across orgs regardless of the table's missing RLS
     policy.
 
-    NOTE: remove this helper (and the ``QUARANTINE_TABLE`` import) when the
-    quarantine table itself drops (B2b+).
+    NOTE (B2b, FAR-694): the quarantine table is KEPT - after migration 0212
+    drops the runs blob columns these rows are the ONLY surviving copy of the
+    0192-quarantined legacy blobs, so the delete stays live.
     """
 
     if not run_ids:

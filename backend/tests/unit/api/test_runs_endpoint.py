@@ -160,7 +160,7 @@ def _stub_gate_fired(monkeypatch: pytest.MonkeyPatch) -> None:
         return markers if isinstance(markers, dict) else None
 
     monkeypatch.setattr(runs_module, "_do_get_run_with_gate", _detail)
-    monkeypatch.setattr(runs_module, "read_run_markers_with_fallback", _markers)
+    monkeypatch.setattr(runs_module, "read_run_markers", _markers)
 
     # The io/diff endpoints reassemble the blobs through the repo reader too
     # (FAR-583); the mocked session cannot serve the real queries, so the stub
@@ -188,7 +188,7 @@ def _stub_gate_fired(monkeypatch: pytest.MonkeyPatch) -> None:
         telemetry = run.node_telemetry_json if run is not None and isinstance(run.node_telemetry_json, dict) else {}
         return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
 
-    monkeypatch.setattr(runs_module, "read_run_blobs_with_fallback", _blobs)
+    monkeypatch.setattr(runs_module, "read_run_blobs", _blobs)
 
 
 def _make_mock_session() -> AsyncMock:
@@ -1617,7 +1617,7 @@ def test_diff_node_output_success(client: TestClient) -> None:
         # the repo reader — stub the two reads in call order (the mocked
         # session cannot serve the real queries).
         patch(
-            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            "modulo.api.routes.runs.read_run_blobs",
             new=AsyncMock(
                 side_effect=[
                     RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
@@ -1669,7 +1669,7 @@ def test_diff_node_output_identical(client: TestClient) -> None:
         # the repo reader — stub the two reads in call order (the mocked
         # session cannot serve the real queries).
         patch(
-            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            "modulo.api.routes.runs.read_run_blobs",
             new=AsyncMock(
                 side_effect=[
                     RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
@@ -1739,7 +1739,7 @@ def test_diff_node_output_node_not_found(client: TestClient) -> None:
         # the repo reader — stub the two reads in call order (the mocked
         # session cannot serve the real queries).
         patch(
-            "modulo.api.routes.runs.read_run_blobs_with_fallback",
+            "modulo.api.routes.runs.read_run_blobs",
             new=AsyncMock(
                 side_effect=[
                     RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),

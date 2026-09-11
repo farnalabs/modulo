@@ -273,7 +273,7 @@ async def test_compensate_blocked_run_no_hub_writes_summary(audit_patch: Any):
     # reader â€” stub it (the _FakeSession cannot serve the real query); the
     # run carries no stored outputs.
     with patch(
-        "modulo.db.crud.run_node_outputs.read_run_outputs_with_fallback",
+        "modulo.db.crud.run_node_outputs.read_run_outputs",
         new=AsyncMock(return_value=None),
     ):
         summary = await compensate_blocked_run(
@@ -446,7 +446,7 @@ async def test_compensate_blocked_run_executed_nodes_falls_back_to_outputs(audit
     # reader â€” stub it with the run's reassembled outputs (the _FakeSession
     # cannot serve the real query).
     with patch(
-        "modulo.db.crud.run_node_outputs.read_run_outputs_with_fallback",
+        "modulo.db.crud.run_node_outputs.read_run_outputs",
         new=AsyncMock(return_value=run.outputs_json),
     ):
         connector = _StubConnector(result=CompensationResult(outcome=CompensationOutcome.COMPENSATED, detail="closed"))

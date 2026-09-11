@@ -918,7 +918,10 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         except ImportError:
             return None
         try:
-            record: Any = pwd.getpwuid(uid)
+            # getattr - not a direct attribute access (`pwd.getpwuid`): typeshed
+            # exposes pwd only on POSIX, so the direct bind fails mypy on
+            # Windows builds while CI's Linux run has the full module.
+            record: Any = getattr(pwd, "getpwuid")(uid)  # noqa: B009 - see comment
             name = getattr(record, "pw_name", None)
             return str(name) if name else None
         except KeyError:

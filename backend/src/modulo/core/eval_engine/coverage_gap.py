@@ -547,11 +547,10 @@ async def compute_coverage_gap(
     # run_node_outputs (with the legacy fallback) in the SAME transaction,
     # one batched repo read per run — the pure evaluator below never touches
     # the legacy columns.
-    from modulo.db.crud.run_node_outputs import read_run_blobs_with_fallback
+    from modulo.db.crud.run_node_outputs import read_run_blobs
 
     outputs_by_run = {
-        run.id: (await read_run_blobs_with_fallback(session, run_id=run.id, organisation_id=org_id)).outputs
-        for run in runs
+        run.id: (await read_run_blobs(session, run_id=run.id, organisation_id=org_id)).outputs for run in runs
     }
 
     return evaluate_coverage_gap(

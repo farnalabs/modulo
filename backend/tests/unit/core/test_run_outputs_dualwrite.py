@@ -938,8 +938,12 @@ class TestSqlstateExtraction:
         from modulo.db.sqlstates import DUAL_WRITE_RETRYABLE_SQLSTATES
 
         source = inspect.getsource(node_runner)
-        assert "MARKER_TXN_ABORTING_SQLSTATES" in source
-        assert "_MARKER_TXN_ABORTING_SQLSTATES" not in source, "the module-local alias must stay removed (B1)"
+        # B2b: the last MARKER_TXN_ABORTING_SQLSTATES consumer died with
+        # the legacy marker leg (the uncommitted claim no longer
+        # classifies failure shapes) - the vocabulary stays in the shared
+        # SQLSTATE leaf only.
+        assert "MARKER_TXN_ABORTING_SQLSTATES" not in source
+        assert "raw_output_marker_persist_uncommitted" in source
         assert _DUAL_WRITE_RETRYABLE_SQLSTATES is DUAL_WRITE_RETRYABLE_SQLSTATES
 
     def test_marker_abort_vocabulary_matches_the_shared_copy(self) -> None:
