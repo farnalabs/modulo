@@ -89,14 +89,14 @@ jobs:
           cd backend
           # Deliberately no actions/setup-uv cache restore: a warm cache from
           # a previous run could mask a no-wheel regression.
-          uv sync --frozen --group dev --quiet
+          uv sync --frozen --no-build --group dev --quiet
           echo "cache warmed (uvlock-resolved, wheels only)"
 
       - name: Offline resolution proof (uv --offline, zero egress)
         run: |
           set -euo pipefail
           cd backend
-          uv sync --frozen --group dev --offline --quiet
+          uv sync --frozen --no-build --group dev --offline --quiet
           echo "offline uv sync OK: the locked dependency set is fully wheel-resolvable"
 
       - name: Boot-import proof in min-glibc container, --network none
@@ -112,7 +112,7 @@ jobs:
           # The repo is mounted at its real path ($PWD) - NOT /repo - so the
           # host-absolute paths recorded in the venv (the editable .pth and the
           # venv directory itself) resolve inside the container despite --network none.
-          python_bin="$(cd backend && uv run --offline which python)"
+          python_bin="$(cd backend && uv run --offline --no-build --no-sync which python)"
           if [ ! -x "${python_bin}" ]; then
             echo "::error::precondition violated: offline python interpreter not found at '${python_bin}'"
             exit 1
