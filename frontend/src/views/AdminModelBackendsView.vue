@@ -501,6 +501,7 @@ interface PresetItem {
   default_model_id: string
   description: string
   api_key_docs_url: string
+  default_params?: Record<string, unknown>
 }
 
 const { t } = useI18n()
@@ -651,6 +652,9 @@ function applyPreset(preset: PresetItem) {
   manualMode.value = false
   formData.provider = preset.provider
   formData.model_id = preset.default_model_id
+  formData.display_name = preset.display_name
+  const presetParams = preset.default_params ?? {}
+  formData.default_params = Object.keys(presetParams).length > 0 ? JSON.stringify(presetParams, null, 2) : ''
 }
 
 function openEditForm(backend: ModelBackendItem) {
