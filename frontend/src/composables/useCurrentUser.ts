@@ -1,6 +1,6 @@
 import { computed } from 'vue'
 import { decodeJwtPayload } from '../lib/jwt'
-import { getAccessToken } from '../lib/api/auth'
+import { getAccessToken } from '../lib/api/client'
 
 export interface JwtPayload {
   sub?: string
