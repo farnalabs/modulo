@@ -74,6 +74,8 @@ from modulo.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTE
 if TYPE_CHECKING:
     from e2b import AsyncSandbox
 
+    from modulo.core.artifacts.writer import ArtifactWriter
+
 from modulo.core.capability_scope import filter_run_context_scope
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
@@ -5210,6 +5212,7 @@ class _SandboxWatchdog:
         drained_chunks: list[str],
         wall_clock: _WatchdogWallClock,
         drain_window_bytes: int | None = None,
+        artifact_writer: "ArtifactWriter | None" = None,
     ) -> None:
         if sandbox is None:
             raise RuntimeError("Sandbox was not created before use")
@@ -5246,6 +5249,8 @@ class _SandboxWatchdog:
         # ``stdout_max_bytes`` (a 512KB drain window would starve a 5MB cap).
         # Defaults to the legacy ``_MAX_DRAIN_WINDOW`` (512KB) bound.
         self._drain_window = drain_window_bytes or _MAX_DRAIN_WINDOW
+        # FAR-582: optional artifact writer for full stdout/stderr side-car files.
+        self._artifact_writer = artifact_writer
 
     @property
     def budget_killed(self) -> bool:
@@ -5298,10 +5303,16 @@ class _SandboxWatchdog:
         self._stall.touch("heartbeat")
         self.touch_stdout(chunk)
         self.stream_chunk(chunk, "stdout")
+        # FAR-582: append to the side-car artifact writer (uncapped).
+        if self._artifact_writer is not None:
+            self._artifact_writer.append(chunk, "stdout")
 
     async def on_stderr(self, chunk: str) -> None:
         self._stall.touch("heartbeat")
         self.stream_chunk(chunk, "stderr")
+        # FAR-582: append to the side-car artifact writer (uncapped).
+        if self._artifact_writer is not None:
+            self._artifact_writer.append(chunk, "stderr")
 
     async def drain_sandbox_log(self) -> None:
         # Probe failed (log file not created yet, sandbox connection
@@ -6040,6 +6051,41 @@ def _runner_binding_env_profile_id() -> uuid.UUID | None:
     return _parse_uuid_opt(environment_profile_id)
 
 
+async def _finalize_artifact_writer(
+    writer: "ArtifactWriter | None",
+    *,
+    session_factory: Any,
+    run_id: str,
+    org_id: str,
+    node_id: str,
+    attempt_key: str | None,
+) -> None:
+    """FAR-582: finalize and persist artifact pointers (best-effort, never fatal)."""
+    if writer is None or not writer.enabled or not attempt_key:
+        return
+    try:
+        pointers = writer.finalize()
+        if pointers and session_factory:
+            from modulo.db.crud.run_node_outputs import persist_artifact_pointers
+
+            async with session_factory() as session, session.begin():
+                await persist_artifact_pointers(
+                    session,
+                    run_id=uuid.UUID(run_id),
+                    organisation_id=uuid.UUID(org_id),
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    pointers=pointers,
+                )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "sandbox_agent.artifact_finalize_failed",
+            extra={"node_id": node_id, "run_id": run_id},
+        )
+
+
 async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegates to extracted helpers (FAR-310)
     state: dict[str, Any],
     *,
@@ -6740,6 +6786,33 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 except (TypeError, ValueError):
                     _stream_broker = None
 
+            # FAR-582: full stdout/stderr side-car artifact writer.
+            # Bound to the node run; appends on every on_stdout/on_stderr
+            # callback; finalized on every terminal path.
+            _artifact_writer: "ArtifactWriter | None" = None  # noqa: UP037 — quotes needed: no `from __future__ import annotations`
+            if run_id and node_id:
+                try:
+                    from modulo.core.artifacts import ArtifactWriter
+                    from modulo.core.artifacts.store import get_store
+                    from modulo.settings import get_settings as _get_settings
+
+                    _settings = _get_settings()
+                    if getattr(_settings, "modulo_artifacts_enabled", True):
+                        _artifact_writer = ArtifactWriter(
+                            org_id=org_id,
+                            run_id=run_id,
+                            node_id=node_id,
+                            attempt_key=attempt_key or "",
+                            store=get_store(),
+                            enabled=True,
+                        )
+                except Exception:
+                    _log.warning(
+                        "sandbox_agent.artifact_writer_init_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
+                    _artifact_writer = None
+
             watchdog = _SandboxWatchdog(
                 sandbox=sandbox,
                 stall=_stall,
@@ -6757,6 +6830,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 # cap (so 5MB can actually be retained); "tail" keeps the legacy
                 # ``_MAX_DRAIN_WINDOW`` bound (and honors test patches of it).
                 drain_window_bytes=_stdout_cap if stdout_retention_mode == "full" else None,
+                artifact_writer=_artifact_writer,
             )
 
             _drain_fn = watchdog.drain_sandbox_log
@@ -7262,6 +7336,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     ) from None
                 elapsed = time.monotonic() - start_time
                 _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
+                # FAR-582: finalize artifacts before returning on schema-failure path.
+                await _finalize_artifact_writer(
+                    watchdog._artifact_writer,
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                )
                 return _build_sandbox_node_envelope(
                     node_id=node_id,
                     output=_SandboxNodeOutput(
@@ -7378,6 +7461,16 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "sandbox_agent.success_delivery_marker_persist_failed",
                     extra={"node_id": node_id, "run_id": run_id},
                 )
+
+        # FAR-582: finalize artifacts before returning on main success/failure path.
+        await _finalize_artifact_writer(
+            watchdog._artifact_writer,
+            session_factory=session_factory,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+        )
 
         return _build_sandbox_node_envelope(
             node_id=node_id,
@@ -7513,6 +7606,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # sandbox may already be dead, in which case the helper returns "".
         _exc_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
         _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
+        # FAR-582: finalize artifacts before returning on exception path.
+        await _finalize_artifact_writer(
+            watchdog._artifact_writer,
+            session_factory=session_factory,
+            run_id=run_id,
+            org_id=org_id,
+            node_id=node_id,
+            attempt_key=attempt_key,
+        )
         return _build_sandbox_node_envelope(
             node_id=node_id,
             output=_SandboxNodeOutput(

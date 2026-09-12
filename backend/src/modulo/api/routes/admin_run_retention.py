@@ -259,6 +259,25 @@ async def purge(
         )
 
     org_id = _resolve_org_id(principal, req.organisation_id)
+
+    # FAR-582: artifact side-car cleanup callback, invoked per-batch
+    # before run rows are deleted.
+    def _on_batch_purge(runs: list, _org_id: uuid.UUID | None) -> None:
+        try:
+            from modulo.core.artifacts.store import get_store
+
+            store = get_store()
+        except Exception:
+            return
+        for run in runs:
+            try:
+                store.delete_run(str(run.organisation_id), str(run.id))
+            except Exception:
+                _log.warning(
+                    "run_retention.artifact_delete_failed",
+                    extra={"run_id": str(run.id), "org_id": str(run.organisation_id)},
+                )
+
     try:
         async with session.begin():
             await _run_scoped(session, org_id)
@@ -269,6 +288,7 @@ async def purge(
                 date_to=req.date_to,
                 pipeline_id=req.pipeline_id,
                 _status=req.status,
+                on_batch_purge=_on_batch_purge,
             )
 
             if org_id is not None:

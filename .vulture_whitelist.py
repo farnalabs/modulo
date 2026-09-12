@@ -307,4 +307,11 @@ __all__ = [
     #     only); FastAPI consumes it as an HTTP endpoint, so it is
     #     load-bearing, not dead.
     "runtime_config_endpoint",
+    # --- FAR-582: sandbox artifact store public API. These are consumed by
+    #     run_retention (on_batch_purge callback in admin_run_retention.py),
+    #     the artifact download endpoint (api/routes/runs.py), and
+    #     tests/unit/core/artifacts/. vulture scans src/ only so it cannot
+    #     see the test call sites.
+    "delete_node",
+    "reset_store",
 ]

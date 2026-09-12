@@ -116,7 +116,7 @@ _JSONB_DB_TO_JSON_ORM: dict[str, frozenset[str]] = {
     "remy_skills": frozenset({"triggers"}),
     # permanent (documented repo divergence) — the new table keeps its three
     # blob columns after B2b (they ARE the store once the legacy columns go).
-    "run_node_outputs": frozenset({"outputs_json", "node_telemetry_json", "raw_output_markers"}),
+    "run_node_outputs": frozenset({"outputs_json", "node_telemetry_json", "raw_output_markers", "artifacts_json"}),
     # B2b/drop (migration 0215): the three legacy runs blob columns are GONE
     # from BOTH sides, so their parity ignore entries were removed with them.
     # The remaining entries are the multi-backend parity convention.

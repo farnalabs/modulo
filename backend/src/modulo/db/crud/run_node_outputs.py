@@ -235,6 +235,7 @@ class NodeOutputWrite:
     outputs: Any = _SIDE_ABSENT
     telemetry: Any = _SIDE_ABSENT
     markers: Any = _SIDE_ABSENT
+    artifacts: Any = _SIDE_ABSENT
 
 
 def _sql_null() -> Any:
@@ -374,16 +375,17 @@ async def upsert_rows(
     if not rows:
         return
     insert_factory = dialect_insert(resolve_dialect(session))
-    groups: dict[tuple[bool, bool, bool], list[NodeOutputWrite]] = {}
+    groups: dict[tuple[bool, bool, bool, bool], list[NodeOutputWrite]] = {}
     for row in rows:
         flags = (
             row.outputs is not _SIDE_ABSENT,
             row.telemetry is not _SIDE_ABSENT,
             row.markers is not _SIDE_ABSENT,
+            row.artifacts is not _SIDE_ABSENT,
         )
         groups.setdefault(flags, []).append(row)
 
-    for (has_out, has_tel, has_markers), group in groups.items():
+    for (has_out, has_tel, has_markers, has_artifacts), group in groups.items():
         values: dict[str, Any] = {"run_id": run_id, "organisation_id": organisation_id}
         if has_out:
             values["outputs_json"] = None
@@ -391,6 +393,8 @@ async def upsert_rows(
             values["node_telemetry_json"] = None
         if has_markers:
             values["raw_output_markers"] = None
+        if has_artifacts:
+            values["artifacts_json"] = None
         stmt = insert_factory(RunNodeOutput).values(**values)
         params: list[dict[str, Any]] = []
         for row in group:
@@ -401,6 +405,8 @@ async def upsert_rows(
                 item["node_telemetry_json"] = row.telemetry
             if has_markers:
                 item["raw_output_markers"] = row.markers
+            if has_artifacts:
+                item["artifacts_json"] = row.artifacts
             params.append(item)
         if ignore_conflicts:
             stmt = stmt.on_conflict_do_nothing(index_elements=["run_id", "node_id", "attempt_key"])
@@ -412,6 +418,8 @@ async def upsert_rows(
                 set_["node_telemetry_json"] = stmt.excluded.node_telemetry_json
             if has_markers:
                 set_["raw_output_markers"] = stmt.excluded.raw_output_markers
+            if has_artifacts:
+                set_["artifacts_json"] = stmt.excluded.artifacts_json
             stmt = stmt.on_conflict_do_update(index_elements=["run_id", "node_id", "attempt_key"], set_=set_)
         await session.execute(stmt, params)
 
@@ -940,3 +948,44 @@ async def read_node_output_blob_bytes(
         total += 0 if r.markers_absent else json_bytes(r.raw_output_markers)
         totals[run_key] = total
     return totals
+
+
+# ── FAR-582: artifact pointer persistence ──────────────────────────────
+
+
+async def persist_artifact_pointers(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    node_id: str,
+    attempt_key: str,
+    pointers: list[dict[str, Any]],
+) -> None:
+    """Persist artifact pointers into ``artifacts_json`` for one node attempt.
+
+    Called by the node runner after ``ArtifactWriter.finalize()`` returns its
+    pointer list.  Does a targeted UPSERT on ``artifacts_json`` only — never
+    touches the blob columns (outputs, telemetry, markers).
+
+    When *pointers* is empty the column is set to an empty list (signal that
+    the node ran but produced no meaningful artifact data).
+    """
+    insert_factory = dialect_insert(resolve_dialect(session))
+    values = {
+        "run_id": run_id,
+        "organisation_id": organisation_id,
+        "node_id": node_id,
+        "attempt_key": attempt_key,
+        "artifacts_json": pointers or None,
+    }
+    stmt = insert_factory(RunNodeOutput).values(**values)
+    set_: dict[str, Any] = {
+        "updated_at": func.current_timestamp(),
+        "artifacts_json": stmt.excluded.artifacts_json,
+    }
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["run_id", "node_id", "attempt_key"],
+        set_=set_,
+    )
+    await session.execute(stmt, [values])
