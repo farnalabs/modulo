@@ -70,7 +70,7 @@ class TestMigration0216AuditEventsSweepDetectionIndex:
             "account_id",
             "created_at",
         ]
-        assert isinstance(AuditEvent.__table__.c.account_id.type, (sa.Uuid,))
+        assert isinstance(AuditEvent.__table__.c.account_id.type, sa.Uuid)
 
 
 class TestMigration0217HitlClaimsDecidedBy:
