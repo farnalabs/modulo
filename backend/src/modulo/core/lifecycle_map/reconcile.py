@@ -90,6 +90,7 @@ __all__ = [
     "record_journey_parse_failure",
     "record_journey_reconcile_drift",
     "record_refs_by_source",
+    "record_refs_cap_dropped",
     "record_refs_malformed",
     "record_refs_shadow_strip_hit",
     "record_refs_unknown_source",
@@ -124,6 +125,13 @@ _refs_by_source_total: Any = None
 _refs_unknown_source_total: Any = None
 _refs_shadow_strip_hits_total: Any = None
 _refs_malformed_total: Any = None
+_refs_cap_dropped_total: Any = None
+
+# The cap-drop event name emitted by the finalize merge and the node-input
+# injection paths (both report it verbatim through ``notify_refs_event``).
+# Declared locally — the db-layer event vocabulary in ``lifecycle_refs``
+# predates this counter and does not carry it.
+_REFS_EVENT_CAP_DROPPED = "refs_cap_dropped"
 
 
 def _get_meter() -> Any:
@@ -150,7 +158,8 @@ def _ensure() -> None:
         _refs_by_source_total, \
         _refs_unknown_source_total, \
         _refs_shadow_strip_hits_total, \
-        _refs_malformed_total
+        _refs_malformed_total, \
+        _refs_cap_dropped_total
     if _journey_advance_total is not None:
         return
     meter = _get_meter()
@@ -204,6 +213,11 @@ def _ensure() -> None:
     _refs_malformed_total = meter.create_counter(
         name="modulo_work_item_refs_malformed_total",
         description="Work-item ref entries dropped as malformed at the intake boundary (FAR-794)",
+        unit="1",
+    )
+    _refs_cap_dropped_total = meter.create_counter(
+        name="modulo_work_item_refs_cap_dropped_total",
+        description="Work-item refs dropped by the unified work_item_refs cap (finalise merge + node-input injection)",
         unit="1",
     )
 
@@ -293,6 +307,14 @@ def record_refs_malformed(count: int = 1) -> None:
         _refs_malformed_total.add(count)
 
 
+def record_refs_cap_dropped(count: int = 1) -> None:
+    """Record refs dropped by the unified ``work_item_refs`` cap."""
+    if _refs_cap_dropped_total is None:
+        _ensure()
+    if _refs_cap_dropped_total is not None:
+        _refs_cap_dropped_total.add(count)
+
+
 def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
     """Dispatch db-layer ref events onto the FAR-794 counters.
 
@@ -308,6 +330,8 @@ def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
         record_refs_unknown_source(int(attrs.get("count", 1)))
     elif event == REFS_EVENT_MALFORMED:
         record_refs_malformed(int(attrs.get("count", 1)))
+    elif event == _REFS_EVENT_CAP_DROPPED:
+        record_refs_cap_dropped(int(attrs.get("count", 1)))
 
 
 set_refs_counter_hook(_refs_event_sink)

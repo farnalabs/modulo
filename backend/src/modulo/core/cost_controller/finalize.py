@@ -1366,9 +1366,14 @@ async def _confirm_reported_refs(
     existing journey keyed by the same canonical ``(org, kind, ref)``; it can
     NEVER mint one (minting is owned by the create-time
     ``INSERT ... ON CONFLICT DO NOTHING`` path in ``modulo.db.crud.run``).
+    The match itself keys on ``(org, kind, ref)`` only, so the legacy
+    ``source="reported"`` marker keeps working as the confirm gate's input.
     ``entries`` are already canonicalised (kind/ref/source="reported") by
     ``validate_and_normalise_reported_refs``. Org-scoped SELECT EXISTS per
-    entry — the caller owns RLS context.
+    entry — the caller owns RLS context. Legacy ``reported`` claims are
+    normalised to ``agent`` by the CALLER (``_resolve_effective_refs``, the
+    merge boundary) AFTER this gate matched — the gate itself stays
+    marker-agnostic beyond TRUTHFUL acceptance.
     """
     confirmed: list[dict[str, Any]] = []
     for entry in entries:
@@ -1582,11 +1587,24 @@ async def _resolve_effective_refs(
     the create-stamped refs with the confirmed reported refs (dedup, unified
     cap with the deterministic rank-ascending drop order). The engine then
     stamps ``source_node_id`` on the confirmed agent refs whose emitting node
-    is identifiable.
+    is identifiable. Confirmed legacy ``reported`` claims are normalised to
+    ``agent`` at the confirm boundary (after the gate matched), so the
+    effective list the run persists carries only ``caller``/``derived``/
+    ``agent`` sources.
     """
     raw = parse_self_report_refs(merged_outputs)
     reported, counters = validate_and_normalise_reported_refs(raw)
     confirmed = await _confirm_reported_refs(session, run.organisation_id, reported)
+    # FAR-794 persisted-source invariant: confirmed legacy ``reported``
+    # claims are normalised to ``agent`` at the merge boundary — AFTER the
+    # confirm gate matched, BEFORE anything is persisted. Stored sources
+    # are only ``caller``/``derived``/``agent``; ``reported`` stays
+    # accepted on read paths only. The dicts are freshly built by
+    # ``validate_and_normalise_reported_refs`` (or supplied by the gate),
+    # so in-place normalisation is safe; unconfirmed claims are never
+    # persisted, so their raw ``reported`` marker is harmless.
+    for entry in confirmed:
+        entry["source"] = "agent"
     effective, cap_dropped = _merge_effective_refs(run.work_item_refs, confirmed, run.organisation_id)
     _stamp_node_sources(effective, _collect_node_emission_sources(merged_outputs))
     return _JourneyResolution(
@@ -1640,11 +1658,16 @@ async def _advance_journeys_on_terminal(
             resolution = await _resolve_effective_refs(session, run, merged_outputs)
             # Agent-sourced never advance or mint at finalise — advance_journeys
             # receives ONLY the mintable caller/derived entries and the
-            # confirmed (pre-existing) reported claims.
+            # confirmed (pre-existing) self-report claims. Those claims are
+            # normalised to ``agent`` at the confirm boundary (FAR-794
+            # persisted-invariant), so they are selected by identity here, not
+            # by source rank: an unconfirmed / storage-only agent emission
+            # must still never advance.
+            confirmed_ids = {id(entry) for entry in resolution.confirmed}
             mint_or_advance = [
                 entry
                 for entry in resolution.effective
-                if entry.get("source") in ("caller", "derived", _REPORTED_SOURCE)
+                if entry.get("source") in ("caller", "derived") or id(entry) in confirmed_ids
             ]
             advanced = await advance_journeys(
                 session,

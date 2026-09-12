@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from modulo.core.cost_controller.finalize import (
     _collect_node_emission_sources,
+    _confirm_reported_refs,
     _merge_effective_refs,
     _resolve_effective_refs,
     _stamp_node_sources,
@@ -31,7 +32,7 @@ from modulo.core.trigger_engine import (
     _RateLimitState,
     _WebhookDelivery,
 )
-from modulo.db.lifecycle_refs import WORK_ITEM_REFS_KEY
+from modulo.db.lifecycle_refs import REPORTED_SOURCE, WORK_ITEM_REFS_KEY, validate_ref_entry
 from modulo.db.models.trigger import Trigger
 from modulo.settings import work_item_refs_cap
 
@@ -154,11 +155,14 @@ class TestNodeEmissionSources:
         assert len(resolution.confirmed) == 1
         assert resolution.cap_dropped == 0
         by_ref = {str(r["ref"]): r for r in resolution.effective}
-        assert by_ref["X-9"]["source"] == "reported"  # wire claims keep the reported stamp
+        # FAR-794 persisted invariant: the stored source is ``agent`` — the
+        # legacy ``reported`` marker is normalised at the confirm boundary,
+        # never persisted.
+        assert by_ref["X-9"]["source"] == "agent"
         assert by_ref["X-9"]["source_node_id"] == "node-a"
-        assert (
-            by_ref["X-1"]["source"] == "caller"
-        )  # wire untouched    def test_resolve_effective_refs_keeps_unconfirmed_reports_unmerged(self) -> None:
+        assert by_ref["X-1"]["source"] == "caller"  # wire untouched
+
+    def test_resolve_effective_refs_keeps_unconfirmed_reports_unmerged(self) -> None:
         run = MagicMock()
         run.organisation_id = uuid.uuid4()
         run.work_item_refs = []
@@ -173,6 +177,68 @@ class TestNodeEmissionSources:
         assert not resolution.confirmed  # advisory: unconfirmed claims never merge
         assert len(resolution.reported) == 1
         assert not resolution.effective
+
+
+# ---------------------------------------------------------------------------
+# confirm-gate normalisation — the persisted-source invariant (FAR-794)
+# ---------------------------------------------------------------------------
+
+
+def _session_with_journey(found: bool) -> MagicMock:
+    """A mock AsyncSession whose per-entry EXISTS probe yields a row id."""
+    row = MagicMock()
+    row.scalar_one_or_none = lambda: uuid.uuid4() if found else None
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=row)
+    return session
+
+
+class TestConfirmReportedRefsNormalisation:
+    async def test_the_confirm_gate_still_matches_legacy_reported_claims(self) -> None:
+        # (b) the gate itself is untouched: the EXISTS match keys on
+        # (org, kind, ref) — a legacy ``reported`` claim that has a journey
+        # row still confirms. The gate output keeps the raw canonicalised
+        # claim; the normalisation happens at the merge boundary.
+        entries = [_ref("jira", "FAR-1", REPORTED_SOURCE)]
+        confirmed = await _confirm_reported_refs(_session_with_journey(True), uuid.uuid4(), entries)
+        assert confirmed == [{"kind": "jira", "ref": "FAR-1", "source": REPORTED_SOURCE}]
+
+    async def test_unmatched_claim_is_dropped_and_never_normalised(self) -> None:
+        entries = [_ref("jira", "GHOST", REPORTED_SOURCE)]
+        confirmed = await _confirm_reported_refs(_session_with_journey(False), uuid.uuid4(), entries)
+        assert not confirmed
+        # The unconfirmed claim keeps its raw shape (it is never persisted).
+        assert entries == [{"kind": "jira", "ref": "GHOST", "source": REPORTED_SOURCE}]
+
+    def test_stored_effective_list_never_carries_reported(self) -> None:
+        # (a) the persisted invariant end-to-end through the resolver: a
+        # confirmed legacy ``reported`` claim is normalised to ``agent``
+        # BEFORE anything reaches ``run.work_item_refs``.
+        run = MagicMock()
+        run.organisation_id = uuid.uuid4()
+        run.work_item_refs = []
+        merged = {"node-a": {"output": {"work_item_refs": [_ref("jira", "X-9", "agent")]}}}
+        confirmed = [_ref("jira", "X-9", REPORTED_SOURCE)]
+        with (
+            patch(
+                "modulo.core.cost_controller.finalize._confirm_reported_refs",
+                new=AsyncMock(return_value=confirmed),
+            ),
+            patch(_CAP, lambda: 100),
+        ):
+            import asyncio
+
+            resolution = asyncio.run(_resolve_effective_refs(MagicMock(), run, merged))
+        assert resolution.effective
+        assert all(e.get("source") != REPORTED_SOURCE for e in resolution.effective)
+        assert resolution.confirmed[0]["source"] == "agent"
+
+    def test_reported_is_accepted_on_read_paths(self) -> None:
+        # (c) ``reported`` stays accepted on READ paths — the default
+        # ``_READ_ACCEPTED_SOURCES`` vocabulary keeps tolerating
+        # pre-normalisation rows; only the intake/merge boundary normalises.
+        entry = validate_ref_entry({"kind": "github_pr", "ref": "#456", "source": "reported"})
+        assert entry == {"kind": "github_pr", "ref": "456", "source": "reported"}
 
 
 # ---------------------------------------------------------------------------
