@@ -321,9 +321,9 @@ class TestMigrationBackfillGrace:
         # follow-up 0212_variant_batch_state_updated_at chains on top of 0211,
         # and FAR-788's 0213_runs_rerun_trigger_type chains on top of 0212,
         # and FAR-748's 0216_audit_events_sweep_detection_index chains on top of 0215,
-        # and 0217_hitl_claims_decided_by chains on top of 0216,
+        # and 0219_eval_cluster_check_constraints chains on top of 0218,
         # so it is now the single linear head of the chain.
-        assert heads == ["0217_hitl_claims_decided_by"], f"expected a single head, got {heads}"
+        assert heads == ["0219_eval_cluster_check_constraints"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

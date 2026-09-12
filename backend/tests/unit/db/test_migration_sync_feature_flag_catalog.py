@@ -25,7 +25,7 @@ from alembic.script import ScriptDirectory
 from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
 
-_HEAD_MIGRATION_NAME = "0217_hitl_claims_decided_by"
+_HEAD_MIGRATION_NAME = "0219_eval_cluster_check_constraints"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
