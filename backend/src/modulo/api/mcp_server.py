@@ -2760,7 +2760,15 @@ async def _trigger_pipeline_impl(
     }
 
 
-@mcp.tool(description="Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress.")
+@mcp.tool(
+    description=(
+        "Fire a pipeline run and return immediately with run_id. Poll get_run_status to track progress. "
+        "Optional work_item_refs: a list of {kind, ref} entries recording the work items this run serves "
+        '(e.g. [{"kind": "linear", "ref": "FAR-123"}]); provenance is engine-assigned (caller) and any '
+        "wire source value is ignored. A pipeline that requires work-item refs returns the "
+        "work_item_refs_required error when none are supplied."
+    )
+)
 @_RETRY_DB
 async def trigger_pipeline(
     pipeline_id: str,

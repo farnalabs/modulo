@@ -434,6 +434,18 @@ hiccup must never become a dispatch outage.
   ADVISORY, lock-free, population-only read (its own-row lock exists only at
   the fenced demote write); the sweep is its named backstop.
 
+### Work-item refs → Lifecycle Map journeys (FAR-794)
+
+Every run records the work items it serves as canonical refs (`kind` + `ref`, e.g. `linear`/`FAR-123`, `github`/`owner/repo#123`) in `runs.work_item_refs`, anchored to deterministic `journeys` rows (`uuid5(org:kind:ref)` — derivable at create and finalise time, no mint races). The refs travel through ONE reserved input-payload key, `_work_item_refs`: reserved (a trigger `payload_mapping` can never target it and a context-setter node may never write it) but EXEMPT from the create-time reserved-key strip so refs survive the coalesce identity — the engine re-stamps the stored value with canonicalised entries before hashing, so a forged key cannot escalate provenance.
+
+Provenance is ENGINE-ASSIGNED per supply channel; the wire `source` value is never trusted. `caller` for authenticated channels (manual REST/MCP triggers, operator reruns), `derived` for extraction-driven channels (webhook, cron, polling, agent_signal, replay), `agent` for a node's own emission. Legacy `reported` is accepted on every read path so pre-normalisation rows never fail, but is normalised to `agent` at every intake/merge boundary and never persisted. ONE shape validator (`modulo.db.lifecycle_refs.validate_ref_entry`) owns kind/ref canonicalisation, the source vocabulary, and status (`done`/`attempted`) for every surface.
+
+Minting is owned by provenance: `caller`/`derived` refs mint journey rows at run creation and again at terminal finalise via a rank-guarded upsert (`agent(0) < derived(1) < caller(2)` — provenance only ever upgrades, never downgrades; `first_seen_source` is immutable after mint; `latest_*`/`run_count` stay owned by the finalise evidence CAS). `agent`-sourced refs are collected and stored on the run and confirmed against EXISTING journey rows (advisory, match-only), but never mint — agent minting is deferred pending its safety substrate (FAR-795). Coalesced deliveries merge refs into the surviving run with the same rank-guarded union and re-mint newly-seen entries.
+
+Completeness over precision: the unified cap (`modulo_work_item_refs_cap`, env `MODULO_WORK_ITEM_REFS_CAP`, default 100, clamped to [1, 100000]) bounds self-report normalisation, the finalise merge, and node-input injection with one value; cap drops drain lowest-provenance first (agent → derived → caller, then array position) and are counted. Pipelines declaring `work_item_refs_required: true` in `run_context_defaults` refuse a delivery that supplied no refs — HTTP 422 `work_item_refs_required` on the REST, MCP, and webhook paths (reject-and-retry for webhooks, not acked-as-accepted).
+
+Nodes opt in to reading the run's refs by declaring a `work_item_refs` input property in the node's `input_schema_json`: the create-time refs are injected read-only as a `{{ work_item_refs }}` template variable at node start (a read failure degrades to fewer refs, never a failed node). Journeys carry `provenance` + `first_seen_source` columns (migration 0216; `runs.work_item_refs` containment is served by the existing partial GIN index) and the refs pipeline emits OTel counters (`modulo_work_item_refs_by_source_total`, `..._unknown_source_total`, `..._shadow_strip_hits_total`, `..._malformed_total`, `..._cap_dropped_total`).
+
 ### WebSocket event flow
 
 ```
