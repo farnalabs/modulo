@@ -73,6 +73,7 @@ PERMISSIONS: dict[str, str] = {
     "run.output": "runner",
     "run.evals": "runner",
     "run.status": "viewer",
+    "runs.get_run_artifact": "runner",
     # connectors
     "connector.create": "operator",
     "connector.update": "operator",
