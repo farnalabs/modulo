@@ -548,8 +548,42 @@
                     {{ $t('views.RunDetailView.log_truncated', { count: MAX_LOG_CHARS.toLocaleString() }) }}
                   </p>
                 </div>
+                <!-- FAR-582: full-log artifact download links -->
                 <div
-                  v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr') && !liveOutput[node.name]"
+                  v-if="nodeArtifactMap[node.name]?.length"
+                  class="rounded-lg border bg-muted p-4"
+                  data-testid="run-detail-node-artifacts"
+                  aria-live="polite"
+                >
+                  <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.full_logs') }}</h4>
+                  <ul class="flex flex-wrap gap-2">
+                    <li v-for="art in nodeArtifactMap[node.name]" :key="art.attempt_key + art.stream">
+                      <a
+                        :href="artifactDownloadUrl(run?.run_id, node.name, art.attempt_key, art.stream)"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                        :data-testid="`run-detail-artifact-${art.stream}`"
+                        :aria-label="artifactAriaLabel(art)"
+                      >
+                        <svg class="h-3 w-3 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        {{ art.stream }}
+                        <span v-if="nodeArtifactMap[node.name] && nodeArtifactMap[node.name].length > 1" class="text-muted-foreground">({{ art.attempt_key.split(':').pop() }})</span>
+                      </a>
+                    </li>
+                  </ul>
+                </div>
+                <div
+                  v-if="nodeArtifactError[node.name]"
+                  class="text-center text-sm text-destructive py-2"
+                  role="alert"
+                  aria-live="assertive"
+                  data-testid="run-detail-artifact-error"
+                >
+                  {{ $t('views.RunDetailView.artifact_load_error') }}
+                </div>
+                <div
+                  v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr') && !liveOutput[node.name] && !nodeArtifactMap[node.name]?.length"
                   class="text-center text-sm text-muted-foreground py-4"
                 >
                   {{ $t('views.RunDetailView.no_agent_logs') }}
@@ -984,6 +1018,56 @@ function toggleNodeLogs(name: string) {
   const s = expandedLogs.value
   if (s.has(name)) s.delete(name)
   else s.add(name)
+  // FAR-582: fetch artifacts when opening the logs panel for the first time
+  if (s.has(name) && !nodeArtifactMap.value[name] && !nodeArtifactFetched.value.has(name)) {
+    fetchNodeArtifacts(name)
+  }
+}
+
+// ── FAR-582: artifact listing ──────────────────────────────────────
+
+interface ArtifactPointer {
+  attempt_key: string
+  stream: string
+  size_bytes: number
+  sha256: string
+  compression: string
+}
+
+const nodeArtifactMap = ref<Record<string, ArtifactPointer[]>>({})
+const nodeArtifactError = ref<Record<string, boolean>>({})
+const nodeArtifactFetched = ref(new Set<string>())
+
+async function fetchNodeArtifacts(nodeName: string) {
+  if (!run.value?.run_id) return
+  nodeArtifactFetched.value.add(nodeName)
+  try {
+    const { data, error: err } = await api.GET('/api/v1/runs/{run_id}/nodes/{node_id}/artifacts', {
+      params: { path: { run_id: run.value.run_id, node_id: nodeName } },
+    })
+    if (err || !data) {
+      nodeArtifactError.value[nodeName] = true
+      return
+    }
+    nodeArtifactMap.value[nodeName] = data.artifacts ?? []
+  } catch {
+    nodeArtifactError.value[nodeName] = true
+  }
+}
+
+function artifactDownloadUrl(
+  runId: string | undefined | null,
+  nodeId: string,
+  attemptKey: string,
+  stream: string,
+): string {
+  if (!runId) return '#'
+  return `/api/v1/runs/${runId}/nodes/${nodeId}/attempts/${encodeURIComponent(attemptKey)}/artifacts/${stream}`
+}
+
+function artifactAriaLabel(art: ArtifactPointer): string {
+  const attemptSuffix = art.attempt_key.split(':').pop() ?? ''
+  return t('views.RunDetailView.artifact_download_aria', { stream: art.stream, attempt: attemptSuffix })
 }
 
 async function copyTraceId() {
