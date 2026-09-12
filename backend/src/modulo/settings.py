@@ -276,6 +276,16 @@ class Settings(BaseSettings):
     # contract where every visit fired). Operators enable it explicitly once the
     # dedup semantics are wanted. Consumed only by ``_connector_write_gate``.
     modulo_connector_write_gate_enabled: bool = Field(False, alias="MODULO_CONNECTOR_WRITE_GATE_ENABLED")
+    # ------------------------------------------------------------------
+    # FAR-582: full sandbox stdout/stderr side-car artifact storage
+    # ------------------------------------------------------------------
+    # When True, every sandbox node run writes full stdout/stderr to
+    # zstd-compressed side-car files on disk. Pointer dicts travel via the
+    # ``_artifact_pointers`` key in the node output JSON.
+    modulo_artifacts_enabled: bool = Field(True, alias="MODULO_ARTIFACTS_ENABLED")
+    # Base directory for artifact files.  Empty defaults to
+    # ``<backend>/.data/artifacts`` resolved by the store factory.
+    modulo_artifacts_dir: str = Field(default="", alias="MODULO_ARTIFACTS_DIR")
     # Web UI auth — FAIL-CLOSED (system worker refuses to boot without both).
     saq_auth_password: str | None = Field(default=None, alias="SAQ_AUTH_PASSWORD", repr=False)
     saq_auth_username: str | None = Field(default=None, alias="SAQ_AUTH_USERNAME")
