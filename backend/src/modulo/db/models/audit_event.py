@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, String, Text, Uuid, text
+from sqlalchemy import JSON, ForeignKey, Index, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base, OrgScoped
@@ -9,6 +9,19 @@ from modulo.db.models.base import Base, OrgScoped
 
 class AuditEvent(OrgScoped):
     __tablename__ = "audit_events"
+    # FAR-748: the sweep-alarm detection aggregate filters by
+    # (organisation_id, event_type, account_id, created_at); the composite
+    # index pins that shape instead of relying on the org-narrowed subset of
+    # the single-column indexes.
+    __table_args__ = (
+        Index(
+            "ix_audit_events_org_type_actor_time",
+            "organisation_id",
+            "event_type",
+            "account_id",
+            "created_at",
+        ),
+    )
 
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     account_id: Mapped[uuid.UUID | None] = mapped_column(

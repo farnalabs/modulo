@@ -4,15 +4,16 @@ On 2026-09-05 a single account claim+approved 22+ HITL gates across 5+
 pipelines in ~80 seconds and nothing flagged it. This module runs the
 detection on every committed approve decision:
 
-* count that actor's committed HITL decisions (``hitl.output_delivered``
-  approve events AND ``hitl.manual_delivery`` events — a manual delivery
-  resumes the run past the gate with caller-supplied output, exactly the
-  impact an approve has, so a sweep mixing the two must trip the same
-  way) in the last ``SWEEP_WINDOW_SECONDS`` (org-scoped — the
-  ``hitl_claims.account_id`` column suggested by the original plan is
-  NULLed by ``_decide`` at decision time, so the audit chain is the only
-  per-actor decision record; the count joins ``hitl_claims`` on the audit
-  ``resource_id`` to resolve each decided gate's pipeline);
+* count that actor's committed HITL decisions (``approved`` and
+  ``deliver_manual`` claims — a manual delivery resumes the run past the
+  gate with caller-supplied output, exactly the impact an approve has, so
+  a sweep mixing the two must trip the same way; rejections are never
+  counted) in the last ``SWEEP_WINDOW_SECONDS`` (org-scoped). The count
+  reads the ``hitl_claims.decided_by`` column (FAR-748: stamped at
+  decision time by ``_decide``, the durable per-actor decision record —
+  the original audit-chain join was best-effort because a decision whose
+  audit append failed was invisible to the alarm) — one indexed
+  claim-row aggregate, no join to the hash-chained ``audit_events`` table;
 * when the count exceeds ``SWEEP_COUNT_THRESHOLD`` AND the decisions span
   more than one pipeline, emit the alarm: an audit event
   (``hitl_approve_sweep_suspected``) and a fire-and-forget webhook
@@ -21,17 +22,16 @@ detection on every committed approve decision:
   (the same sibling pattern the ``hitl_overdue`` job uses, so the alarm
   never writes the notification row twice).
 
-Cost note: the detection runs one aggregate SELECT per approve, filtered
-by the org, the indexed ``event_type``/``account_id`` columns and a
-60-second ``created_at`` window, then joins on the ``hitl_claims``
-primary key. There is no composite index on
-``(organisation_id, event_type, account_id, created_at)`` — a migration
-was deliberately out of scope (FAR-611). At these volumes the
-org-narrowed subset is tiny (approves are rare relative to other audit
-traffic) and the planner can drive the join from the ``audit_events``
-event_type/account_id indexes; if approve volume ever grows enough for
-this query to show up in pg_stat_statements, add the composite index as
-a follow-up.
+Cost note: the detection runs one aggregate SELECT per decision, filtered
+by the org, ``decided_by`` and ``decision`` columns and the
+``decision_at`` window — an indexed single-table aggregate (``decided_by``
+carries its own index). The residual audit-side filter shape
+(``organisation_id, event_type, account_id, created_at``) is likewise
+covered by the ``ix_audit_events_org_type_actor_time`` composite index
+(FAR-748) so approve-volume growth can never turn the emission path into
+a hot pg_stat_statements entry. Legacy claims decided before
+``decided_by`` existed carry NULL and are skipped (never backfilled with
+a fictitious actor).
 
 Suppression: the alarm itself is rate-limited — at most ONE alarm per
 (org, actor) per ``SWEEP_ALARM_COOLDOWN`` via a bounded in-process
@@ -66,7 +66,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.notifier import EVENT_HITL_APPROVE_SWEEP
-from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.hitl_claim import HitlClaim
 
 _log = logging.getLogger(__name__)
@@ -85,13 +84,12 @@ SWEEP_ALARM_COOLDOWN = timedelta(hours=1)
 # Audit + notification event type (one literal, audit and notifier agree).
 AUDIT_EVENT_TYPE = "hitl_approve_sweep_suspected"
 
-# Decision event types counted by the detection query. One approve (plain or
-# with modification) writes exactly one ``hitl.output_delivered`` audit event
-# and one manual delivery writes exactly one ``hitl.manual_delivery`` event,
-# so the count of these events == the count of committed approve/manual
-# decisions (FAR-611 review fix: deliver_manual resumes the run past the gate
-# with caller-supplied output — equal sweep signal to an approve).
-_DECISION_EVENT_TYPES = ("hitl.output_delivered", "hitl.manual_delivery")
+# Decisions counted by the detection query. ``hitl_claims.decision`` values:
+# one approve (plain or with modification) commits ``approved`` and one
+# manual delivery commits ``deliver_manual`` — equal sweep signal. Rejections
+# (``rejected``) are never counted, matching the original audit-event shape
+# (``hitl.output_delivered`` + ``hitl.manual_delivery`` only).
+_SWEEP_COUNTED_DECISIONS = ("approved", "deliver_manual")
 _RESOURCE_TYPE = "hitl_claim"
 
 # Bounded in-process suppression marker: (org_id, actor_id) -> last alarm time.
@@ -143,30 +141,25 @@ async def count_recent_approves(
 ) -> tuple[int, int]:
     """Count the actor's committed HITL decisions since *window_start* (org-scoped).
 
-    Counts BOTH decision surfaces — ``hitl.output_delivered`` (approve) and
-    ``hitl.manual_delivery`` — so a sweep mixing approves and manual
-    deliveries trips the same aggregate threshold. Returns
-    ``(decision_count, distinct_pipeline_count)``. The count reads the
-    audit chain (the only per-actor decision record —
-    ``hitl_claims.account_id`` is NULLed at decision time) joined to
-    ``hitl_claims`` on the audit ``resource_id`` so each decided gate's
-    pipeline is resolved without a second query.
+    Counts BOTH decision surfaces — ``approved`` and ``deliver_manual``
+    claims — so a sweep mixing approves and manual deliveries trips the
+    same aggregate threshold. Returns ``(decision_count,
+    distinct_pipeline_count)``. The count reads
+    ``hitl_claims.decided_by`` (the durable per-actor decision record,
+    FAR-748 — ``account_id`` is NULLed at decision time and the old
+    audit-chain reconstruction was best-effort), scoped by org, actor and
+    the ``decision_at`` window; legacy claims with NULL ``decided_by`` are
+    not counted and are never backfilled.
     """
     stmt = (
         select(func.count(), func.count(func.distinct(HitlClaim.pipeline_id)))
-        .select_from(AuditEvent)
-        .join(
-            HitlClaim,
-            (AuditEvent.resource_id == HitlClaim.id)
-            & (AuditEvent.resource_type == _RESOURCE_TYPE)
-            & (AuditEvent.organisation_id == HitlClaim.organisation_id),
-        )
+        .select_from(HitlClaim)
         .where(
-            AuditEvent.organisation_id == org_id,
-            AuditEvent.event_type.in_(_DECISION_EVENT_TYPES),
-            AuditEvent.account_id == actor_id,
-            AuditEvent.created_at.is_not(None),
-            AuditEvent.created_at >= window_start,
+            HitlClaim.organisation_id == org_id,
+            HitlClaim.decided_by == actor_id,
+            HitlClaim.decision.in_(_SWEEP_COUNTED_DECISIONS),
+            HitlClaim.decision_at.is_not(None),
+            HitlClaim.decision_at >= window_start,
         )
     )
     row = (await session.execute(stmt)).one()
@@ -242,10 +235,11 @@ async def maybe_alarm_approve_sweep(
     """Detect and alarm an approve sweep for *actor_id*. Returns True when alarmed.
 
     Runs after a decision (approve plain/with-modification, or a manual
-    delivery via ``deliver_manual``) has committed its decision audit
-    event on *session*, so the detection count includes the just-made
-    decision. The count covers ``hitl.output_delivered`` AND
-    ``hitl.manual_delivery`` events. No-throw by contract: every failure
+    delivery via ``deliver_manual``) has committed its claim-row decision
+    on *session*, so the detection count includes the just-made decision.
+    The count covers ``approved`` AND ``deliver_manual`` claims via
+    ``decided_by`` (FAR-748 durable detection shape). No-throw by
+    contract: every failure
     is logged and swallowed so the decision itself is never affected
     (``asyncio.CancelledError`` still propagates).
 

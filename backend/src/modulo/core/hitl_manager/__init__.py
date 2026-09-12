@@ -580,6 +580,7 @@ class HITLManager:
             claim_token=claim_token,
             decision=_DECISION_APPROVED,
             decision_payload=decision_payload,
+            decided_by=actor_id,
         )
 
         await self._log_audit_and_deliver(
@@ -635,6 +636,7 @@ class HITLManager:
             claim_token=claim_token,
             decision=_DECISION_APPROVED,
             decision_payload=decision_payload,
+            decided_by=actor_id,
         )
 
         await self._log_audit_and_deliver(
@@ -687,6 +689,7 @@ class HITLManager:
             claim_token=claim_token,
             decision=_DECISION_REJECTED,
             decision_payload=decision_payload,
+            decided_by=actor_id,
         )
 
         extra: dict[str, Any] = {}
@@ -744,6 +747,7 @@ class HITLManager:
             claim_token=claim_token,
             decision=_DECISION_DELIVER_MANUAL,
             decision_payload=decision_payload,
+            decided_by=actor_id,
         )
 
         await self._log_audit_and_deliver(
@@ -926,8 +930,14 @@ class HITLManager:
         claim_token: str,
         decision: str,
         decision_payload: dict[str, Any] | None = None,
+        decided_by: uuid.UUID | None = None,
     ) -> HitlClaim:
         """Record a decision on the claim row — the STAMP authority (FAR-541).
+
+        ``decided_by`` (FAR-748) is the deciding account id, seeded on the
+        same UPDATE that commits the decision (``account_id`` is NULLed by
+        the same UPDATE — it is the claimant, not the decider). The sweep
+        alarm's detection reads this column instead of the audit chain.
 
         Decision-payload contract (FAR-541 iteration 3): the persisted payload
         shape is ``{"action": <verdict>, "gate_id": <this row's gate id>}``
@@ -992,6 +1002,7 @@ class HITLManager:
             )
             .values(
                 decision=decision,
+                decided_by=decided_by,
                 decision_at=now,
                 decision_payload=decision_payload,
                 account_id=None,

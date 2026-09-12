@@ -528,6 +528,75 @@ def _trigger_pipeline_client_key() -> str:
     return f"trigger_pipeline:{org_s}:{auth_type}:{client}"
 
 
+# FAR-748: per-key HITL decision budget on the MCP transport. HITL decision
+# actions (approve / deliver_manual) ride the general 200/min ``/mcp`` rule;
+# the 2026-09-05 sweep's actual vector is alarmed post-hoc (FAR-611) but was
+# never throttled on the transport itself. This bucket caps DECISION actions
+# at 20/min per key, mirroring the trigger_pipeline bucket's process-local
+# floor precedent: per-process (not cross-worker), so a multi-replica
+# deployment gets up to a 20x aggregated ceiling — availability, not
+# enforcement, is the documented posture, and the FAR-611 sweep alarm remains
+# the detective control. Rejections are deliberately outside the budget
+# (they do NOT let a run continue; an approve or manual delivery does).
+_HITL_DECISION_RATE = 20 / 60.0  # 20 decisions per 60s window
+_HITL_DECISION_BURST = 20
+
+_hitl_decision_limiter = TokenBucketRegistry(
+    rate=_HITL_DECISION_RATE,
+    burst=_HITL_DECISION_BURST,
+)
+
+
+def _hitl_decision_client_key() -> str:
+    """Derive the per-key bucket for the HITL decision budget.
+
+    Same derivation contract as :func:`_trigger_pipeline_client_key` (FAR-620:
+    a user-scoped key acts as its creator — one user-scoped key is one client,
+    org-wide/team/run-scoped keys hold ``ak:{key_id}`` buckets); decisions are
+    attributed to the caller's account, so OAuth/JWT and user-scoped keys share
+    the identity ``user:{account_id}`` bucket the attribution follows.
+    """
+    org = _ctx_org_id.get(None)
+    org_s = str(org) if org is not None else "unknown"
+    auth_type = _ctx_auth_type.get(None) or "unknown"
+    if auth_type == "api_key":
+        if _ctx_key_scope.get(None) == "user":
+            uid = _ctx_user_id.get(None)
+            client = f"user:{uid}" if uid is not None else "user:unknown"
+        else:
+            key_id = _ctx_key_id.get(None)
+            client = f"ak:{key_id}" if key_id is not None else "ak:unknown"
+    else:
+        uid = _ctx_user_id.get(None)
+        client = f"user:{uid}" if uid is not None else "user:unknown"
+    return f"hitl_decision:{org_s}:{auth_type}:{client}"
+
+
+async def _hitl_decision_budget_allowed() -> bool:
+    """Consume one token from the caller's HITL decision bucket.
+
+    Returns False once the caller exceeds 20 decisions/min (rate ~=0.33/s,
+    burst=20). FAIL-OPEN by design (availability over enforcement, the same
+    posture as the REST limiter's registry-failure behaviour): a limiter
+    defect must never block the human's decision — the FAR-611 sweep alarm
+    is the detective control that still fires regardless.
+    """
+    try:
+        return await _hitl_decision_limiter.consume(_hitl_decision_client_key())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("hitl_decision.budget_check_failed")
+        return True
+
+
+def _hitl_decision_rate_limited_response() -> dict[str, Any]:
+    return {
+        "error": "rate_limited",
+        "detail": "Rate limit exceeded for HITL decisions (20/min)",
+    }
+
+
 async def _trigger_pipeline_rate_allowed() -> bool:
     """Consume one token from the caller's trigger_pipeline bucket.
 
@@ -4100,6 +4169,21 @@ async def _dispatch_hitl_action(
     writing a bogus id.
     """
     client_type = "mcp"
+    # FAR-748: per-key decision budget (20/min, process-local bucket —
+    # the trigger_pipeline floor precedent). Fail-open: a limiter defect
+    # must never block the human's decision (availability over
+    # enforcement); the FAR-611 sweep alarm remains the detective
+    # control and fires regardless.
+    if action in ("approve", "deliver_manual") and not await _hitl_decision_budget_allowed():
+        _log.warning(
+            "hitl_decision.budget_exceeded",
+            extra={
+                "org_id": str(org_id),
+                "action": action,
+                "gate_id": gate_id,
+            },
+        )
+        return _hitl_decision_rate_limited_response()
     if action == "claim":
         if actor_account_id is None:
             return {
