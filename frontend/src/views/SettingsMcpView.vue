@@ -2,7 +2,7 @@
   <FeatureGate feature-name="mcp_server" show-disabled>
 
     <div data-theme="agent" class="page-wide">
-    <PageHeader title="MCP Configuration" subtitle="Configure Model Context Protocol (MCP) server settings and API keys" />
+    <PageHeader :title="$t('views.SettingsMcpView.mcp_configuration')" :subtitle="$t('views.SettingsMcpView.configure_mcp_server_settings_and_api_keys')" />
 
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
@@ -18,10 +18,9 @@
             v-if="!mcpUrl"
             class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning"
           >
-            <p class="font-medium">MODULO_PUBLIC_URL not set</p>
+            <p class="font-medium">{{ $t('views.SettingsMcpView.modulo_public_url_not_set') }}</p>
             <p class="mt-1">
-              The MODULO_PUBLIC_URL environment variable is not configured.
-              The MCP server URL will fall back to <code class="rounded bg-warning/10 px-1 py-0.5 text-xs">http://localhost:8000</code>.
+              {{ $t('views.SettingsMcpView.modulo_public_url_not_configured') }} <code class="rounded bg-warning/10 px-1 py-0.5 text-xs">http://localhost:8000</code>.
             </p>
           </div>
 
@@ -32,10 +31,10 @@
             </div>
             <div class="flex shrink-0 items-center gap-2">
               <Button severity="secondary" outlined size="small" data-testid="settings-mcp-copy-url" @click="copyServerUrl">
-                {{ copiedField === 'server-url' ? 'Copied!' : 'Copy' }}
+                {{ copiedField === 'server-url' ? $t('views.SettingsMcpView.copied') : $t('views.SettingsMcpView.copy') }}
               </Button>
               <Badge :severity="mcpUrl ? 'info' : 'secondary'">
-                {{ mcpUrl ? 'Active' : 'Local Only' }}
+                {{ mcpUrl ? $t('views.SettingsMcpView.active') : $t('views.SettingsMcpView.local_only') }}
               </Badge>
             </div>
           </div>
@@ -52,7 +51,7 @@
               <div class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication') }}</div>
             </div>
             <Button data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
-              Create MCP API Key
+              {{ $t('views.SettingsMcpView.create_mcp_api_key') }}
             </Button>
           </div>
         </template>
@@ -62,7 +61,7 @@
             {{ $t('views.SettingsMcpView.api_keys_act_org_wide_note') }}
           </p>
           <div v-if="apiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
-            No API keys created yet.
+            {{ $t('views.SettingsMcpView.no_api_keys_created_yet') }}
           </div>
 
           <div v-else class="overflow-x-auto">
@@ -84,15 +83,15 @@
                 <td class="py-2.5 capitalize">{{ key.role }}</td>
                 <td class="py-2.5">
                   <Badge :severity="key.is_active ? 'success' : 'secondary'">
-                    {{ key.is_active ? 'Active' : 'Revoked' }}
+                    {{ key.is_active ? $t('views.SettingsMcpView.active') : $t('views.SettingsMcpView.revoked') }}
                   </Badge>
                 </td>
                 <td class="py-2.5 text-muted-foreground">
-                  {{ key.last_used_at ? formatDate(key.last_used_at) : 'Never' }}
+                  {{ key.last_used_at ? formatDate(key.last_used_at) : $t('views.SettingsMcpView.never') }}
                 </td>
                 <td class="py-2.5 text-right">
                   <Button v-if="key.is_active" severity="danger" size="small" data-testid="settings-mcp-revoke-key" @click="confirmRevokeKey(key)">
-                    Revoke
+                    {{ $t('views.SettingsMcpView.revoke') }}
                   </Button>
                 </td>
               </tr>
@@ -114,7 +113,7 @@
             <Select
   aria-label="Client"
   v-model="selectedMcpClient"
-  placeholder="Select client"
+  :placeholder="$t('views.SettingsMcpView.client')"
   id="settingsmcpview-client"
   class="w-full"
   :options="[{ value: 'opencode', label: 'opencode / Claude Code' }, { value: 'claude', label: $t('views.SettingsMcpView.claude_desktop') }, { value: 'cursor', label: $t('views.SettingsMcpView.cursor') }, { value: 'continue', label: $t('views.SettingsMcpView.continue_dev') }, { value: 'custom', label: $t('views.SettingsMcpView.custom') }]"
@@ -128,7 +127,7 @@
           </div>
           <div class="rounded-lg bg-muted/30 p-4">
             <pre class="text-xs font-mono whitespace-pre-wrap break-all">{{ mcpConfigSnippet }}</pre>
-            <Button severity="secondary" outlined size="small" class="mt-2" @click="copySnippet">{{ $t('views.SettingsMcpView.copy') }}</Button>
+            <Button severity="secondary" outlined size="small" class="mt-2" data-testid="settings-mcp-copy-snippet" @click="copySnippet">{{ $t('views.SettingsMcpView.copy') }}</Button>
           </div>
           </div>
         </template>
@@ -149,9 +148,9 @@
 
     <FormDialog
       v-model:open="createKeyDialogOpen"
-      title="Create MCP API Key"
-      description="Generate a new API key for MCP client authentication"
-      confirmText="Create"
+      :title="$t('views.SettingsMcpView.create_mcp_api_key')"
+      :description="$t('views.SettingsMcpView.generate_new_api_key_description')"
+      :confirmText="$t('views.SettingsMcpView.create_mcp_api_key')"
       :confirmDisabled="!createKeyName.trim()"
       :loading="creatingKey"
       @confirm="createKey"
@@ -164,7 +163,7 @@
             type="text"
             data-testid="settings-mcp-create-key-name"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="e.g. Claude Desktop"
+            :placeholder="$t('views.SettingsMcpView.key_placeholder_example')"
             @blur="createKeyNameTouched = true"
           />
           <p
@@ -177,7 +176,7 @@
           <Select
   aria-label="Role"
   v-model="createKeyRole"
-  placeholder="Select role"
+  :placeholder="$t('views.SettingsMcpView.role')"
   data-testid="settings-mcp-create-key-role"
   id="settingsmcpview-role"
   class="w-full"
@@ -196,11 +195,11 @@
 
     <Dialog v-model:visible="keyCreatedDialogOpen" :modal="true" :dismissable-mask="true" class="sm:max-w-lg" @update:visible="onKeyCreatedDialogClose">
       <template #header>
-        <div class="text-lg font-semibold">API Key Created</div>
+        <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.api_key_created') }}</div>
       </template>
       <div class="space-y-4 py-2">
         <p class="text-sm text-muted-foreground">
-          Copy this key now. You will not be able to see it again.
+          {{ $t('views.SettingsMcpView.copy_key_now_warning') }}
         </p>
         <div class="space-y-4">
           <div>
@@ -208,39 +207,39 @@
             <p class="text-sm text-muted-foreground">{{ createdKeyName }}</p>
           </div>
           <div>
-            <p class="mb-1 text-sm font-medium">API Key</p>
+            <p class="mb-1 text-sm font-medium">{{ $t('views.SettingsMcpView.api_key') }}</p>
             <div class="relative">
-              <input aria-label="keyMasked ? "
+              <input :aria-label="$t('views.SettingsMcpView.api_key')"
                 :type="keyMasked ? 'password' : 'text'"
                 :value="createdKeyValue"
                 readonly
                 class="w-full rounded-lg border border-input bg-muted px-3 py-2 font-mono text-sm"
               />
               <Button severity="secondary" outlined size="small" class="absolute right-1 top-1" data-testid="settings-mcp-copy-key-value" @click="copyToClipboard(createdKeyValue, 'key-value')">
-                {{ copiedField === 'key-value' ? 'Copied!' : 'Copy' }}
+                {{ copiedField === 'key-value' ? $t('views.SettingsMcpView.copied') : $t('views.SettingsMcpView.copy') }}
               </Button>
             </div>
             <p v-if="!keyMasked" class="mt-1 text-xs text-muted-foreground">
-              This key will be masked in {{ keyMaskCountdown }}s
+              {{ $t('views.SettingsMcpView.key_will_be_masked_in', { seconds: keyMaskCountdown }) }}
             </p>
           </div>
         </div>
       </div>
       <template #footer>
-        <Button @click="keyCreatedDialogOpen = false">{{ $t('views.SettingsMcpView.done') }}</Button>
+        <Button data-testid="settings-mcp-key-created-done" @click="keyCreatedDialogOpen = false">{{ $t('views.SettingsMcpView.done') }}</Button>
       </template>
     </Dialog>
 
     <FormDialog
       v-model:open="revokeKeyDialogOpen"
-      title="Revoke API Key"
-      confirmText="Confirm Revoke"
+      :title="$t('views.SettingsMcpView.revoke_api_key')"
+      :confirmText="$t('views.SettingsMcpView.confirm_revoke')"
       :loading="revokingKey"
       @confirm="revokeKey"
     >
       <p class="text-sm text-muted-foreground">
-        Are you sure you want to revoke the key <strong>{{ revokeKeyTarget?.name }}</strong>?
-        Any clients using this key will lose access immediately.
+        {{ $t('views.SettingsMcpView.revoke_key_confirmation_part1') }} <strong>{{ revokeKeyTarget?.name }}</strong>?
+        {{ $t('views.SettingsMcpView.revoke_key_confirmation_part2') }}
       </p>
       <div v-if="revokeKeyError" class="text-sm text-destructive">{{ revokeKeyError }}</div>
     </FormDialog>

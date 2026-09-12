@@ -28,6 +28,20 @@ class HitlClaim(OrgScoped):
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
     )
+    # FAR-748: the durable per-actor DECISION record. ``account_id`` is the
+    # claimant and is NULLed at decision time (a decided row no longer owns a
+    # claim), so the FAR-611 sweep alarm previously had to reconstruct the
+    # actor from the hash-chained audit chain (best-effort — an audit append
+    # failure made a decision invisible to the alarm). ``decided_by`` is
+    # stamped at decision time (the single stamp authority, ``HITLManager.
+    # _decide``) so detection is one indexed claim-row query with no join to
+    # the audit table. NOT NULL going forward: every decision after this
+    # column exists carries an actor; rows decided before it carry NULL
+    # (legacy) and are skipped by the sweep detection rather than
+    # backfilled with a fictitious actor.
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+    )
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     claim_token: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

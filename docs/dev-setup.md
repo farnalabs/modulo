@@ -9,4 +9,4 @@ See [Deployment](deployment.md) for production deployment.
 - Python 3.12+
 - Node.js 20+
 - Docker Desktop (for local Postgres/Redis)
-- UV package manager (`pip install uv`)
+- UV package manager ([install](https://docs.astral.sh/uv/getting-started/installation/))
