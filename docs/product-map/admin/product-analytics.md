@@ -52,6 +52,13 @@ an eligible tier.
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
 
 ## QA History
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
+  testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/product-analytics`
+  and wired the two components into the reverse testid-coverage guard
+  (`test_mapped_route_elements_cover_owning_view_testids`), so the entitlement-card
+  surface on those pages stays visible to Remy's docs indexer / `/api/v1/manifest` and
+  can no longer drift unguarded.
 
 - 2026-09-11: **improve-architecture (product-map walk)** — registered the
   consent prompt surface (`product-analytics/ProductAnalyticsConsentPrompt.vue`

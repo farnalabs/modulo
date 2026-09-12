@@ -320,10 +320,11 @@ class TestMigrationBackfillGrace:
         # 0211_variant_batch_state chains on top of 0210, and FAR-775's
         # follow-up 0212_variant_batch_state_updated_at chains on top of 0211,
         # and FAR-788's 0213_runs_rerun_trigger_type chains on top of 0212,
-        # and 0215_drop_runs_blob_columns chains on top of 0213,
-        # and 0216_run_node_artifacts chains on top of 0215,
+        # and FAR-748's 0216_audit_events_sweep_detection_index chains on top of 0215,
+        # and 0217_hitl_claims_decided_by chains on top of 0216,
+        # and 0218_run_node_artifacts chains on top of 0217,
         # so it is now the single linear head of the chain.
-        assert heads == ["0216_run_node_artifacts"], f"expected a single head, got {heads}"
+        assert heads == ["0218_run_node_artifacts"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

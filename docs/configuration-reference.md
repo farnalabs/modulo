@@ -46,7 +46,7 @@ Controls a 98% hard-stop that refuses new runs when database capacity is nearly 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SECRET_KEY` | **Yes** | – | JWT signing key, minimum 32 bytes (256 bits) |
-| `FERNET_KEY` | **Yes** | – | Fernet encryption key, exactly 44 base64-encoded bytes |
+| `FERNET_KEY` | **Yes** | – | Fernet encryption key, minimum 32 bytes (typically 44 for a standard Fernet key) |
 | `FERNET_KEY_OLD` | No | – | Previous Fernet key for no-downtime rotation; decrypt falls back to this when `FERNET_KEY` is rotated |
 | `MODULO_USERS` | For seeding | – | Comma-separated `user:pass` pairs for initial user seed |
 | `MODULO_ADMIN_PASSWORD` | No | – | Admin password for single-admin alpha auth (at least one of `MODULO_ADMIN_PASSWORD` or `MODULO_USERS` must be set) |
