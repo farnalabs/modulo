@@ -1214,10 +1214,10 @@ class TestBackfillEnrichment:
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
                     "status, input_hash, langgraph_thread_id, run_number, created_at, started_at, "
                     "completed_at, dispatched_at, heartbeat_at, claim_count, cancellation_requested, "
-                    "error_code, outputs_json, rate_limit_key) "
+                    "error_code, rate_limit_key) "
                     "VALUES (:id, :oid, :pid, :sid, 'manual', 'failed', :hash, :thread, 7, "
                     ":created, :started, :completed, :dispatched, :heartbeat, 3, true, "
-                    "'executor_stalled', :outjson, 'rate:limit:key')"
+                    "'executor_stalled', 'rate:limit:key')"
                 ),
                 {
                     "id": str(run_id),
@@ -1231,8 +1231,19 @@ class TestBackfillEnrichment:
                     "dispatched": datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
                     "completed": datetime(2026, 8, 7, 9, 30, 0, tzinfo=UTC),
                     "heartbeat": datetime(2026, 8, 7, 9, 29, 0, tzinfo=UTC),
-                    "outjson": '{"node_a": {"result": "ok"}}',
                 },
+            )
+            # FAR-583 drop (migration 0215): the legacy runs ``outputs_json`` blob
+            # is gone. ``output_bytes`` is now reassembled from ``run_node_outputs``
+            # (the per-node store), so seed the run's ``__final__`` output row here.
+            await conn.execute(
+                text(
+                    "INSERT INTO run_node_outputs (organisation_id, run_id, node_id, "
+                    "attempt_key, outputs_json) "
+                    "VALUES (:oid, :rid, 'node_a', '__final__', "
+                    "CAST(:outjson AS jsonb))"
+                ),
+                {"oid": str(org_a), "rid": str(run_id), "outjson": '{"result": "ok"}'},
             )
 
         # Backfill via a BYPASSRLS role (the maintenance cron runs as one): the
@@ -1304,8 +1315,8 @@ class TestBackfillEnrichment:
         assert row[8] == 600, "max_node_timeout_seconds from the snapshot graph_json"
         assert row[10] == uuid.UUID(str(snapshot_id))
         assert row[11] == 7
-        assert row[12] is not None, "output_bytes from outputs_json"
-        assert row[12] > 0, "output_bytes from outputs_json"
+        assert row[12] is not None, "output_bytes reassembled from run_node_outputs"
+        assert row[12] > 0, "output_bytes reassembled from run_node_outputs"
         assert row[13] is True, "rate_limited from rate_limit_key"
         # FAR-134 concurrency columns — absolute instants + full queue wait.
         assert row[14] == datetime(2026, 8, 7, 9, 0, tzinfo=UTC), "dispatched_at from Run.dispatched_at"
