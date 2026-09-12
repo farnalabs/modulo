@@ -351,6 +351,12 @@ def test_mapped_route_elements_cover_owning_view_testids():
     its static ``page-header-right`` testid when the owning view passes a
     ``#right`` slot, so those routes list the component alongside the page view
     and register ``page-header-right`` in their elements inventory.
+
+    A page whose ``FilterBar`` receives a ``search`` prop owns the search-bar
+    surface too: ``components/shared/FilterBar.vue`` only ships its static
+    ``filter-bar-search`` / ``filter-bar-search-wrapper`` testids when ``search``
+    is configured, so those routes list the component and register the search
+    surface in their elements inventory.
     """
     owned_pages = {
         "/": (
@@ -414,6 +420,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/admin/housekeeping": (
             "frontend/src/views/AdminHousekeepingView.vue",
             "frontend/src/components/DbCapacityBanner.vue",
+            "frontend/src/components/shared/PageHeader.vue",
             "frontend/src/components/FeatureGate.vue",
             "frontend/src/components/LockIcon.vue",
         ),
@@ -446,6 +453,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/admin/run-retention": (
             "frontend/src/views/AdminRunRetentionView.vue",
             "frontend/src/components/DbCapacityBanner.vue",
+            "frontend/src/components/shared/PageHeader.vue",
             "frontend/src/components/FeatureGate.vue",
             "frontend/src/components/LockIcon.vue",
         ),
@@ -620,6 +628,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/lifecycle-maps": (
             "frontend/src/views/lifecycle-map/LifecycleMapList.vue",
             "frontend/src/components/shared/PageHeader.vue",
+            "frontend/src/components/shared/FilterBar.vue",
         ),
         "/notifications": "frontend/src/views/NotificationsPage.vue",
         "/onboarding": "frontend/src/views/OnboardingWizard.vue",

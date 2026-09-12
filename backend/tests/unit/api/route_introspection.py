@@ -7,6 +7,8 @@ route carries an appropriate permission dependency (task-authz-b-sweep).
 
 from __future__ import annotations
 
+import typing
+
 
 def get_all_apiroutes(app: object) -> list:
     """Extract all APIRoute instances, including nested included routers.
@@ -37,15 +39,50 @@ def get_mutating_routes(app: object) -> list:
     return out
 
 
+def _tagged_deps_from_param(param, annotation=None) -> list[dict]:
+    """Collect permission-tag dicts from a single endpoint parameter.
+
+    Relies on the ``_tagged_dep`` helper setting ``permission``/``permission_kind``
+    /``min_role`` on a ``Depends`` object. Two FastAPI patterns are supported:
+
+    * classic default-value form —
+      ``user: T = Depends(require_system_permission("..."))`` — where the
+      ``Depends`` is the parameter *default*;
+    * ``Annotated`` form (ADR 017 sweep, used to drop ``# type: ignore``) —
+      ``user: Annotated[T, Depends(require_system_permission("..."))]`` — where
+      the ``Depends`` lives in the annotation metadata rather than the default.
+    """
+    if annotation is None:
+        annotation = getattr(param, "annotation", None)
+    deps = []
+    # Classic default-value form.
+    default = getattr(param, "default", None)
+    if type(default).__name__ == "Depends" and getattr(default, "permission", None) is not None:
+        deps.append(default)
+    # Annotated-metadata form (resolved with include_extras=True so the
+    # metadata survives ``from __future__ import annotations`` stringification).
+    for meta in getattr(annotation, "__metadata__", ()):
+        if type(meta).__name__ == "Depends" and getattr(meta, "permission", None) is not None:
+            deps.append(meta)
+    return [
+        {
+            "permission": dep.permission,
+            "permission_kind": getattr(dep, "permission_kind", None),
+            "min_role": getattr(dep, "min_role", None),
+        }
+        for dep in deps
+    ]
+
+
 def get_permission_tag(route) -> dict | None:
     """Find the permission-dependency tag(s) on a route, if any.
 
     The ``_tagged_dep`` helper sets ``permission``/``permission_kind``/``min_role``
-    on the ``Depends`` object that becomes a route endpoint parameter default.
-    Inspect the endpoint signature's parameter defaults for a ``Depends`` whose
-    ``permission`` attribute is set. Multiple permission deps on one endpoint
-    (e.g. ``require_permission`` + ``require_team_membership_or_admin``) are
-    returned via the ``tags`` key; the primary tag is the first org-role one.
+    on the ``Depends`` object that becomes a route endpoint parameter default (or
+    lives in an ``Annotated`` metadata slot). Inspect each endpoint parameter for
+    a ``Depends`` whose ``permission`` attribute is set. Multiple permission deps
+    on one endpoint (e.g. ``require_permission`` + ``require_team_membership_or_admin``)
+    are returned via the ``tags`` key; the primary tag is the first org-role one.
     """
     import inspect
 
@@ -54,21 +91,17 @@ def get_permission_tag(route) -> dict | None:
         return None
     try:
         sig = inspect.signature(endpoint)
-    except (TypeError, ValueError):
+        # ``include_extras=True`` is essential: under ``from __future__ import
+        # annotations`` FastAPI routes the ``Depends`` lives in an ``Annotated``
+        # metadata slot, and the default ``inspect.signature`` resolution strips
+        # ``Annotated`` extras — which would make the permission tag invisible.
+        hints = typing.get_type_hints(endpoint, include_extras=True)
+    except (TypeError, ValueError, NameError):
         return None
     tags = []
-    for param in sig.parameters.values():
-        default = param.default
-        if type(default).__name__ == "Depends":
-            permission = getattr(default, "permission", None)
-            if permission is not None:
-                tags.append(
-                    {
-                        "permission": permission,
-                        "permission_kind": getattr(default, "permission_kind", None),
-                        "min_role": getattr(default, "min_role", None),
-                    }
-                )
+    for name, param in sig.parameters.items():
+        annotation = hints.get(name, param.annotation)
+        tags.extend(_tagged_deps_from_param(param, annotation))
     if not tags:
         return None
     primary = next(

@@ -34,7 +34,7 @@ from alembic.script import ScriptDirectory
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _MIGRATION_0113 = "0113_guardrail_summary"
 _HEAD_MIGRATION = "0213_runs_rerun_trigger_type"
-_CHAIN_HEAD_MIGRATION = "0218_run_node_artifacts"
+_CHAIN_HEAD_MIGRATION = "0220_run_node_artifacts"
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
 _SPEND_PARTIAL = "trigger_type <> 'ongoing' OR (daily_spend_limit IS NOT NULL AND daily_spend_limit > 0)"

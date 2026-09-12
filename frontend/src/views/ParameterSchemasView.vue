@@ -843,7 +843,7 @@ async function saveSchema() {
       creatingSchema.value = false
       editingSchema.value = resp.data as unknown as SchemaItem
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     saveError.value = formatApiError(err)
   } finally {
     saving.value = false
@@ -881,7 +881,7 @@ async function doDelete() {
     }
     deleteConfirmId.value = null
     await loadSchemas()
-  } catch (err: any) {
+  } catch (err: unknown) {
     deleteRefError.value = formatApiError(err)
   } finally {
     deleting.value = false
@@ -912,7 +912,7 @@ async function loadSets() {
       return
     }
     sets.value = (resp.data as any) ?? []
-  } catch (err: any) {
+  } catch (err: unknown) {
     setsError.value = formatApiError(err)
   } finally {
     setsLoading.value = false
@@ -970,7 +970,7 @@ async function saveSet() {
     }
     cancelSetEdit()
     await loadSets()
-  } catch (err: any) {
+  } catch (err: unknown) {
     setSaveError.value = formatApiError(err)
   } finally {
     setSaving.value = false
@@ -1003,7 +1003,7 @@ async function doDeleteSet() {
     }
     deleteSetConfirmId.value = null
     await loadSets()
-  } catch (err: any) {
+  } catch (err: unknown) {
     deleteSetError.value = formatApiError(err)
   } finally {
     deletingSet.value = false
@@ -1028,7 +1028,7 @@ async function loadReferences() {
       return
     }
     references.value = resp.data as unknown as ReferenceResponse
-  } catch (err: any) {
+  } catch (err: unknown) {
     refsError.value = formatApiError(err)
   } finally {
     refsLoading.value = false
@@ -1070,7 +1070,7 @@ async function doValidate() {
     } else {
       validateResult.value = { valid: true }
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     validateResult.value = { valid: false, errors: [{ message: formatApiError(err) }] }
   } finally {
     validating.value = false

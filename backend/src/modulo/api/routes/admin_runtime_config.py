@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import asdict
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -56,7 +56,7 @@ def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
 
 @router.get("", dependencies=[require_feature("runtime_config")])
 def get_runtime_config(
-    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE),  # type: ignore[assignment]
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE)],
 ) -> dict[str, Any]:
     try:
         return _build_response(get_runtime_config_store())
@@ -73,7 +73,7 @@ def get_runtime_config(
 @router.put("", dependencies=[require_feature("runtime_config")])
 def set_runtime_config_overrides(
     req: dict[str, Any],
-    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE),  # type: ignore[assignment]
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE)],
 ) -> dict[str, Any]:
     try:
         store = get_runtime_config_store()
@@ -128,7 +128,7 @@ def set_runtime_config_overrides(
 
 @router.post("/reload", dependencies=[require_feature("runtime_config")])
 def reload_runtime_config(
-    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE),  # type: ignore[assignment]
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE)],
 ) -> dict[str, Any]:
     try:
         store = get_runtime_config_store()

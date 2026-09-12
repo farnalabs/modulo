@@ -79,9 +79,10 @@ _MIGRATION_PATH = (
 # 0211_variant_batch_state chained onto 0210, and 0212_variant_batch_state_updated_at
 # chained onto 0211, and FAR-788's 0213_runs_rerun_trigger_type chained onto 0212, and
 # 0215_drop_runs_blob_columns chained onto 0213, FAR-748's 0216_audit_events_sweep_detection_index
-# chained onto 0215, 0217_hitl_claims_decided_by chained onto 0216, and 0218_run_node_artifacts
-# chained onto 0217 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0218_run_node_artifacts"
+# chained onto 0215, 0217_hitl_claims_decided_by chained onto 0216,
+# and 0219_eval_cluster_check_constraints chained onto 0218,
+# and 0220_run_node_artifacts chained onto 0219 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0220_run_node_artifacts"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

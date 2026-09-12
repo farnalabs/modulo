@@ -306,8 +306,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { api, getAccessToken } from "../lib/api/client";
-import { decodeJwtPayload } from "../lib/jwt";
+import { api } from "../lib/api/client";
+import { useCurrentUser } from "../composables/useCurrentUser";
 import Button from 'primevue/button'
 import { formatApiError } from "../lib/api/formatError";
 import type { components } from "../lib/api/client";
@@ -366,11 +366,8 @@ const teamEndpoints = computed(() =>
 
 // notification.manage resolves to operator; only operator+ may create/update/
 // delete webhook endpoints (SECURITY #1462).
-const canManage = computed(() => {
-  const payload = decodeJwtPayload(getAccessToken()) as Record<string, unknown> | null;
-  const role = payload?.org_role as string | undefined;
-  return role === "operator" || role === "admin";
-});
+const { isOperator } = useCurrentUser();
+const canManage = computed(() => isOperator.value);
 
 async function loadEndpoints() {
   loading.value = true;

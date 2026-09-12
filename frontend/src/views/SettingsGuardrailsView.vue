@@ -216,8 +216,8 @@ import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
 import Button from 'primevue/button'
-import { api, getAccessToken } from '../lib/api/client'
-import { decodeJwtPayload } from '../lib/jwt'
+import { api } from '../lib/api/client'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -231,17 +231,9 @@ import Select from 'primevue/select'
 
 const planStore = usePlanStore()
 const { t } = useI18n()
+const { jwtPayload } = useCurrentUser()
 
-interface JwtPayload {
-  org_role?: string
-  org_id?: string
-}
-
-function readJwtPayload(): JwtPayload | null {
-  return decodeJwtPayload(getAccessToken()) as JwtPayload | null
-}
-
-const orgId = computed(() => readJwtPayload()?.org_id ?? '')
+const orgId = computed(() => jwtPayload.value?.org_id ?? '')
 
 type PipelineItem = components['schemas']['PipelineResponse']
 

@@ -1,7 +1,7 @@
 """Add ``artifacts_json`` to ``run_node_outputs`` for FAR-582 side-car artifact pointers.
 
-Revision ID: 0218_run_node_artifacts
-Revises: 0217_hitl_claims_decided_by
+Revision ID: 0220_run_node_artifacts
+Revises: 0219_eval_cluster_check_constraints
 Create Date: 2026-09-12
 
 FAR-582: full sandbox stdout/stderr side-car files.  Each node attempt's
@@ -21,8 +21,8 @@ from alembic import op
 
 _log = logging.getLogger(__name__)
 
-revision = "0218_run_node_artifacts"
-down_revision = "0217_hitl_claims_decided_by"
+revision = "0220_run_node_artifacts"
+down_revision = "0219_eval_cluster_check_constraints"
 branch_labels: str | None = None
 depends_on: str | None = None
 

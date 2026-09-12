@@ -1445,6 +1445,9 @@ elements:
       - testid: hk-ckpt-error
         type: element
         dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
       - testid: db-capacity-banner
         type: element
         dynamic_testid: false
@@ -2002,6 +2005,9 @@ elements:
         dynamic_testid: false
       - testid: admin-run-retention-reset
         type: button
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
         dynamic_testid: false
       - testid: db-capacity-banner
         type: element
@@ -2652,6 +2658,12 @@ elements:
         type: button
         dynamic_testid: false
       - testid: page-header-right
+        type: element
+        dynamic_testid: false
+      - testid: filter-bar-search
+        type: input
+        dynamic_testid: false
+      - testid: filter-bar-search-wrapper
         type: element
         dynamic_testid: false
     /lifecycle-maps/:id:
@@ -4801,5 +4813,3 @@ sidebar_groups:
         order: 6
         default_expanded: false
         labelKey: components.SidebarNav.group_system
-
-
