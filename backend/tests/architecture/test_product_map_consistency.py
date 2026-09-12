@@ -810,6 +810,3 @@ def test_navigation_icons_resolve_in_svg_icon_map():
         "(the sidebar renders a generic placeholder for these):\n"
         + "\n".join(f"  {name} -> {icon}" for name, icon in sorted(unknown.items()))
     )
-
-
-
