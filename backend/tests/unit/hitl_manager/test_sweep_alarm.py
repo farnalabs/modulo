@@ -450,26 +450,30 @@ class TestManagerWiring:
 
 class TestDetectionQuery:
     async def test_count_query_is_org_and_actor_scoped(self):
-        """The detection statement filters on org, actor, decision event, window."""
+        """The detection statement filters on org, actor, decision, window.
+
+        FAR-748 durable detection shape: the count reads
+        ``hitl_claims.decided_by`` directly — one indexed claim-row aggregate,
+        no join to the hash-chained ``audit_events`` table."""
         session = _alarm_session(1, 1)
         window_start = datetime.now(UTC) - timedelta(seconds=sweep_alarm.SWEEP_WINDOW_SECONDS)
         await sweep_alarm.count_recent_approves(session, org_id=_ORG, actor_id=_USER, window_start=window_start)
         stmt = session.execute.await_args.args[0]
         compiled = stmt.compile()
         sql = str(compiled)
-        assert "audit_events" in sql
         assert "hitl_claims" in sql
-        # The decision event types are bound parameters, not SQL literals.
+        assert "audit_events" not in sql
+        # The counted decisions are bound parameters, not SQL literals.
         param_values = list(compiled.params.values())
         flat = [
             item for value in param_values for item in (list(value) if isinstance(value, (list, tuple)) else [value])
         ]
-        for event_type in sweep_alarm._DECISION_EVENT_TYPES:
-            assert event_type in flat
+        for decision in sweep_alarm._SWEEP_COUNTED_DECISIONS:
+            assert decision in flat
 
     async def test_count_query_covers_approve_and_manual_delivery(self):
         """Both decision surfaces are counted (FAR-611 review fix): the IN
-        clause carries ``hitl.output_delivered`` AND ``hitl.manual_delivery``
+        clause carries ``approved`` AND ``deliver_manual``
         so a mixed approve + manual-delivery sweep trips one aggregate
         threshold."""
         session = _alarm_session(1, 1)
@@ -486,8 +490,8 @@ class TestDetectionQuery:
         flat = [
             item for value in param_values for item in (list(value) if isinstance(value, (list, tuple)) else [value])
         ]
-        assert "hitl.output_delivered" in flat
-        assert "hitl.manual_delivery" in flat
+        assert "approved" in flat
+        assert "deliver_manual" in flat
 
     async def test_real_hitl_claim_model_is_not_required(self):
         """count_recent_approves works against a plain session mock (shape parity)."""
