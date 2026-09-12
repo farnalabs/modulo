@@ -1010,6 +1010,24 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
+        dynamic_testid: false
     /admin/connectors:
       - testid: admin-connectors-add
         type: button
@@ -2530,6 +2548,24 @@ elements:
       - testid: feedback-inbox-dismiss
         type: button
         dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
+        dynamic_testid: false
     /library:
       - testid: library-create-pipeline-header
         type: button
@@ -3205,6 +3241,15 @@ elements:
       - testid: remy-analytics-card
         type: element
         dynamic_testid: false
+      - testid: analytics-chart
+        type: element
+        dynamic_testid: false
+      - testid: analytics-chart-canvas
+        type: element
+        dynamic_testid: false
+      - testid: analytics-chart-empty
+        type: element
+        dynamic_testid: false
     /runs:
       - testid: runs-list-aggregate-cost
         type: element
@@ -3466,6 +3511,24 @@ elements:
       - testid: diff-identical-banner
         type: element
         dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
+        dynamic_testid: false
     /schemas:
       - testid: schema-list-move-error
         type: element
@@ -3613,6 +3676,24 @@ elements:
       - testid: schema-inference-discard
         type: button
         dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
+        dynamic_testid: false
     /settings/guardrails:
       - testid: feature-gate
         type: element
@@ -3677,6 +3758,24 @@ elements:
         dynamic_testid: false
       - testid: lock-icon
         type: element
+        dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
         dynamic_testid: false
     /settings/email:
       - testid: feature-gate
@@ -4060,6 +4159,24 @@ elements:
       - testid: settings-sso-delete-cancel
         type: button
         dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
+        dynamic_testid: false
     /settings/teams:
       - testid: feature-gate
         type: element
@@ -4331,6 +4448,24 @@ elements:
       - testid: variant-compare-run-variants
         type: button
         dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
+        dynamic_testid: false
     /variants/compare/:batchId:
       - testid: variant-batch-status
         type: element
@@ -4355,6 +4490,24 @@ elements:
         dynamic_testid: false
       - testid: variant-batch-new-comparison
         type: element
+        dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
         dynamic_testid: false
 features:
     feat-auth:

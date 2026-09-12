@@ -84,6 +84,16 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `retry` /
 ## QA History
 
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
+  `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
+  in the manifest `elements:` inventory for `/runs/diff`: the compared run-output
+  legs render inline with `<JsonViewer :show-toolbar="true">`
+  (`AgentOutputDiffView.vue`), so the viewer shipped in the DOM while staying
+  invisible to Remy's docs indexer / `/api/v1/manifest`. The component is now part
+  of the route's reverse testid-coverage guard
+  (`test_mapped_route_elements_cover_owning_view_testids`).
+
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/runs`, which
   renders the header's `#right` action slot, and wired the component into the reverse

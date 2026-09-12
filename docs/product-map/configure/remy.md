@@ -65,6 +65,15 @@ listed org roles always granted).
 
 ## QA History
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  `AnalyticsChart` surface (`components/analytics/AnalyticsChart.vue` static testids
+  `analytics-chart` / `analytics-chart-canvas` / `analytics-chart-empty`) in the
+  manifest `elements:` inventory for `/remy`: `RemyChat.vue` renders
+  `<AnalyticsChart>` for analytics-chart conversation turns, so the chart shipped
+  in the DOM while staying invisible to Remy's docs indexer / `/api/v1/manifest`.
+  The component is now part of the route's reverse testid-coverage guard
+  (`test_mapped_route_elements_cover_owning_view_testids`).
+
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/remy`
   and wired the two components into the reverse testid-coverage guard

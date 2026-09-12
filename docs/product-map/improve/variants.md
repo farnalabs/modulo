@@ -43,6 +43,16 @@ per node, prompt diffs and eval coverage gaps, and a batch-compare flow
 
 ## QA History
 
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
+  `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
+  in the manifest `elements:` inventory for `/variants/compare` and
+  `/variants/compare/:batchId`: both pages render the compared variant outputs
+  inline with `<JsonViewer>` (`VariantCompareView.vue` / `VariantBatchCompareView.vue`),
+  so the viewer shipped in the DOM while staying invisible to Remy's docs indexer /
+  `/api/v1/manifest`. The component is now part of both routes' reverse
+  testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`).
+
 - 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/variants/compare, /variants/compare/:batchId, /variants/ab-test`: the whole-page view(s) `VariantCompareView.vue, VariantBatchCompareView.vue, ABTestModelsView.vue` render static `data-testid`s that the

@@ -39,6 +39,16 @@ with sensitive value masking.
 
 ## QA History
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
+  `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
+  in the manifest `elements:` inventory for `/admin/system/config`: each config
+  entry's value renders inline with `<JsonViewer :show-toolbar="true">`
+  (`AdminSystemConfigView.vue`), so the viewer shipped in the DOM while staying
+  invisible to Remy's docs indexer / `/api/v1/manifest`. The component is now part
+  of the route's reverse testid-coverage guard
+  (`test_mapped_route_elements_cover_owning_view_testids`).
+
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/system/config`
   and wired the two components into the reverse testid-coverage guard

@@ -357,6 +357,16 @@ def test_mapped_route_elements_cover_owning_view_testids():
     ``filter-bar-search`` / ``filter-bar-search-wrapper`` testids when ``search``
     is configured, so those routes list the component and register the search
     surface in their elements inventory.
+
+    A page that renders the shared ``components/shared/JsonViewer.vue``
+    (an expanded audit payload, a system-config entry value, a feedback
+    correction proposal, a run-output diff leg, or a raw inferred schema) owns
+    its static testids — ``json-viewer`` and the toolbar / string-toggle
+    controls — because the viewer is part of the page surface whenever it is
+    shown. Likewise ``/remy`` embeds ``components/analytics/AnalyticsChart.vue``
+    through ``RemyChat.vue`` for analytics-chart turns, so the chart surface
+    (``analytics-chart`` / ``analytics-chart-canvas`` / ``analytics-chart-empty``)
+    is registered on the route.
     """
     owned_pages = {
         "/": (
@@ -369,6 +379,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
         "/admin/audit": (
             "frontend/src/views/AdminAuditView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
             "frontend/src/components/FeatureGate.vue",
             "frontend/src/components/LockIcon.vue",
         ),
@@ -459,6 +470,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         ),
         "/admin/system/config": (
             "frontend/src/views/AdminSystemConfigView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
             "frontend/src/components/FeatureGate.vue",
             "frontend/src/components/LockIcon.vue",
         ),
@@ -545,6 +557,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         ),
         "/settings/sso": (
             "frontend/src/views/SettingsSsoView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
             "frontend/src/components/FeatureGate.vue",
             "frontend/src/components/LockIcon.vue",
         ),
@@ -608,6 +621,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/remy": (
             "frontend/src/views/RemyOnlyView.vue",
             "frontend/src/components/remy/RemyChat.vue",
+            "frontend/src/components/analytics/AnalyticsChart.vue",
         ),
         "/schemas": (
             "frontend/src/views/SchemaListView.vue",
@@ -624,7 +638,10 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/components/FeatureGate.vue",
             "frontend/src/components/LockIcon.vue",
         ),
-        "/feedback/inbox": "frontend/src/views/FeedbackInboxView.vue",
+        "/feedback/inbox": (
+            "frontend/src/views/FeedbackInboxView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
+        ),
         "/lifecycle-maps": (
             "frontend/src/views/lifecycle-map/LifecycleMapList.vue",
             "frontend/src/components/shared/PageHeader.vue",
@@ -636,17 +653,29 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/views/CopyPipelineWizard.vue",
             "frontend/src/components/shared/FilterBar.vue",
         ),
-        "/runs/diff": "frontend/src/views/AgentOutputDiffView.vue",
+        "/runs/diff": (
+            "frontend/src/views/AgentOutputDiffView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
+        ),
         "/schemas/editor/:id": (
             "frontend/src/views/SchemaEditorView.vue",
             "frontend/src/components/shared/FilterBar.vue",
             "frontend/src/components/FeatureGate.vue",
             "frontend/src/components/LockIcon.vue",
         ),
-        "/schemas/infer": "frontend/src/views/SchemaInferenceView.vue",
+        "/schemas/infer": (
+            "frontend/src/views/SchemaInferenceView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
+        ),
         "/setup/model-backend/:id": "frontend/src/views/setup/ModelBackendSetupView.vue",
-        "/variants/compare": "frontend/src/views/VariantCompareView.vue",
-        "/variants/compare/:batchId": "frontend/src/views/VariantBatchCompareView.vue",
+        "/variants/compare": (
+            "frontend/src/views/VariantCompareView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
+        ),
+        "/variants/compare/:batchId": (
+            "frontend/src/views/VariantBatchCompareView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
+        ),
         "/variants/ab-test": "frontend/src/views/ABTestModelsView.vue",
     }
     elements = _load_elements()
