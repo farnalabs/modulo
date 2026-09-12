@@ -314,4 +314,10 @@ __all__ = [
     #     see the test call sites.
     "delete_node",
     "reset_store",
+    # --- FAR-796 managed workspace inputs core functions (test-referenced;
+    #     production callers land in the provisioning layer, so vulture cannot
+    #     see a prod call site yet) ---
+    "parse_ls_remote",
+    "resolve_movable_ref",
+    "build_input_clone_script",
 ]
