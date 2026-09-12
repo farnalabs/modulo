@@ -929,6 +929,9 @@ elements:
       - testid: spotlight-overlay
         type: element
         dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
     /library/collections/:id:
       - testid: collection-publish
         type: button
@@ -2582,6 +2585,9 @@ elements:
       - testid: filter-bar-search-wrapper
         type: element
         dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
     /library/collections/new:
       - testid: collection-name
         type: input
@@ -2645,11 +2651,20 @@ elements:
       - testid: lifecycle-map-list-next-page
         type: button
         dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
     /lifecycle-maps/:id:
       - testid: lifecycle-map-version-select
         type: select
         dynamic_testid: false
       - testid: lifecycle-map-view-edit
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-export
+        type: button
+        dynamic_testid: false
+      - testid: lifecycle-map-import
         type: button
         dynamic_testid: false
       - testid: lifecycle-map-export-error
@@ -2689,6 +2704,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: journey-overflow-chip
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
         type: element
         dynamic_testid: false
     /notifications:
@@ -2816,6 +2834,9 @@ elements:
         type: input
         dynamic_testid: false
       - testid: filter-bar-search-wrapper
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
         type: element
         dynamic_testid: false
     /pipelines/:id/editor:
@@ -3186,6 +3207,9 @@ elements:
         type: input
         dynamic_testid: false
       - testid: filter-bar-search-wrapper
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
         type: element
         dynamic_testid: false
     /runs/:id:
