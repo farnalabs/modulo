@@ -122,16 +122,17 @@ class ArtifactWriter:
         # Redact the combined text
         redacted = _redact_artifact_text(combined)
 
-        # The overlap portion of the redacted text becomes the new tail
-        if overlap:
-            # We only want the NEW portion after the overlap in the stored text
-            # But the overlap may have changed the redaction, so store the
-            # full redacted text and remember the tail for next time.
-            stored_text = redacted
-            self._prev_tail[stream] = redacted[-_REDACT_OVERLAP:] if len(redacted) > _REDACT_OVERLAP else redacted
-        else:
-            stored_text = redacted
-            self._prev_tail[stream] = redacted[-_REDACT_OVERLAP:] if len(redacted) > _REDACT_OVERLAP else redacted
+        # The overlap was already redacted and written to disk in the
+        # previous flush. Strip it from this flush's output to avoid
+        # duplicating content on disk.  If redaction modified the overlap
+        # length (credential pattern spanned the boundary), we strip
+        # approximately — a few chars of imprecision at the boundary is
+        # acceptable for best-effort credential scrubbing.
+        stored_text = (redacted[len(overlap) :] if len(redacted) > len(overlap) else "") if overlap else redacted
+
+        # Remember the tail for the next boundary check (always from the
+        # FULL redacted text, not the stored portion).
+        self._prev_tail[stream] = redacted[-_REDACT_OVERLAP:] if len(redacted) > _REDACT_OVERLAP else redacted
 
         try:
             self._store.append(

@@ -6075,7 +6075,7 @@ async def _finalize_artifact_writer(
                     organisation_id=uuid.UUID(org_id),
                     node_id=node_id,
                     attempt_key=attempt_key,
-                    pointers=pointers,
+                    pointers=pointers,  # type: ignore[arg-type]  # ArtifactPointer is a dict subclass
                 )
     except asyncio.CancelledError:
         raise

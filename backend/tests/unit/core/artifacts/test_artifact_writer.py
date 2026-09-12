@@ -106,7 +106,7 @@ def test_flush_respects_interval(tmp_path):
     writer.append("second\n", "stdout")
 
     # Now the buffer should be empty (flushed)
-    assert len(writer._buf["stdout"]) == 0
+    assert not writer._buf["stdout"]
 
 
 def test_flush_clears_buffer(tmp_path):
@@ -115,7 +115,7 @@ def test_flush_clears_buffer(tmp_path):
     writer.append("data\n", "stdout")
     assert len(writer._buf["stdout"]) == 1
     writer.flush("stdout")
-    assert len(writer._buf["stdout"]) == 0
+    assert not writer._buf["stdout"]
 
 
 # ── unknown stream is no-op ─────────────────────────────────────────────

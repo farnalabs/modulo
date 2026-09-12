@@ -41,6 +41,7 @@ from modulo.db.crud.run_retention import (
     list_retention_candidates,
     purge_terminal_runs,
 )
+from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -262,12 +263,17 @@ async def purge(
 
     # FAR-582: artifact side-car cleanup callback, invoked per-batch
     # before run rows are deleted.
-    def _on_batch_purge(runs: list, _org_id: uuid.UUID | None) -> None:
+    def _on_batch_purge(runs: list[Run], _org_id: uuid.UUID | None) -> None:
         try:
             from modulo.core.artifacts.store import get_store
 
             store = get_store()
         except Exception:
+            _log.warning(
+                "run_retention.artifact_store_unavailable",
+                exc_info=True,
+                extra={"batch_runs": len(runs)},
+            )
             return
         for run in runs:
             try:

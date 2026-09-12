@@ -27,7 +27,7 @@ import os
 import tempfile
 from contextlib import suppress
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import zstandard
 
@@ -42,7 +42,7 @@ _SUFFIX_ZST = ".zst"
 # ── pointer typed-dict ──────────────────────────────────────────────────
 
 
-class ArtifactPointer(dict):
+class ArtifactPointer(dict[str, str | int]):
     """Typed alias for an artifact pointer dict.
 
     The frontend consumption contract is exact:
@@ -97,7 +97,7 @@ class ArtifactStore(Protocol):
         """Compress and atomically replace the raw file; return pointer."""
         ...
 
-    def read_bytes(self, pointer: ArtifactPointer) -> bytes:
+    def read_bytes(self, pointer: dict[str, Any]) -> bytes:
         """Read and decompress the artifact; return raw bytes."""
         ...
 
@@ -136,7 +136,23 @@ class LocalArtifactStore:
 
     # ── internal helpers ────────────────────────────────────────────────
 
+    @staticmethod
+    def _validate_path_component(name: str, value: str) -> None:
+        """Reject path-traversal sequences in a path component.
+
+        ``../``, ``..\\``, ``/``, and ``\\`` would escape the intended
+        directory tree.  An absolute path (starting with ``/`` or a drive
+        letter on Windows) is also rejected.
+        """
+        if ".." in value or "/" in value or "\\" in value:
+            raise ValueError(f"Invalid {name}: path traversal characters not allowed")
+        if len(value) >= 2 and value[1] == ":":
+            raise ValueError(f"Invalid {name}: absolute path not allowed")
+
     def _node_dir(self, org_id: str, run_id: str, node_id: str) -> Path:
+        self._validate_path_component("org_id", org_id)
+        self._validate_path_component("run_id", run_id)
+        self._validate_path_component("node_id", node_id)
         return self._root / org_id / run_id / node_id
 
     def _raw_path(
@@ -147,6 +163,7 @@ class LocalArtifactStore:
         attempt_key: str,
         stream: str,
     ) -> Path:
+        self._validate_path_component("attempt_key", attempt_key)
         return self._node_dir(org_id, run_id, node_id) / f"{attempt_key}.{stream}{_SUFFIX_RAW}"
 
     def _zst_path(
@@ -157,6 +174,7 @@ class LocalArtifactStore:
         attempt_key: str,
         stream: str,
     ) -> Path:
+        self._validate_path_component("attempt_key", attempt_key)
         return self._node_dir(org_id, run_id, node_id) / f"{attempt_key}.{stream}{_SUFFIX_ZST}"
 
     def _rel_path(self, path: Path) -> str:
@@ -231,14 +249,14 @@ class LocalArtifactStore:
             compression="zstd",
         )
 
-    def read_bytes(self, pointer: ArtifactPointer) -> bytes:
-        path = self._root / pointer["rel_path"]
+    def read_bytes(self, pointer: dict[str, Any]) -> bytes:
+        path = self._root / str(pointer["rel_path"])
         if not path.exists():
             raise FileNotFoundError(f"Artifact not found: {pointer['rel_path']}")
         raw = path.read_bytes()
         if pointer.get("compression") == "zstd":
             dctx = zstandard.ZstdDecompressor()
-            return dctx.decompress(raw)
+            return bytes(dctx.decompress(raw))
         return raw
 
     def delete_run(self, org_id: str, run_id: str) -> int:
