@@ -59,6 +59,16 @@ purging old run data.
 
 ## QA History
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
+  `page-header-right`) in the manifest `elements:` inventory for
+  `/admin/housekeeping` and `/admin/run-retention`, whose owning views
+  (`AdminHousekeepingView.vue` / `AdminRunRetentionView.vue`) pass the header's
+  `#right` action slot (hk-refresh / admin-run-retention-* header actions), and
+  wired the component into the reverse testid-coverage guard
+  (`test_mapped_route_elements_cover_owning_view_testids`) so the header action
+  surface on both pages stays visible to Remy's docs indexer / `/api/v1/manifest`.
+
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/housekeeping`, `/admin/run-retention`,
   `/admin/runners/concurrency`, `/admin/runners/profiles`,
