@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import ForeignKey, Index, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -28,7 +28,14 @@ from modulo.db.models.base import OrgScoped
 
 class Journey(OrgScoped):
     __tablename__ = "journeys"
-    __table_args__ = (UniqueConstraint("organisation_id", "kind", "ref", name="uq_journeys_org_kind_ref"),)
+    __table_args__ = (
+        UniqueConstraint("organisation_id", "kind", "ref", name="uq_journeys_org_kind_ref"),
+        # Org growth / provenance-distribution queries group by the canonical
+        # per-journey provenance (FAR-794 slice 1). ``latest_provenance`` keeps
+        # its own meaning (compare-and-set terminal evidence) and is NOT indexed
+        # here.
+        Index("ix_journeys_org_provenance", "organisation_id", "provenance"),
+    )
 
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True, index=True
@@ -50,4 +57,12 @@ class Journey(OrgScoped):
     position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latest_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     latest_provenance: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # FAR-794 slice 1: canonical journey-level provenance. ``provenance`` is the
+    # mapped value of the FIRST observed ref source ('reported' legacy values
+    # map to 'agent'; 'derived' stays 'derived'; defaulted 'derived' when
+    # unrecoverable). ``first_seen_source`` records the mapped value only when
+    # it was recoverable — legacy rows with an unrecognised ``latest_provenance``
+    # carry NULL.
+    provenance: Mapped[str] = mapped_column(String(30), nullable=False, server_default="derived")
+    first_seen_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
