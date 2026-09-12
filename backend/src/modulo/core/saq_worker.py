@@ -1263,6 +1263,7 @@ async def slot_reconciliation(_ctx: dict[str, Any]) -> dict[str, Any]:
         {
             "last_run_at": datetime.now(UTC).isoformat(),
             "released": result["released"],
+            "retried": result.get("retried", 0),
             "per_pipeline": result["per_pipeline"],
         },
         SLOT_RECONCILIATION_STATS_TTL_SECONDS,

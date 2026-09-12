@@ -62,6 +62,7 @@ def _released_row() -> Any:
         id=RUN_ID,
         organisation_id=ORG_ID,
         pipeline_id=PIPELINE_ID,
+        claim_count=2,  # FAR-779: > HEARTBEAT_STALE_RETRY_BUDGET (1) -> terminal-fail
     )
 
 

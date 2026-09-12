@@ -53,6 +53,15 @@ _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
 # can never be miscounted as a hang.
 _SLOT_RELEASE_DETAIL = "Slot reconciliation: heartbeat stale past threshold; pipeline slot force-released (FAR-604)."
 
+# FAR-779: maximum number of times a heartbeat-stale run is auto-retried
+# (reset to pending for re-dispatch) before being terminal-failed.  The
+# budget is checked against ``runs.claim_count`` — each SAQ dequeue+claim
+# increments it, so a run that has been claimed multiple times and still
+# goes heartbeat-stale is genuinely stuck.  The sweep resets the run to
+# ``pending`` (clearing ``dispatched_at``/``dispatcher``/``heartbeat_at``)
+# so ``dispatcher_reconcile`` re-dispatches it on its next 60s tick.
+HEARTBEAT_STALE_RETRY_BUDGET = 1
+
 
 async def _advance_released_run(async_engine: AsyncEngine, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
     """Advance journeys + daily facts for a slot-released run (fail-open).
@@ -276,6 +285,7 @@ async def reconcile_pipeline_slots(
     settings = get_settings()
     window = stale_seconds if stale_seconds is not None else settings.slot_reconcile_stale_seconds
     released: list[Any] = []
+    retried: list[Any] = []
     per_pipeline: Counter[str] = Counter()
     sweep_error: BaseException | None = None
     try:
@@ -286,54 +296,101 @@ async def reconcile_pipeline_slots(
         for org_id in org_ids:
             async with async_engine.connect() as conn, conn.begin():
                 await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
+                # FAR-779: auto-retry heartbeat-stale runs instead of
+                # terminal-failing them immediately.  When claim_count <=
+                # HEARTBEAT_STALE_RETRY_BUDGET, the run is reset to pending
+                # (clearing dispatched_at/dispatcher/heartbeat_at) so
+                # dispatcher_reconcile re-dispatches it on its next 60s tick.
+                # When claim_count > budget, the run is terminal-failed — it
+                # has been claimed multiple times and still goes heartbeat-stale,
+                # meaning it is genuinely stuck.
                 result = await conn.execute(
                     text(
-                        "UPDATE runs "
-                        "SET status = 'failed', error_code = 'heartbeat_stale', "
-                        "error_detail = :detail, completed_at = now() "
+                        "UPDATE runs SET "
+                        "status = CASE "
+                        "  WHEN claim_count <= :retry_budget THEN 'pending' "
+                        "  ELSE 'failed' "
+                        "END, "
+                        "error_code = 'heartbeat_stale', "
+                        "error_detail = :detail, "
+                        "completed_at = CASE "
+                        "  WHEN claim_count <= :retry_budget THEN NULL "
+                        "  ELSE now() "
+                        "END, "
+                        "dispatched_at = NULL, "
+                        "dispatcher = NULL, "
+                        "heartbeat_at = NULL "
                         "WHERE status = 'running' "
                         "AND organisation_id = :oid "
                         "AND cancellation_requested = false "
                         "AND COALESCE(heartbeat_at, started_at, created_at) "
                         "    < now() - (:stale_seconds * interval '1 second') "
-                        "RETURNING id, organisation_id, pipeline_id"
+                        "RETURNING id, organisation_id, pipeline_id, claim_count"
                     ),
-                    {"oid": str(org_id), "stale_seconds": window, "detail": _SLOT_RELEASE_DETAIL},
+                    {
+                        "oid": str(org_id),
+                        "stale_seconds": window,
+                        "detail": _SLOT_RELEASE_DETAIL,
+                        "retry_budget": HEARTBEAT_STALE_RETRY_BUDGET,
+                    },
                 )
-                released.extend(result.all())
+                for row in result.all():
+                    if getattr(row, "claim_count", 0) <= HEARTBEAT_STALE_RETRY_BUDGET:
+                        retried.append(row)
+                    else:
+                        released.append(row)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         sweep_error = exc
         _log.exception("slot_reconciliation.sweep_failed")
     finally:
-        # Post-release advance — independent of the org-loop failure (F6):
-        # rows already released must still get their journeys + daily facts
-        # even when a later org's release loop blew up.
+        # Post-release advance — only for terminal-failed runs (FAR-779):
+        # retried runs (reset to pending) are NOT terminal and must NOT get
+        # their journeys + daily facts advanced — they will be re-dispatched
+        # by dispatcher_reconcile.
         for row in released:
             per_pipeline[str(row.pipeline_id)] += 1
             _log.info(
-                "slot_reconciliation.released run=%s pipeline=%s org=%s (heartbeat stale past %ss)",
+                "slot_reconciliation.released run=%s pipeline=%s org=%s "
+                "(heartbeat stale past %ss, claim_count=%d exceeded budget %d)",
                 row.id,
                 row.pipeline_id,
                 row.organisation_id,
                 window,
+                getattr(row, "claim_count", 0),
+                HEARTBEAT_STALE_RETRY_BUDGET,
             )
             await _advance_released_run(async_engine, row.id, row.organisation_id)
-        if released:
+        for row in retried:
+            per_pipeline[str(row.pipeline_id)] += 1
+            _log.warning(
+                "slot_reconciliation.retried run=%s pipeline=%s org=%s "
+                "(heartbeat stale past %ss, claim_count=%d <= budget %d"
+                " — reset to pending for re-dispatch)",
+                row.id,
+                row.pipeline_id,
+                row.organisation_id,
+                window,
+                getattr(row, "claim_count", 0),
+                HEARTBEAT_STALE_RETRY_BUDGET,
+            )
+        total_swept = len(released) + len(retried)
+        if total_swept:
             _log.info(
-                "slot_reconciliation.swept released=%d pipelines=%d",
+                "slot_reconciliation.swept released=%d retried=%d pipelines=%d",
                 len(released),
+                len(retried),
                 len(per_pipeline),
             )
 
     if sweep_error is not None:
         raise SlotReconciliationError(
             "slot reconciliation sweep failed",
-            released=len(released),
+            released=len(released) + len(retried),
             per_pipeline=dict(per_pipeline),
         ) from sweep_error
-    return {"released": len(released), "per_pipeline": dict(per_pipeline)}
+    return {"released": len(released), "retried": len(retried), "per_pipeline": dict(per_pipeline)}
 
 
 # ---------------------------------------------------------------------------
