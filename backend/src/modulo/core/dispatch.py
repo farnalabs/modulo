@@ -97,6 +97,59 @@ async def _capacity_deferred(session: AsyncSession, run_id: uuid.UUID) -> bool:
     return active >= max_concurrent
 
 
+# FAR-779: slot-saturation threshold — refuse new admissions when the
+# pipeline's active slots are at >= this fraction of max_concurrent_runs.
+# Under high concurrent dispatch volume, the SAQ worker's event loop can be
+# starved and the executor's heartbeat loop fails to write heartbeat_at in
+# time.  The slot-reconciliation sweep then kills the run.  By refusing
+# new admissions at saturation, we prevent heartbeat-stale kills.
+_SLOT_SATURATION_THRESHOLD = 0.9
+
+
+async def _slot_saturated(session: AsyncSession, run_id: uuid.UUID) -> bool:
+    """True when the pipeline's active slots are at >= 90% saturation.
+
+    A nearly-full pipeline cannot maintain heartbeats for additional runs.
+    This backpressure gate prevents new admissions that would be killed by
+    the slot-reconciliation sweep when the event loop is starved.
+
+    Fail-open: a missing pipeline or a read error ADMITS the run (logged) —
+    backpressure is an overload guard, never an admission authority.
+    """
+    from modulo.db.crud.run import count_active_runs_for_pipeline, get_run
+    from modulo.db.models.pipeline import Pipeline
+
+    try:
+        run = await get_run(session, run_id)
+        if run is None:
+            return False
+        pipeline = await session.get(Pipeline, run.pipeline_id)
+        if pipeline is None:
+            return False
+        max_concurrent = pipeline.max_concurrent_runs
+        if max_concurrent <= 0:
+            return False
+        active = await count_active_runs_for_pipeline(
+            session, run.pipeline_id, include_pending=False, exclude_run_id=run_id
+        )
+        saturation = active / max_concurrent
+        if saturation >= _SLOT_SATURATION_THRESHOLD:
+            _log.info(
+                "dispatch_run: slot_saturation pipeline=%s active=%d max=%d saturation=%.1f%%",
+                run.pipeline_id,
+                active,
+                max_concurrent,
+                saturation * 100,
+            )
+            return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatch_run: slot_saturation check failed for run %s (admitting)", run_id, exc_info=True)
+        return False
+    return False
+
+
 async def _org_capacity_deferred(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -482,6 +535,16 @@ async def dispatch_run(
                 return ("deferred", None)
             if await _org_capacity_deferred(session, rid, oid, job_type=job_type):
                 _log.info("dispatch_run: run %s org-capacity-deferred (no enqueue)", rid)
+                return ("deferred", None)
+            # FAR-779: slot-saturation backpressure — refuse new admissions
+            # when the pipeline's active slots are at >= 90% capacity.  Under
+            # high concurrent dispatch volume, the SAQ worker's event loop can
+            # be starved and the executor's heartbeat loop fails to write
+            # heartbeat_at in time.  The slot-reconciliation sweep then kills
+            # the run.  By refusing new admissions at 90% saturation, we
+            # prevent heartbeat-stale kills from slot exhaustion.
+            if await _slot_saturated(session, rid):
+                _log.info("dispatch_run: run %s slot-saturated (no enqueue)", rid)
                 return ("deferred", None)
     finally:
         await session.close()
