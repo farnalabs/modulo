@@ -1233,21 +1233,21 @@ class TestBackfillEnrichment:
                     "heartbeat": datetime(2026, 8, 7, 9, 29, 0, tzinfo=UTC),
                 },
             )
-        # The runs blob columns were dropped (migration 0215, FAR-583); the
-        # backfill reads output bytes from the per-node run_node_outputs rows
-        # instead. Seed one final-attempt row so output_bytes is populated.
-        await conn.execute(
-            text(
-                "INSERT INTO run_node_outputs (run_id, organisation_id, node_id, attempt_key, "
-                "outputs_json) "
-                "VALUES (:rid, :oid, 'node_a', '__final__', :outjson)"
-            ),
-            {
-                "rid": str(run_id),
-                "oid": str(org_a),
-                "outjson": '{"result": "ok"}',
-            },
-        )
+            # The runs blob columns were dropped (migration 0215, FAR-583); the
+            # backfill reads output bytes from the per-node run_node_outputs rows
+            # instead. Seed one final-attempt row so output_bytes is populated.
+            await conn.execute(
+                text(
+                    "INSERT INTO run_node_outputs (run_id, organisation_id, node_id, attempt_key, "
+                    "outputs_json) "
+                    "VALUES (:rid, :oid, 'node_a', '__final__', :outjson)"
+                ),
+                {
+                    "rid": str(run_id),
+                    "oid": str(org_a),
+                    "outjson": '{"result": "ok"}',
+                },
+            )
 
         # Backfill via a BYPASSRLS role (the maintenance cron runs as one): the
         # conftest FORCE-enables RLS on runs/pipeline_snapshots even for
