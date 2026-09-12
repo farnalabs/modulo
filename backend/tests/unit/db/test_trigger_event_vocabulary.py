@@ -78,8 +78,8 @@ _MIGRATION_PATH = (
 # chained onto 0208, FAR-764's 0210_community_gate chained onto 0209, and FAR-775's
 # 0211_variant_batch_state chained onto 0210, and 0212_variant_batch_state_updated_at
 # chained onto 0211, and FAR-788's 0213_runs_rerun_trigger_type chained onto 0212, and
-# 0215_drop_runs_blob_columns chained onto 0213 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0215_drop_runs_blob_columns"
+# 0216_run_node_artifacts chained onto 0215 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0216_run_node_artifacts"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

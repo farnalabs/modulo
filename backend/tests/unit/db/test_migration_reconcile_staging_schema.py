@@ -45,8 +45,8 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # chains off 0208, FAR-764's 0210_community_gate chains off 0209, and FAR-775's
 # 0211_variant_batch_state chains off 0210, and 0212_variant_batch_state_updated_at chains off 0211,
 # and FAR-788's 0213_runs_rerun_trigger_type chains off 0212, and
-# 0215_drop_runs_blob_columns chains off 0213 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0215_drop_runs_blob_columns"
+# 0216_run_node_artifacts chains off 0215 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0216_run_node_artifacts"
 
 
 def _source(name: str) -> str:

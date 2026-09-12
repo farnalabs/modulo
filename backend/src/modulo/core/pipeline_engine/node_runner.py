@@ -6122,6 +6122,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
 
+    # FAR-582: the sandbox watchdog + artifact writer are created during
+    # provisioning (after the sandbox is created). Bind them up-front so the
+    # terminal/exception paths that finalize artifacts can never hit
+    # UnboundLocalError when provisioning fails before they are assigned.
+    watchdog = None
+    _artifact_writer: "ArtifactWriter | None" = None  # noqa: UP037 — quotes needed: no `from __future__ import annotations`
+
     # FAR-792: effective stdout/stderr retention cap for this node. "tail"
     # (legacy default) keeps the 512KB bound; "full" honours stdout_max_bytes
     # (or the 5MB default). The same cap drives the stored artifact slices,
@@ -7338,7 +7345,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
                 # FAR-582: finalize artifacts before returning on schema-failure path.
                 await _finalize_artifact_writer(
-                    watchdog._artifact_writer,
+                    _artifact_writer,
                     session_factory=session_factory,
                     run_id=run_id,
                     org_id=org_id,
@@ -7464,7 +7471,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
 
         # FAR-582: finalize artifacts before returning on main success/failure path.
         await _finalize_artifact_writer(
-            watchdog._artifact_writer,
+            _artifact_writer,
             session_factory=session_factory,
             run_id=run_id,
             org_id=org_id,
@@ -7608,7 +7615,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
         # FAR-582: finalize artifacts before returning on exception path.
         await _finalize_artifact_writer(
-            watchdog._artifact_writer,
+            _artifact_writer,
             session_factory=session_factory,
             run_id=run_id,
             org_id=org_id,
