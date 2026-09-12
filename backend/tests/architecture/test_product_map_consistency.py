@@ -69,7 +69,21 @@ _IS_REDIRECT = re.compile(r"^\s{6,}redirect:", re.MULTILINE)
 
 #: Static ``data-testid`` literals contributing to each element inventory are
 #: qualified with the exact attribute form they must appear as in the sources.
-_TESTID_LITERAL = re.compile(r"data-testid=\"([a-zA-Z0-9_-]+)\"")
+#: A ``data-testid`` is *static* in three template forms:
+#:
+#: - a plain attribute ``data-testid="lit"`` (matched with a ``(?<!:)``
+#:   guard so the ``:data-testid="expr"`` dynamic-binding form is excluded —
+#:   a bare-identifier expression like ``:data-testid="dataTestId"`` would
+#:   otherwise be misread as a literal testid);
+#: - a bound single-quoted string ``:data-testid="'lit'"``;
+#: - a bound template literal ``:data-testid="`lit`"`` (no interpolation).
+#:
+#: Any other binding evaluates to a dynamic value and is not an element.
+_TESTID_LITERAL = re.compile(
+    r"(?<!:)data-testid=\"([a-zA-Z0-9_-]+)\""
+    r"|:data-testid=\"'([a-zA-Z0-9_-]+)'\""
+    r"|:data-testid=\"`([a-zA-Z0-9_-]+)`\""
+)
 
 
 def _routes_text() -> str:
@@ -245,7 +259,7 @@ def _static_testids_in_frontend() -> frozenset[str]:
         if path.suffix not in {".vue", ".ts", ".js"}:
             continue
         try:
-            src.update(_TESTID_LITERAL.findall(path.read_text(encoding="utf-8")))
+            src.update(t for match in _TESTID_LITERAL.findall(path.read_text(encoding="utf-8")) for t in match if t)
         except (OSError, UnicodeDecodeError):
             continue
     return frozenset(src)
@@ -331,10 +345,17 @@ def test_mapped_route_elements_cover_owning_view_testids():
     surface. The gate wraps the page content, so a newly shipped control on the
     entitlement card would otherwise stay invisible to Remy's docs indexer and
     to ``/api/v1/manifest`` on every gated route.
+
+    A page header with an action slot owns the ``PageHeader`` right-slot
+    surface: the shared ``components/shared/PageHeader.vue`` strips only render
+    its static ``page-header-right`` testid when the owning view passes a
+    ``#right`` slot, so those routes list the component alongside the page view
+    and register ``page-header-right`` in their elements inventory.
     """
     owned_pages = {
         "/": (
             "frontend/src/views/DashboardView.vue",
+            "frontend/src/components/shared/PageHeader.vue",
             "frontend/src/components/onboarding/OnboardingBanner.vue",
             "frontend/src/components/onboarding/SpotlightOverlay.vue",
         ),
@@ -467,6 +488,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         ),
         "/runs": (
             "frontend/src/views/RunsListView.vue",
+            "frontend/src/components/shared/PageHeader.vue",
             "frontend/src/components/shared/FilterBar.vue",
         ),
         "/runs/:id": (
@@ -559,16 +581,19 @@ def test_mapped_route_elements_cover_owning_view_testids():
         ),
         "/library": (
             "frontend/src/views/LibraryView.vue",
+            "frontend/src/components/shared/PageHeader.vue",
             "frontend/src/components/shared/FilterBar.vue",
         ),
         "/library/collections/new": "frontend/src/views/CollectionCreateView.vue",
         "/lifecycle-maps/:id": (
             "frontend/src/views/lifecycle-map/LifecycleMapView.vue",
+            "frontend/src/components/shared/PageHeader.vue",
             "frontend/src/components/lifecycle-map/LifecycleMapRenderer.vue",
         ),
         "/lifecycle-maps/:id/editor": "frontend/src/views/lifecycle-map/LifecycleMapEditorView.vue",
         "/pipelines": (
             "frontend/src/views/PipelineListView.vue",
+            "frontend/src/components/shared/PageHeader.vue",
             "frontend/src/components/shared/FilterBar.vue",
             "frontend/src/components/pipelines/FolderTree.vue",
         ),
@@ -592,7 +617,10 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/components/LockIcon.vue",
         ),
         "/feedback/inbox": "frontend/src/views/FeedbackInboxView.vue",
-        "/lifecycle-maps": "frontend/src/views/lifecycle-map/LifecycleMapList.vue",
+        "/lifecycle-maps": (
+            "frontend/src/views/lifecycle-map/LifecycleMapList.vue",
+            "frontend/src/components/shared/PageHeader.vue",
+        ),
         "/notifications": "frontend/src/views/NotificationsPage.vue",
         "/onboarding": "frontend/src/views/OnboardingWizard.vue",
         "/pipelines/copy": (
@@ -620,7 +648,12 @@ def test_mapped_route_elements_cover_owning_view_testids():
             {
                 testid
                 for view_rel in view_rels
-                for testid in _TESTID_LITERAL.findall((REPO_ROOT / view_rel).read_text(encoding="utf-8"))
+                for testid in (
+                    t
+                    for match in _TESTID_LITERAL.findall((REPO_ROOT / view_rel).read_text(encoding="utf-8"))
+                    for t in match
+                    if t
+                )
             }
             - documented
         )

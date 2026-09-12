@@ -69,6 +69,20 @@ edges representing transitions between stages.
 
 ## QA History
 
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
+  `page-header-right`) in the manifest `elements:` inventory for `/lifecycle-maps` and
+  `/lifecycle-maps/:id`, both of which render the header's `#right` action slot, and
+  wired the component into the reverse testid-coverage guard
+  (`test_mapped_route_elements_cover_owning_view_testids`) so the header action surface
+  stays visible to Remy's docs indexer / `/api/v1/manifest`. Also registered the map
+  detail page's header action buttons `lifecycle-map-export` / `lifecycle-map-import`
+  (bound-literal static testids that the manifest previously left out), and extended
+  the static-testid scanner to recognise bound string literals
+  (`:data-testid="'lit'"` / ``:data-testid="`lit`"``) while excluding dynamic
+  ``:data-testid="expr"`` bindings (bare-identifier props like `dataTestId` are no
+  longer misread as elements).
+
 - 2026-09-12: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/lifecycle-maps/:id/editor`: the whole-page view
