@@ -307,4 +307,10 @@ __all__ = [
     #     only); FastAPI consumes it as an HTTP endpoint, so it is
     #     load-bearing, not dead.
     "runtime_config_endpoint",
+    # --- FAR-796 managed workspace inputs core functions (test-referenced;
+    #     production callers land in the provisioning layer, so vulture cannot
+    #     see a prod call site yet) ---
+    "parse_ls_remote",
+    "resolve_movable_ref",
+    "build_input_clone_script",
 ]
