@@ -53,7 +53,7 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "heads"
+MIGRATION_REV = "0215_drop_runs_blob_columns"
 PREV_REV = "0214_connector_instance_indexes_unique"
 
 # The B1 deploy cutoff embedded in the migration (B1 merged 2026-09-10T11:25:42Z, PR #298).
