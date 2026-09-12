@@ -4801,5 +4801,3 @@ sidebar_groups:
         order: 6
         default_expanded: false
         labelKey: components.SidebarNav.group_system
-
-
