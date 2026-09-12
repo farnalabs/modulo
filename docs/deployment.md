@@ -356,7 +356,7 @@ DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
 | Rate limiting | Redis sliding window when Redis is reachable; per-process no-op otherwise |
 | Concurrency | Single process, single worker |
 
-Runs and triggers require Redis plus the SAQ workers — see [`docs/quickstart.md`](./quickstart.md) §3b. `REDIS_URL` defaults to `redis://localhost:6379/0`, so start a local Redis and the two SAQ workers; otherwise pipeline runs and cron/polling triggers never execute (and `api/main.py` refuses to boot if `REDIS_URL` is empty).
+Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.md`](./quickstart.md) §3b. `REDIS_URL` defaults to `redis://localhost:6379/0`, so start a local Redis and the two SAQ workers; otherwise pipeline runs and cron/polling triggers never execute (and `api/main.py` refuses to boot if `REDIS_URL` is empty).
 
 **What you lose vs. full deployment:**
 - **No horizontal scaling** – one process, one user at a time
