@@ -4154,6 +4154,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Artifact
+         * @description Download a decompressed artifact side-car file for a node attempt.
+         *
+         *     Returns the raw ``stdout`` or ``stderr`` content as ``text/plain``.
+         *     Returns 404 when the artifact is not found (node did not produce that
+         *     stream, or artifact storage is disabled).
+         */
+        get: operations["get_run_artifact_api_v1_runs__run_id__nodes__node_id__attempts__attempt_key__artifacts__stream__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runners/status": {
         parameters: {
             query?: never;
@@ -27906,6 +27930,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeOutputDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_artifact_api_v1_runs__run_id__nodes__node_id__attempts__attempt_key__artifacts__stream__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                node_id: string;
+                attempt_key: string;
+                stream: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

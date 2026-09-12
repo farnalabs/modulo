@@ -134,3 +134,8 @@ class RunNodeOutput(Base, TimestampMixin):
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     raw_output_markers: Mapped[Any] = mapped_column(JSON, nullable=True)
+    # FAR-582: per-node attempt artifact pointer list.
+    # JSON on the ORM (repo parity convention: JSONB only in migrations).
+    # Stores ``list[pointer]`` — zero or more artifact pointer dicts
+    # (stdout/stderr side-car files) for the node attempt.
+    artifacts_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)

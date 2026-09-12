@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Select, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
@@ -94,6 +95,7 @@ from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.otel_bridge import trace_id_for_thread
@@ -3030,6 +3032,100 @@ async def diff_node_output(
         node_output_b=masked_b,
         diff_lines=diff_lines,
         has_diff=has_diff,
+    )
+
+
+# ---------------------------------------------------------------------------
+# FAR-582: artifact side-car download
+# ---------------------------------------------------------------------------
+
+_CODE_RUN_ARTIFACT = "runs.get_run_artifact"
+
+_MSG_ARTIFACT_STREAM_NOT_FOUND = "Artifact stream not found"
+_MSG_ARTIFACT_NOT_CONFIGURED = "Artifact storage is not enabled"
+
+
+@router.get("/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}")
+@handle_db_errors("runs.get_run_artifact")
+async def get_run_artifact(
+    run_id: uuid.UUID,
+    node_id: str,
+    attempt_key: str,
+    stream: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_ARTIFACT),
+) -> Response:
+    """Download a decompressed artifact side-car file for a node attempt.
+
+    Returns the raw ``stdout`` or ``stderr`` content as ``text/plain``.
+    Returns 404 when the artifact is not found (node did not produce that
+    stream, or artifact storage is disabled).
+    """
+    if stream not in ("stdout", "stderr"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
+        )
+
+    try:
+        from modulo.core.artifacts.store import get_store
+
+        store = get_store()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_NOT_CONFIGURED,
+        ) from None
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            row = (
+                await session.execute(
+                    select(RunNodeOutput).where(
+                        RunNodeOutput.run_id == run_id,
+                        RunNodeOutput.node_id == node_id,
+                        RunNodeOutput.attempt_key == attempt_key,
+                    )
+                )
+            ).scalar_one_or_none()
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    if row is None or not row.artifacts_json:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
+        )
+
+    # Find the pointer for the requested stream
+    pointer = None
+    for ptr in row.artifacts_json:
+        if ptr.get("stream") == stream:
+            pointer = ptr
+            break
+
+    if pointer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
+        )
+
+    try:
+        content = store.read_bytes(pointer)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
+        ) from None
+
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
     )
 
 

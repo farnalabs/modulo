@@ -47,7 +47,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -882,6 +882,7 @@ async def purge_terminal_runs(
     pipeline_id: uuid.UUID | None = None,
     _status: str | None = None,
     batch_size: int = BATCH_SIZE_DEFAULT,
+    on_batch_purge: Callable[[list[Run], uuid.UUID | None], None] | None = None,
 ) -> dict[str, int]:
     """Delete terminal runs matching the filter set, cascading to checkpoints.
 
@@ -947,6 +948,10 @@ async def purge_terminal_runs(
                 await _delete_checkpoints(session, thread_ids, org_id)
                 await _delete_quarantine_rows(session, ids)
                 await _delete_run_id_rows(session, ids)
+                # FAR-582: notify caller of batch deletion so it can clean up
+                # artifact side-car files before the run rows are removed.
+                if on_batch_purge is not None:
+                    on_batch_purge(batch, org_id)
                 await session.execute(
                     text("DELETE FROM runs WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
                     {"ids": ids},
