@@ -3836,8 +3836,14 @@ elements:
       - testid: settings-mcp-copy-key-value
         type: button
         dynamic_testid: false
+      - testid: settings-mcp-copy-snippet
+        type: button
+        dynamic_testid: false
       - testid: settings-mcp-org-scope-note
         type: element
+        dynamic_testid: false
+      - testid: settings-mcp-key-created-done
+        type: button
         dynamic_testid: false
     /settings/observability:
       - testid: feature-gate
