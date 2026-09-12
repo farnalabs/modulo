@@ -30,12 +30,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from modulo.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
+from modulo.db.lifecycle_refs import (
+    _VALID_STATUSES,
+    canonicalise_kind,
+    canonicalise_ref,
+)
+from modulo.db.lifecycle_refs import (
+    REPORTED_SOURCE as _REPORTED_SOURCE,
+)
 
 _REF_KEYS: frozenset[str] = frozenset({"work_item_refs", "modulo.work_item_refs", "touched_work_items"})
-
-_REPORTED_SOURCE = "reported"
-_VALID_STATUSES: frozenset[str] = frozenset({"done", "attempted"})
 
 
 def parse_self_report_refs(merged_outputs: dict[str, Any]) -> list[dict[str, Any]]:

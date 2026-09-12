@@ -148,7 +148,7 @@ from modulo.db.crud.account import AccountNotFoundError
 from modulo.db.crud.hitl_gate_guard import GuardrailBindingStripDenied, HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
-from modulo.db.crud.run import get_run
+from modulo.db.crud.run import WorkItemRefsRequiredError, get_run
 from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
@@ -2677,6 +2677,7 @@ async def _create_manual_run(
     pid: uuid.UUID,
     pipeline_id: str,
     payload: dict[str, Any],
+    work_item_refs: list[dict[str, Any]] | None = None,
 ) -> tuple[uuid.UUID | None, str | None, dict[str, Any] | None]:
     from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
     from modulo.db.crud.run import create_run
@@ -2706,6 +2707,10 @@ async def _create_manual_run(
         snapshot_id=snapshot.id,
         trigger_type="manual",
         input_payload=payload,
+        # FAR-794 slice 2a: MCP caller-supplied refs; provenance is
+        # engine-assigned (caller) inside create_run — the wire source is
+        # never trusted.
+        work_item_refs=work_item_refs,
         # FAR-620 run attribution: manual MCP-triggered runs are stamped with
         # the CALLER's account (the account of the authenticating credential).
         # This enables the reject→correction guardrail dispatch
@@ -2720,6 +2725,7 @@ async def _create_manual_run(
 async def _trigger_pipeline_impl(
     pipeline_id: str,
     input_payload: dict[str, Any] | None,
+    work_item_refs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
@@ -2739,7 +2745,7 @@ async def _trigger_pipeline_impl(
     payload = input_payload or {}
 
     async with _session(org_id) as s:
-        run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload)
+        run_id, thread_id, run_err = await _create_manual_run(s, org_id, pid, pipeline_id, payload, work_item_refs)
     if run_err:
         return run_err
     if run_id is None:
@@ -2759,11 +2765,20 @@ async def _trigger_pipeline_impl(
 async def trigger_pipeline(
     pipeline_id: str,
     input_payload: dict[str, Any] | None = None,
+    work_item_refs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     try:
-        return await _trigger_pipeline_impl(pipeline_id, input_payload)
+        return await _trigger_pipeline_impl(pipeline_id, input_payload, work_item_refs)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
+    except WorkItemRefsRequiredError as exc:
+        # FAR-794 slice 2a: the pipeline declares work_item_refs_required and
+        # the trigger supplied none — a caller-fixable validation failure.
+        _log.info("trigger_pipeline work_item_refs_required pipeline=%s", exc.pipeline_id)
+        return {
+            "error": "work_item_refs_required",
+            "detail": "This pipeline requires work_item_refs but none were supplied",
+        }
     except SnapshotLockNotAvailableError:
         from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
 
