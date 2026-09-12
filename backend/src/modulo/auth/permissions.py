@@ -73,6 +73,8 @@ PERMISSIONS: dict[str, str] = {
     "run.output": "runner",
     "run.evals": "runner",
     "run.status": "viewer",
+    # FAR-582: artifact side-car download — reading run-produced artifact content,
+    # scoped like run.output (runner).
     "runs.get_run_artifact": "runner",
     # connectors
     "connector.create": "operator",
