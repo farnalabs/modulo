@@ -237,7 +237,7 @@ class TestHeartbeatStaleRetry:
         advance.assert_awaited_once()
         assert advance.await_args.args[1] == run_b.id
 
-    async def test_retry_budget_constant_is_positive(self) -> None:
+    def test_retry_budget_constant_is_positive(self) -> None:
         """Sanity: the budget must be a positive int."""
         assert isinstance(HEARTBEAT_STALE_RETRY_BUDGET, int)
         assert HEARTBEAT_STALE_RETRY_BUDGET >= 1
