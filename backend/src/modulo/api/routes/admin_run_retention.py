@@ -121,6 +121,33 @@ async def _run_scoped(session: AsyncSession, org_id: uuid.UUID | None) -> None:
     await set_rls_org(session, org_id)
 
 
+def _delete_run_artifacts(runs: list[Run], org_id: uuid.UUID | None) -> None:
+    """Delete artifact side-car files for a batch of runs (best-effort).
+
+    Extracted from the ``purge`` handler's inner callback to reduce its
+    cognitive complexity (python:S3776).
+    """
+    try:
+        from modulo.core.artifacts.store import get_store
+
+        store = get_store()
+    except Exception:
+        _log.warning(
+            "run_retention.artifact_store_unavailable",
+            exc_info=True,
+            extra={"batch_runs": len(runs)},
+        )
+        return
+    for run in runs:
+        try:
+            store.delete_run(str(run.organisation_id), str(run.id))
+        except Exception:
+            _log.warning(
+                "run_retention.artifact_delete_failed",
+                extra={"run_id": str(run.id), "org_id": str(run.organisation_id)},
+            )
+
+
 @router.get("/candidates", dependencies=[require_feature("admin_run_retention")])
 async def candidates(
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -261,29 +288,6 @@ async def purge(
 
     org_id = _resolve_org_id(principal, req.organisation_id)
 
-    # FAR-582: artifact side-car cleanup callback, invoked per-batch
-    # before run rows are deleted.
-    def _on_batch_purge(runs: list[Run], _org_id: uuid.UUID | None) -> None:
-        try:
-            from modulo.core.artifacts.store import get_store
-
-            store = get_store()
-        except Exception:
-            _log.warning(
-                "run_retention.artifact_store_unavailable",
-                exc_info=True,
-                extra={"batch_runs": len(runs)},
-            )
-            return
-        for run in runs:
-            try:
-                store.delete_run(str(run.organisation_id), str(run.id))
-            except Exception:
-                _log.warning(
-                    "run_retention.artifact_delete_failed",
-                    extra={"run_id": str(run.id), "org_id": str(run.organisation_id)},
-                )
-
     try:
         async with session.begin():
             await _run_scoped(session, org_id)
@@ -294,7 +298,7 @@ async def purge(
                 date_to=req.date_to,
                 pipeline_id=req.pipeline_id,
                 _status=req.status,
-                on_batch_purge=_on_batch_purge,
+                on_batch_purge=_delete_run_artifacts,
             )
 
             if org_id is not None:

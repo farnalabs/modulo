@@ -128,7 +128,11 @@ class ArtifactWriter:
         # length (credential pattern spanned the boundary), we strip
         # approximately — a few chars of imprecision at the boundary is
         # acceptable for best-effort credential scrubbing.
-        stored_text = (redacted[len(overlap) :] if len(redacted) > len(overlap) else "") if overlap else redacted
+        if overlap:  # noqa: SIM108 — if/else is intentional for S3358 clarity
+            # Strip the already-written overlap prefix from the redacted text.
+            stored_text = redacted[len(overlap) :] if len(redacted) > len(overlap) else ""
+        else:
+            stored_text = redacted
 
         # Remember the tail for the next boundary check (always from the
         # FULL redacted text, not the stored portion).

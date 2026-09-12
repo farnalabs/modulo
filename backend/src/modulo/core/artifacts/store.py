@@ -32,8 +32,6 @@ from typing import Any, Protocol, runtime_checkable
 
 import zstandard
 
-from modulo.settings import Settings, get_settings
-
 _log = logging.getLogger(__name__)
 
 # File suffixes
@@ -339,13 +337,12 @@ def get_store() -> LocalArtifactStore:
     """Return the singleton LocalArtifactStore, creating on first call."""
     global _store_instance
     if _store_instance is None:
-        settings = get_settings()
-        root = _resolve_artifacts_dir(settings)
+        root = _resolve_artifacts_dir()
         _store_instance = LocalArtifactStore(root)
     return _store_instance
 
 
-def _resolve_artifacts_dir(settings: Settings) -> Path:
+def _resolve_artifacts_dir() -> Path:
     """Resolve the artifact storage directory from settings."""
     env_val = os.environ.get("MODULO_ARTIFACTS_DIR", "")
     if env_val:

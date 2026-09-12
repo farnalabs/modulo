@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -264,3 +265,164 @@ def test_colon_attempt_key_multiple_streams(tmp_path):
     assert ptr_err is not None
     assert store.read_bytes(ptr_out) == b"out\n"
     assert store.read_bytes(ptr_err) == b"err\n"
+
+
+# ── path traversal validation ─────────────────────────────────────────
+
+
+def test_validate_path_component_rejects_dotslash(tmp_path):
+    """Path traversal with '..' is rejected."""
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError, match="path traversal"):
+        store.append("../escape", "run1", "node1", "attempt1", "stdout", "x")
+
+
+def test_validate_path_component_rejects_forward_slash(tmp_path):
+    """Forward slash in a path component is rejected."""
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError, match="path traversal"):
+        store.append("org/1", "run1", "node1", "attempt1", "stdout", "x")
+
+
+def test_validate_path_component_rejects_backslash(tmp_path):
+    """Backslash in a path component is rejected."""
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError, match="path traversal"):
+        store.append("org\\1", "run1", "node1", "attempt1", "stdout", "x")
+
+
+def test_validate_path_component_rejects_absolute_windows_path(tmp_path):
+    """Absolute Windows path (C:) is rejected."""
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError, match="absolute path"):
+        store.append("C:", "run1", "node1", "attempt1", "stdout", "x")
+
+
+# ── delete_run error paths ───────────────────────────────────────────
+
+
+def test_delete_run_handles_unlink_error(tmp_path, monkeypatch):
+    """delete_run logs warning on OSError during file unlink."""
+    store = _make_store(tmp_path)
+    store.append("org1", "run1", "node1", "attempt1", "stdout", "data")
+    store.finalize("org1", "run1", "node1", "attempt1", "stdout")
+
+    def failing_unlink(self, *args, **kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    # Should not raise — just logs warning
+    count = store.delete_run("org1", "run1")
+    assert count == 0
+
+
+def test_delete_run_handles_rmdir_error(tmp_path, monkeypatch):
+    """delete_run handles OSError during directory removal."""
+    store = _make_store(tmp_path)
+    store.append("org1", "run1", "node1", "attempt1", "stdout", "data")
+    store.finalize("org1", "run1", "node1", "attempt1", "stdout")
+
+    def failing_rmdir(self, *args, **kwargs):
+        raise OSError("directory busy")
+
+    monkeypatch.setattr(Path, "rmdir", failing_rmdir)
+    # Should not raise — the rmdir error is suppressed
+    count = store.delete_run("org1", "run1")
+    # Files should still be deleted even if rmdir fails
+    assert count >= 1
+
+
+# ── delete_node error paths ──────────────────────────────────────────
+
+
+def test_delete_node_nonexistent(tmp_path):
+    """delete_node on non-existent node returns 0."""
+    store = _make_store(tmp_path)
+    count = store.delete_node("org1", "nonexistent_run", "nonexistent_node")
+    assert count == 0
+
+
+def test_delete_node_handles_unlink_error(tmp_path, monkeypatch):
+    """delete_node logs warning on OSError during file unlink."""
+    store = _make_store(tmp_path)
+    store.append("org1", "run1", "node1", "attempt1", "stdout", "data")
+    store.finalize("org1", "run1", "node1", "attempt1", "stdout")
+
+    def failing_unlink(self, *args, **kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    count = store.delete_node("org1", "run1", "node1")
+    assert count == 0
+
+
+# ── read_bytes uncompressed ──────────────────────────────────────────
+
+
+def test_read_bytes_uncompressed(tmp_path):
+    """read_bytes returns raw bytes when compression is not zstd."""
+    store = _make_store(tmp_path)
+    # Write a file directly without compression
+    node_dir = store._node_dir("org1", "run1", "node1")
+    node_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = node_dir / "attempt1.stdout.raw"
+    raw_path.write_bytes(b"uncompressed data")
+
+    ptr = ArtifactPointer(
+        stream="stdout",
+        rel_path=store._rel_path(raw_path),
+        size_bytes=len(b"uncompressed data"),
+        sha256="abc",
+        compression="none",
+    )
+    result = store.read_bytes(ptr)
+    assert result == b"uncompressed data"
+
+
+# ── finalize failure cleanup ─────────────────────────────────────────
+
+
+def test_finalize_cleanup_on_write_failure(tmp_path):
+    """finalize cleans up temp file when write fails."""
+    from unittest.mock import patch
+
+    store = _make_store(tmp_path)
+    store.append("org1", "run1", "node1", "attempt1", "stdout", "data")
+
+    # The finalize flow: read raw -> compress -> write temp -> replace.
+    # If write_bytes fails on the temp file, the except handler cleans it up.
+    # We intercept tempfile.mkstemp to track the temp path.
+    created_temps: list[str] = []
+    _orig_mkstemp = __import__("tempfile").mkstemp
+
+    def tracking_mkstemp(*args, **kwargs):
+        fd, path = _orig_mkstemp(*args, **kwargs)
+        created_temps.append(path)
+        return fd, path
+
+    with (
+        patch("tempfile.mkstemp", tracking_mkstemp),
+        patch.object(Path, "write_bytes", side_effect=OSError("disk full")),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        store.finalize("org1", "run1", "node1", "attempt1", "stdout")
+    # Temp file should have been cleaned up by the except handler
+    for tmp in created_temps:
+        assert not Path(tmp).exists()
+
+
+# ── reset_store ──────────────────────────────────────────────────────
+
+
+def test_reset_store_clears_singleton(tmp_path):
+    """reset_store clears the module-level singleton."""
+    from modulo.core.artifacts.store import get_store, reset_store
+
+    # Ensure singleton is set
+    store = get_store()
+    assert store is not None
+    # Reset it
+    reset_store()
+    from modulo.core.artifacts.store import _store_instance as inst_after
+
+    assert inst_after is None

@@ -136,3 +136,71 @@ def test_disabled_no_store(tmp_path):
     """When disabled, no store is created."""
     writer, _ = _make_writer(tmp_path, enabled=False)
     assert writer._store is None
+
+
+# ── flush failure path ────────────────────────────────────────────────
+
+
+def test_flush_failure_is_swallowed(tmp_path):
+    """Flush failure logs but does not raise."""
+    from unittest.mock import patch
+
+    writer, _store = _make_writer(tmp_path)
+    writer.append("data\n", "stdout")
+
+    # Force the flush to happen
+    writer._last_flush_ts["stdout"] = time.monotonic() - _FLUSH_INTERVAL - 1
+
+    with patch.object(_store, "append", side_effect=OSError("disk full")):
+        # Should not raise — flush failure is logged and swallowed
+        writer.flush("stdout")
+    # Buffer should still be cleared (the failure is after append call)
+    assert not writer._buf["stdout"]
+
+
+# ── redaction overlap path ────────────────────────────────────────────
+
+
+def test_redaction_overlap_strips_old_content(tmp_path):
+    """When overlap exists, the overlap prefix is stripped from stored text."""
+    writer, store = _make_writer(tmp_path)
+
+    # First flush — establishes the overlap
+    writer.append("first chunk of text\n", "stdout")
+    writer._last_flush_ts["stdout"] = time.monotonic() - _FLUSH_INTERVAL - 1
+    writer.append("second\n", "stdout")
+
+    # The prev_tail should now have content from the first redacted text
+    assert writer._prev_tail["stdout"]
+
+    # Force another flush with overlap
+    writer._last_flush_ts["stdout"] = time.monotonic() - _FLUSH_INTERVAL - 1
+    writer.append("third chunk\n", "stdout")
+
+    # Finalize and check the content
+    pointers = writer.finalize()
+    assert len(pointers) == 1
+    content = store.read_bytes(pointers[0]).decode("utf-8")
+    # Content should contain the actual data
+    assert "third chunk" in content
+
+
+# ── _redact_artifact_text fallback ───────────────────────────────────
+
+
+def test_redact_artifact_text_empty():
+    """_redact_artifact_text returns empty string as-is."""
+    from modulo.core.artifacts.writer import _redact_artifact_text
+
+    assert _redact_artifact_text("") == ""
+
+
+# ── append to non-existent stream ─────────────────────────────────────
+
+
+def test_append_to_nonexistent_stream(tmp_path):
+    """Appending to a non-existent stream is silently ignored."""
+    writer, _ = _make_writer(tmp_path)
+    writer.append("data\n", "nonexistent")
+    # No error, no buffer entry
+    assert "nonexistent" not in writer._buf
