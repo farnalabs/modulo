@@ -35,10 +35,10 @@ from modulo.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 
-# The generic-JSON run columns the deploy's json/jsonb promotion targets.
-# FAR-583 migration 0215 dropped the legacy blobs (outputs_json /
-# node_telemetry_json) from runs — only node_token_usage / cost_breakdown
-# remain as generic-JSON run columns.
+# The generic-JSON run columns the deploy's json/jsonb promotion targets that
+# still exist on ``runs`` after the FAR-583 blob-column drop (migration 0215).
+# The legacy blobs (``outputs_json`` / ``node_telemetry_json``) are GONE — the
+# fenced status write carries them onto ``run_node_outputs`` instead.
 _JSON_COLUMNS = ("node_token_usage", "cost_breakdown")
 
 

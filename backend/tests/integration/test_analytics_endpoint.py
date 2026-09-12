@@ -1233,20 +1233,17 @@ class TestBackfillEnrichment:
                     "heartbeat": datetime(2026, 8, 7, 9, 29, 0, tzinfo=UTC),
                 },
             )
-            # The runs blob columns were dropped (migration 0215, FAR-583); the
-            # backfill reads output bytes from the per-node run_node_outputs rows
-            # instead. Seed one final-attempt row so output_bytes is populated.
+            # FAR-583 drop (migration 0215): the legacy runs ``outputs_json`` blob
+            # is gone. ``output_bytes`` is now reassembled from ``run_node_outputs``
+            # (the per-node store), so seed the run's ``__final__`` output row here.
             await conn.execute(
                 text(
-                    "INSERT INTO run_node_outputs (run_id, organisation_id, node_id, attempt_key, "
-                    "outputs_json) "
-                    "VALUES (:rid, :oid, 'node_a', '__final__', :outjson)"
+                    "INSERT INTO run_node_outputs (organisation_id, run_id, node_id, "
+                    "attempt_key, outputs_json) "
+                    "VALUES (:oid, :rid, 'node_a', '__final__', "
+                    "CAST(:outjson AS jsonb))"
                 ),
-                {
-                    "rid": str(run_id),
-                    "oid": str(org_a),
-                    "outjson": '{"result": "ok"}',
-                },
+                {"oid": str(org_a), "rid": str(run_id), "outjson": '{"result": "ok"}'},
             )
 
         # Backfill via a BYPASSRLS role (the maintenance cron runs as one): the
@@ -1318,8 +1315,8 @@ class TestBackfillEnrichment:
         assert row[8] == 600, "max_node_timeout_seconds from the snapshot graph_json"
         assert row[10] == uuid.UUID(str(snapshot_id))
         assert row[11] == 7
-        assert row[12] is not None, "output_bytes from outputs_json"
-        assert row[12] > 0, "output_bytes from outputs_json"
+        assert row[12] is not None, "output_bytes reassembled from run_node_outputs"
+        assert row[12] > 0, "output_bytes reassembled from run_node_outputs"
         assert row[13] is True, "rate_limited from rate_limit_key"
         # FAR-134 concurrency columns — absolute instants + full queue wait.
         assert row[14] == datetime(2026, 8, 7, 9, 0, tzinfo=UTC), "dispatched_at from Run.dispatched_at"
