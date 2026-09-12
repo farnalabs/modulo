@@ -1732,6 +1732,9 @@ elements:
       - testid: product-analytics-toggle
         type: element
         dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
     /admin/parameter-schemas:
       - testid: paramschema-new
         type: button
@@ -3908,6 +3911,9 @@ elements:
         dynamic_testid: false
       - testid: hitl-review-claim-failure-banner
         type: element
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
         dynamic_testid: false
       - testid: hitl-review-fetch-error
         type: element

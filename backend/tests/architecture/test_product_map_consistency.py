@@ -367,6 +367,16 @@ def test_mapped_route_elements_cover_owning_view_testids():
     through ``RemyChat.vue`` for analytics-chart turns, so the chart surface
     (``analytics-chart`` / ``analytics-chart-canvas`` / ``analytics-chart-empty``)
     is registered on the route.
+
+    A page whose ``ErrorAlert`` receives a dismiss (``on-dismiss`` plus a
+    ``dismissLabel`` — the shared ``components/shared/ErrorAlert.vue`` only
+    ships ``error-alert-dismiss`` when both are configured) owns the dismiss
+    surface: the hitl-review claim-failure banner (``/settings/hitl-review``)
+    passes both, and the org product-analytics error strip surfaces it through
+    ``components/product-analytics/ProductAnalyticsSettings.vue`` ->
+    ``components/product-analytics/ProductAnalyticsError.vue``
+    (``/admin/org``), so those routes list the components and register
+    ``error-alert-dismiss`` in their elements inventory.
     """
     owned_pages = {
         "/": (
@@ -491,6 +501,8 @@ def test_mapped_route_elements_cover_owning_view_testids():
         ),
         "/admin/org": (
             "frontend/src/views/AdminOrgSettingsView.vue",
+            "frontend/src/components/product-analytics/ProductAnalyticsSettings.vue",
+            "frontend/src/components/product-analytics/ProductAnalyticsError.vue",
             "frontend/src/components/FeatureGate.vue",
             "frontend/src/components/LockIcon.vue",
         ),
@@ -537,6 +549,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/settings/hitl-review": (
             "frontend/src/views/SettingsHitlReviewView.vue",
             "frontend/src/components/shared/FilterBar.vue",
+            "frontend/src/components/shared/ErrorAlert.vue",
             "frontend/src/components/hitl/HitlGateCard.vue",
             "frontend/src/components/HitlBriefing.vue",
         ),
