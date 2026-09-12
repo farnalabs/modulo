@@ -37,29 +37,33 @@ depends_on: str | None = None
 
 _CONSTRAINTS: list[tuple[str, str, str]] = [
     # (table, constraint_name, check_expression)
-    ("eval_definitions", "ck_eval_definitions_pass_threshold_range",
-     "pass_threshold IS NULL OR (pass_threshold >= 0 AND pass_threshold <= 1)"),
-    ("eval_definitions", "ck_eval_definitions_version_gte_1",
-     "version >= 1"),
-    ("eval_suites", "ck_eval_suites_minimum_delta_range",
-     "minimum_delta IS NULL OR (minimum_delta >= 0 AND minimum_delta <= 1)"),
-    ("eval_suites", "ck_eval_suites_baseline_window_gte_1",
-     "baseline_window IS NULL OR baseline_window >= 1"),
-    ("eval_suites", "ck_eval_suites_cooldown_gte_0",
-     "cooldown IS NULL OR cooldown >= 0"),
-    ("eval_suites", "ck_eval_suites_version_gte_1",
-     "version >= 1"),
-    ("eval_datasets", "ck_eval_datasets_version_gte_1",
-     "version >= 1"),
-    ("suite_runs", "ck_suite_runs_version_gte_0",
-     "version >= 0"),
-    ("suite_runs", "ck_suite_runs_dataset_version_gte_1",
-     "dataset_version >= 1"),
-    ("suite_runs", "ck_suite_runs_cost_non_negative",
-     "(total_cost_usd IS NULL OR total_cost_usd >= 0) AND "
-     "(claimed_cost IS NULL OR claimed_cost >= 0)"),
-    ("suite_runs", "ck_suite_runs_case_counts_consistent",
-     "passed_cases + failed_cases + excluded_case_count <= total_cases"),
+    (
+        "eval_definitions",
+        "ck_eval_definitions_pass_threshold_range",
+        "pass_threshold IS NULL OR (pass_threshold >= 0 AND pass_threshold <= 1)",
+    ),
+    ("eval_definitions", "ck_eval_definitions_version_gte_1", "version >= 1"),
+    (
+        "eval_suites",
+        "ck_eval_suites_minimum_delta_range",
+        "minimum_delta IS NULL OR (minimum_delta >= 0 AND minimum_delta <= 1)",
+    ),
+    ("eval_suites", "ck_eval_suites_baseline_window_gte_1", "baseline_window IS NULL OR baseline_window >= 1"),
+    ("eval_suites", "ck_eval_suites_cooldown_gte_0", "cooldown IS NULL OR cooldown >= 0"),
+    ("eval_suites", "ck_eval_suites_version_gte_1", "version >= 1"),
+    ("eval_datasets", "ck_eval_datasets_version_gte_1", "version >= 1"),
+    ("suite_runs", "ck_suite_runs_version_gte_0", "version >= 0"),
+    ("suite_runs", "ck_suite_runs_dataset_version_gte_1", "dataset_version >= 1"),
+    (
+        "suite_runs",
+        "ck_suite_runs_cost_non_negative",
+        ("(total_cost_usd IS NULL OR total_cost_usd >= 0) AND (claimed_cost IS NULL OR claimed_cost >= 0)"),
+    ),
+    (
+        "suite_runs",
+        "ck_suite_runs_case_counts_consistent",
+        "passed_cases + failed_cases + excluded_case_count <= total_cases",
+    ),
 ]
 
 
