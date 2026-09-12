@@ -45,6 +45,12 @@ class ErrorCodeSpec:
 _CODE_HARNESS_UNKNOWN = "harness.unknown"
 _CODE_HARNESS_EXECUTOR_FAILED = "harness.executor_failed"
 _CODE_HARNESS_DISPATCH_FAILED = "harness.dispatch_failed"
+# FAR-604 P1: the heartbeat-stale slot-reconciliation sweep (run_admission)
+# terminalizes a run whose heartbeat froze past the stale threshold. A DISTINCT
+# code from ``harness.dispatch_failed`` (the legacy ``worker_lost`` alias) so
+# analytics can tell "never dispatched" from "dispatched, then the heartbeat
+# went silent and the slot was force-released".
+_CODE_HARNESS_HEARTBEAT_STALE = "harness.heartbeat_stale"
 _CODE_NODE_TIMEOUT = "node.timeout"
 _CODE_NODE_RUNAWAY = "node.runaway"
 _CODE_EVAL_BLOCKED = "eval.blocked"
@@ -189,6 +195,19 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         retryable=True,
         alert_severity="warning",
         guidance="Run was never dispatched.",
+    ),
+    # FAR-604 P1: registered (and aliased in LEGACY_ALIASES as the raw
+    # ``heartbeat_stale`` spelling the sweep writes) so the heartbeat-stale
+    # slot force-release never resolves through the ``harness.unknown``
+    # fallback and analytics buckets it as its own class, distinct from
+    # ``harness.dispatch_failed`` (never dispatched). Transient like the
+    # sibling harness codes; warning-level — a frozen heartbeat usually means
+    # a wedged worker or a DB storm, both worth watching.
+    _CODE_HARNESS_HEARTBEAT_STALE: ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Heartbeat stale past threshold; concurrency slot force-released by reconciliation.",
     ),
     "harness.worker_failed": ErrorCodeSpec(
         error_class="harness",
@@ -569,6 +588,11 @@ LEGACY_ALIASES: dict[str, str] = {
     "never_dispatched": _CODE_HARNESS_DISPATCH_FAILED,
     "dispatch_failed": _CODE_HARNESS_DISPATCH_FAILED,
     "worker_lost": _CODE_HARNESS_DISPATCH_FAILED,
+    # FAR-604 P1: the heartbeat-stale slot-reconciliation sweep writes the raw
+    # ``heartbeat_stale`` spelling — canonicalized to its own registry entry
+    # (distinct from ``worker_lost``/``harness.dispatch_failed``) so analytics
+    # separates "never dispatched" from "dispatched, heartbeat went stale".
+    "heartbeat_stale": _CODE_HARNESS_HEARTBEAT_STALE,
     "task_failure": "harness.worker_failed",
     "gate_creation_failed": "harness.gate_creation_failed",
     # FAR-228 raw code used by the executor's retry-suppression write.

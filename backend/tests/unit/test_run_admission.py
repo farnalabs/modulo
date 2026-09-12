@@ -2,7 +2,8 @@
 
 Mock/fake based — no Postgres, no Redis. Covers:
   * D1 slot reconciliation sweep: stale ``running`` rows are released with the
-    house ``worker_lost`` code, logged per pipeline, journeys advanced
+    FAR-604 P1 ``heartbeat_stale`` code (canonicalized to
+    ``harness.heartbeat_stale``), logged per pipeline, journeys advanced
     fail-open; the sweep never touches pending rows; admission succeeds again
     once the leaked slot is released.
   * D2 queue coalescing: GitHub coalesce-key derivation, per-trigger flag,
@@ -120,7 +121,7 @@ class TestReconcilePipelineSlots:
     def _settings(self, stale_seconds: int = 1800) -> MagicMock:
         return MagicMock(slot_reconcile_stale_seconds=stale_seconds)
 
-    async def test_releases_stale_running_slot_with_worker_lost_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_releases_stale_running_slot_with_heartbeat_stale_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
         statements: list[str] = []
         engine = _SweepEngine(statements, [_released_row()])
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
@@ -131,11 +132,21 @@ class TestReconcilePipelineSlots:
         assert result["per_pipeline"] == {str(PIPELINE_ID): 1}
         release_stmts = [s for s in statements if "status = 'running'" in s]
         assert len(release_stmts) == 1
-        assert "error_code = 'worker_lost'" in release_stmts[0]
+        assert "error_code = 'heartbeat_stale'" in release_stmts[0]
         assert "COALESCE(heartbeat_at, started_at, created_at)" in release_stmts[0]
         assert ":stale_seconds" in release_stmts[0]
         assert "set_config('app.organisation_id'" in " ".join(statements)
         advance.assert_awaited_once()
+
+    def test_heartbeat_stale_code_is_registered_not_unknown(self) -> None:
+        """FAR-604 P1: the raw ``heartbeat_stale`` spelling the sweep writes
+        must canonicalize to its own ``harness.heartbeat_stale`` registry entry
+        — never the ``harness.unknown`` fallback, and distinct from
+        ``worker_lost``/``harness.dispatch_failed``."""
+        from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+        assert map_legacy_code("heartbeat_stale") == "harness.heartbeat_stale"
+        assert map_legacy_code("worker_lost") == "harness.dispatch_failed"
 
     async def test_explicit_stale_seconds_overrides_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []
