@@ -70,6 +70,15 @@ edges representing transitions between stages.
 ## QA History
 
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  `FilterBar` search surface (`components/shared/FilterBar.vue` static testids
+  `filter-bar-search` / `filter-bar-search-wrapper`) in the manifest `elements:`
+  inventory for `/lifecycle-maps`: `LifecycleMapList.vue` passes a `search` prop
+  to its in-header `FilterBar`, so the search box ships in the DOM on the list page
+  while staying invisible to Remy's docs indexer / `/api/v1/manifest`. The
+  component is now part of the route's reverse testid-coverage guard
+  (`test_mapped_route_elements_cover_owning_view_testids`).
+
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for `/lifecycle-maps` and
   `/lifecycle-maps/:id`, both of which render the header's `#right` action slot, and
