@@ -5,73 +5,93 @@ Revises: 0218_eval_cluster_indexes
 Create Date: 2026-09-12
 
 Adds database-level domain-integrity CHECK constraints that the application
-layer currently assumes but the DB does not enforce:
+layer currently assumes but the DB does not enforce. These cover ONLY
+constraints not already enforced by an earlier migration:
 
-1. eval_definitions.pass_threshold BETWEEN 0 AND 1 (pass-rate fraction).
-2. eval_definitions.version >= 1 (monotonically increasing).
-3. eval_suites.minimum_delta BETWEEN 0 AND 1 (pass-rate drop fraction).
-4. eval_suites.baseline_window >= 1 when non-NULL.
-5. eval_suites.cooldown >= 0 when non-NULL.
-6. eval_suites.version >= 1.
-7. eval_datasets.version >= 1.
-8. suite_runs.version >= 0 (optimistic-lock guard).
-9. suite_runs.dataset_version >= 1.
-10. suite_runs.total_cost_usd >= 0.
-11. suite_runs.claimed_cost >= 0.
-12. suite_runs case-count consistency:
-    passed_cases + failed_cases + excluded_case_count <= total_cases.
+* ``0157_add_numeric_check_constraints`` already enforces
+  ``pass_threshold BETWEEN 0 AND 1`` (``ck_eval_definitions_pass_threshold``),
+  ``minimum_delta BETWEEN 0 AND 1`` (``ck_eval_suites_minimum_delta``), and
+  ``claimed_cost >= 0`` (``ck_eval_suite_runs_claimed_cost``). Those rules are
+  deliberately NOT re-added here — re-adding them under new names would make
+  the same columns pay for redundant checks on every INSERT/UPDATE.
 
-All constraints are created IF NOT EXISTS to be idempotent. Downgrade drops
-every constraint created here by name.
+The constraints added here are the remaining gaps:
+
+1. eval_definitions.version >= 1 (monotonically increasing).
+2. eval_suites.baseline_window >= 1 when non-NULL.
+3. eval_suites.cooldown >= 0 when non-NULL.
+4. eval_suites.version >= 1.
+5. eval_datasets.version >= 1.
+6. suite_runs.version >= 0 (optimistic-lock guard).
+7. suite_runs.dataset_version >= 1.
+8. suite_runs.total_cost_usd >= 0 (NULL ok). ``claimed_cost`` is covered by
+   0157, so it is intentionally excluded here.
+9. suite_runs case-count consistency:
+   passed_cases + failed_cases + excluded_case_count <= total_cases.
+
+Idempotency: each ADD CONSTRAINT is guarded by a ``pg_constraint`` existence
+check (the same property ``0157`` / ``0153`` / ``0110`` get from their
+DO-block existence guards). A partially-applied run — one constraint
+added, a later one rejected by pre-existing bad data — can be re-run without
+failing on the constraints that already exist. ``op.create_check_constraint``
+emits a bare ``ALTER TABLE ... ADD CONSTRAINT`` with no existence guard, so we
+use the explicit ``pg_constraint`` guard instead. Downgrade drops every
+constraint by name with ``DROP CONSTRAINT IF EXISTS``.
 """
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import text
 
 revision: str = "0219_eval_cluster_check_constraints"
 down_revision: str | None = "0218_eval_cluster_indexes"
 branch_labels: str | None = None
 depends_on: str | None = None
 
+# (constraint_name, table, check_expression)
+# Only constraints NOT already enforced by 0157_add_numeric_check_constraints.
 _CONSTRAINTS: list[tuple[str, str, str]] = [
-    # (table, constraint_name, check_expression)
+    ("ck_eval_definitions_version_gte_1", "eval_definitions", "version >= 1"),
     (
-        "eval_definitions",
-        "ck_eval_definitions_pass_threshold_range",
-        "pass_threshold IS NULL OR (pass_threshold >= 0 AND pass_threshold <= 1)",
-    ),
-    ("eval_definitions", "ck_eval_definitions_version_gte_1", "version >= 1"),
-    (
+        "ck_eval_suites_baseline_window_gte_1",
         "eval_suites",
-        "ck_eval_suites_minimum_delta_range",
-        "minimum_delta IS NULL OR (minimum_delta >= 0 AND minimum_delta <= 1)",
+        "baseline_window IS NULL OR baseline_window >= 1",
     ),
-    ("eval_suites", "ck_eval_suites_baseline_window_gte_1", "baseline_window IS NULL OR baseline_window >= 1"),
-    ("eval_suites", "ck_eval_suites_cooldown_gte_0", "cooldown IS NULL OR cooldown >= 0"),
-    ("eval_suites", "ck_eval_suites_version_gte_1", "version >= 1"),
-    ("eval_datasets", "ck_eval_datasets_version_gte_1", "version >= 1"),
-    ("suite_runs", "ck_suite_runs_version_gte_0", "version >= 0"),
-    ("suite_runs", "ck_suite_runs_dataset_version_gte_1", "dataset_version >= 1"),
+    ("ck_eval_suites_cooldown_gte_0", "eval_suites", "cooldown IS NULL OR cooldown >= 0"),
+    ("ck_eval_suites_version_gte_1", "eval_suites", "version >= 1"),
+    ("ck_eval_datasets_version_gte_1", "eval_datasets", "version >= 1"),
+    ("ck_suite_runs_version_gte_0", "suite_runs", "version >= 0"),
+    ("ck_suite_runs_dataset_version_gte_1", "suite_runs", "dataset_version >= 1"),
     (
+        "ck_suite_runs_total_cost_non_negative",
         "suite_runs",
-        "ck_suite_runs_cost_non_negative",
-        ("(total_cost_usd IS NULL OR total_cost_usd >= 0) AND (claimed_cost IS NULL OR claimed_cost >= 0)"),
+        "total_cost_usd IS NULL OR total_cost_usd >= 0",
     ),
     (
-        "suite_runs",
         "ck_suite_runs_case_counts_consistent",
+        "suite_runs",
         "passed_cases + failed_cases + excluded_case_count <= total_cases",
     ),
 ]
 
 
 def upgrade() -> None:
-    for table, name, expr in _CONSTRAINTS:
-        op.create_check_constraint(name, table, sa.text(expr))
+    bind = op.get_bind()
+    for name, table, expr in _CONSTRAINTS:
+        # Idempotent like 0157's pg_constraint guard: a partial re-run (an
+        # earlier constraint added, a later one rejected by pre-existing bad
+        # data) must not then fail with "constraint already exists".
+        already_present = bind.execute(
+            text("SELECT 1 FROM pg_constraint WHERE conname = :name"),
+            {"name": name},
+        ).scalar_one_or_none()
+        if already_present is not None:
+            continue
+        bind.execute(text(f'ALTER TABLE public."{table}" ADD CONSTRAINT {name} CHECK ({expr});'))
 
 
 def downgrade() -> None:
-    for table, name, _ in reversed(_CONSTRAINTS):
-        op.drop_constraint(name, table, type_="check")
+    bind = op.get_bind()
+    for name, table, _ in reversed(_CONSTRAINTS):
+        bind.execute(text(f'ALTER TABLE public."{table}" DROP CONSTRAINT IF EXISTS {name};'))
