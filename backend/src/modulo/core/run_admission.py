@@ -42,10 +42,15 @@ _log = logging.getLogger(__name__)
 # every per-org statement runs inside set_config('app.organisation_id', ...).
 _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
 
-# worker_lost is the house error code for worker death (error_codes.py maps it
-# to the harness-dispatch failure class). The synthetic error_detail is safe:
-# the daily-watcher hang-death detector keys on error_code == 'node_cancelled'
-# ONLY (FAR-164), so a string detail here can never be miscounted as a hang.
+# heartbeat_stale is the FAR-604 P1 code for the heartbeat-stale slot
+# force-release: DISTINCT from worker_lost (which maps to
+# harness.dispatch_failed — "never dispatched") so analytics can tell a run
+# that never started from one that was dispatched and then went silent. The
+# raw spelling is canonicalized via LEGACY_ALIASES in error_codes.py to the
+# registered ``harness.heartbeat_stale`` entry (never harness.unknown). The
+# synthetic error_detail is safe: the daily-watcher hang-death detector keys
+# on error_code == 'node_cancelled' ONLY (FAR-164), so a string detail here
+# can never be miscounted as a hang.
 _SLOT_RELEASE_DETAIL = "Slot reconciliation: heartbeat stale past threshold; pipeline slot force-released (FAR-604)."
 
 
@@ -250,8 +255,10 @@ async def reconcile_pipeline_slots(
     leaked-slot half of the FAR-604 wedge.
 
     Per org (RLS-scoped), stale ``running`` rows are terminalised with the
-    house worker-death code ``worker_lost``; each release is logged with the
-    pipeline id, and journeys + daily facts are advanced post-commit exactly
+    FAR-604 P1 code ``heartbeat_stale`` (canonicalized to
+    ``harness.heartbeat_stale`` — distinct from the legacy ``worker_lost``
+    "never dispatched" class); each release is logged with the pipeline id,
+    and journeys + daily facts are advanced post-commit exactly
     like the legacy stale-run sweep's terminalised rows (fail-open per run).
     ``awaiting_human`` runs are deliberately NOT swept (a human decision may
     legitimately take days) and fresh-heartbeat runs are never swept.
@@ -282,7 +289,7 @@ async def reconcile_pipeline_slots(
                 result = await conn.execute(
                     text(
                         "UPDATE runs "
-                        "SET status = 'failed', error_code = 'worker_lost', "
+                        "SET status = 'failed', error_code = 'heartbeat_stale', "
                         "error_detail = :detail, completed_at = now() "
                         "WHERE status = 'running' "
                         "AND organisation_id = :oid "

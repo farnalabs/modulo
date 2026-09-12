@@ -28,10 +28,16 @@ from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-_PIPELINE_ID = uuid.uuid4()
-_RUN_ID = uuid.uuid4()
-_EVAL_ID = uuid.uuid4()
-_SUITE_ID = uuid.uuid4()
+# FIXED UUIDs (not uuid.uuid4()): these constants are interpolated into
+# @pytest.mark.parametrize values, and xdist workers import this module in
+# separate processes — a random UUID yields DIFFERENT collected test IDs per
+# worker and pytest-xdist aborts with "Different tests were collected between
+# gw0 and gw1" (breaks every `-n auto` run, i.e. CI's Test Backend and the
+# pre-push gate). Mocked IDs need stability, not randomness.
+_PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
+_RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
+_EVAL_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
+_SUITE_ID = uuid.UUID("00000000-0000-0000-0000-000000000006")
 
 _PROG = ProgrammingError("s", {}, Exception())
 _SQL = SQLAlchemyError("boom")
@@ -364,6 +370,10 @@ def test_evals_error_mapping_matrix(
             {"run_id": str(_RUN_ID), "node_id": str(uuid.uuid4()), "eval_type": "regex", "name": "n"},
         ),
     ],
+    # Explicit ids: without them pytest derives IDs from the param values,
+    # and any randomness there breaks xdist collection parity (see the fixed
+    # UUID note at the top of this module).
+    ids=["put-eval", "delete-eval", "from-run"],
 )
 def test_admin_gates_reject_operators(method: str, url: str, json_body: dict | None) -> None:
     session = _make_session()

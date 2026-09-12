@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 import modulo.core.pipeline_execution as pe
 import modulo.core.run_terminal_advance as rta
@@ -398,6 +399,126 @@ class TestFailRunTerminal:
                 engine, run_id, org_id, error_code="executor_stalled", error_detail="boom"
             )
         assert ok is True, "the terminal failure itself must still report success (facts are best-effort)"
+
+
+class TestTerminalWriteRetry:
+    """FAR-604 P0: bounded transient-only retry for the heartbeat-loss terminal write.
+
+    The heartbeat-loss classification write runs inside the same DB storm that
+    killed the heartbeat, so its own UPDATE can deadlock. Before the fix the
+    exception escaped ``_resolve_cancel_outcome`` and the classification was
+    abandoned (run left ``running`` until the reconciliation sweep
+    force-released it, misclassified). The retry is bounded (3 attempts) and
+    transient-only (deadlock / serialization / lock-timeout / OperationalError);
+    a logical failure re-raises on the first attempt.
+    """
+
+    @staticmethod
+    def _deadlock() -> OperationalError:
+        return OperationalError("UPDATE runs SET status='failed'", {}, Exception("deadlock detected"))
+
+    @pytest.mark.asyncio
+    async def test_transient_deadlock_retries_and_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A transient deadlock on the first attempt is retried and the
+        classification lands on attempt 2 — no exception escapes."""
+        monkeypatch.setattr(pe, "_TERMINAL_WRITE_RETRY_BACKOFF_SECONDS", 0.0)
+        fail = AsyncMock(side_effect=[self._deadlock(), True])
+        with patch.object(pe, "fail_run_terminal", fail):
+            ok = await pe._fail_run_terminal_with_retry(
+                MagicMock(),  # type: ignore[arg-type]
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                error_code="executor_heartbeat_lost",
+                error_detail="boom",
+                claim_token="tok-a",
+            )
+        assert ok is True
+        assert fail.await_count == 2
+        assert fail.await_args.kwargs["error_code"] == "executor_heartbeat_lost"
+
+    @pytest.mark.asyncio
+    async def test_transient_exhaustion_reraises_last_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When every attempt deadlocks, the bounded loop gives up after
+        exactly _TERMINAL_WRITE_MAX_ATTEMPTS attempts and re-raises the last
+        transient error (pre-fix escape behaviour preserved — the sweep stays
+        the backstop)."""
+        monkeypatch.setattr(pe, "_TERMINAL_WRITE_RETRY_BACKOFF_SECONDS", 0.0)
+        fail = AsyncMock(side_effect=self._deadlock())
+        with patch.object(pe, "fail_run_terminal", fail), pytest.raises(OperationalError):
+            await pe._fail_run_terminal_with_retry(
+                MagicMock(),  # type: ignore[arg-type]
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                error_code="executor_heartbeat_lost",
+                error_detail="boom",
+            )
+        assert fail.await_count == pe._TERMINAL_WRITE_MAX_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_non_transient_error_reraises_immediately(self) -> None:
+        """A logical failure (ValueError here; IntegrityError-class DBAPI
+        errors behave the same) is NEVER retried — it re-raises on the first
+        attempt exactly as before the fix."""
+        fail = AsyncMock(side_effect=ValueError("logic bug"))
+        with patch.object(pe, "fail_run_terminal", fail), pytest.raises(ValueError, match="logic bug"):
+            await pe._fail_run_terminal_with_retry(
+                MagicMock(),  # type: ignore[arg-type]
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                error_code="executor_heartbeat_lost",
+                error_detail="boom",
+            )
+        assert fail.await_count == 1
+
+    def test_dbapi_integrity_error_is_not_transient(self) -> None:
+        """A non-Operational DBAPIError whose orig is not an abort class is
+        classified non-transient (pin the detection boundary)."""
+        assert pe._is_transient_db_error(DBAPIError("UPDATE runs", {}, Exception("other"))) is False
+
+    def test_deadlock_orig_class_name_is_transient(self) -> None:
+        """Portable detection: a DBAPIError wrapping a driver abort class
+        (matched by orig class NAME, mirroring finalize._is_abort_error) is
+        transient even when isinstance(OperationalError) is False."""
+
+        class DeadlockDetectedError(Exception):  # mirrors the psycopg driver class name
+            pass
+
+        assert pe._is_transient_db_error(DBAPIError("UPDATE runs", {}, DeadlockDetectedError("deadlock"))) is True
+        assert pe._is_transient_db_error(self._deadlock()) is True
+        assert pe._is_transient_db_error(ValueError("nope")) is False
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_branch_routes_through_retry_wrapper(self) -> None:
+        """The health_failed branch of _resolve_cancel_outcome must call the
+        retry wrapper (not fail_run_terminal directly) with the heartbeat-lost
+        code — pin the wiring so a future edit cannot silently drop the
+        retry."""
+        watchdog_task = asyncio.create_task(asyncio.sleep(0))
+        node_deadline_task = asyncio.create_task(asyncio.sleep(0))
+        await watchdog_task
+        await node_deadline_task
+        wrapper = AsyncMock(return_value=True)
+        health_failed = asyncio.Event()
+        health_failed.set()
+        with (
+            patch.object(pe, "_fail_run_terminal_with_retry", wrapper),
+            patch.object(pe, "_kill_sandbox_best_effort", new_callable=AsyncMock) as kill,
+        ):
+            await pe._resolve_cancel_outcome(
+                watchdog_task=watchdog_task,
+                node_deadline_task=node_deadline_task,
+                stall_requested=asyncio.Event(),
+                health_failed=health_failed,
+                superseded=asyncio.Event(),
+                aeng=MagicMock(),  # type: ignore[arg-type]
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                claim_token="tok-a",
+                rid=uuid.uuid4(),
+            )
+        kill.assert_awaited_once()
+        wrapper.assert_awaited_once()
+        assert wrapper.await_args.kwargs["error_code"] == "executor_heartbeat_lost"
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ from typing import Any
 
 from langgraph.errors import NodeCancelledError
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.crud.run import get_run
@@ -105,6 +106,34 @@ EXECUTOR_HEARTBEAT_LOST_ERROR_CODE = "executor_heartbeat_lost"
 # claimed-but-nodeless zombie) so analytics/alerting can tell a half-alive
 # stalled node from a run that never dispatched a node at all.
 NODE_DEADLINE_EXCEEDED_ERROR_CODE = "node_deadline_exceeded"
+
+# FAR-604 P0: bounded retry for the heartbeat-loss terminal classification
+# write. When a DB deadlock storm kills the heartbeat loop (fail-closed after
+# 3 strikes), the SAME storm can deadlock the ``fail_run_terminal`` UPDATE
+# itself — and the previously un-retried exception escaped
+# ``_resolve_cancel_outcome``, abandoning the classification: the run stayed
+# ``running`` with a frozen heartbeat until the reconciliation sweep
+# force-released it ~30 min later (every swept run sharing an identical
+# ``completed_at`` and misclassified ``worker_lost``). Zero runs ever carried
+# the intended ``executor_heartbeat_lost`` code. The retry is BOUNDED and
+# TRANSIENT-ONLY: only deadlock/serialization/lock-timeout/operational-class
+# DBAPI errors are retried — a logical failure (integrity violation,
+# programming error) re-raises on the first attempt exactly as before.
+_TERMINAL_WRITE_MAX_ATTEMPTS = 3
+_TERMINAL_WRITE_RETRY_BACKOFF_SECONDS = 0.25
+# Transient abort-class DBAPI ``orig`` names (same portable detection the cost
+# ledger uses in cost_controller.finalize._is_abort_error). Deadlocks from
+# psycopg/asyncpg arrive wrapped in ``sqlalchemy.exc.DBAPIError`` with the
+# driver class as ``orig``; OperationalError (a DBAPIError subclass) covers
+# connection-level transients.
+_TRANSIENT_DBAPI_ORIG_CLASSES = frozenset(
+    {
+        "DeadlockDetectedError",
+        "SerializationError",
+        "SerializationFailure",
+        "LockNotAvailableError",
+    }
+)
 
 # FAR-603: bound on how long a cancelled executor waits for a watchdog task to
 # settle in the UNCLASSIFIED (worker-shutdown) cancellation path. A watchdog
@@ -613,6 +642,90 @@ async def fail_run_terminal(
         except Exception:
             _log.warning("pipeline_execution.terminal_failed_facts_failed run=%s", run_id, exc_info=True)
     return ok
+
+
+def _is_transient_db_error(exc: BaseException) -> bool:
+    """True for a transient DB fault worth retrying (FAR-604 P0).
+
+    Covers deadlocks / serialization failures / lock timeouts (detected
+    portably via the DBAPI ``orig`` class name, mirroring
+    ``cost_controller.finalize._is_abort_error``) and OperationalError
+    (connection-level failures; the DBAPI drivers surface deadlocks under
+    OperationalError too). Anything else — an IntegrityError, a programming
+    error, a logical bug — is NEVER retried: retrying cannot fix it and
+    masking it would hide a real defect.
+    """
+    if isinstance(exc, OperationalError):
+        return True
+    if not isinstance(exc, DBAPIError):
+        return False
+    orig = exc.orig
+    if orig is None:
+        return False
+    return type(orig).__name__ in _TRANSIENT_DBAPI_ORIG_CLASSES
+
+
+async def _fail_run_terminal_with_retry(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    error_code: str,
+    error_detail: str,
+    claim_token: str | None = None,
+) -> bool:
+    """``fail_run_terminal`` with a bounded retry for transient DB errors.
+
+    FAR-604 P0: the heartbeat-loss classification write runs INSIDE the same
+    DB storm that killed the heartbeat, so its own UPDATE can deadlock. Each
+    attempt opens a FRESH connection/transaction (``fail_run_terminal`` owns
+    its ``connect()/begin()`` block), so a retried attempt cannot observe
+    partial state from the aborted one. Transient errors back off
+    exponentially; a non-transient error re-raises on the first
+    attempt. When the bounded attempts are exhausted the LAST transient error
+    is re-raised — the pre-fix behaviour (the classification is abandoned and
+    the reconciliation sweep recovers the run) — after a loud log, never
+    silently swallowed.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(1, _TERMINAL_WRITE_MAX_ATTEMPTS + 1):
+        try:
+            return await fail_run_terminal(
+                aeng,
+                run_id,
+                org_id,
+                error_code=error_code,
+                error_detail=error_detail,
+                claim_token=claim_token,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if not _is_transient_db_error(exc):
+                raise
+            last_exc = exc
+            if attempt < _TERMINAL_WRITE_MAX_ATTEMPTS:
+                delay = _TERMINAL_WRITE_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                _log.warning(
+                    "pipeline_execution.terminal_write_retry run=%s attempt=%d/%d "
+                    "exc=%s — retrying the classification write in %.3fs",
+                    run_id,
+                    attempt,
+                    _TERMINAL_WRITE_MAX_ATTEMPTS,
+                    type(exc).__name__,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+    _log.error(
+        "pipeline_execution.terminal_write_retries_exhausted run=%s attempts=%d — "
+        "re-raising the last transient error (classification abandoned; the "
+        "reconciliation sweep remains the backstop)",
+        run_id,
+        _TERMINAL_WRITE_MAX_ATTEMPTS,
+        exc_info=last_exc,
+    )
+    assert last_exc is not None  # the loop body always raised or returned
+    raise last_exc
 
 
 async def _advance_journeys_from_stored_refs(
@@ -1445,7 +1558,14 @@ async def _resolve_cancel_outcome(
             rid,
         )
         await _kill_sandbox_best_effort(aeng, run_id, org_id)
-        await fail_run_terminal(
+        # FAR-604 P0: this terminal write runs inside the same DB storm that
+        # killed the heartbeat — a transient deadlock here used to escape and
+        # abandon the classification entirely (run left ``running`` with a
+        # frozen heartbeat until the reconciliation sweep force-released it,
+        # misclassified). Bounded transient-only retry; on exhaustion the
+        # pre-fix behaviour is preserved (re-raise, sweep remains the
+        # backstop).
+        await _fail_run_terminal_with_retry(
             aeng,
             run_id,
             org_id,
