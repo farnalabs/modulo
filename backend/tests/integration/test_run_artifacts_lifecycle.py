@@ -13,8 +13,12 @@ from __future__ import annotations
 import hashlib
 import uuid
 
+import pytest
+
 from modulo.core.artifacts.store import LocalArtifactStore
 from modulo.core.artifacts.writer import ArtifactWriter
+
+pytestmark = pytest.mark.integration
 
 
 def _make_store(tmp_path) -> LocalArtifactStore:

@@ -171,7 +171,8 @@ def test_multiple_attempts(tmp_path):
     ptr1 = store.finalize("org1", "run1", "node1", "attempt1", "stdout")
     ptr2 = store.finalize("org1", "run1", "node1", "attempt2", "stdout")
 
-    assert ptr1 is not None and ptr2 is not None
+    assert ptr1 is not None
+    assert ptr2 is not None
     assert store.read_bytes(ptr1) == b"first"
     assert store.read_bytes(ptr2) == b"second"
 
