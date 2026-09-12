@@ -383,7 +383,7 @@ async def test_0215_drop_legs_and_abort_gates(drop_db_url, monkeypatch: pytest.M
 
     # -- Attempt 5: the migration succeeds all the way through. ---------------
     await _upgrade(db_url)
-    assert await _alembic_version(db_url) == "0215_drop_runs_blob_columns"
+    assert await _alembic_version(db_url) == MIGRATION_REV
 
     async with create_async_engine(db_url, poolclass=NullPool).connect() as conn:
         cols = {
@@ -446,4 +446,4 @@ async def test_0215_drop_legs_and_abort_gates(drop_db_url, monkeypatch: pytest.M
     with pytest.raises(RuntimeError, match="never rewind past this migration"):
         command.downgrade(config, "-1")
     del config.cmd_opts  # type: ignore[attr-defined]
-    assert await _alembic_version(db_url) == "0215_drop_runs_blob_columns"
+    assert await _alembic_version(db_url) == MIGRATION_REV
