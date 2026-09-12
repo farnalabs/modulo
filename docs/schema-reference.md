@@ -23,6 +23,7 @@ and run-time.
 | `name` | String(255) | Unique within org |
 | `description` | String(2000) | Optional |
 | `abstract_name` | String(255) | Optional namespaced reference |
+| `collection_install_id` | UUID FK → collection_installs | Owning collection install (nullable) |
 | `account_id` | UUID FK → accounts | Owning account |
 | `folder_id` | UUID FK → schema_folders | Optional parent folder |
 | `deprecated` | Boolean | Default false |
