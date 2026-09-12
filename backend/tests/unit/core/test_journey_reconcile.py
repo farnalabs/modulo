@@ -741,8 +741,9 @@ class TestReconcileMetrics:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
         reconcile_mod._ensure()
         reconcile_mod._ensure()
-        # Only the first call builds the six handles; the second returns early.
-        assert len(fake_meter.counters) == 6
+        # Only the first call builds the handles; the second returns early.
+        # Six journey handles + the four FAR-794 work-item-refs counters.
+        assert len(fake_meter.counters) == 10
 
     def test_record_functions_noop_without_meter(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: None)
