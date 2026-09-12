@@ -414,7 +414,7 @@ def test_finalize_cleanup_on_write_failure(tmp_path):
 # ── reset_store ──────────────────────────────────────────────────────
 
 
-def test_reset_store_clears_singleton(tmp_path):
+def test_reset_store_clears_singleton():
     """reset_store clears the module-level singleton."""
     from modulo.core.artifacts.store import get_store, reset_store
 

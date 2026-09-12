@@ -192,7 +192,7 @@ def test_redact_artifact_text_empty():
     """_redact_artifact_text returns empty string as-is."""
     from modulo.core.artifacts.writer import _redact_artifact_text
 
-    assert _redact_artifact_text("") == ""
+    assert not _redact_artifact_text("")
 
 
 # ── append to non-existent stream ─────────────────────────────────────

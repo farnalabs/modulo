@@ -40,10 +40,13 @@ def test_delete_run_artifacts_happy_path():
 
 
 def test_delete_run_artifacts_store_unavailable():
-    """When get_store() raises, the callback returns without error."""
-    with patch("modulo.core.artifacts.store.get_store", side_effect=RuntimeError("boom")):
-        # Should not raise
+    """When get_store() raises, the callback swallows the error — no deletion attempted."""
+    mock_get_store = MagicMock(side_effect=RuntimeError("boom"))
+    with patch("modulo.core.artifacts.store.get_store", mock_get_store):
+        # Should not raise (best-effort store access)
         _delete_run_artifacts([_make_run()], None)
+    # get_store was exercised (proving the code path ran)
+    mock_get_store.assert_called_once()
 
 
 # ── per-run delete failure ───────────────────────────────────────────
