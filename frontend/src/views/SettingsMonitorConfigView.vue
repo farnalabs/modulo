@@ -91,6 +91,7 @@ import { getErrorTracker } from '../lib/error-tracking'
 import { loadBackends } from '../monitor'
 import type { MonitorConfig } from '../monitor/types'
 import PageHeader from '../components/shared/PageHeader.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import Button from 'primevue/button'
 
 const { t } = useI18n()

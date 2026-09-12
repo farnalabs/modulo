@@ -323,6 +323,14 @@ def test_mapped_route_elements_cover_owning_view_testids():
     Components that render children own those children's testids as well —
     ``hitl/HitlGateCard.vue`` embeds ``HitlBriefing.vue``, so its briefing
     surface is part of every route that renders the gate card.
+
+    Every whole-page view that gates its content behind the plan entitlement
+    surface (``components/FeatureGate.vue``, which embeds ``LockIcon.vue``)
+    owns the gate's static testids — ``feature-gate`` / ``feature-gate-disabled``
+    / ``feature-gate-lock`` / ``lock-icon`` — just like the FilterBar search
+    surface. The gate wraps the page content, so a newly shipped control on the
+    entitlement card would otherwise stay invisible to Remy's docs indexer and
+    to ``/api/v1/manifest`` on every gated route.
     """
     owned_pages = {
         "/": (
@@ -332,54 +340,124 @@ def test_mapped_route_elements_cover_owning_view_testids():
         ),
         "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
         "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
-        "/admin/audit": "frontend/src/views/AdminAuditView.vue",
-        "/admin/connectors": "frontend/src/views/AdminConnectorsView.vue",
-        "/admin/costs": "frontend/src/views/AdminCostBreakdownView.vue",
-        "/admin/costs/controls": "frontend/src/views/AdminCostControlsView.vue",
-        "/admin/costs/components": "frontend/src/views/CostComponentsView.vue",
-        "/admin/costs/limits": "frontend/src/views/AdminSpendLimitsView.vue",
+        "/admin/audit": (
+            "frontend/src/views/AdminAuditView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/connectors": (
+            "frontend/src/views/AdminConnectorsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/costs": (
+            "frontend/src/views/AdminCostBreakdownView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/costs/controls": (
+            "frontend/src/views/AdminCostControlsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/costs/components": (
+            "frontend/src/views/CostComponentsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/costs/limits": (
+            "frontend/src/views/AdminSpendLimitsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
         "/admin/errors": (
             "frontend/src/views/AdminErrorsView.vue",
             "frontend/src/components/shared/FilterBar.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
         "/admin/errors/:id": (
             "frontend/src/views/AdminErrorDetailView.vue",
             "frontend/src/components/shared/JsonViewer.vue",
             "frontend/src/components/shared/ErrorAlert.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
         "/admin/system/orgs": "frontend/src/views/AdminSystemOrgsView.vue",
         "/admin/feature-flags": (
             "frontend/src/views/AdminFeatureFlagsView.vue",
             "frontend/src/components/shared/FilterBar.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
         "/admin/housekeeping": (
             "frontend/src/views/AdminHousekeepingView.vue",
             "frontend/src/components/DbCapacityBanner.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
-        "/admin/notification-delivery": "frontend/src/views/AdminNotificationDeliveryLogView.vue",
-        "/admin/remy": "frontend/src/views/AdminRemyView.vue",
+        "/admin/notification-delivery": (
+            "frontend/src/views/AdminNotificationDeliveryLogView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/remy": (
+            "frontend/src/views/AdminRemyView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
         "/admin/runners/profiles": (
             "frontend/src/views/AdminRunnersView.vue",
             "frontend/src/views/runners/RunnersProfilesTab.vue",
             "frontend/src/components/runners/RunnerStatusStrip.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
         "/admin/runners/concurrency": (
             "frontend/src/views/AdminRunnersView.vue",
             "frontend/src/views/runners/RunnersConcurrencyTab.vue",
             "frontend/src/components/runners/RunnerStatusStrip.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
         "/admin/runners/profiles/new": "frontend/src/views/environment-profiles/EnvironmentProfileForm.vue",
         "/admin/runners/profiles/:id/edit": "frontend/src/views/environment-profiles/EnvironmentProfileForm.vue",
         "/admin/run-retention": (
             "frontend/src/views/AdminRunRetentionView.vue",
             "frontend/src/components/DbCapacityBanner.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
-        "/admin/system/config": "frontend/src/views/AdminSystemConfigView.vue",
-        "/admin/users": "frontend/src/views/AdminUsersView.vue",
-        "/admin/views": "frontend/src/views/AdminViewsView.vue",
-        "/admin/node-categories": "frontend/src/views/AdminNodeCategoriesView.vue",
-        "/admin/org": "frontend/src/views/AdminOrgSettingsView.vue",
-        "/admin/plugins": "frontend/src/views/AdminPluginsView.vue",
+        "/admin/system/config": (
+            "frontend/src/views/AdminSystemConfigView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/users": (
+            "frontend/src/views/AdminUsersView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/views": (
+            "frontend/src/views/AdminViewsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/node-categories": (
+            "frontend/src/views/AdminNodeCategoriesView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/org": (
+            "frontend/src/views/AdminOrgSettingsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/plugins": (
+            "frontend/src/views/AdminPluginsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
         "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
         "/library/:id/create-pipeline": "frontend/src/views/LibraryPipelineWizard.vue",
         "/composites/:id/editor": "frontend/src/views/pipeline/CompositeEditorView.vue",
@@ -398,34 +476,86 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/components/hitl/HitlGateCard.vue",
             "frontend/src/components/HitlBriefing.vue",
         ),
-        "/settings/email": "frontend/src/views/SettingsEmailView.vue",
+        "/settings/email": (
+            "frontend/src/views/SettingsEmailView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
         "/settings/error-forwarders": (
             "frontend/src/views/SettingsErrorForwardersView.vue",
             "frontend/src/components/shared/ErrorAlert.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
-        "/settings/monitoring": "frontend/src/views/SettingsMonitorConfigView.vue",
+        "/settings/monitoring": (
+            "frontend/src/views/SettingsMonitorConfigView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
         "/settings/hitl-review": (
             "frontend/src/views/SettingsHitlReviewView.vue",
             "frontend/src/components/shared/FilterBar.vue",
             "frontend/src/components/hitl/HitlGateCard.vue",
             "frontend/src/components/HitlBriefing.vue",
         ),
-        "/settings/guardrails": "frontend/src/views/SettingsGuardrailsView.vue",
-        "/settings/mcp": "frontend/src/views/SettingsMcpView.vue",
-        "/settings/observability": "frontend/src/views/SettingsObservabilityView.vue",
-        "/settings/sso": "frontend/src/views/SettingsSsoView.vue",
-        "/settings/teams": "frontend/src/views/SettingsTeamsView.vue",
-        "/settings/triggers": "frontend/src/views/SettingsTriggersView.vue",
-        "/settings/rate-limits": "frontend/src/views/SettingsRateLimitsView.vue",
-        "/settings/runtime-config": "frontend/src/views/SettingsRuntimeConfigView.vue",
+        "/settings/guardrails": (
+            "frontend/src/views/SettingsGuardrailsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/settings/mcp": (
+            "frontend/src/views/SettingsMcpView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/settings/observability": (
+            "frontend/src/views/SettingsObservabilityView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/settings/sso": (
+            "frontend/src/views/SettingsSsoView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/settings/teams": (
+            "frontend/src/views/SettingsTeamsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/settings/triggers": (
+            "frontend/src/views/SettingsTriggersView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/settings/rate-limits": (
+            "frontend/src/views/SettingsRateLimitsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/settings/runtime-config": (
+            "frontend/src/views/SettingsRuntimeConfigView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
         "/settings/license": "frontend/src/views/SettingsLicenseView.vue",
         "/settings/remy": "frontend/src/views/UserRemySkillsView.vue",
-        "/admin/model-backends": "frontend/src/views/AdminModelBackendsView.vue",
-        "/admin/my-profile": "frontend/src/views/MyProfileView.vue",
+        "/admin/model-backends": (
+            "frontend/src/views/AdminModelBackendsView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/admin/my-profile": (
+            "frontend/src/views/MyProfileView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
         "/admin/parameter-schemas": "frontend/src/views/ParameterSchemasView.vue",
         "/admin/product-analytics": (
             "frontend/src/views/AdminProductAnalyticsView.vue",
             "frontend/src/components/product-analytics/ProductAnalyticsConsentPrompt.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
         "/library": (
             "frontend/src/views/LibraryView.vue",
@@ -451,8 +581,16 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/components/pipelines/FolderTree.vue",
         ),
         "/analytics": "frontend/src/views/AnalyticsView.vue",
-        "/evals/editor": "frontend/src/views/EvalEditorView.vue",
-        "/evals/proposals": "frontend/src/views/EvalProposalsQueueView.vue",
+        "/evals/editor": (
+            "frontend/src/views/EvalEditorView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
+        "/evals/proposals": (
+            "frontend/src/views/EvalProposalsQueueView.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
+        ),
         "/feedback/inbox": "frontend/src/views/FeedbackInboxView.vue",
         "/lifecycle-maps": "frontend/src/views/lifecycle-map/LifecycleMapList.vue",
         "/notifications": "frontend/src/views/NotificationsPage.vue",
@@ -465,6 +603,8 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/schemas/editor/:id": (
             "frontend/src/views/SchemaEditorView.vue",
             "frontend/src/components/shared/FilterBar.vue",
+            "frontend/src/components/FeatureGate.vue",
+            "frontend/src/components/LockIcon.vue",
         ),
         "/schemas/infer": "frontend/src/views/SchemaInferenceView.vue",
         "/setup/model-backend/:id": "frontend/src/views/setup/ModelBackendSetupView.vue",
@@ -670,3 +810,6 @@ def test_navigation_icons_resolve_in_svg_icon_map():
         "(the sidebar renders a generic placeholder for these):\n"
         + "\n".join(f"  {name} -> {icon}" for name, icon in sorted(unknown.items()))
     )
+
+
+
