@@ -189,11 +189,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
-import { api, getAccessToken } from '../lib/api/client'
-import { decodeJwtPayload } from '../lib/jwt'
+import { api } from '../lib/api/client'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -250,15 +250,10 @@ const formSuccess = ref<string | null>(null)
 const testing = ref(false)
 const testResult = ref<TestSpanResult | null>(null)
 
-function readJwtPayload(): Record<string, unknown> | null {
-  return decodeJwtPayload(getAccessToken())
-}
+const { isOperator } = useCurrentUser()
 
 // observability.manage resolves to operator; only operator+ can update config.
-const canManage = computed(() => {
-  const role = readJwtPayload()?.org_role
-  return role === 'operator' || role === 'admin'
-})
+const canManage = isOperator
 let observabilityFormTimeout: ReturnType<typeof setTimeout> | null = null
 let observabilityTestTimeout: ReturnType<typeof setTimeout> | null = null
 

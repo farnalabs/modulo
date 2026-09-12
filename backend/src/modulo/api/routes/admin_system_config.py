@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -43,7 +43,7 @@ class ConfigEntry(BaseModel):
 )
 @handle_db_errors("admin.system_config.admin_list_config")
 async def admin_list_config(
-    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ConfigEntry]:
     try:
@@ -95,7 +95,7 @@ class SetConfigRequest(BaseModel):
 async def admin_set_config(
     key: str,
     req: SetConfigRequest,
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfigEntry:
     try:
@@ -144,7 +144,7 @@ async def admin_set_config(
 @handle_db_errors("admin.system_config.admin_delete_config")
 async def admin_delete_config(
     key: str,
-    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:

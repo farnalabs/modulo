@@ -706,9 +706,9 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { api, getAccessToken } from '../lib/api/client'
+import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
-import { decodeJwtPayload } from '../lib/jwt'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import { useApi } from '../composables/useApi'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -847,18 +847,7 @@ const overrideMessage = ref<{ type: string; text: string } | null>(null)
 // (FAR-123 delivers the full truncation UX later.)
 const MAX_LOG_CHARS = 20000
 
-interface JwtPayload {
-  org_role?: string
-}
-
-function readJwtPayload(): JwtPayload | null {
-  return decodeJwtPayload(getAccessToken()) as JwtPayload | null
-}
-
-const isOrgOperator = computed(() => {
-  const role = readJwtPayload()?.org_role
-  return role === 'operator' || role === 'admin'
-})
+const { isOperator: isOrgOperator } = useCurrentUser()
 
 const isGuardrailBlocked = computed(() =>
   run.value?.status === 'eval_failed' && run.value?.error_code === 'eval_blocked',

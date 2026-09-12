@@ -487,8 +487,8 @@ import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useApi } from '../composables/useApi'
 import Button from 'primevue/button'
-import { api, getAccessToken } from '../lib/api/client'
-import { decodeJwtPayload } from '../lib/jwt'
+import { api } from '../lib/api/client'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -503,26 +503,14 @@ import Select from 'primevue/select'
 
 const planStore = usePlanStore()
 const { t } = useI18n()
+const { jwtPayload, isOperator } = useCurrentUser()
 
-interface JwtPayload {
-  org_role?: string
-  org_id?: string
-}
-
-function readJwtPayload(): JwtPayload | null {
-  // FIX 6: the shared decoder (handles padded + unpadded base64url).
-  return decodeJwtPayload(getAccessToken()) as JwtPayload | null
-}
-
-const isOrgAdmin = computed(() => readJwtPayload()?.org_role === 'admin')
+const isOrgAdmin = computed(() => jwtPayload.value?.org_role === 'admin')
 // FAR-191: the re-enable action is operator-or-above (backend trigger.update
 // resolves to operator). Admins are operators too (viewer < runner < operator
 // < admin), so both are granted.
-const isOrgOperator = computed(() => {
-  const role = readJwtPayload()?.org_role
-  return role === 'operator' || role === 'admin'
-})
-const orgId = computed(() => readJwtPayload()?.org_id ?? '')
+const isOrgOperator = isOperator
+const orgId = computed(() => jwtPayload.value?.org_id ?? '')
 
 // Org-wide "pause all triggers" kill-switch (admin-managed). The org's paused
 // state is read from the triggers-list GET top-level fields; the toggle PUTs to

@@ -77,8 +77,10 @@ const { loading, error, mutate: submit } = useMutation(async () => {
     backendName.value = resp.name
     success.value = true
     return resp
-  } catch (e: any) {
-    const detail = e?.detail || e?.message || ''
+  } catch (e: unknown) {
+    const detail = typeof e === 'object' && e !== null
+      ? String((e as Record<string, unknown>).detail ?? (e as Record<string, unknown>).message ?? '')
+      : ''
     if (detail.includes('invalid_token')) {
       throw new Error('Setup link expired or already used. Re-run the MCP command to generate a new setup URL.')
     } else if (detail.includes('backend_not_found')) {

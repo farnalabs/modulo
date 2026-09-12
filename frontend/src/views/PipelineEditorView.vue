@@ -1983,7 +1983,7 @@ async function saveAsNewParamSet() {
       return
     }
     await loadParamSets()
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.warn('Failed to create param set:', err)
   }
 }

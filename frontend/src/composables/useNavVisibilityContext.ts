@@ -1,8 +1,8 @@
 import { computed, toValue } from 'vue'
 import type { MaybeRefOrGetter } from 'vue'
 import { usePlanStore } from '../stores/planStore'
-import { getAccessToken, isDemoSession } from '../lib/api/client'
-import { decodeJwtPayload } from '../lib/jwt'
+import { isDemoSession } from '../lib/api/client'
+import { useCurrentUser } from './useCurrentUser'
 import type { NavVisibilityContext } from '../config/navigation'
 
 /**
@@ -29,9 +29,7 @@ export function useNavVisibilityContext(
   overrides?: MaybeRefOrGetter<NavVisibilityOverrides | undefined>,
 ) {
   const planStore = usePlanStore()
-  const jwtPayload = computed(() =>
-    decodeJwtPayload(getAccessToken()) as Record<string, unknown> | null,
-  )
+  const { jwtPayload } = useCurrentUser()
   return computed<NavVisibilityContext>(() => {
     const o = toValue(overrides)
     return {
