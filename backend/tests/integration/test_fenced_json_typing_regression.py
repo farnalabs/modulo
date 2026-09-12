@@ -35,8 +35,11 @@ from modulo.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 
-# The four generic-JSON run columns the deploy's json/jsonb promotion targets.
-_JSON_COLUMNS = ("outputs_json", "node_telemetry_json", "node_token_usage", "cost_breakdown")
+# The generic-JSON run columns the deploy's json/jsonb promotion targets.
+# FAR-583 migration 0215 dropped the legacy blobs (outputs_json /
+# node_telemetry_json) from runs — only node_token_usage / cost_breakdown
+# remain as generic-JSON run columns.
+_JSON_COLUMNS = ("node_token_usage", "cost_breakdown")
 
 
 def _as_json(value: Any) -> Any:
@@ -144,18 +147,13 @@ async def test_fenced_update_run_status_succeeds_on_plain_json_columns(
         async with db_engine.connect() as conn, conn.begin():
             row = (
                 await conn.execute(
-                    text(
-                        "SELECT outputs_json, node_telemetry_json, node_token_usage, cost_breakdown "
-                        "FROM runs WHERE id = :rid"
-                    ),
+                    text("SELECT node_token_usage, cost_breakdown FROM runs WHERE id = :rid"),
                     {"rid": str(run_id)},
                 )
             ).first()
             assert row is not None
-            assert row[0] is None, "the legacy blobs column is never written post-B1"
-            assert row[1] is None, "the legacy blobs column is never written post-B1"
-            assert _as_json(row[2]) == node_token_usage
-            assert _as_json(row[3]) == cost_breakdown
+            assert _as_json(row[0]) == node_token_usage
+            assert _as_json(row[1]) == cost_breakdown
             store_rows = (
                 await conn.execute(
                     text(

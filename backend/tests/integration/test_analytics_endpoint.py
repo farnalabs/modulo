@@ -1214,10 +1214,10 @@ class TestBackfillEnrichment:
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
                     "status, input_hash, langgraph_thread_id, run_number, created_at, started_at, "
                     "completed_at, dispatched_at, heartbeat_at, claim_count, cancellation_requested, "
-                    "error_code, outputs_json, rate_limit_key) "
+                    "error_code, rate_limit_key) "
                     "VALUES (:id, :oid, :pid, :sid, 'manual', 'failed', :hash, :thread, 7, "
                     ":created, :started, :completed, :dispatched, :heartbeat, 3, true, "
-                    "'executor_stalled', :outjson, 'rate:limit:key')"
+                    "'executor_stalled', 'rate:limit:key')"
                 ),
                 {
                     "id": str(run_id),
@@ -1231,9 +1231,23 @@ class TestBackfillEnrichment:
                     "dispatched": datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
                     "completed": datetime(2026, 8, 7, 9, 30, 0, tzinfo=UTC),
                     "heartbeat": datetime(2026, 8, 7, 9, 29, 0, tzinfo=UTC),
-                    "outjson": '{"node_a": {"result": "ok"}}',
                 },
             )
+        # The runs blob columns were dropped (migration 0215, FAR-583); the
+        # backfill reads output bytes from the per-node run_node_outputs rows
+        # instead. Seed one final-attempt row so output_bytes is populated.
+        await conn.execute(
+            text(
+                "INSERT INTO run_node_outputs (run_id, organisation_id, node_id, attempt_key, "
+                "outputs_json) "
+                "VALUES (:rid, :oid, 'node_a', '__final__', :outjson)"
+            ),
+            {
+                "rid": str(run_id),
+                "oid": str(org_a),
+                "outjson": '{"result": "ok"}',
+            },
+        )
 
         # Backfill via a BYPASSRLS role (the maintenance cron runs as one): the
         # conftest FORCE-enables RLS on runs/pipeline_snapshots even for
