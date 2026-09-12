@@ -174,6 +174,41 @@ _ADVANCE_SQL = text(
     bindparam("evidence_ts", type_=DateTime(timezone=True)),
 )
 
+# FAR-794 slice 2b: the rank-guarded provenance UPSERT for caller/derived refs
+# at terminal finalise — the same shape ``modulo.db.crud.run._hydrate_journeys``
+# established at create time, applied to the mint entries that were absent at
+# run creation (node-input injection arrived after the snapshot seeded input).
+#
+# * INSERT arm MINTS the missing caller/derived journey row (agents never mint).
+# * UPDATE arm upgrades ``provenance`` by rank ONLY (``agent(0) < derived(1) <
+#   caller(2)``, unknown/NULL legacy rank 0 — the same inline CASE the create
+#   path in ``modulo.db.crud.run`` established) — an INDEPENDENT SET, never
+#   gated by the ``:evidence_ts`` evidence compare-and-set, and it does
+#   NOT touch ``updated_at`` / ``latest_*`` / ``run_count`` (those are owned
+#   by terminal-advance evidence-CAS). A provenance upgrade never downgrades.
+# * ``first_seen_source`` is immutable post-mint — the UPDATE arm never writes it.
+_PROVENANCE_UPSERT_SQL = text(
+    "INSERT INTO journeys "
+    "(id, organisation_id, kind, ref, canonical_work_item_id, provenance, "
+    "first_seen_source, created_at, updated_at) "
+    "VALUES (:id, :org_id, :kind, :ref, :canonical_id, :provenance, "
+    ":first_seen_source, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+    "ON CONFLICT (organisation_id, kind, ref) DO UPDATE SET "
+    "provenance = CASE "
+    "WHEN (CASE :provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
+    "> (CASE journeys.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
+    "THEN :provenance ELSE journeys.provenance END"
+)
+
+
+def _mintable_source(entry: dict[str, Any]) -> bool:
+    """True for the mintable ref sources (``caller`` / ``derived``).
+
+    Agent-emitted refs are stored on the run and CONFIRMED against existing
+    journey rows but never mint a row and never upgrade provenance.
+    """
+    return entry.get("source") in ("caller", "derived")
+
 
 def _canonicalise_entry(entry: Any) -> dict[str, Any] | None:
     """Canonicalise + validate a raw work-item ref entry (fail-open).
@@ -443,3 +478,46 @@ async def advance_journeys(
             evidence_ts=evidence_ts,
         )
     return advanced
+
+
+async def upsert_ref_provenances(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    refs: list[dict[str, Any]],
+) -> int:
+    """Rank-guarded provenance UPSERT for the mintable (caller/derived) refs.
+
+    FAR-794 slice 2b: at terminal finalise the run's create-stamped refs are
+    minted through the rank-guarded upsert (the same shape the create path in
+    ``modulo.db.crud.run`` uses) — the UPDATE arm upgrades ``provenance`` ONLY
+    by rank (derived → caller), independent of the evidence compare-and-set:
+    a provenance upgrade is an independent SET that must never gate, or be
+    gated by, the ``latest_*`` evidence write. ``first_seen_source`` is
+    immutable (never rewritten here). Agent-emitted entries are skipped —
+    they are storage-owned, never minted.
+
+    Runs inside the caller's transaction (the journey savepoint at finalise);
+    the caller owns the RLS org context. Returns the number of entries
+    considered (mint or upgrade attempted).
+    """
+    considered = 0
+    for entry in refs:
+        if not _mintable_source(entry):
+            continue
+        try:
+            canonical = validate_ref_entry(entry)
+        except (ValueError, TypeError) as exc:
+            _log.warning("upsert_ref_provenances: dropping invalid work-item ref entry: %s", exc)
+            continue
+        if canonical is None:
+            continue
+        params = _ref_params(organisation_id, canonical)
+        params.update(
+            {
+                "provenance": canonical["source"],
+                "first_seen_source": canonical["source"],
+            }
+        )
+        await session.execute(_PROVENANCE_UPSERT_SQL, params)
+        considered += 1
+    return considered

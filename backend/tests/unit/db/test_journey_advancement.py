@@ -794,7 +794,12 @@ class TestFinalizeJourneyHook:
 
         refs = await _read_run_refs(session, run_id)
         assert refs is not None
-        assert {"kind": "github_pr", "ref": "456", "source": "reported", "status": "done"} in refs
+        # FAR-794 slice 2b: the engine stamps ``source_node_id`` on confirmed
+        # emissions it can attribute to a node — check the base fields with the
+        # stamp allowed present.
+        claimed = [r for r in refs if r.get("kind") == "github_pr" and r.get("ref") == "456"]
+        assert claimed[0]["source"] == "reported"
+        assert claimed[0]["status"] == "done"
         assert {"kind": "github_pr", "ref": "123", "source": "derived"} in refs
         journey = await _read_journey_by_kind(session, "github_pr", "456")
         assert journey is not None
@@ -883,7 +888,9 @@ class TestFinalizeCostWiring:
         )
         refs = await _read_run_refs(session, run_id)
         assert refs is not None
-        assert {"kind": "github_pr", "ref": "456", "source": "reported", "status": "done"} in refs
+        claimed = [r for r in refs if r.get("kind") == "github_pr" and r.get("ref") == "456"]
+        assert claimed[0]["source"] == "reported"
+        assert claimed[0]["status"] == "done"
         journey = await _read_journey_by_kind(session, "github_pr", "456")
         assert journey is not None
         assert journey.latest_terminal_run_id == run_id

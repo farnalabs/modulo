@@ -117,10 +117,94 @@ from modulo.core.run_context.autonomy import (
 )
 from modulo.core.run_context.autonomy_telemetry import emit_autonomy_telemetry
 from modulo.db.crud.hitl_gate_config import human_only_effective
+from modulo.db.lifecycle_refs import (
+    _SOURCE_RANK,
+    WORK_ITEM_REFS_KEY,
+    notify_refs_event,
+    validate_ref_entry,
+)
 from modulo.db.models.eval_result import EvalResult as EvalResultModel
 from modulo.db.rls import set_rls_execution_context, set_rls_org
+from modulo.settings import work_item_refs_cap
 
 _log = logging.getLogger(__name__)
+
+# FAR-794 slice 2b: node INPUT injection — when a node's ``input_schema_json``
+# declares the ``work_item_refs`` INPUT property, the run's create-time refs
+# are injected READ-ONLY at node start (a prompt template can bind
+# ``{{ work_item_refs }}``). This is a declare-and-opt-in channel, parallel to
+# ``output_schema_json``; the declaration lives on the NODE definition (and
+# the snapshot), not on user input, so caller input can never switch an
+# undeclared node onto this injection path.
+_WORK_ITEM_REFS_INPUT_PROP = "work_item_refs"
+_WORK_ITEM_REFS_INPUT_PROPS = {"work_item_refs", WORK_ITEM_REFS_KEY}
+
+# Same unified cap as the self-report normalisation + finalise merge
+# (FAR-794 slice 2b ONE cap). Drop order is the deterministic rank map.
+_NODE_INPUT_REFS_CAP_DROPPED = "refs_cap_dropped"
+
+
+def _node_declares_work_item_refs(node_def: dict[str, Any]) -> bool:
+    """True when the node's ``input_schema_json`` declares work-item refs.
+
+    Accepts EITHER the reserved carrier key (``_work_item_refs``, slice 2a)
+    or the clean template alias ``work_item_refs`` — both feed the same
+    injected ``work_item_refs`` template variable.
+    """
+    schema_json = node_def.get("input_schema_json")
+    if not isinstance(schema_json, dict):
+        return False
+    properties = schema_json.get("properties")
+    return isinstance(properties, dict) and bool(_WORK_ITEM_REFS_INPUT_PROPS & set(properties))
+
+
+def _node_input_work_item_refs(node_id: str, run_context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read the run's CREATE-TIME work-item refs for node input injection.
+
+    Read-only: the carrier is the create-time ``run_context.input._work_item_refs``
+    key reserved in FAR-794 slice 2a; the entry validator canonicalises each
+    entry, so caller input can never forge a malformed stamp through here.
+    This NEVER raises — a read or validation failure degrades to fewer/empty
+    refs with a warning log plus a counter event. Capped at the unified
+    ``modulo_work_item_refs_cap`` with the deterministic rank-ascending drop
+    order (agent first, then derived, then caller, then array position).
+    """
+    input_obj = run_context.get("input")
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    malformed = 0
+    if isinstance(input_obj, dict):
+        raw = input_obj.get(WORK_ITEM_REFS_KEY)
+        if isinstance(raw, list):
+            for i, entry in enumerate(raw):
+                try:
+                    candidates.append((i, validate_ref_entry(entry)))
+                except (ValueError, TypeError) as exc:
+                    malformed += 1
+                    if malformed <= 3:
+                        _log.warning(
+                            "node_work_item_refs.validation_failed",
+                            extra={"node_id": node_id, "index": i, "reason": str(exc)},
+                        )
+    cap = work_item_refs_cap()
+    ranked = sorted(
+        range(len(candidates)),
+        key=lambda j: (
+            _SOURCE_RANK.get(str(candidates[j][1].get("source")), 0),
+            candidates[j][0],
+        ),
+    )
+    for j in ranked[: max(len(candidates) - cap, 0)]:
+        notify_refs_event(
+            _NODE_INPUT_REFS_CAP_DROPPED,
+            node_id=node_id,
+            kind=str(candidates[j][1].get("kind")),
+            ref=str(candidates[j][1].get("ref")),
+        )
+    kept_positions = sorted(ranked[len(candidates) - cap :]) if cap else []
+    refs = [candidates[j][1] for j in kept_positions]
+    if malformed:
+        notify_refs_event("malformed_entry", surface="node_input", node_id=node_id, count=malformed)
+    return refs
 
 
 def _normalize_required_team_id(gate_id: str, raw: Any) -> str | None:
@@ -2878,12 +2962,19 @@ def _render_agent_prompt(
     raw_input: Any,
     prompt_template: str,
     node_def: dict[str, Any],
+    work_item_refs: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str | None]:
     """Render the node's prompt template (FAR-332/342 overrides applied inbound).
 
     Injects the state, run_context, input, and any resolved parameters into a
     sandboxed Jinja environment, then appends the LLM-routing prompt when the
-    node is an ``llm`` routing node. Returns ``(rendered_prompt, routing_mode)``.
+    node is an ``llm`` routing node. When *work_item_refs* is not ``None`` (the
+    node declared the ``work_item_refs`` input property — FAR-794 slice 2b),
+    the run's create-time refs are additionally exposed to the template as a
+    ``work_item_refs`` top-level variable (read-only data; the template CAN
+    bind ``{{ work_item_refs }}`` but nothing here lets a caller-governed
+    ``run_context["input"]`` write a run_context key with that name).
+    Returns ``(rendered_prompt, routing_mode)``.
     """
     env = SandboxedEnvironment()
     template = env.from_string(prompt_template)
@@ -2898,6 +2989,8 @@ def _render_agent_prompt(
         "run_context": scoped_run_context,
         "input": raw_input,
     }
+    if work_item_refs is not None:
+        template_vars[_WORK_ITEM_REFS_INPUT_PROP] = [dict(entry) for entry in work_item_refs]
     resolved = node_def.get("_resolved_parameters")
     if isinstance(resolved, dict):
         template_vars["parameter"] = resolved
@@ -3076,12 +3169,20 @@ def make_node_fn(
         # is never mutated.
         scoped_state = dict(state)
         scoped_state["run_context"] = scoped_run_context
+        # FAR-794 slice 2b: declare-and-inject the run's create-time refs when
+        # THIS node's input schema declares ``work_item_refs`` — read-only at
+        # node start, never failing the node (a read failure yields [], not a
+        # raise), and capped deterministically by the unified refs cap.
+        node_work_item_refs = (
+            _node_input_work_item_refs(node_id, run_context) if _node_declares_work_item_refs(node_def) else None
+        )
         rendered_prompt, routing_mode = _render_agent_prompt(
             state=scoped_state,
             run_context=scoped_run_context,
             raw_input=raw_input,
             prompt_template=prompt_template,
             node_def=node_def,
+            work_item_refs=node_work_item_refs,
         )
 
         output_data = await _invoke_node_model(rendered_prompt, model_backend_id_str, node_id)

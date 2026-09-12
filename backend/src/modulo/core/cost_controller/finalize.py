@@ -72,7 +72,7 @@ from modulo.core.cost_controller.system_config import (
     read_system_config,
     write_system_config,
 )
-from modulo.core.lifecycle_map.advancement import advance_journeys
+from modulo.core.lifecycle_map.advancement import advance_journeys, upsert_ref_provenances
 from modulo.core.lifecycle_map.reconcile import (
     record_journey_advance,
     record_journey_finalise_attempt,
@@ -96,6 +96,16 @@ from modulo.core.spend_ceiling import (
 )
 from modulo.db.crud.run import update_run_status
 from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
+from modulo.db.lifecycle_refs import (
+    _SOURCE_RANK,
+    canonical_work_item_id,
+    canonicalise_kind,
+    canonicalise_ref,
+    notify_refs_event,
+)
+from modulo.db.lifecycle_refs import (
+    REPORTED_SOURCE as _REPORTED_SOURCE,
+)
 from modulo.db.models.agent import Agent
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.journey import Journey
@@ -104,9 +114,15 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact
 from modulo.db.rls import set_rls_org
-from modulo.settings import get_settings
+from modulo.settings import get_settings, work_item_refs_cap
 
 _log = logging.getLogger(__name__)
+
+# FAR-794 slice 2b: the finalise-side cap-drop event. reconcile.py keeps the
+# OTel counter registry; until its wiring is extended (deferred by the slice-2b
+# allowlist), drops are counted via notify_refs_event which records into the
+# capture-hook path and dusk counters that exist.
+_REFS_EVENT_CAP_DROPPED = "refs_cap_dropped"
 
 __all__ = [
     "derive_node_type_map",
@@ -161,7 +177,8 @@ class _JourneyResolution(NamedTuple):
     """The parsed/confirmed self-report resolution feeding journey advancement.
 
     Groups the raw entries, the normalised reported claims, the confirmed refs,
-    the parse counters, and the merged effective refs — cutting
+    the parse counters, the merged effective refs (post dedupe + unified cap),
+    and the number of refs dropped by the finalise merge cap — cutting
     ``_record_journey_outcome``'s argument count from 8 to 5.
     """
 
@@ -170,6 +187,7 @@ class _JourneyResolution(NamedTuple):
     confirmed: list[dict[str, Any]]
     counters: dict[str, int]
     effective: list[dict[str, Any]]
+    cap_dropped: int = 0
 
 
 class _LedgerEscapeContext(NamedTuple):
@@ -985,10 +1003,11 @@ async def _record_fallback_terminal_facts(
     """FAR-143 — the LEGACY FALLBACK terminal also records facts + advances journeys."""
     run = await session.get(Run, run_id)
     if run is not None:
-        await record_run_facts(session, run)
-        # FAR-143 — the LEGACY FALLBACK terminal also advances journeys
-        # (fail-open, own savepoint).
+        # FAR-794 slice 2b: the journey block (merge + provisional UPSERT +
+        # advance) runs BEFORE the cost facts so any provenance snapshot in
+        # the facts is recorded AFTER the upsert, in the same transaction.
         await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_FALLBACK)
+        await record_run_facts(session, run)
 
 
 def _is_abort_error(exc: Exception) -> bool:
@@ -1370,28 +1389,76 @@ async def _confirm_reported_refs(
 def _merge_effective_refs(
     stamped: list[dict[str, Any]] | None,
     confirmed: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Create-stamped refs first, then confirmed reported refs (dedup, cap 100).
+    org_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]], int]:
+    """Create-stamped refs first, then confirmed reported refs (dedup + unified cap).
 
-    A reported (kind, ref) that duplicates a create-stamped entry is collapsed
-    (first occurrence wins — the derived stamp predates the reported claim). The
-    combined list is capped at 100 so a hostile output cannot grow the run's
-    ``work_item_refs`` without bound.
+    FAR-794 slice 2b: the combined list is capped at the unified
+    ``modulo_work_item_refs_cap`` setting (ONE constant for self-report
+    normalisation, node-input injection and this merge). A reported (kind, ref)
+    that duplicates a create-stamped entry is collapsed (first occurrence wins —
+    the derived stamp predates the reported claim).
+
+    Cap drop order is DETERMINISTIC: ``source`` rank ascending (agent first,
+    then derived, then caller — the 2a rank map), then the entry's array
+    position, then ``(kind, ref)`` as a final stable tiebreak (the array
+    position is unique, so the canonical id tiebreak can never engage). Callers
+    are additionally bounded at admission (slice 2a caps caller refs before
+    they reach the run), so under normal operation a caller entry is never
+    dropped here. Each dropped entry is counted via ``refs_cap_dropped``.
+
+    Returns ``(effective_entries, dropped_count)``.
     """
-    effective: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for entry in stamped or []:
-        if isinstance(entry, dict) and entry.get("kind") and entry.get("ref"):
-            key = (str(entry["kind"]), str(entry["ref"]))
-            if key not in seen:
-                seen.add(key)
-                effective.append(entry)
-    for entry in confirmed:
-        key = (entry["kind"], entry["ref"])
-        if key not in seen:
-            seen.add(key)
-            effective.append(entry)
-    return effective[:100]
+    union: list[dict[str, Any]] = []
+    index_by_id: dict[str, int] = {}
+    for entry in (stamped or []) + confirmed:
+        if not (isinstance(entry, dict) and entry.get("kind") and entry.get("ref")):
+            continue
+        ckind = canonicalise_kind(entry["kind"])
+        cref = str(entry["ref"])
+        cid = str(canonical_work_item_id(org_id, ckind, cref))
+        present = index_by_id.get(cid)
+        if present is None:
+            index_by_id[cid] = len(union)
+            union.append(entry)
+        elif _SOURCE_RANK.get(str(entry.get("source")), 0) > _SOURCE_RANK.get(str(union[present].get("source")), 0):
+            # Same canonical id, higher-rank source: the surviving entry keeps
+            # the richest provenance (caller stamp over an agent duplicate).
+            union[present] = entry
+
+    cap = work_item_refs_cap()
+    if len(union) <= cap:
+        return union, 0
+
+    # Rank ascending: agent(0) first, derived(1), caller(2) — the KEEP set takes
+    # the TAIL of this order (highest-rank sources survive; callers must never
+    # be dropped while lower-rank entries remain), and the DROPPED set drains
+    # from the head (agent dropped before derived before caller).
+    ranked = sorted(
+        range(len(union)),
+        key=lambda i: (
+            _SOURCE_RANK.get(str(union[i].get("source")), 0),
+            i,
+            (str(union[i]["kind"]), str(union[i]["ref"])),
+        ),
+    )
+    kept_positions = sorted(ranked[len(union) - cap :])
+    dropped_positions = ranked[: len(union) - cap]
+    kept = [union[i] for i in kept_positions]
+    for i in dropped_positions:
+        dropped = union[i]
+        notify_refs_event(
+            _REFS_EVENT_CAP_DROPPED,
+            org_id=str(org_id),
+            kind=str(dropped.get("kind")),
+            ref=str(dropped.get("ref")),
+            source=str(dropped.get("source")),
+        )
+    _log.info(
+        "cost_finalize.refs_cap_dropped",
+        extra={"org_id": str(org_id), "dropped": len(dropped_positions), "cap": cap},
+    )
+    return kept, len(dropped_positions)
 
 
 async def _record_journey_fact(
@@ -1438,6 +1505,69 @@ async def _record_journey_fact(
         )
 
 
+def _collect_node_emission_sources(
+    merged_outputs: dict[str, Any],
+) -> list[tuple[str, str, str]]:
+    """Attribute confirmed agent refs to the FAR-125 node that emitted them.
+
+    Walks the TOP-LEVEL node-keyed placement only (``{node_id: {"output":
+    {"work_item_refs": [...]}}}`` — the placement ``parse_self_report_refs``
+    covers for parsing, refined here with node identity for attribution). Each
+    emission whose ``kind``/``ref`` canonicalise is mapped to its emitting
+    node. Malformed emissions are silently skipped — the shared parser already
+    counts them as ``malformed``.
+    """
+    attributed: list[tuple[str, str, str]] = []
+    for node_id, node_entry in merged_outputs.items():
+        if not isinstance(node_entry, dict):
+            continue
+        node_output = node_entry.get("output")
+        if not isinstance(node_output, dict):
+            continue
+        raw_refs = node_output.get("work_item_refs")
+        if not isinstance(raw_refs, list):
+            continue
+        for raw in raw_refs:
+            if not isinstance(raw, dict):
+                continue
+            raw_kind = raw.get("kind")
+            raw_ref = raw.get("ref")
+            if raw_kind is None or raw_ref is None:
+                continue
+            try:
+                kind = canonicalise_kind(raw_kind)
+                ref = canonicalise_ref(kind, raw_ref)
+            except ValueError:
+                continue
+            attributed.append((kind, ref, str(node_id)))
+    return attributed
+
+
+def _stamp_node_sources(
+    effective: list[dict[str, Any]],
+    attributed: list[tuple[str, str, str]],
+) -> None:
+    """Stamp the engine-assigned ``source_node_id`` onto confirmed agent refs.
+
+    ``source``/``source_node_id`` are engine-owned (never trusted from the
+    wire): the first node that emitted a confirmed claim wins, so the stamp is
+    deterministic under multi-node emission. Mutates ``effective`` in place —
+    the merge already produced private per-finalise copies downstream.
+    """
+    remaining = list(attributed)
+    consumed: set[int] = set()
+    for entry in effective:
+        if entry.get("source") not in (_REPORTED_SOURCE, "agent"):
+            continue
+        for i, (kind, ref, node_id) in enumerate(remaining):
+            if i in consumed:
+                continue
+            if (kind, ref) == (str(entry.get("kind")), str(entry.get("ref"))):
+                entry["source_node_id"] = node_id
+                consumed.add(i)
+                break
+
+
 async def _resolve_effective_refs(
     session: AsyncSession,
     run: Run,
@@ -1445,21 +1575,27 @@ async def _resolve_effective_refs(
 ) -> _JourneyResolution:
     """Self-report confirm + effective-ref merge — the journey resolution.
 
-    Parses the self-report refs from ``merged_outputs``, normalises the reported
-    claims, confirms them against existing journey rows (ADVISORY — a reported
-    claim can only MATCH, never mint), and merges the create-stamped refs with
-    the confirmed reported refs (dedup, cap 100).
+    Parses the self-report refs from ``merged_outputs`` (the parse covers both
+    the top-level key and the FAR-125 node-keyed emission placement),
+    normalises the reported claims, confirms them against existing journey
+    rows (ADVISORY — a reported claim can only MATCH, never mint), and merges
+    the create-stamped refs with the confirmed reported refs (dedup, unified
+    cap with the deterministic rank-ascending drop order). The engine then
+    stamps ``source_node_id`` on the confirmed agent refs whose emitting node
+    is identifiable.
     """
     raw = parse_self_report_refs(merged_outputs)
     reported, counters = validate_and_normalise_reported_refs(raw)
     confirmed = await _confirm_reported_refs(session, run.organisation_id, reported)
-    effective = _merge_effective_refs(run.work_item_refs, confirmed)
+    effective, cap_dropped = _merge_effective_refs(run.work_item_refs, confirmed, run.organisation_id)
+    _stamp_node_sources(effective, _collect_node_emission_sources(merged_outputs))
     return _JourneyResolution(
         raw=raw,
         reported=reported,
         confirmed=confirmed,
         counters=counters,
         effective=effective,
+        cap_dropped=cap_dropped,
     )
 
 
@@ -1502,21 +1638,41 @@ async def _advance_journeys_on_terminal(
         async with session.begin_nested():
             await session.refresh(run)
             resolution = await _resolve_effective_refs(session, run, merged_outputs)
-            if resolution.confirmed:
-                run.work_item_refs = resolution.effective
-                await session.flush()
+            # Agent-sourced never advance or mint at finalise — advance_journeys
+            # receives ONLY the mintable caller/derived entries and the
+            # confirmed (pre-existing) reported claims.
+            mint_or_advance = [
+                entry
+                for entry in resolution.effective
+                if entry.get("source") in ("caller", "derived", _REPORTED_SOURCE)
+            ]
             advanced = await advance_journeys(
                 session,
                 run.organisation_id,
                 run_id=run.id,
                 pipeline_id=run.pipeline_id,
-                refs=resolution.effective,
+                refs=mint_or_advance,
                 status=status,
                 completed_at=run.completed_at,
                 run_created_at=run.created_at,
                 is_replay=bool(run.is_replay),
                 variant_group_id=run.variant_group_id,
             )
+            # FAR-794 slice 2b: rank-guarded provenance UPSERT (independent SET
+            # — never gated by the evidence CAS). It runs AFTER the advance on
+            # purpose: its INSERT arm stamps updated_at=CURRENT_TIMESTAMP, and
+            # the advance's evidence CAS compares ``:evidence_ts >
+            # updated_at`` — upsert-first would poison the comparison for the
+            # very rows it minted and the advance would silently keep NULL
+            # evidence. Post-advance, the upsert's INSERT arm is a no-op
+            # (advance already minted caller/derived) and its UPDATE arm only
+            # upgrades ``provenance`` by rank.
+            await upsert_ref_provenances(session, run.organisation_id, resolution.effective)
+            # The merged effective list (create-stamped + confirmed reported +
+            # node-emission attributions) is ALWAYS persisted — agent-sourced
+            # entries are storage-minted even when nothing advanced.
+            run.work_item_refs = resolution.effective
+            await session.flush()
             await _record_journey_outcome(
                 session,
                 run,
@@ -1947,12 +2103,16 @@ async def _record_terminal_analytics(
     the ORM identity map, so the fact must snapshot the terminal row — FAR-200);
     a refresh failure degrades to the in-memory object and never propagates.
     ``_advance_journeys_on_terminal`` is the FAR-143 self-report confirm +
-    journey advancement hook (fail-open, own savepoint). Also covers the
+    journey advancement hook (fail-open, own savepoint). FAR-794 slice 2b: the
+    journey block runs BEFORE the cost facts so any provenance snapshot in the
+    facts is recorded AFTER the rank-guarded provenance UPSERT, in the same
+    transaction — a fact written before the upsert would snapshot the stale
+    provenance (terminalization write-ordering rule). Also covers the
     reduced-escape terminal (its fresh-tx status write is committed before we
     get here).
     """
-    await record_run_facts(session, run)
     await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=writer)
+    await record_run_facts(session, run)
 
 
 async def _apply_agent_budget_override(
