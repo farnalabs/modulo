@@ -1,7 +1,7 @@
 """Add ``journeys.provenance``/``first_seen_source`` + canon ``reported`` → ``agent`` (FAR-794 slice 1).
 
-Revision ID: 0216_journey_provenance
-Revises: 0215_drop_runs_blob_columns
+Revision ID: 0221_journey_provenance
+Revises: 0220_run_node_artifacts
 Create Date: 2026-09-12
 
 Schema legs (Postgres only; SQLite/ORM-created test schemas get the columns
@@ -34,7 +34,7 @@ NUL-byte JSONB precedent):
    touched, one autocommit commit per batch on a DEDICATED connection (never
    alembic's transactional bind — committing on it closes
    ``context.begin_transaction()`` and loses the version row, FAR-403).
-   Reversibility claim: pre-0216 no code path ever wrote ``source='agent'`` —
+   Reversibility claim: pre-0220 no code path ever wrote ``source='agent'`` —
    the only ``source`` writers were self-report (forced ``"reported"``) and
    canonicalisation (``"derived"`` default) — so every post-backfill
    ``'agent'`` entry was necessarily ``'reported'`` pre-migration and the
@@ -70,8 +70,8 @@ from sqlalchemy import text
 
 from modulo.db.migrations._rls_ceremony import is_postgres as _is_postgres
 
-revision: str = "0216_journey_provenance"
-down_revision: str | None = "0215_drop_runs_blob_columns"
+revision: str = "0221_journey_provenance"
+down_revision: str | None = "0220_run_node_artifacts"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -231,7 +231,7 @@ def downgrade() -> None:
         return
 
     # REVERSIBILITY + migration-window assumption (documented, last-deploy
-    # guard): pre-0216 no code ever wrote ``agent``, so every ``agent`` value
+    # guard): pre-0220 no code ever wrote ``agent``, so every ``agent`` value
     # present in ``runs.work_item_refs`` at downgrade time was necessarily
     # ``reported`` pre-upgrade — the reverse rewrite restores them exactly.
     # VALID ONLY WITHIN the upgrade's deployment window: rows created/updated

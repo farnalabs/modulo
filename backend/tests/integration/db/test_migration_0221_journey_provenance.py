@@ -1,6 +1,6 @@
-"""Integration test for migration 0216_journey_provenance (FAR-794 slice 1).
+"""Integration test for migration 0221_journey_provenance (FAR-794 slice 1).
 
-Runs the real Alembic ``upgrade``/``downgrade`` of revision 0216 against a live
+Runs the real Alembic ``upgrade``/``downgrade`` of revision 0221 against a live
 Postgres (testcontainers) on an ISOLATED database (the migration drops data-leg
 columns on downgrade — never touch the shared session DB) and verifies:
 
@@ -20,8 +20,8 @@ columns on downgrade — never touch the shared session DB) and verifies:
     re-upgrade re-derives the same values (convergent round-trip).
 
 The test resets ``alembic_version`` on ITS OWN database seeded by upgrading
-from template0 up to the revision immediately before 0216 (only that one chain
-segment re-runs, and 0216 itself is idempotent/existence-guarded).
+from template0 up to the revision immediately before 0221 (only that one chain
+segment re-runs, and 0221 itself is idempotent/existence-guarded).
 """
 
 import os
@@ -44,8 +44,8 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0216_journey_provenance"
-PREV_REV = "0215_drop_runs_blob_columns"
+MIGRATION_REV = "0221_journey_provenance"
+PREV_REV = "0219_eval_cluster_check_constraints"
 
 # Runs seeded with rows whose work_item_refs carry 'reported' so the backfill
 # has real work; runs whose refs are derived-only or NULL must be untouched.
@@ -257,7 +257,7 @@ async def _downgrade(db_url: str) -> None:
         command.downgrade(cfg, PREV_REV)
 
 
-async def test_0216_upgrade_backfills_and_is_idempotent(isolated_db_url: str) -> None:
+async def test_0221_upgrade_backfills_and_is_idempotent(isolated_db_url: str) -> None:
     seeded = await _seed(isolated_db_url)
 
     await _upgrade(isolated_db_url)
@@ -284,7 +284,7 @@ async def test_0216_upgrade_backfills_and_is_idempotent(isolated_db_url: str) ->
     assert await _refs(isolated_db_url, seeded["run_null"]) is None
 
     # Idempotency: rewind alembic_version one revision and re-run the REAL
-    # 0216 migration against the already-backfilled data — the column guards
+    # 0221 migration against the already-backfilled data — the column guards
     # / CREATE INDEX IF NOT EXISTS are no-ops, the batching predicates match
     # zero rows, and nothing changes or degrades.
     engine = create_async_engine(isolated_db_url, poolclass=NullPool)
@@ -304,7 +304,7 @@ async def test_0216_upgrade_backfills_and_is_idempotent(isolated_db_url: str) ->
     ]
 
 
-async def test_0216_downgrade_reverses_and_reupgrades(isolated_db_url: str) -> None:
+async def test_0221_downgrade_reverses_and_reupgrades(isolated_db_url: str) -> None:
     seeded = await _seed(isolated_db_url)
     await _upgrade(isolated_db_url)
     assert await _column_exists(isolated_db_url, "provenance")
