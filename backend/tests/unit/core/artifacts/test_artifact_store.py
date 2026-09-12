@@ -163,6 +163,33 @@ def test_read_bytes_file_not_found(tmp_path):
         store.read_bytes(ptr)
 
 
+def test_read_bytes_rejects_traversal_in_rel_path(tmp_path):
+    """read_bytes must not follow a ``..`` traversal out of the artifact root.
+
+    ``rel_path`` is persisted DB data (artifacts_json), so a hostile value must
+    be neutralised rather than resolved against the store root (Sonar S2083).
+    """
+    store = _make_store(tmp_path)
+    # A real artifact must exist so the guard is exercised before any open().
+    store.append("org1", "run1", "node1", "attempt1", "stdout", "secret\n")
+    store.finalize("org1", "run1", "node1", "attempt1", "stdout")
+
+    for evil in (
+        "../escape.zst",
+        "../../etc/passwd",
+        "org1/run1/node1/..%2F..%2Fetc%2Fpasswd",
+        "/abs/etc/passwd",
+    ):
+        ptr = ArtifactPointer(
+            stream="stdout",
+            rel_path=evil,
+            size_bytes=0,
+            sha256="abc",
+        )
+        with pytest.raises(ValueError, match="rel_path"):
+            store.read_bytes(ptr)
+
+
 # ── multiple attempts ──────────────────────────────────────────────────
 
 

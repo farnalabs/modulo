@@ -274,7 +274,25 @@ class LocalArtifactStore:
         )
 
     def read_bytes(self, pointer: dict[str, Any]) -> bytes:
-        path = self._root / str(pointer["rel_path"])
+        rel = str(pointer.get("rel_path", ""))
+        if not rel:
+            raise FileNotFoundError(f"Artifact not found: {rel!r}")
+        # ``rel_path`` is persisted DB data (artifacts_json), so it is treated as
+        # untrusted. Reject any traversal / absolute path before resolving, then
+        # assert the resolved path stays inside the artifact root (defense in
+        # depth against path traversal — Sonar S2083).
+        if Path(rel).is_absolute():
+            raise ValueError("Invalid rel_path: absolute path not allowed")
+        for segment in rel.split("/"):
+            self._validate_path_component("rel_path", segment)
+        resolved_root = self._root.resolve()
+        path = (resolved_root / rel).resolve()
+        # Containment check: the resolved path must be the root itself or live
+        # beneath it.  ``commonpath`` diverges if *rel* escaped the root (e.g.
+        # via ``..`` that survived segment validation), neutralising the
+        # traversal sink (Sonar S2083).
+        if os.path.commonpath([resolved_root, path]) != resolved_root:
+            raise ValueError("Invalid rel_path: escapes artifact root")
         if not path.exists():
             raise FileNotFoundError(f"Artifact not found: {pointer['rel_path']}")
         raw = path.read_bytes()
