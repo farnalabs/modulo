@@ -12,7 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
 
 from modulo.core.bundled_runner.health_probe import (
     NOTIFICATION_ACTION_URL,
@@ -437,6 +437,137 @@ class TestRunRunnerHealthProbe:
         assert kwargs["images_present"] is True
         assert placeholder_ref not in kwargs["image_checks"]
         assert kwargs["image_checks"][real_ref] is True
+
+
+class _NoAutoBeginSession:
+    """Session stand-in reproducing the PROD system-session semantics.
+
+    ``saq_worker._make_system_session_factory`` builds its sessionmaker with
+    ``autobegin=False``: calling ``session.execute()`` without a transaction
+    raises ``InvalidRequestError`` (observed on app.modulo.run, where the
+    probe died in Phase 1 every tick before the fix). Like the real session,
+    ``session.begin()`` starts a transaction and ``in_transaction`` reflects it.
+    """
+
+    def __init__(self) -> None:
+        self.in_transaction = False
+        self.savepoints: list[int] = []
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> None:
+        if not self.in_transaction:
+            raise InvalidRequestError(
+                "Autobegin is disabled on this Session; please call session.begin() to start a new transaction"
+            )
+
+    def begin(self) -> Any:
+        return self._Transaction(self)
+
+    def begin_nested(self) -> Any:
+        self.savepoints.append(len(self.savepoints) + 1)
+        return self._Transaction(self, nested=True)
+
+    async def flush(self) -> None:
+        if not self.in_transaction and not self.savepoints:
+            raise InvalidRequestError("no active transaction")
+
+    class _Transaction:
+        def __init__(self, session: "_NoAutoBeginSession", *, nested: bool = False) -> None:
+            self._session = session
+            self._nested = nested
+
+        async def __aenter__(self) -> Any:
+            self._was = self._session.in_transaction
+            if not self._nested:
+                self._session.in_transaction = True
+            return None
+
+        async def __aexit__(self, *args: object) -> None:
+            if not self._nested:
+                self._session.in_transaction = self._was
+
+
+def _no_autobegin_session_factory(session: _NoAutoBeginSession) -> Any:
+    class _Factory:
+        def __call__(self) -> Any:
+            return self
+
+        async def __aenter__(self) -> _NoAutoBeginSession:
+            return session
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    return _Factory()
+
+
+class TestRunRunnerHealthProbeSystemSessionFactory:
+    """Regression: the probe's Phase-1 read MUST survive a session factory
+    built with ``autobegin=False`` (the system-cron factory on PostgreSQL).
+
+    Without an explicit ``read_session.begin()``, ``list_orgs_with_runner_profiles``
+    raised ``InvalidRequestError`` on every tick, SAQ retried and failed, the
+    wrapper persisted ``error=probe_failed, orgs_probed=0``, and no probe-cache
+    rows ever landed — the deployment read a permanent ``stale`` (observed on
+    app.modulo.run, 2026-09-12)."""
+
+    @pytest.mark.asyncio
+    async def test_phase1_read_runs_inside_explicit_begin(self) -> None:
+        session = _NoAutoBeginSession()
+
+        async def _read_orgs(_session: Any) -> list[uuid.UUID]:
+            await session.execute("SELECT orgs")  # must run inside an open transaction
+            return [_ORG_ID]
+
+        async def _read_refs(_session: Any, _org: Any) -> list[str]:
+            await session.execute("SELECT refs")
+            return [_IMAGE_REF]
+
+        boundary = _fake_boundary(reachable=True, image_ok=True)
+        with (
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_read_orgs)),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(side_effect=_read_refs)),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()) as prune,
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+        ):
+            result = await run_runner_health_probe(
+                _no_autobegin_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        assert result["orgs_probed"] == 1
+        assert result["orgs_failed"] == 0
+        upsert.assert_awaited_once()
+        prune.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_tick_completes_and_rows_landed(self) -> None:
+        """The tick COMPLETES on an autobegin=False factory: the probe must
+        not die in Phase 1 (no pytest.raises here — a failure to complete is
+        the regression)."""
+        session = _NoAutoBeginSession()
+        boundary = _fake_boundary(reachable=False, image_ok=True)
+
+        async def _read_orgs(_session: Any) -> list[uuid.UUID]:
+            await session.execute("SELECT orgs")
+            return [_ORG_ID]
+
+        with (
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_read_orgs)),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+        ):
+            result = await run_runner_health_probe(
+                _no_autobegin_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        assert result["reachable"] is False
+        assert result["orgs_probed"] == 1
+        assert upsert.await_args is not None
+        kwargs = upsert.await_args.kwargs
+        assert kwargs["engine_reachable"] is False
+        assert kwargs["images_present"] is None  # engine down -> unknown, not stale
+        assert kwargs["engine_reachable"] is False
+        assert kwargs["images_present"] is None  # engine down -> unknown, not stale
 
 
 class TestEngineBoundaryRealClient:
