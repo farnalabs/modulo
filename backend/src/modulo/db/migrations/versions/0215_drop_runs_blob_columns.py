@@ -33,7 +33,14 @@ One transaction, in order (Postgres path; SQLite drops the same objects):
    (sentinel-squatting row ids). A jsonb ``'null'`` VALUE stored in a legacy
    side (0192's carved-out shape, qa M-guard here: the junk gate must not
    abort on it) is folded to the ABSENT-side semantic — it contributes no
-   repair rows and never mismatches parity.
+   repair rows and never mismatches parity. The repair walk is BOUNDED per
+   run (:data:`_MAX_REPAIR_ATTEMPTS`): a candidate whose repair legs insert
+   ZERO rows on a pass (a non-quarantined blob the legs cannot map — e.g.
+   a dict whose every key is ``__``-prefixed sentinel-squatting) is
+   re-selected by the candidate walk FOREVER, so after the bound the
+   migration aborts with the sample run id — the repair bound is the
+   detector for un-round-trippable blobs (the parity overwrite bound below
+   remains for the overwrite path).
 3. **Content parity** — for PKs present in BOTH stores, scoped to runs
    TERMINAL and ``created_at < :b1_cutoff``:
    * ``outputs_json`` / ``node_telemetry_json``: the reassembled new-table
@@ -48,7 +55,9 @@ One transaction, in order (Postgres path; SQLite drops the same objects):
      through the 0192 mapping (e.g. a sentinel-squatting object key the
      `__`-prefixed filter drops) would otherwise re-flag on every pass and
      spin forever — the bound aborts with a LIMIT-1-style sample run id and
-     the overflow count instead.
+     the overflow count instead. (An unmapped blob whose new-table rows are
+     entirely ABSENT never reaches this overwrite loop at all — the repair
+     walk's own per-run bound aborts it first, see stage 2.)
    * ``raw_output_markers``: the legacy markers dict must be a jsonb SUBSET
      of the reassembled-new markers dict — post-B1 additions are legitimate
      (the new table may hold MORE keys), so a MISSING legacy key is
@@ -170,6 +179,19 @@ _PARITY_BATCH = 200
 # spins forever. After this many per-run overwrite attempts the migration
 # aborts with the sample run id instead.
 _MAX_OVERWRITE_ATTEMPTS = 2
+
+# Review gate (PR #400, MAJOR): the repair walk is bounded per run too. The
+# candidate predicate keys on new-table rows being ABSENT, so a run whose
+# repair legs insert ZERO rows every pass (a non-quarantined blob the legs
+# cannot map — e.g. an out/tel dict whose every key is `__`-prefixed
+# sentinel-squatting: the out/tel + markers legs filter `__`-prefixed keys
+# and the metadata leg needs a '{}' side) is re-selected FOREVER — spinning
+# the `while candidates` loop before the parity overwrite bound can ever run
+# (under release.sh's 3x retry that is a deploy HANG, not a loud abort).
+# Mirror of :data:`_MAX_OVERWRITE_ATTEMPTS`: a run still a candidate after
+# this many zero-progress repair passes aborts the migration with the sample
+# run id + count.
+_MAX_REPAIR_ATTEMPTS = 2
 
 _META_NODE_ID = "__run_meta__"
 _FINAL_ATTEMPT_KEY = "__final__"
@@ -311,7 +333,10 @@ _UNKNOWN_RUN_FILTER_SQL = "r.id = :run_id AND r.status = 'unknown' AND r." + _CU
 # '__run_meta__' key collides with the metadata row's PK and its content is
 # dropped by ON CONFLICT DO NOTHING, breaking the round-trip 0192-era rows
 # already prevent — quarantine captured sentinel runs inside 0192's window;
-# outside it the parity overwrite bound is the detector). Parseable
+# outside it the REPAIR LOOP's own per-run bound is the detector (a
+# filter-everything blob leaves the run a zero-insertion candidate forever
+# — the repair loop precedes parity, so the parity overwrite bound can
+# never see that shape). Parseable
 # keys ride through the UNION DISTINCT folding; jsonb-null sides yield no
 # keys via the CASE folding (absent semantic).
 _REPAIR_OUT_TEL_BODY_SQL = (
@@ -583,22 +608,58 @@ def _repair_candidates(bind: sa.Connection, *, terminal: bool, batch: int) -> li
     return [uuid.UUID(str(row[0])) for row in rows.all()]
 
 
+def _repair_population(bind: sa.Connection, *, terminal: bool, inserted: dict[str, int]) -> int:
+    """One bounded repair walk over ONE population (terminal or unknown).
+
+    The candidate walk re-selects any run whose new-table rows are still
+    ABSENT, so a run whose repair legs insert ZERO rows on a pass (a blob
+    the legs cannot map — e.g. every out/tel dict key `__`-prefixed
+    sentinel-squatting on a non-quarantined run) is re-selected FOREVER and
+    the `while candidates` loop would spin before the parity overwrite bound
+    could ever run (a deploy HANG under release.sh's retry, not a loud
+    abort). BOUNDED per run (:data:`_MAX_REPAIR_ATTEMPTS`, mirror of the
+    parity overwrite bound): a run that consumed
+    :data:`_MAX_REPAIR_ATTEMPTS` passes while STILL a candidate aborts the
+    migration with the sample run id + attempt count.
+
+    Returns the number of rows the population's legs inserted; increments
+    the caller's ``inserted`` tally per leg in place.
+    """
+    attempts: dict[uuid.UUID, int] = {}
+    rows_inserted = 0
+    while candidates := _repair_candidates(bind, terminal=terminal, batch=_PARITY_BATCH):
+        for run_id in candidates:
+            leg_counts = _repair_run(bind, run_id, unknown_run=not terminal)
+            if not any(leg_counts.values()):
+                attempts[run_id] = attempts.get(run_id, 0) + 1
+                if attempts[run_id] >= _MAX_REPAIR_ATTEMPTS:
+                    raise RuntimeError(
+                        "FAR-583 drop repair bound exceeded: "
+                        f"run_id={run_id} remained a repair candidate after {attempts[run_id]} pass(es) that "
+                        f"inserted ZERO rows (the repair legs cannot map its legacy blob to the new table — "
+                        "e.g. every key is `__`-prefixed sentinel-squatting on a non-quarantined run). "
+                        "The blob is NOT round-trippable through the 0192 mapping semantics — "
+                        "remediate by hand (or quarantine the run), then re-run."
+                    )
+            else:
+                attempts.pop(run_id, None)
+                for leg, count in leg_counts.items():
+                    inserted[leg] += count
+                    rows_inserted += count
+    return rows_inserted
+
+
 def _repair_installation(bind: sa.Connection) -> dict[str, int]:
     """INSERT-only repair of BOTH populations (terminal + unknown-status).
 
     The terminal population runs the FULL leg set (out/tel + metadata +
     markers); the unknown population runs the MARKERS LEG ONLY (0192 twin
-    geometry — see :func:`_repair_run`).
+    geometry — see :func:`_repair_run`). Both walks are BOUNDED per run
+    (see :func:`_repair_population`).
     """
     inserted = {"final": 0, "meta": 0, "markers": 0}
-    while candidates := _repair_candidates(bind, terminal=True, batch=_PARITY_BATCH):
-        for run_id in candidates:
-            for leg, count in _repair_run(bind, run_id, unknown_run=False).items():
-                inserted[leg] += count
-    while candidates := _repair_candidates(bind, terminal=False, batch=_PARITY_BATCH):
-        for run_id in candidates:
-            for leg, count in _repair_run(bind, run_id, unknown_run=True).items():
-                inserted[leg] += count
+    _repair_population(bind, terminal=True, inserted=inserted)
+    _repair_population(bind, terminal=False, inserted=inserted)
     return inserted
 
 

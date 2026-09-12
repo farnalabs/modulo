@@ -8,8 +8,9 @@ INFLIGHT drain set (running/claimed/awaiting_human/pending/hitl_parked), the
 marker key-grammar twin (byte-identical to the repo module), the quarantine
 table KEPT, the qa-gate fixes (quarantine-excluded + narrowed junk scans,
 jsonb-null folds, the __ sentinel filter on the out/tel leg, the bounded
-overwrite loop, the shared retry helper for the index AND column drops,
-status-aware markers parity), and the RAISING downgrade.
+overwrite loop, the bounded repair walk, the shared retry helper for the
+index AND column drops, status-aware markers parity), and the RAISING
+downgrade.
 """
 
 from __future__ import annotations
@@ -162,6 +163,20 @@ class TestStructure:
         assert "attempts[run_id] = attempts.get(run_id, 0) + 1" in code
         parity_body = code[code.index("def _parity_outputs_telemetry") : code.index("def _parity_markers")]
         assert "NOT round-trippable" in parity_body
+
+    def test_repair_loop_is_bounded_per_run(self) -> None:
+        # Review gate (PR #400): the candidate walk re-selects a run whose
+        # repair legs insert ZERO rows every pass (a non-quarantined blob
+        # whose every out/tel key is __-prefixed) FOREVER — the repair loop
+        # carries its own per-run bound, and the repair bound (not the
+        # parity overwrite bound) is the detector for un-round-trippable
+        # blobs (the repair loop precedes parity).
+        assert "_MAX_REPAIR_ATTEMPTS = 2" in code
+        repair_body = code[code.index("def _repair_population") : code.index("def _parity_outputs_telemetry")]
+        assert "repair bound exceeded" in repair_body
+        assert "inserted ZERO rows" in repair_body
+        assert "attempts[run_id] = attempts.get(run_id, 0) + 1" in repair_body
+        assert "attempts.pop(run_id, None)" in repair_body
 
     def test_unknown_status_repairs_markers_leg_only(self) -> None:
         # qa gate fix 6: 0192's twin geometry is markers-only for the

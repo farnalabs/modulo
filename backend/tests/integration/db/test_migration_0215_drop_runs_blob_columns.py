@@ -10,6 +10,10 @@ Covers every stage of the drop spec:
   transaction rolls back — alembic_version stays at the pre-revision);
 * the structural-anomaly gate RAISES on a legacy blob that is not a jsonb
   object (instruction of the 0192 dict semantics — unparseable);
+* the per-run REPAIR bound RAISES on a NON-quarantined run whose legacy
+  blob's keys are all `__`-prefixed (the pre-bound `while candidates` loop
+  re-selected that run forever — a deploy HANG; the bound aborts loudly
+  with the sample run id instead);
 * the INSERT-only repair inserts the absent new-table rows for a TERMINAL
   pre-cutoff run whose legacy blobs have no new-table representation (and
   the MARKERS leg ONLY for the unknown-status run — 0192's twin geometry);
@@ -25,8 +29,9 @@ Covers every stage of the drop spec:
 * the downgrade RAISES ("never rewind past this migration").
 
 Aborted attempts roll their full transaction back, so the same isolated
-database drives all four attempts in sequence (drain -> junk -> markers
-divergence -> success), each blocker removed/repaired in between.
+database drives all five attempts in sequence (drain -> junk -> repair
+bound -> markers divergence -> success), each blocker removed/repaired in
+between.
 """
 
 import os
@@ -179,6 +184,7 @@ async def _seed_drop_world(db_url: str) -> dict[str, Any]:
     run_c = uuid.uuid4()  # markers PRESENT-key value divergence (TERMINAL variant)
     run_e = uuid.uuid4()  # unknown-status run with an unparseable marker key (markers leg only)
     run_f = uuid.uuid4()  # junk scalar legacy blob (out/tel structural anomaly gate)
+    run_g = uuid.uuid4()  # NOT quarantined; legacy blob whose every key is __-prefixed (repair bound)
     run_d = uuid.uuid4()  # pre-B1 in-flight run (drain gate)
 
     marker_a = f"run:{run_a}:node:n1:1"
@@ -195,6 +201,13 @@ async def _seed_drop_world(db_url: str) -> dict[str, Any]:
         (run_c, "complete", None, None, f'{{"{marker_c}": {{"raw": "LEGACY-MARK"}}}}'),
         (run_e, "unknown", None, None, f'{{"{marker_e}": "payload"}}'),
         (run_f, "complete", "3", None, None),
+        # run_g: a jsonb OBJECT blob — passes the junk gate — but EVERY key
+        # is __-prefixed, so the out/tel leg's sentinel filter drops them
+        # all; the meta leg needs a '{}' side run_g does not have. 0192's
+        # quarantine window is long closed so run_g is NOT quarantined:
+        # before the per-run repair bound, the candidate walk re-selected
+        # run_g forever (a deploy HANG under release.sh's 3x retry).
+        (run_g, "complete", '{"__squat_a": {"v": 1}, "__squat_b": {"v": 2}}', None, None),
         (run_d, "running", None, None, None),
     ]
 
@@ -268,6 +281,7 @@ async def _seed_drop_world(db_url: str) -> dict[str, Any]:
             "run_c": run_c,
             "run_e": run_e,
             "run_f": run_f,
+            "run_g": run_g,
             "run_d": run_d,
         },
         "markers": {"a": marker_a, "c": marker_c, "e": marker_e},
@@ -331,7 +345,20 @@ async def test_0215_drop_legs_and_abort_gates(drop_db_url, monkeypatch: pytest.M
     assert await _alembic_version(db_url) == PREV_REV
     await _delete_run(db_url, ids["runs"]["run_f"])
 
-    # -- Attempt 3: markers PRESENT-key value divergence aborts. ---------------
+    # -- Attempt 3: the per-run REPAIR bound aborts on an all-sentinel blob. --
+    # run_g (attempt 2 proved it is not junk — its blob IS a jsonb object)
+    # has NO quarantine row and NO new-table rows, and its every legacy key
+    # is __-prefixed: the pre-bound `while candidates` loop re-selected
+    # run_g forever (0 rows per pass, candidate predicate never clears) —
+    # a deploy HANG under release.sh's 3x retry. The bound must abort
+    # LOUDLY with the sample run id instead.
+    with pytest.raises(RuntimeError, match="repair bound exceeded") as excinfo:
+        await _upgrade(db_url)
+    assert str(ids["runs"]["run_g"]) in str(excinfo.value), "the abort must name the stuck run"
+    assert await _alembic_version(db_url) == PREV_REV, "the repair-bound abort must roll back fully"
+    await _delete_run(db_url, ids["runs"]["run_g"])
+
+    # -- Attempt 4: markers PRESENT-key value divergence aborts. ---------------
     with pytest.raises(RuntimeError, match="diverges from the reassembled new-table markers"):
         await _upgrade(db_url)
     assert await _alembic_version(db_url) == PREV_REV, "the markers raise must roll back the repair too"
@@ -354,7 +381,7 @@ async def test_0215_drop_legs_and_abort_gates(drop_db_url, monkeypatch: pytest.M
     finally:
         await engine.dispose()
 
-    # -- Attempt 4: the migration succeeds all the way through. ---------------
+    # -- Attempt 5: the migration succeeds all the way through. ---------------
     await _upgrade(db_url)
     assert await _alembic_version(db_url) == "0215_drop_runs_blob_columns"
 
