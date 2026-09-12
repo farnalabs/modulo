@@ -266,12 +266,14 @@ class TestBareRepoProof:
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         subprocess.run(  # noqa: S603
             [_GIT, "init", "-b", "main", str(clone)],
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         subprocess.run(  # noqa: S603
             [_GIT, "config", "user.email", "test@test.com"],
@@ -279,6 +281,7 @@ class TestBareRepoProof:
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         subprocess.run(  # noqa: S603
             [_GIT, "config", "user.name", "Test"],
@@ -286,6 +289,7 @@ class TestBareRepoProof:
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         # Create an initial commit.
         (clone / "file.txt").write_text("hello")
@@ -295,6 +299,7 @@ class TestBareRepoProof:
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         subprocess.run(  # noqa: S603
             [_GIT, "commit", "-m", "init"],
@@ -302,6 +307,7 @@ class TestBareRepoProof:
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         subprocess.run(  # noqa: S603
             [_GIT, "remote", "add", "origin", str(bare)],
@@ -309,6 +315,7 @@ class TestBareRepoProof:
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         subprocess.run(  # noqa: S603
             [_GIT, "push", "origin", "main"],
@@ -316,6 +323,7 @@ class TestBareRepoProof:
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         # Record the SHA we just pushed.
         result = subprocess.run(  # noqa: S603
@@ -325,6 +333,7 @@ class TestBareRepoProof:
             text=True,
             check=True,
             env=env,
+            timeout=30,
         )
         pushed_sha = result.stdout.strip()
 
@@ -343,6 +352,7 @@ class TestBareRepoProof:
             check=True,
             capture_output=True,
             env=env,
+            timeout=30,
         )
         # Verify the checkout SHA matches.
         verify = subprocess.run(  # noqa: S603
@@ -352,5 +362,6 @@ class TestBareRepoProof:
             text=True,
             check=True,
             env=env,
+            timeout=30,
         )
         assert verify.stdout.strip() == pushed_sha
