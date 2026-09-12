@@ -1346,7 +1346,7 @@ async def _write_raw_output_marker(
                 )
                 return
             # B2c (FAR-583): the writers no longer touch the runs blob
-            # columns (drop migration 0212 in the follow-up PR) - the markers
+            # columns (dropped by migration 0215) - the markers
             # merge reads the CURRENT new-table state
             # (the run row is still locked FOR UPDATE, so the read-merge-write
             # serialises exactly like the former ORM leg). One reassembly

@@ -1934,7 +1934,7 @@ def _apply_run_output_fields(run: Run, update: _RunStatusUpdate) -> None:
     """Apply the token-usage payload.
 
     FAR-583 B2c: the outputs/telemetry payloads have NO whole-run storage on
-    ``runs`` (B1 cut the ORM mapping; the drop migration 0212 lands in the
+    ``runs`` (B1 cut the ORM mapping; the drop migration 0215 removed the
     follow-up PR - the incoming dicts are persisted on
     ``run_node_outputs`` by the primary repo write the caller performs right
     after (:func:`write_run_outputs_from_run`).
@@ -1983,8 +1983,8 @@ async def write_run_outputs_from_run(
 
     B1 contract cut (FAR-583): this is not a dual-write. And B2c the writers
     no longer touch the ``runs`` blob columns at all (their SET clauses are
-    absent from the fenced UPDATE as well; the DB columns persist unwritten
-    until the drop migration 0212 in the follow-up PR) - the
+    absent from the fenced UPDATE as well; the DB columns were removed by
+    the drop migration 0215) - the
     ``run_node_outputs`` REPLACE write
     (:func:`replace_run_node_outputs` - upsert ``__final__``/metadata rows
     + delete-absent ordered AFTER upserts, metadata flags re-derived) inside
@@ -2193,7 +2193,7 @@ async def update_run_status(
         # the row set the reader's tenant compensation covers).
         # B2c: the capture reads the CURRENT new-table state (readers are
         # new-table-only; the runs blob columns are unwritten since B1 and
-        # drop in the follow-up migration 0212; the inherited-sentinel filter
+        # were dropped by migration 0215; the inherited-sentinel filter
         # speaks new-table
         # row ids now).
         stored = await read_run_node_outputs_raw(

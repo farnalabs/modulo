@@ -272,7 +272,7 @@ def dialect_insert(dialect: str) -> Any:
 
 
 # The 0192 quarantine side table as a CORE-ONLY Table - deliberately NOT an
-# ORM model (ops/remediation surface). KEPT through the drop (migration 0212
+# ORM model (ops/remediation surface). KEPT through the drop (migration 0215
 # does NOT drop it): its rows are the only surviving copy of the
 # 0192-quarantined legacy blobs (sentinel ``__``-prefixed keys could never be
 # represented) once the legacy runs columns go; the retention purge's delete
