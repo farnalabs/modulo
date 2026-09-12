@@ -268,7 +268,7 @@ class TestBareRepoProof:
             env=env,
         )
         subprocess.run(  # noqa: S603
-            [_GIT, "init", str(clone)],
+            [_GIT, "init", "-b", "main", str(clone)],
             check=True,
             capture_output=True,
             env=env,
