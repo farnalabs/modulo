@@ -27,7 +27,9 @@ SCOPE (connector-write dedupe, FAR-458): the read-before-write dedupe
 points:
 
 1. **Sandbox single-node transient recovery** (FAR-438) — the executor's
-   ``_idempotency_gate_ok`` reads ``runs.raw_output_markers`` and applies
+   ``_idempotency_gate_ok`` reads the run's ALREADY-LOADED reassembled
+   raw-output markers (``run_node_outputs`` marker rows — the store leg; the
+   legacy runs blob columns died with migration 0215) and applies
    suppression for a ``single_sandbox_node`` graph on the sandbox transient
    retry.
 2. **Connector-write UNKNOWN recovery** (FAR-458) — the connector node's write

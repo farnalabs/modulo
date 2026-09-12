@@ -18,11 +18,11 @@ module. It provides:
   ``json.dumps`` bytes (PG jsonb orders keys length-then-bytewise; the
   server-side ``ORDER BY length(key), key COLLATE "C"`` is PG-only, so the
   ordering happens in Python — dialect-neutral);
-* Reads are NEW-TABLE-ONLY (B2c, FAR-583): the readers no longer consult the
-  legacy ``runs`` blob columns — the EMPTY/MISMATCH fallback machinery is
-  removed in code. The columns themselves still EXIST in the database until
-  the follow-up drop migration (0212) lands; nothing here reads them. The
-  only cross-table reader left is the fenced markers gate, which
+* Reads are NEW-TABLE-ONLY (B2c, FAR-583): the readers never consulted the
+  legacy ``runs`` blob columns (the EMPTY/MISMATCH fallback machinery was
+  removed in code) and migration 0215 has now DROPPED those columns — the
+  three blobs live ONLY in ``run_node_outputs`` (+ the quarantine side
+  table). The only cross-table reader left is the fenced markers gate, which
   fences on ``runs.status`` / ``claim_token`` / ``organisation_id`` (ordinary
   columns the ORM still maps) without touching any blob column.
 
@@ -272,7 +272,7 @@ def dialect_insert(dialect: str) -> Any:
 
 
 # The 0192 quarantine side table as a CORE-ONLY Table - deliberately NOT an
-# ORM model (ops/remediation surface). KEPT through the drop (migration 0212
+# ORM model (ops/remediation surface). KEPT through the drop (migration 0215
 # does NOT drop it): its rows are the only surviving copy of the
 # 0192-quarantined legacy blobs (sentinel ``__``-prefixed keys could never be
 # represented) once the legacy runs columns go; the retention purge's delete
@@ -832,16 +832,20 @@ async def read_run_blobs(
 ) -> RunBlobs:
     """The reassembled legacy dict shapes — new-table-only (B2c).
 
-    Readers no longer consult the legacy ``runs`` blob columns (the
-    EMPTY/MISMATCH fallback machinery is removed; the columns themselves are
-    dropped later by the follow-up drop migration 0212).
+    Readers never consulted the legacy ``runs`` blob columns (the
+    EMPTY/MISMATCH fallback machinery was removed; migration 0215 has since
+    DROPPED the columns).
 
-    DISPOSITION NOTE for that drop (M6): after migration 0212 lands, runs
-    whose legacy blobs were 0192-QUARANTINED are under-served here — their
-    evidence lives in ``run_node_outputs_quarantine`` (ops SQL), not in
-    ``run_node_outputs``, so these readers serve an absent-side shape for
-    them. That is accepted: quarantine is the remediation surface, and the
-    disposition is recorded before the drop.
+    DISPOSITION, post-drop (decided with migration 0215): runs whose legacy
+    blobs were 0192-QUARANTINED stay under-served here — their evidence lives
+    in ``run_node_outputs_quarantine`` (ops SQL), not in ``run_node_outputs``,
+    so these readers serve an absent-side shape for them. A QUARANTINE OVERLAY
+    in the read path was considered and DECIDED AGAINST: quarantined dicts
+    carry ``__``-prefixed sentinel keys that the write path validates OUT of
+    existence, so an overlaid read would serve a shape no legitimate write
+    could ever produce (and the Core quarantine table has no RLS policy to
+    scope an overlay through). Quarantine remains the remediation surface;
+    see docs/operations/drop-runs-blob-columns.md.
     """
     return await read_run_node_outputs_raw(session, run_id=run_id, organisation_id=organisation_id)
 

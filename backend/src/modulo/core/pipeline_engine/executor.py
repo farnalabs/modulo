@@ -1059,7 +1059,8 @@ def _should_skip_retry(node_id: str | None, markers: Any, run_id: Any) -> bool:
 
     ``node_id`` is ``exc.node_id`` (only ``SandboxNodeFailedError`` carries it)
     or None — a None node_id (or a plain ``NodeCancelledError``) disables the
-    gate. ``markers`` is the run's ALREADY-LOADED ``raw_output_markers`` (never
+    gate. ``markers`` is the run's ALREADY-LOADED reassembled raw-output markers
+    (the ``run_node_outputs`` store leg's markers — never
     a fresh SELECT). Fires only when any marker whose attempt_key embeds
     ``:node:<node_id>:`` and ``:run:<run_id>:`` (delimiters, never substring)
     carries ``delivery_done is True``. Non-dict ``markers`` (including
