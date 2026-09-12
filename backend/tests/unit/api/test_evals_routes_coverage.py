@@ -28,10 +28,13 @@ from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-_PIPELINE_ID = uuid.uuid4()
-_RUN_ID = uuid.uuid4()
-_EVAL_ID = uuid.uuid4()
-_SUITE_ID = uuid.uuid4()
+_PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
+_RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
+_EVAL_ID = uuid.UUID("00000000-0000-0000-0000-000000000005")
+_SUITE_ID = uuid.UUID("00000000-0000-0000-0000-000000000006")
+_NODE_ID = uuid.UUID("00000000-0000-0000-0000-000000000007")
+_RUN_ID_B = uuid.UUID("00000000-0000-0000-0000-000000000008")
+
 
 _PROG = ProgrammingError("s", {}, Exception())
 _SQL = SQLAlchemyError("boom")
@@ -308,9 +311,9 @@ def test_create_eval_error_mapping(
         (
             "POST",
             "/api/v1/evals/from-run",
-            {"run_id": str(_RUN_ID), "node_id": str(uuid.uuid4()), "eval_type": "regex", "name": "n"},
+            {"run_id": str(_RUN_ID), "node_id": str(_NODE_ID), "eval_type": "regex", "name": "n"},
         ),
-        ("POST", "/api/v1/evals/compare", {"run_id_a": str(_RUN_ID), "run_id_b": str(uuid.uuid4())}),
+        ("POST", "/api/v1/evals/compare", {"run_id_a": str(_RUN_ID), "run_id_b": str(_RUN_ID_B)}),
     ],
     ids=[
         "list-evals",
@@ -361,7 +364,7 @@ def test_evals_error_mapping_matrix(
         (
             "POST",
             "/api/v1/evals/from-run",
-            {"run_id": str(_RUN_ID), "node_id": str(uuid.uuid4()), "eval_type": "regex", "name": "n"},
+            {"run_id": str(_RUN_ID), "node_id": str(_NODE_ID), "eval_type": "regex", "name": "n"},
         ),
     ],
 )
