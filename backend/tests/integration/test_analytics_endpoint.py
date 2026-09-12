@@ -1238,9 +1238,9 @@ class TestBackfillEnrichment:
             # (the per-node store), so seed the run's ``__final__`` output row here.
             await conn.execute(
                 text(
-                    "INSERT INTO run_node_outputs (id, organisation_id, run_id, node_id, "
+                    "INSERT INTO run_node_outputs (organisation_id, run_id, node_id, "
                     "attempt_key, outputs_json) "
-                    "VALUES (gen_random_uuid(), :oid, :rid, 'node_a', '__final__', "
+                    "VALUES (:oid, :rid, 'node_a', '__final__', "
                     "CAST(:outjson AS jsonb))"
                 ),
                 {"oid": str(org_a), "rid": str(run_id), "outjson": '{"result": "ok"}'},
