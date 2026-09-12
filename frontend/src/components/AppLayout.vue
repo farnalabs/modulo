@@ -47,8 +47,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { getAccessToken, clearAccessToken } from "../lib/api/client";
-import { decodeJwtPayload } from "../lib/jwt";
+import { clearAccessToken } from "../lib/api/client";
+import { useCurrentUser } from "../composables/useCurrentUser";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
 import RemyPanel from "./remy/RemyPanel.vue";
@@ -136,18 +136,9 @@ function logout() {
   window.location.reload();
 }
 
-interface AppLayoutJwtPayload {
-  sub?: string;
-  is_system_admin?: boolean;
-  org_role?: string | null;
-  permissions?: unknown;
-}
+const { jwtPayload, userId, isSystemAdmin: isSystemAdminFlag, orgRole, permissions } = useCurrentUser();
 
-const jwtPayload = computed<AppLayoutJwtPayload | null>(() =>
-  decodeJwtPayload(getAccessToken()) as AppLayoutJwtPayload | null,
-);
-
-const userEmail = computed(() => jwtPayload.value?.sub || "");
+const userEmail = computed(() => userId.value || "");
 
 const userInitial = computed(() => {
   const email = userEmail.value;
@@ -155,14 +146,12 @@ const userInitial = computed(() => {
   return email.charAt(0).toUpperCase();
 });
 
-const isSystemAdmin = computed(
-  () => jwtPayload.value?.is_system_admin === true,
-);
+const isSystemAdmin = isSystemAdminFlag;
 
-const userRole = computed(() => jwtPayload.value?.org_role || null);
+const userRole = computed(() => orgRole.value || null);
 
 const userPermissions = computed<string[]>(() => {
-  const perms = jwtPayload.value?.permissions;
+  const perms = permissions.value;
   return Array.isArray(perms) ? (perms as string[]) : [];
 });
 

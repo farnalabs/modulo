@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -189,7 +189,7 @@ class CreateOrgResponse(BaseModel):
 @handle_db_errors("admin.orgs.admin_create_org")
 async def admin_create_org(
     req: CreateOrgRequest,
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
+    current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgResponse:
     try:
@@ -243,7 +243,7 @@ class ListOrgItem(BaseModel):
 @router.get("")
 @handle_db_errors("admin.orgs.admin_list_orgs")
 async def admin_list_orgs(
-    _: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
+    _: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ListOrgItem]:
     try:
@@ -366,7 +366,7 @@ def _create_org_user_response(account: Any, membership: Any) -> "CreateOrgUserRe
 async def admin_create_org_user(
     org_id: uuid.UUID,
     req: CreateOrgUserRequest,
-    _current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> CreateOrgUserResponse:
     _validate_org_role(req.org_role)
@@ -412,7 +412,7 @@ async def admin_create_org_user(
 @handle_db_errors("admin.orgs.admin_delete_org")
 async def admin_delete_org(
     org_id: uuid.UUID,
-    _: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_ORG_MANAGE),  # type: ignore[assignment]
+    _: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
@@ -481,7 +481,7 @@ def _resolve_org_license(org: Organisation) -> OrgLicenseResponse:
 @handle_db_errors("admin.orgs.admin_get_org_license")
 async def admin_get_org_license(
     org_id: uuid.UUID,
-    _: AuthenticatedPrincipal = require_target_org_role("org.license.view", "operator"),  # type: ignore[assignment]
+    _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.license.view", "operator")],
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
     try:
@@ -536,7 +536,7 @@ def _clear_org_license_key(settings_json: dict[str, Any]) -> dict[str, Any]:
 async def admin_set_org_license(
     org_id: uuid.UUID,
     req: SetOrgLicenseRequest,
-    _: AuthenticatedPrincipal = require_target_org_role("org.license.manage", "admin"),  # type: ignore[assignment]
+    _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.license.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
     try:
@@ -574,7 +574,7 @@ async def admin_set_org_license(
 @handle_db_errors("admin.orgs.admin_remove_org_license")
 async def admin_remove_org_license(
     org_id: uuid.UUID,
-    _: AuthenticatedPrincipal = require_target_org_role("org.license.manage", "admin"),  # type: ignore[assignment]
+    _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.license.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
     try:
@@ -625,7 +625,7 @@ class SetOrgAuthzEnforceResponse(BaseModel):
 async def admin_set_org_authz_enforce(
     org_id: uuid.UUID,
     req: SetOrgAuthzEnforceRequest,
-    _: AuthenticatedPrincipal = require_target_org_role("org.authz_enforce.manage", "admin"),  # type: ignore[assignment]
+    _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.authz_enforce.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
 ) -> SetOrgAuthzEnforceResponse:
     # Tenancy-bounded (ADR 017 DECISION 3): only the org's own admin (or a
@@ -678,9 +678,9 @@ async def admin_set_org_triggers_paused(
     # Tenancy-bounded (ADR 017 DECISION 3 scope pin): the authz kill-switch must
     # NOT be able to lift this gate -- ``kill_switch_eligible=False`` mirrors the
     # org.delete immunity in ``require_system_or_org_admin``.
-    current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+    current_user: Annotated[AuthenticatedPrincipal, require_target_org_role(
         "org.triggers.pause.manage", "admin", kill_switch_eligible=False
-    ),
+    )],
     session: AsyncSession = Depends(get_db_session),
 ) -> SetOrgTriggersPausedResponse:
     try:
@@ -752,9 +752,9 @@ class SetOrgGuardrailsKillSwitchResponse(BaseModel):
 @handle_db_errors("admin.orgs.get_org_guardrails_kill_switch")
 async def admin_get_org_guardrails_kill_switch(
     org_id: uuid.UUID,
-    _current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+    _current_user: Annotated[AuthenticatedPrincipal, require_target_org_role(
         "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
-    ),
+    )],
     session: AsyncSession = Depends(get_db_session),
 ) -> GetOrgGuardrailsKillSwitchResponse:
     """Read the org's guardrails kill-switch state (admin only)."""
@@ -790,9 +790,9 @@ async def admin_get_org_guardrails_kill_switch(
 async def admin_set_org_guardrails_kill_switch(
     org_id: uuid.UUID,
     req: SetOrgGuardrailsKillSwitchRequest,
-    current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+    current_user: Annotated[AuthenticatedPrincipal, require_target_org_role(
         "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
-    ),
+    )],
     session: AsyncSession = Depends(get_db_session),
 ) -> SetOrgGuardrailsKillSwitchResponse:
     """Set the org's guardrails kill-switch (admin only).

@@ -166,8 +166,8 @@ import PortDefinitionPanel from '../../components/pipeline/composite/PortDefinit
 import PublishCompositeFlow from '../../components/pipeline/composite/PublishCompositeFlow.vue'
 import type { ParameterPort } from '../../types/pipeline'
 import { formatApiError } from '../../lib/api/formatError'
-import { api, getAccessToken } from '../../lib/api/client'
-import { decodeJwtPayload } from '../../lib/jwt'
+import { api } from '../../lib/api/client'
+import { useCurrentUser } from '../../composables/useCurrentUser'
 import Button from 'primevue/button'
 
 const route = useRoute()
@@ -176,10 +176,8 @@ const compositeId = route.params.id as string
 
 // composite-template create/update/publish require pipeline.create/update
 // (operator); hide the write controls from viewers/runners (SECURITY #1461).
-const canManage = computed(() => {
-  const role = (decodeJwtPayload(getAccessToken()) as Record<string, unknown> | null)?.org_role as string | undefined
-  return role === 'operator' || role === 'admin'
-})
+const { isOperator } = useCurrentUser()
+const canManage = isOperator
 
 const compositeName = ref('')
 const flowNodes = ref<any[]>([])
