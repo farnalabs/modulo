@@ -342,6 +342,12 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/views/AdminErrorsView.vue",
             "frontend/src/components/shared/FilterBar.vue",
         ),
+        "/admin/errors/:id": (
+            "frontend/src/views/AdminErrorDetailView.vue",
+            "frontend/src/components/shared/JsonViewer.vue",
+            "frontend/src/components/shared/ErrorAlert.vue",
+        ),
+        "/admin/system/orgs": "frontend/src/views/AdminSystemOrgsView.vue",
         "/admin/feature-flags": (
             "frontend/src/views/AdminFeatureFlagsView.vue",
             "frontend/src/components/shared/FilterBar.vue",
@@ -376,6 +382,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
         "/admin/plugins": "frontend/src/views/AdminPluginsView.vue",
         "/library/collections/:id": "frontend/src/views/CollectionDetailView.vue",
         "/library/:id/create-pipeline": "frontend/src/views/LibraryPipelineWizard.vue",
+        "/composites/:id/editor": "frontend/src/views/pipeline/CompositeEditorView.vue",
         "/pipelines/:id/editor": (
             "frontend/src/views/PipelineEditorView.vue",
             "frontend/src/components/pipeline/SandboxCommandsEditor.vue",
@@ -392,6 +399,11 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/components/HitlBriefing.vue",
         ),
         "/settings/email": "frontend/src/views/SettingsEmailView.vue",
+        "/settings/error-forwarders": (
+            "frontend/src/views/SettingsErrorForwardersView.vue",
+            "frontend/src/components/shared/ErrorAlert.vue",
+        ),
+        "/settings/monitoring": "frontend/src/views/SettingsMonitorConfigView.vue",
         "/settings/hitl-review": (
             "frontend/src/views/SettingsHitlReviewView.vue",
             "frontend/src/components/shared/FilterBar.vue",
@@ -424,6 +436,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/views/lifecycle-map/LifecycleMapView.vue",
             "frontend/src/components/lifecycle-map/LifecycleMapRenderer.vue",
         ),
+        "/lifecycle-maps/:id/editor": "frontend/src/views/lifecycle-map/LifecycleMapEditorView.vue",
         "/pipelines": (
             "frontend/src/views/PipelineListView.vue",
             "frontend/src/components/shared/FilterBar.vue",
@@ -454,6 +467,7 @@ def test_mapped_route_elements_cover_owning_view_testids():
             "frontend/src/components/shared/FilterBar.vue",
         ),
         "/schemas/infer": "frontend/src/views/SchemaInferenceView.vue",
+        "/setup/model-backend/:id": "frontend/src/views/setup/ModelBackendSetupView.vue",
         "/variants/compare": "frontend/src/views/VariantCompareView.vue",
         "/variants/compare/:batchId": "frontend/src/views/VariantBatchCompareView.vue",
         "/variants/ab-test": "frontend/src/views/ABTestModelsView.vue",
