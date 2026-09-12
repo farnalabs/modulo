@@ -6126,7 +6126,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     # provisioning (after the sandbox is created). Bind them up-front so the
     # terminal/exception paths that finalize artifacts can never hit
     # UnboundLocalError when provisioning fails before they are assigned.
-    watchdog = None
+    watchdog: "_SandboxWatchdog | None" = None  # noqa: UP037
     _artifact_writer: "ArtifactWriter | None" = None  # noqa: UP037 — quotes needed: no `from __future__ import annotations`
 
     # FAR-792: effective stdout/stderr retention cap for this node. "tail"
@@ -6796,7 +6796,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # FAR-582: full stdout/stderr side-car artifact writer.
             # Bound to the node run; appends on every on_stdout/on_stderr
             # callback; finalized on every terminal path.
-            _artifact_writer: "ArtifactWriter | None" = None  # noqa: UP037 — quotes needed: no `from __future__ import annotations`
+            _artifact_writer = None  # re-binding (annotated at function top)
             if run_id and node_id:
                 try:
                     from modulo.core.artifacts import ArtifactWriter
@@ -6839,6 +6839,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 drain_window_bytes=_stdout_cap if stdout_retention_mode == "full" else None,
                 artifact_writer=_artifact_writer,
             )
+            assert watchdog is not None  # narrowed for post-construction uses in this try block
 
             _drain_fn = watchdog.drain_sandbox_log
 
@@ -7051,6 +7052,10 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             )
             cmd_result = getattr(_cee, "result", None) or _cee
 
+        # Narrow watchdog for post-try/except uses (drain, budget checks, finalize).
+        # The assert inside the try block narrows within that block only; after
+        # the except handlers mypy widens back to `_SandboxWatchdog | None`.
+        assert watchdog is not None  # provisioning guaranteed construction
         # One final drain so the last growth (between the last tick and the
         # process exit) is captured before we read output.json. The probe is
         # fully guarded — on a dead sandbox it returns immediately.
