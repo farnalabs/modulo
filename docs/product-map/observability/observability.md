@@ -101,6 +101,18 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
 
 ## QA History
 
+- 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
+  surface the `/admin/errors/:id`, `/settings/error-forwarders` and
+  `/settings/monitoring` whole-page views render (`components/shared/JsonViewer.vue`
+  and `components/shared/ErrorAlert.vue` static testids `json-viewer*` /
+  `error-alert-dismiss`) in the manifest `elements:` inventory for
+  `/admin/errors/:id` and `/settings/error-forwarders`, and wired the three routes
+  into the reverse testid-coverage guard
+  (`test_mapped_route_elements_cover_owning_view_testids`) mapped to
+  `AdminErrorDetailView.vue`, `SettingsErrorForwardersView.vue` and
+  `SettingsMonitorConfigView.vue`, so the error-detail / forwarders / browser-monitor
+  surfaces stay visible to Remy's docs indexer and `/api/v1/manifest`.
+
 - 2026-09-11: **improve-architecture (product-map walk)** — registered the shared
   search-bar surface (`components/shared/FilterBar.vue` static testids
   `filter-bar-search` / `filter-bar-search-wrapper`) in the `/admin/errors` manifest

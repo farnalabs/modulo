@@ -1242,6 +1242,28 @@ elements:
       - testid: filter-bar-search-wrapper
         type: element
         dynamic_testid: false
+    /admin/errors/:id:
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer
+        type: element
+        dynamic_testid: false
+      - testid: json-viewer-collapse-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-copy
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-expand-all
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-collapse
+        type: button
+        dynamic_testid: false
+      - testid: json-viewer-string-expand
+        type: button
+        dynamic_testid: false
     /admin/housekeeping:
       - testid: hk-refresh
         type: button
@@ -3294,6 +3316,10 @@ elements:
         type: button
         dynamic_testid: false
       - testid: settings-email-test
+        type: button
+        dynamic_testid: false
+    /settings/error-forwarders:
+      - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
     /settings/hitl-review:
