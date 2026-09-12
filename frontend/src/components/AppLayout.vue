@@ -136,7 +136,7 @@ function logout() {
   window.location.reload();
 }
 
-const { jwtPayload, userId, isSystemAdmin: isSystemAdminFlag, orgRole, permissions } = useCurrentUser();
+const { userId, isSystemAdmin: isSystemAdminFlag, orgRole, permissions } = useCurrentUser();
 
 const userEmail = computed(() => userId.value || "");
 

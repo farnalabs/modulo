@@ -678,9 +678,10 @@ async def admin_set_org_triggers_paused(
     # Tenancy-bounded (ADR 017 DECISION 3 scope pin): the authz kill-switch must
     # NOT be able to lift this gate -- ``kill_switch_eligible=False`` mirrors the
     # org.delete immunity in ``require_system_or_org_admin``.
-    current_user: Annotated[AuthenticatedPrincipal, require_target_org_role(
-        "org.triggers.pause.manage", "admin", kill_switch_eligible=False
-    )],
+    current_user: Annotated[
+        AuthenticatedPrincipal,
+        require_target_org_role("org.triggers.pause.manage", "admin", kill_switch_eligible=False),
+    ],
     session: AsyncSession = Depends(get_db_session),
 ) -> SetOrgTriggersPausedResponse:
     try:
@@ -752,9 +753,10 @@ class SetOrgGuardrailsKillSwitchResponse(BaseModel):
 @handle_db_errors("admin.orgs.get_org_guardrails_kill_switch")
 async def admin_get_org_guardrails_kill_switch(
     org_id: uuid.UUID,
-    _current_user: Annotated[AuthenticatedPrincipal, require_target_org_role(
-        "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
-    )],
+    _current_user: Annotated[
+        AuthenticatedPrincipal,
+        require_target_org_role("org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False),
+    ],
     session: AsyncSession = Depends(get_db_session),
 ) -> GetOrgGuardrailsKillSwitchResponse:
     """Read the org's guardrails kill-switch state (admin only)."""
@@ -790,9 +792,10 @@ async def admin_get_org_guardrails_kill_switch(
 async def admin_set_org_guardrails_kill_switch(
     org_id: uuid.UUID,
     req: SetOrgGuardrailsKillSwitchRequest,
-    current_user: Annotated[AuthenticatedPrincipal, require_target_org_role(
-        "org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False
-    )],
+    current_user: Annotated[
+        AuthenticatedPrincipal,
+        require_target_org_role("org.guardrails.kill_switch.manage", "admin", kill_switch_eligible=False),
+    ],
     session: AsyncSession = Depends(get_db_session),
 ) -> SetOrgGuardrailsKillSwitchResponse:
     """Set the org's guardrails kill-switch (admin only).

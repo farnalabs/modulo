@@ -503,7 +503,7 @@ import Select from 'primevue/select'
 
 const planStore = usePlanStore()
 const { t } = useI18n()
-const { jwtPayload, isSystemAdmin, isOperator } = useCurrentUser()
+const { jwtPayload, isOperator } = useCurrentUser()
 
 const isOrgAdmin = computed(() => jwtPayload.value?.org_role === 'admin')
 // FAR-191: the re-enable action is operator-or-above (backend trigger.update
