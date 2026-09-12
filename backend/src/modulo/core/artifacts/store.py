@@ -25,6 +25,7 @@ import hashlib
 import logging
 import os
 import tempfile
+import urllib.parse
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -38,6 +39,23 @@ _log = logging.getLogger(__name__)
 # File suffixes
 _SUFFIX_RAW = ".tmp"
 _SUFFIX_ZST = ".zst"
+
+
+def _encode_segment(value: str) -> str:
+    """Percent-encode *value* for safe use as a single filesystem path segment.
+
+    Characters outside ``A-Za-z0-9._-`` are percent-encoded (e.g. ``:`` →
+    ``%3A``, ``/`` → ``%2F``).  The encoding is injective and reversible
+    (``urllib.parse.unquote`` recovers the original).
+
+    After encoding, path-traversal names (``""``, ``"."``, ``".."``) are
+    neutralised with a ``_`` prefix so they can never escape the root.
+    """
+    encoded = urllib.parse.quote(value, safe="")
+    if encoded in ("", ".", ".."):
+        encoded = "_" + encoded
+    return encoded
+
 
 # ── pointer typed-dict ──────────────────────────────────────────────────
 
@@ -143,17 +161,23 @@ class LocalArtifactStore:
         ``../``, ``..\\``, ``/``, and ``\\`` would escape the intended
         directory tree.  An absolute path (starting with ``/`` or a drive
         letter on Windows) is also rejected.
+
+        Note: colons are NOT rejected here — real ``attempt_key`` values
+        contain them (e.g. ``run:{run_id}:node:{node_id}:0``).  They are
+        encoded to ``%3A`` by ``_encode_segment`` before being used as
+        filesystem path components.
         """
         if ".." in value or "/" in value or "\\" in value:
             raise ValueError(f"Invalid {name}: path traversal characters not allowed")
-        if len(value) >= 2 and value[1] == ":":
+        # Allow "./something" (relative) but reject "C:\..." (absolute Windows path)
+        if len(value) >= 2 and value[1] == ":" and value[0] != "." and value[0].isalpha():
             raise ValueError(f"Invalid {name}: absolute path not allowed")
 
     def _node_dir(self, org_id: str, run_id: str, node_id: str) -> Path:
         self._validate_path_component("org_id", org_id)
         self._validate_path_component("run_id", run_id)
         self._validate_path_component("node_id", node_id)
-        return self._root / org_id / run_id / node_id
+        return self._root / _encode_segment(org_id) / _encode_segment(run_id) / _encode_segment(node_id)
 
     def _raw_path(
         self,
@@ -164,7 +188,8 @@ class LocalArtifactStore:
         stream: str,
     ) -> Path:
         self._validate_path_component("attempt_key", attempt_key)
-        return self._node_dir(org_id, run_id, node_id) / f"{attempt_key}.{stream}{_SUFFIX_RAW}"
+        encoded_key = _encode_segment(attempt_key)
+        return self._node_dir(org_id, run_id, node_id) / f"{encoded_key}.{stream}{_SUFFIX_RAW}"
 
     def _zst_path(
         self,
@@ -175,7 +200,8 @@ class LocalArtifactStore:
         stream: str,
     ) -> Path:
         self._validate_path_component("attempt_key", attempt_key)
-        return self._node_dir(org_id, run_id, node_id) / f"{attempt_key}.{stream}{_SUFFIX_ZST}"
+        encoded_key = _encode_segment(attempt_key)
+        return self._node_dir(org_id, run_id, node_id) / f"{encoded_key}.{stream}{_SUFFIX_ZST}"
 
     def _rel_path(self, path: Path) -> str:
         """Return the path relative to root as a POSIX string."""
@@ -223,7 +249,7 @@ class LocalArtifactStore:
         zst.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path_str = tempfile.mkstemp(
             dir=str(zst.parent),
-            prefix=f".{attempt_key}.{stream}",
+            prefix=f".{_encode_segment(attempt_key)}.{stream}",
             suffix=_SUFFIX_ZST,
         )
         tmp_path = Path(tmp_path_str)

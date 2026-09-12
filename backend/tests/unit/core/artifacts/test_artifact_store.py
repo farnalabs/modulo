@@ -6,12 +6,14 @@ Tests the LocalArtifactStore: append, finalize, read_bytes, delete_run, delete_n
 from __future__ import annotations
 
 import hashlib
+import uuid
 
 import pytest
 
 from modulo.core.artifacts.store import (
     ArtifactPointer,
     LocalArtifactStore,
+    _encode_segment,
 )
 
 
@@ -190,3 +192,75 @@ def test_pointer_has_required_keys():
     )
     assert set(ptr.keys()) == {"stream", "rel_path", "size_bytes", "sha256", "compression"}
     assert ptr["compression"] == "zstd"
+
+
+# ── _encode_segment ────────────────────────────────────────────────────
+
+
+def test_encode_segment_colon():
+    """Colons are encoded to %3A."""
+    assert _encode_segment("run:abc:node:n1:0") == "run%3Aabc%3Anode%3An1%3A0"
+
+
+def test_encode_segment_slash():
+    """Slashes are encoded to %2F."""
+    assert _encode_segment("a/b") == "a%2Fb"
+
+
+def test_encode_segment_traversal_neutralised():
+    """Traversal names get a _ prefix after encoding."""
+    # After encoding, "" stays "", "." stays ".", ".." stays ".."
+    # Each gets prefixed with "_"
+    assert _encode_segment("") == "_"
+    assert _encode_segment(".") == "_."
+    assert _encode_segment("..") == "_.."
+
+
+def test_encode_segment_safe_chars_pass_through():
+    """Alphanumeric, dot, underscore, hyphen pass through unchanged."""
+    assert _encode_segment("node_1") == "node_1"
+    assert _encode_segment("run-id.test") == "run-id.test"
+
+
+# ── colon-containing attempt_key round-trip ─────────────────────────────
+
+
+def test_colon_attempt_key_roundtrip(tmp_path):
+    """Colon-bearing attempt_key (real format) round-trips through the store."""
+    store = _make_store(tmp_path)
+    run_id = str(uuid.uuid4())
+    node_id = "sandbox_1"
+    attempt_key = f"run:{run_id}:node:{node_id}:0"
+
+    store.append("org1", run_id, node_id, attempt_key, "stdout", "hello colon world\n")
+    ptr = store.finalize("org1", run_id, node_id, attempt_key, "stdout")
+
+    assert ptr is not None
+    # The rel_path must NOT contain raw colons — they are encoded
+    assert ":" not in ptr["rel_path"]
+    # The filename on disk must also not contain colons
+    zst = store._zst_path("org1", run_id, node_id, attempt_key, "stdout")
+    assert zst.exists()
+    assert ":" not in zst.name
+
+    # Round-trip: read back the content
+    result = store.read_bytes(ptr)
+    assert result == b"hello colon world\n"
+
+
+def test_colon_attempt_key_multiple_streams(tmp_path):
+    """Colon-bearing attempt_key works for both stdout and stderr."""
+    store = _make_store(tmp_path)
+    run_id = str(uuid.uuid4())
+    node_id = "node_0"
+    attempt_key = f"run:{run_id}:node:{node_id}:0"
+
+    store.append("org1", run_id, node_id, attempt_key, "stdout", "out\n")
+    store.append("org1", run_id, node_id, attempt_key, "stderr", "err\n")
+    ptr_out = store.finalize("org1", run_id, node_id, attempt_key, "stdout")
+    ptr_err = store.finalize("org1", run_id, node_id, attempt_key, "stderr")
+
+    assert ptr_out is not None
+    assert ptr_err is not None
+    assert store.read_bytes(ptr_out) == b"out\n"
+    assert store.read_bytes(ptr_err) == b"err\n"

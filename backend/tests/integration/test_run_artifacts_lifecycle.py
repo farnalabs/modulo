@@ -15,7 +15,7 @@ import uuid
 
 import pytest
 
-from modulo.core.artifacts.store import LocalArtifactStore
+from modulo.core.artifacts.store import LocalArtifactStore, _encode_segment
 from modulo.core.artifacts.writer import ArtifactWriter
 
 pytestmark = pytest.mark.integration
@@ -116,7 +116,7 @@ def test_multiple_nodes(tmp_path):
     for node_idx in [0, 2]:
         node_id = f"node_{node_idx}"
         attempt_key = f"run:{run_id}:node:{node_id}:0"
-        ptr_path = store.root / org_id / run_id / node_id / f"{attempt_key}.stdout.zst"
+        ptr_path = store.root / org_id / run_id / node_id / f"{_encode_segment(attempt_key)}.stdout.zst"
         assert ptr_path.exists()
 
 
