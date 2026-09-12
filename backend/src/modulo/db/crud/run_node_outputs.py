@@ -968,8 +968,8 @@ async def persist_artifact_pointers(
     pointer list.  Does a targeted UPSERT on ``artifacts_json`` only — never
     touches the blob columns (outputs, telemetry, markers).
 
-    When *pointers* is empty the column is set to an empty list (signal that
-    the node ran but produced no meaningful artifact data).
+    When *pointers* is empty the column is set to NULL (signal that the node
+    ran but produced no meaningful artifact data).
     """
     insert_factory = dialect_insert(resolve_dialect(session))
     values = {

@@ -1080,3 +1080,69 @@ def test_run_with_retry_is_transparent() -> None:
         return "value"
 
     assert asyncio.run(runs_module._run_with_retry(ok)) == "value"
+
+
+# ── FAR-582 artifact download endpoint (get_run_artifact) ───────────────────
+
+
+def _artifact_pointer(stream: str = "stdout") -> dict[str, object]:
+    return {
+        "stream": stream,
+        "rel_path": f"org/run/node/attempt.{stream}.zst",
+        "size_bytes": 11,
+        "sha256": "x",
+        "compression": "zstd",
+    }
+
+
+def test_get_run_artifact_returns_decompressed_content(client) -> None:
+    """The endpoint decompresses the stored pointer and returns it as text/plain."""
+    http, _session = client
+    row = _result(scalar_one_or_none=MagicMock(artifacts_json=[_artifact_pointer("stdout")]))
+    _queue_execute(_session, [row])
+    store = MagicMock()
+    store.read_bytes = MagicMock(return_value=b"hello world")
+    with patch("modulo.core.artifacts.store.get_store", return_value=store):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/stdout")
+    assert resp.status_code == 200, resp.text
+    assert resp.content == b"hello world"
+    assert resp.headers["content-type"].startswith("text/plain")
+
+
+def test_get_run_artifact_404_when_row_missing(client) -> None:
+    http, _session = client
+    _queue_execute(_session, [_result(scalar_one_or_none=None)])
+    with patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/stdout")
+    assert resp.status_code == 404
+
+
+def test_get_run_artifact_404_when_stream_missing(client) -> None:
+    """A node with artifacts but not the requested stream yields 404."""
+    http, _session = client
+    row = _result(scalar_one_or_none=MagicMock(artifacts_json=[_artifact_pointer("stderr")]))
+    _queue_execute(_session, [row])
+    store = MagicMock()
+    store.read_bytes = MagicMock(return_value=b"should-not-be-read")
+    with patch("modulo.core.artifacts.store.get_store", return_value=store):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/stdout")
+    assert resp.status_code == 404
+
+
+def test_get_run_artifact_404_when_file_missing(client) -> None:
+    """read_bytes raising FileNotFoundError maps to 404."""
+    http, _session = client
+    row = _result(scalar_one_or_none=MagicMock(artifacts_json=[_artifact_pointer("stdout")]))
+    _queue_execute(_session, [row])
+    store = MagicMock()
+    store.read_bytes = MagicMock(side_effect=FileNotFoundError("Artifact not found: x"))
+    with patch("modulo.core.artifacts.store.get_store", return_value=store):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/stdout")
+    assert resp.status_code == 404
+
+
+def test_get_run_artifact_404_when_invalid_stream(client) -> None:
+    http, _session = client
+    with patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/bogus")
+    assert resp.status_code == 404

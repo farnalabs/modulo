@@ -453,3 +453,25 @@ def test_reset_store_clears_singleton():
     from modulo.core.artifacts.store import _store_instance as inst_after
 
     assert inst_after is None
+
+
+# ── delete_run path hardening (FAR-582 review finding #4) ───────────────────
+
+
+def test_delete_run_rejects_traversal_in_org_id(tmp_path):
+    """delete_run validates org_id so a ../ segment can't escape the root."""
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError, match="path traversal"):
+        store.delete_run("../evil", "run1")
+
+
+def test_delete_run_rejects_traversal_in_run_id(tmp_path):
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError, match="path traversal"):
+        store.delete_run("org1", "../evil")
+
+
+def test_delete_run_rejects_absolute_org_id(tmp_path):
+    store = _make_store(tmp_path)
+    with pytest.raises(ValueError, match="path traversal"):
+        store.delete_run("/abs/org", "run1")

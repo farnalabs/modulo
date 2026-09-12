@@ -291,7 +291,7 @@ class LocalArtifactStore:
         # beneath it.  ``commonpath`` diverges if *rel* escaped the root (e.g.
         # via ``..`` that survived segment validation), neutralising the
         # traversal sink (Sonar S2083).
-        if os.path.commonpath([resolved_root, path]) != resolved_root:
+        if os.path.commonpath([str(resolved_root), str(path)]) != str(resolved_root):
             raise ValueError("Invalid rel_path: escapes artifact root")
         if not path.exists():
             raise FileNotFoundError(f"Artifact not found: {pointer['rel_path']}")
@@ -302,7 +302,12 @@ class LocalArtifactStore:
         return raw
 
     def delete_run(self, org_id: str, run_id: str) -> int:
-        run_dir = self._root / org_id / run_id
+        # Validate + encode the org/run segments so a tampered ``org_id`` /
+        # ``run_id`` cannot escape the artifact root (consistent with the
+        # encode-and-validate discipline used on every write path).
+        self._validate_path_component("org_id", org_id)
+        self._validate_path_component("run_id", run_id)
+        run_dir = self._root / _encode_segment(org_id) / _encode_segment(run_id)
         count = 0
         if not run_dir.exists():
             return count
