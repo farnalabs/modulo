@@ -123,6 +123,18 @@ class TestStructure:
         # FROM 'null'); the drop scans must too.
         assert len(re.findall(r"jsonb_typeof\(r\.[a-z_]+\) IS DISTINCT FROM 'null'", code)) >= 6
 
+    def test_or_composed_constants_carry_outer_parens(self) -> None:
+        # Regression pin (integration-repro found it): the OR-composed SQL
+        # constants are spliced into bare AND-chains at several sites —
+        # without outermost parens the OR rebinds the whole chain and the
+        # walks scan the wrong population (run_a stayed a repair candidate
+        # forever). Every OR-composed constant must open with '(('.
+        for name in ("_HAS_OUT_TEL_BLOB_SQL", "_JUNK_OUT_TEL_GUARD_SQL"):
+            start = code.index(f"{name} = (")
+            slice_ = code[start : code.index("\n\n\n", start)]
+            assert '"((r.' in slice_, f"{name} must wrap its OR composition in outermost parens"
+            assert "OR (r." in slice_, f"{name} must wrap both OR arms in their own parens"
+
     def test_jsonb_null_folds_to_absent_in_walks_and_parity(self) -> None:
         # qa gate fix 3 (folding): the blob-bearing walks use the folded
         # has-blob predicate; the parity comparison NULL-folds the legacy

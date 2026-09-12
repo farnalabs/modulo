@@ -234,9 +234,12 @@ _SHAPE_ASSERT_SQL = (
 # comparison below NULL-folds it, so jsonb-null vs a row-absent reassembly is
 # NOT an anomaly). SQL NULL and jsonb-null both mean the side is absent —
 # exactly the 0192 _ANY_BLOB_OBJECT_SQL comment's semantics.
+# adds an outermost-parentheses wrapper at EVERY splice site; these constants
+# therefore carry their OWN outer parens (the 0192 module-constant assembly
+# style splices with bare AND) — never splice without them.
 _HAS_OUT_TEL_BLOB_SQL = (
-    "(r.outputs_json IS NOT NULL AND jsonb_typeof(r.outputs_json) IS DISTINCT FROM 'null') "
-    "OR (r.node_telemetry_json IS NOT NULL AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'null')"
+    "((r.outputs_json IS NOT NULL AND jsonb_typeof(r.outputs_json) IS DISTINCT FROM 'null') "
+    "OR (r.node_telemetry_json IS NOT NULL AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'null'))"
 )
 _FOLDED_OUT_SQL = "(CASE WHEN jsonb_typeof(r.outputs_json) = 'object' THEN r.outputs_json END)"
 _FOLDED_TEL_SQL = "(CASE WHEN jsonb_typeof(r.node_telemetry_json) = 'object' THEN r.node_telemetry_json END)"
@@ -257,10 +260,10 @@ _FOLDED_TEL_SQL = "(CASE WHEN jsonb_typeof(r.node_telemetry_json) = 'object' THE
 #     markers loops iterate terminal+unknown runs, so junk markers scan
 #     that population only.
 _JUNK_OUT_TEL_GUARD_SQL = (
-    "(r.outputs_json IS NOT NULL AND jsonb_typeof(r.outputs_json) IS DISTINCT FROM 'null' "
+    "((r.outputs_json IS NOT NULL AND jsonb_typeof(r.outputs_json) IS DISTINCT FROM 'null' "
     " AND jsonb_typeof(r.outputs_json) IS DISTINCT FROM 'object') "
     "OR (r.node_telemetry_json IS NOT NULL AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'null' "
-    " AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'object')"
+    " AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'object'))"
 )
 _JUNK_MARKERS_GUARD_SQL = (
     "r.raw_output_markers IS NOT NULL AND jsonb_typeof(r.raw_output_markers) IS DISTINCT FROM 'null' "
@@ -753,7 +756,7 @@ def upgrade() -> None:
         raise RuntimeError(
             "FAR-583 drop structural anomaly: "
             f"{junk_count} pre-cutoff TERMINAL run(s) hold an outputs/telemetry legacy blob that is non-NULL but "
-            f"NOT a jsonb object or jsonb-null value (unparseable / unexpected shape; sample run_id="
+            f"NOT a jsonb object or a jsonb 'null' value (unparseable / unexpected shape; sample run_id="
             f"{junk_out_tel_sample[0]}). The 0192 dict semantics cannot re-map them losslessly — "
             "remediate by hand, then re-run."
         )

@@ -326,7 +326,7 @@ async def test_0215_drop_legs_and_abort_gates(drop_db_url, monkeypatch: pytest.M
     await _delete_run(db_url, ids["runs"]["run_d"])
 
     # -- Attempt 2: the structural-anomaly gate aborts on a scalar blob. ------
-    with pytest.raises(RuntimeError, match="NOT a jsonb object or jsonb 'null' value"):
+    with pytest.raises(RuntimeError, match="NOT a jsonb object or a jsonb 'null' value"):
         await _upgrade(db_url)
     assert await _alembic_version(db_url) == PREV_REV
     await _delete_run(db_url, ids["runs"]["run_f"])
