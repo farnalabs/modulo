@@ -133,6 +133,7 @@ describe('RunsListView rerun (FAR-788)', () => {
     const rerunBtn = wrapper.find('[data-testid="runs-list-rerun-run1"]')
     expect(rerunBtn.exists()).toBe(true)
     expect(rerunBtn.text()).toContain('Re-run')
+    expect(rerunBtn.classes()).toContain('whitespace-nowrap')
     wrapper.unmount()
   })
 

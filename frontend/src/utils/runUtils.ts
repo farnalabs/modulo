@@ -44,6 +44,30 @@ export function runStatusLabel(status: string | null | undefined): string {
   return status.replace(/_/g, ' ')
 }
 
+/** Full explanatory description for a run status, surfaced as a hover tooltip
+ * on the status badge. Covers every status in the DB CHECK constraint. */
+const RUN_STATUS_DESCRIPTIONS: Record<string, string> = {
+  complete: 'The run finished successfully.',
+  failed: 'The run encountered an error and did not complete.',
+  cancelled: 'The run was cancelled by a user or the system.',
+  eval_failed: 'A guardrail evaluation blocked or failed the run.',
+  stalled: 'The run stopped producing output and was terminated.',
+  budget_exceeded: 'The per-agent token budget was exceeded.',
+  router_no_match: 'A router node had no matching rule and no default.',
+  cost_ceiling_exceeded: 'The organisation-wide spend ceiling was exceeded.',
+  compensation_failed: 'A watched node and its compensation path both failed.',
+  pending: 'The run is queued and waiting to start.',
+  running: 'The run is currently executing.',
+  awaiting_human: 'The run is waiting for a human decision at a HITL gate.',
+  claimed: 'A worker has claimed the run and will execute it.',
+  hitl_parked: 'The HITL gate expired unanswered; the run is parked pending a decision.',
+}
+
+export function runStatusDescription(status: string | null | undefined): string {
+  if (status == null) return ''
+  return RUN_STATUS_DESCRIPTIONS[status] ?? ''
+}
+
 const triggerTypeLabelKeys: Record<string, string> = {
   manual: 'common.trigger_types.manual',
   webhook: 'common.trigger_types.webhook',
@@ -131,4 +155,15 @@ export function errorCodeLabel(code: string | null | undefined, t: (key: string)
   const key = `errorCodes.${code}`
   const translated = t(key)
   return translated === key ? t('errorCodes._unknown') : translated
+}
+
+/** Full explanatory description for a dotted run error code (e.g. `agent.stall`
+ * → "The worker claimed the run but never dispatched a node; it was recovered
+ * by re-dispatch."), looked up in the locale's `errorCodeDescriptions` section.
+ * Falls back to the short label when no description entry exists. */
+export function errorCodeDescription(code: string | null | undefined, t: (key: string) => string): string {
+  if (!code) return ''
+  const key = `errorCodeDescriptions.${code}`
+  const translated = t(key)
+  return translated === key ? errorCodeLabel(code, t) : translated
 }

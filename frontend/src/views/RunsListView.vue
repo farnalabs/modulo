@@ -77,7 +77,12 @@
           </template>
           <template #cell-status="{ value, row }">
             <div class="flex flex-wrap items-center gap-1">
-              <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
+              <span
+                :class="runStatusBadgeClass(value as string)"
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize"
+                :title="runStatusDescription(value as string)"
+                :aria-label="runStatusDescription(value as string)"
+              >
                 {{ value }}
               </span>
               <span
@@ -149,7 +154,7 @@
                 v-if="isNonTerminalStatus(row.status as string)"
                 :disabled="cancellingIds.has(row.run_id as string)"
                 :data-testid="`runs-list-cancel-${row.run_id}`"
-                class="inline-flex items-center gap-1 rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+                class="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
                 @click.stop="cancelRun(row as RunListItem)"
                 @keydown.stop
               >
@@ -163,7 +168,7 @@
                 :disabled="rerunningIds.has(row.run_id as string)"
                 :data-testid="`runs-list-rerun-${row.run_id}`"
                 :aria-label="$t('views.RunsListView.rerun')"
-                class="ml-2 inline-flex items-center gap-1 rounded-lg border border-input bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-50"
+                class="ml-2 inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-input bg-background px-2 py-1 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-50"
                 @click.stop="rerunRun(row as RunListItem)"
                 @keydown.stop
               >
@@ -238,7 +243,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
-import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, triggerTypeLabel, runStatusDescription } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
 import { isNonTerminalStatus, isTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
