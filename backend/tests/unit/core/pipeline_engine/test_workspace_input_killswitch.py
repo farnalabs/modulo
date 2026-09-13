@@ -11,6 +11,14 @@ Covers:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+from modulo.core.pipeline_engine.workspace_input_orchestration import ResolvedInput
 
 # ---------------------------------------------------------------------------
 # Killswitch tests
@@ -211,3 +219,144 @@ class TestDailyFactsWorkspaceInputsCount:
         params = list(sig.parameters.keys())
         assert "session" in params
         assert "run" in params
+
+
+# ---------------------------------------------------------------------------
+# Killswitch behavioral dispatch tests (prove-the-fix)
+# ---------------------------------------------------------------------------
+
+_ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
+_AGENT_ID = str(uuid.uuid4())
+
+
+def _read_router(output_json: str) -> Callable[..., str]:
+    def _read(path: str, format: str = "text", **kwargs: Any) -> str:
+        if str(path).endswith("output.json"):
+            return output_json
+        return ""
+
+    return _read
+
+
+def _script_sandbox_mock(*, output_json: str = '{"result": "ok"}') -> MagicMock:
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "script stdout"
+    cmd_result.stderr = ""
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router(output_json))
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    sandbox.get_metrics = AsyncMock(return_value=MagicMock(cpu_used_pct=1.0, mem_used=1, disk_used=1))
+    return sandbox
+
+
+def _run_state() -> dict[str, Any]:
+    return {
+        "run_context": {"input": {"task": "x"}},
+        "_run_id": str(uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")),
+        "_pipeline_id": "pipe-1",
+        "_org_id": _ORG_ID,
+    }
+
+
+def _workspace_node_def(**overrides: Any) -> dict[str, Any]:
+    node_def: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0, "y": 0},
+        "template_id": "opencode",
+        "mode": "script",
+        "script_command": "python3 /home/user/main.py",
+        "agent_id": _AGENT_ID,
+        "env_vars": {"GH_TOKEN": "node-token"},
+        "workspace_inputs": [
+            {
+                "url": "https://github.com/o/r.git",
+                "dest": "/home/user/repo",
+                "ref": {"kind": "branch", "value": "main"},
+            }
+        ],
+    }
+    node_def.update(overrides)
+    return node_def
+
+
+def _resolved_inputs() -> list[ResolvedInput]:
+    return [
+        ResolvedInput(
+            url="https://github.com/o/r.git",
+            dest="/home/user/repo",
+            resolved_sha="a" * 40,
+        ),
+    ]
+
+
+@pytest.fixture(autouse=True)
+def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Script mode requires a remote E2B provider (same seam as the bindings tests)."""
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-e2b-key")
+
+
+class TestWorkspaceInputsKillswitchDispatch:
+    """Behavioral prove-the-fix for the FAR-802 killswitch gate in
+    ``_sandbox_agent_impl``: when MWI is disabled the gate MUST fire before any
+    sandbox is created and short-circuit the node; when enabled it MUST NOT fire
+    and the resolution/provisioning path proceeds."""
+
+    async def test_disabled_blocks_provisioning_no_sandbox_created(self) -> None:
+        """MWI OFF (default): dispatch fires the killswitch before any sandbox is
+        created — the node fails (never 'completed') with the dedicated
+        workspace-inputs-disabled message, and AsyncSandbox.create is NEVER
+        called."""
+        from modulo.settings import get_settings
+
+        # Default is OFF; assert the precondition explicitly so the test is
+        # meaningful even if the default ever flips.
+        assert get_settings().modulo_workspace_inputs_enabled is False
+
+        fn = make_sandbox_agent_fn(_workspace_node_def())
+        sandbox = _script_sandbox_mock()
+
+        with (
+            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
+            patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        ):
+            result = await fn(_run_state())
+
+        # Gate fired: dispatch short-circuited with the disabled error code and
+        # never created a sandbox (pre-claim, re-dispatch safe).
+        create_mock.assert_not_called()
+        assert result["output"]["status"] == "failed"
+        assert "disabled" in (result["output"].get("error_message") or "").lower()
+
+    async def test_enabled_passes_gate_and_resolves_inputs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """MWI ON: the gate does not fire — host-side resolution runs and a sandbox
+        is created (the dispatch proceeds past the killswitch)."""
+        from modulo.settings import get_settings
+
+        monkeypatch.setattr(get_settings(), "modulo_workspace_inputs_enabled", True)
+
+        fn = make_sandbox_agent_fn(_workspace_node_def())
+        sandbox = _script_sandbox_mock()
+
+        with (
+            patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
+            patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+                new=AsyncMock(return_value=_resolved_inputs()),
+            ) as resolve_mock,
+        ):
+            result = await fn(_run_state())
+
+        # Gate not tripped: resolution ran and the sandbox was created.
+        resolve_mock.assert_awaited_once()
+        create_mock.assert_awaited_once()
+        assert result["output"]["status"] == "completed"

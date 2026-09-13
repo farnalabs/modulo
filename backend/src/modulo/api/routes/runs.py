@@ -263,12 +263,19 @@ async def _do_get_workspace_inputs(
     try:
         async with factory() as session, session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # One audit row per (run_id, node_id, attempt_key): take the LATEST
+            # attempt so a per-attempt re-run cannot raise MultipleResultsFound
+            # (the table PK is (run_id, node_id, attempt_key)) and silently
+            # degrade workspace inputs to None on the run detail response.
             row = (
                 await session.execute(
-                    select(RunNodeOutput).where(
+                    select(RunNodeOutput)
+                    .where(
                         RunNodeOutput.run_id == run_id,
                         RunNodeOutput.node_id == AUDIT_NODE_ID,
                     )
+                    .order_by(RunNodeOutput.attempt_key.desc())
+                    .limit(1)
                 )
             ).scalar_one_or_none()
         if row is None or not isinstance(row.outputs_json, dict):

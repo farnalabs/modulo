@@ -208,12 +208,19 @@ async def _fact_workspace_inputs_count(session: AsyncSession, run: Run) -> int |
     from modulo.db.models.run_node_outputs import RunNodeOutput
 
     try:
+        # One audit row per (run_id, node_id, attempt_key): take the LATEST
+        # attempt so a per-attempt re-run cannot raise MultipleResultsFound
+        # (the table PK is (run_id, node_id, attempt_key)) and silently degrade
+        # the count to NULL.
         row = (
             await session.execute(
-                select(RunNodeOutput.outputs_json).where(
+                select(RunNodeOutput.outputs_json)
+                .where(
                     RunNodeOutput.run_id == run.id,
                     RunNodeOutput.node_id == AUDIT_NODE_ID,
                 )
+                .order_by(RunNodeOutput.attempt_key.desc())
+                .limit(1)
             )
         ).scalar_one_or_none()
         if not isinstance(row, dict):
