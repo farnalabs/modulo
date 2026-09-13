@@ -109,7 +109,22 @@ def _make_session() -> AsyncMock:
     result.all.return_value = []
     result.scalars.return_value.all.return_value = []
     result.scalars.return_value.first.return_value = None
-    session.execute = AsyncMock(return_value=result)
+
+    default_result = result
+
+    async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        if isinstance(stmt, Select) and "FOR UPDATE" in str(stmt).upper() and "FROM pipelines" in str(stmt):
+            # #1801: the in-txn team gate's locked row-read — serve an
+            # org-visible pipeline so the re-check short-circuits.
+            gate_row = MagicMock()
+            gate_row.visibility = "org"
+            gate_row.owner_team_id = None
+            gate_result = MagicMock()
+            gate_result.scalar_one_or_none.return_value = gate_row
+            return gate_result
+        return default_result
+
+    session.execute = AsyncMock(side_effect=_execute)
     session.refresh = AsyncMock(return_value=None)
     return session
 
@@ -147,6 +162,15 @@ def operator_client() -> Generator[TestClient, AsyncMock, None]:
 
     async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
         if isinstance(stmt, Select) and "FROM pipelines" in str(stmt):
+            if "FOR UPDATE" in str(stmt).upper():
+                # #1801: the in-txn team gate's locked row-read — serve an
+                # org-visible pipeline so the re-check short-circuits.
+                gate_row = MagicMock()
+                gate_row.visibility = "org"
+                gate_row.owner_team_id = None
+                gate_result = MagicMock()
+                gate_result.scalar_one_or_none.return_value = gate_row
+                return gate_result
             row = MagicMock()
             row.first.return_value = (None, "org")
             return row

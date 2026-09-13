@@ -155,6 +155,15 @@ def _make_operator_mock_session() -> AsyncMock:
 
     async def _execute(stmt: object, *args: Any, **kwargs: Any) -> Any:
         if isinstance(stmt, Select) and "FROM pipelines" in str(stmt):
+            if "FOR UPDATE" in str(stmt).upper():
+                # #1801: the in-txn team gate's locked row-read — serve an
+                # org-visible pipeline so the re-check short-circuits.
+                gate_row = MagicMock()
+                gate_row.visibility = "org"
+                gate_row.owner_team_id = None
+                gate_result = MagicMock()
+                gate_result.scalar_one_or_none.return_value = gate_row
+                return gate_result
             row = MagicMock()
             row.first.return_value = (None, "org")
             return row

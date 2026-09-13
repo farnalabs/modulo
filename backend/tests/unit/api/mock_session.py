@@ -36,6 +36,13 @@ _RLS_SET_CONFIG_SNIPPET = "set_config"
 _RUN_NODE_OUTPUTS_SNIPPET = "FROM run_node_outputs"
 _RUNS_LEGACY_BLOBS_SNIPPET = "runs.outputs_json, runs.node_telemetry_json, runs.raw_output_markers"
 
+# Issue #1801: the pipeline mutation endpoints re-verify the team gate INSIDE
+# the mutation transaction (``_reapply_team_gate_inside_mutation_txn``), which
+# issues a ``SELECT ... FROM pipelines ... FOR UPDATE`` on the strict mock.
+# Serve an org-visible row by default (owner_team_id None) so the re-check
+# short-circuits; tests exercising the gate itself stub the result explicitly.
+_PIPELINE_ROW_SNIPPET = "FROM pipelines"
+
 
 def _is_run_node_outputs_query(stmt: Any) -> bool:
     if not isinstance(stmt, Select):
@@ -47,6 +54,13 @@ def _is_runs_legacy_blobs_query(stmt: Any) -> bool:
     if not isinstance(stmt, Select):
         return False
     return _RUNS_LEGACY_BLOBS_SNIPPET in str(stmt)
+
+
+def _is_pipeline_row_query(stmt: Any) -> bool:
+    """Matches the #1801 in-txn gate SELECT (and any ORM row-read FROM pipelines)."""
+    if not isinstance(stmt, Select):
+        return False
+    return _PIPELINE_ROW_SNIPPET.lower() in str(stmt).lower()
 
 
 def _is_authz_enforce_query(stmt: Any) -> bool:
@@ -115,6 +129,14 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
                 legacy_result = MagicMock()
                 legacy_result.first.return_value = None
                 return legacy_result
+            if _is_pipeline_row_query(args[0] if args else None):
+                pipeline_row = MagicMock()
+                pipeline_row.visibility = "org"
+                pipeline_row.owner_team_id = None
+                pipeline_row.deleted_at = None
+                pipeline_result = MagicMock()
+                pipeline_result.scalar_one_or_none.return_value = pipeline_row
+                return pipeline_result
             raise AssertionError(
                 "Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True"
             )

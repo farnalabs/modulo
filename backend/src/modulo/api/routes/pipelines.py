@@ -1804,6 +1804,7 @@ async def replace_pipeline_graph_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             pipeline = await _get_pipeline_or_404(session, pipeline_id)
             await _enforce_connector_team_bindings(
                 session,
@@ -1888,6 +1889,47 @@ async def _require_team_membership(
     is_member = await team_membership_exists(session, account_id=account_id, team_id=team_id)
     if not is_member:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=denial_detail)
+
+
+async def _reapply_team_gate_inside_mutation_txn(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    *,
+    include_deleted: bool = False,
+) -> None:
+    """Lock + re-verify the team gate INSIDE the mutation transaction (#1801).
+
+    ``require_team_membership_or_admin`` runs its own transaction that COMMITs
+    before the endpoint's mutation transaction opens, so ownership/visibility
+    can change between the two (TOCTOU). Re-selects the row ``FOR UPDATE`` by
+    id + organisation and re-runs the membership-or-admin matrix against the
+    locked row's CURRENT visibility/``owner_team_id`` — the same matrix the
+    dependency enforces, evaluated atomically with the mutation.
+
+    Fail closed: 404 when the row is gone (the caller's crud call would 404
+    anyway), 403 when the locked row is team-private and the caller is neither
+    a member of its owner team nor an org admin.
+    """
+    stmt = select(Pipeline).where(
+        Pipeline.id == pipeline_id,
+        Pipeline.organisation_id == principal.organisation_id,
+    )
+    if not include_deleted:
+        stmt = stmt.where(Pipeline.deleted_at.is_(None))
+    current = (await session.execute(stmt.with_for_update())).scalar_one_or_none()
+    if current is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    if _is_admin(principal):
+        return current
+    if current.visibility not in ("org", None) and current.owner_team_id is not None:
+        await _require_team_membership(
+            session,
+            account_id=principal.account_id,
+            team_id=current.owner_team_id,
+            denial_detail="Not a member of the team that owns this resource",
+        )
+    return current
 
 
 async def _assert_team_transition_allowed(
@@ -2064,6 +2106,7 @@ async def update_pipeline_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             current = await _get_pipeline_or_404(session, pipeline_id)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             await _assert_team_transition_allowed(session, principal, current, updates)
             ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
             await _maybe_audit_autonomy_change(
@@ -2125,6 +2168,7 @@ async def delete_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             deleted = await soft_delete_pipeline(session, pipeline_id, deleted_by=principal.account_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
@@ -2143,6 +2187,7 @@ async def restore_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id, include_deleted=True)
             existing = await get_pipeline(
                 session, pipeline_id, include_deleted=True, organisation_id=principal.organisation_id
             )
@@ -2166,6 +2211,7 @@ async def archive_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
@@ -2187,6 +2233,7 @@ async def unarchive_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
@@ -2789,6 +2836,7 @@ async def rollback_snapshot_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             new_snapshot = await rollback_to_snapshot(
                 session,
                 pipeline_id,
@@ -2833,6 +2881,7 @@ async def delete_snapshot_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             snapshot = await get_snapshot_detail(
                 session,
                 snapshot_id,
