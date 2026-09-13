@@ -190,6 +190,21 @@ describe('SchemaListView', () => {
     expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
   })
 
+  it('navigates to the schema editor on row keyboard activation (Enter and Space) for a11y', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const row = wrapper.find('[data-testid="schema-row-1"]')
+    await row.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
+
+    // Space is the keyboard-only equivalent of the row click.
+    await row.trigger('keydown', { key: ' ' })
+    await nextTick()
+    expect(mockPush).toHaveBeenCalledTimes(2)
+  })
+
   it('does not navigate when the action menu trigger is clicked', async () => {
     const wrapper = mountView()
     await flushPromises()

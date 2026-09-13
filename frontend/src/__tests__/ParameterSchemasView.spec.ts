@@ -154,6 +154,25 @@ describe('ParameterSchemasView — editor', () => {
     expect((wrapper.find('[data-testid="paramschema-desc-input"]').element as HTMLTextAreaElement).value).toBe('Deployment parameters')
   })
 
+  it('opens the editor for a schema via keyboard (Enter and Space) for a11y', async () => {
+    const wrapper = await mountWithSchemas()
+    const row = wrapper.find('tbody tr')
+    expect(row.exists()).toBe(true)
+
+    // Enter opens the editor for the focused schema row.
+    await row.trigger('keydown', { key: 'Enter' })
+    await flush()
+    expect(wrapper.find('[data-testid="paramschema-name-input"]').exists()).toBe(true)
+
+    // Back to the list, then Space re-opens the editor.
+    await wrapper.find('[data-testid="paramschema-back"]').trigger('click')
+    await flush()
+    const row2 = wrapper.find('tbody tr')
+    await row2.trigger('keydown', { key: ' ' })
+    await flush()
+    expect(wrapper.find('[data-testid="paramschema-name-input"]').exists()).toBe(true)
+  })
+
   it('back button returns to the list', async () => {
     const wrapper = await openEditor()
     await wrapper.find('[data-testid="paramschema-back"]').trigger('click')
