@@ -73,37 +73,37 @@ class TestCapabilityConstant:
 class TestValidConfigs:
     def test_no_workspace_inputs(self) -> None:
         """Absent workspace_inputs is valid."""
-        _validate_sandbox_managed_inputs_config({"id": "n"})
+        assert _validate_sandbox_managed_inputs_config({"id": "n"}) is None
 
     def test_empty_workspace_inputs(self) -> None:
         """Empty list is valid."""
-        _validate_sandbox_managed_inputs_config({"id": "n", "workspace_inputs": []})
+        assert _validate_sandbox_managed_inputs_config({"id": "n", "workspace_inputs": []}) is None
 
     def test_valid_https_input(self) -> None:
-        _validate_sandbox_managed_inputs_config(_base_node())
+        assert _validate_sandbox_managed_inputs_config(_base_node()) is None
 
     def test_valid_ssh_input(self) -> None:
         node = _base_node(workspace_inputs=[_input_with(url="ssh://git@github.com/org/repo.git")])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_valid_git_at_input(self) -> None:
         node = _base_node(workspace_inputs=[_input_with(url="git@github.com:org/repo.git")])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_relative_dest_resolves_under_home(self) -> None:
         """Relative dest is resolved under /home/user/."""
         node = _base_node(workspace_inputs=[_input_with(dest="projects/my-repo")])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_no_ref_defaults_ok(self) -> None:
         """Absent ref is fine (defaults to HEAD/main at runtime)."""
         node = _base_node(workspace_inputs=[_input_with(ref=None)])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_no_url_ok(self) -> None:
         """Absent url is fine (may reference a connector instead, deferred)."""
         node = _base_node(workspace_inputs=[_input_with(url=None)])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ class TestGitCloneDetection:
     def test_git_clone_in_jinja_block_not_rejected(self) -> None:
         """{{ git_clone }} is interpolation — must NOT trigger."""
         node = _base_node(agent_command="{{ git_clone }} && do_stuff")
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_git_clone_after_jinja_block_rejected(self) -> None:
         """Static git clone AFTER a jinja block is still a literal."""
@@ -138,7 +138,7 @@ class TestGitCloneDetection:
     def test_clone_without_git_prefix_not_rejected(self) -> None:
         """Just 'clone' without 'git' prefix is fine."""
         node = _base_node(agent_command="clone https://example.com/r.git")
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_git_clone_in_multiline_command(self) -> None:
         node = _base_node(agent_command="#!/bin/bash\necho setup\ngit clone https://x.com/r.git")
@@ -149,7 +149,7 @@ class TestGitCloneDetection:
         """No agent_command means no git clone check needed."""
         node = _base_node()
         node.pop("agent_command", None)
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +232,7 @@ class TestDestValidation:
     def test_relative_dest_resolves(self) -> None:
         """Relative dest should resolve under /home/user/ and pass."""
         node = _base_node(workspace_inputs=[_input_with(dest="workspace/src")])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_non_string_dest_rejected(self) -> None:
         node = _base_node(workspace_inputs=[_input_with(dest=123)])
@@ -263,15 +263,15 @@ class TestRefValidation:
 
     def test_valid_branch_ref(self) -> None:
         node = _base_node(workspace_inputs=[_input_with(ref={"kind": "branch"})])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_valid_tag_ref(self) -> None:
         node = _base_node(workspace_inputs=[_input_with(ref={"kind": "tag"})])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
     def test_valid_sha_ref(self) -> None:
         node = _base_node(workspace_inputs=[_input_with(ref={"kind": "sha"})])
-        _validate_sandbox_managed_inputs_config(node)
+        assert _validate_sandbox_managed_inputs_config(node) is None
 
 
 # ---------------------------------------------------------------------------
