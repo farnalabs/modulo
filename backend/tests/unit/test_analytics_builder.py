@@ -209,6 +209,52 @@ class TestFAR102Filters:
         assert "COALESCE" not in str(stmt.compile(dialect=postgresql.dialect())).upper()
         assert "team_id" not in params
 
+    def test_team_ids_member_sees_own_teams_plus_org_level_rows(self) -> None:
+        # #1795: a team-scoped caller's boundary binds via scoped_team_ids —
+        # never another team's rows, and the value is bound, not interpolated.
+        team_a = uuid.UUID("66666666-6666-4666-8666-666666666666")
+        stmt, params = build_facts_query(_query(team_ids=(team_a,)))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "pipelines" in sql
+        assert "COALESCE" in sql.upper()
+        assert str(team_a) not in sql, "team ids must be bound, never interpolated"
+        assert params["scoped_team_ids"] == [team_a]
+        assert "scoped_team_ids" in sql
+
+    def test_team_ids_empty_tuple_stays_fail_closed_to_org_level(self) -> None:
+        # A scoped member of NO teams sees only org-level (NULL-owner) rows:
+        # the predicate is an IS NULL, not an unbounded pass-through — the
+        # empty boundary must never degrade to unconstrained.
+        stmt, params = build_facts_query(_query(team_ids=()))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "COALESCE" in sql.upper()
+        assert "scoped_team_ids" not in params
+        assert "team_id" not in params
+        assert "IS NULL" in sql.upper()
+
+    def test_team_ids_merge_solo_team_id_filter(self) -> None:
+        membership = uuid.UUID("77777777-7777-4777-8777-777777777777")
+        explicit = uuid.UUID("88888888-8888-4888-8888-888888888888")
+        _stmt, params = build_facts_query(_query(team_ids=(membership,), team_id=explicit))
+        assert params["scoped_team_ids"] == [membership, explicit]
+
+    def test_team_ids_none_keeps_constrained_default(self) -> None:
+        # The never-constrained DEFAULT applies ONLY to unscoped callers:
+        # team_ids=None (org admin) yields no boundary predicate at all.
+        stmt, params = build_facts_query(_query())
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        assert "scoped_team_ids" not in str(compiled)
+        assert "scoped_team_ids" not in params
+
+    def test_concurrency_query_applies_scoped_team_boundary(self) -> None:
+        team_a = uuid.UUID("66666666-6666-4666-8666-666666666666")
+        stmt, params = build_concurrency_query(_query(team_ids=(team_a,)))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "pipelines" in sql
+        assert "COALESCE" in sql.upper()
+        assert params["scoped_team_ids"] == [team_a]
+        assert "IS NULL" in sql.upper()
+
     def test_error_code_filter_is_bound(self) -> None:
         stmt, params = build_facts_query(_query(error_code="executor_stalled"))
         sql = str(stmt.compile(dialect=postgresql.dialect()))

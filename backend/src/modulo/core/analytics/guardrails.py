@@ -44,6 +44,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.core.analytics.builder import team_scope_condition
 from modulo.core.analytics.service import (
     AnalyticsDatabaseError,
     AnalyticsMigrationRequiredError,
@@ -57,6 +58,7 @@ from modulo.core.analytics.service import (
 from modulo.core.pipeline_engine.error_codes import expand_code_variants
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.feedback_record import FeedbackRecord
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings
@@ -148,6 +150,7 @@ def _build_runs_scorecard_stmt(
     org_id: uuid.UUID,
     date_from: datetime,
     date_to: datetime,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> sa.Select[Any]:
     """One aggregate row of guardrail fire counts over *runs* in range.
 
@@ -158,18 +161,24 @@ def _build_runs_scorecard_stmt(
     run-level "blocked" signal the telemetry exposes. ``first_try_pass_runs``
     counts runs whose ingestion-edge pass found NO violation (``violated == 0``
     among runs with a bound guardrail).
+
+    ``team_ids`` carries the caller's own team boundary (#1795) — ``None``
+    (org admin / unscoped) is unconstrained; a scoped caller's runs scorecard
+    resolves each run's effective owner through its pipeline (``Run`` carries
+    no owner team of its own) and keeps only the caller's teams plus
+    org-shared runs with NO owner team.
     """
     g = Run.guardrail_summary_json
     bound = _json_int(g, "bound", dialect)
     violated = _json_int(g, "violated", dialect)
     blocked_codes = sorted(expand_code_variants("eval.blocked"))
-    conditions = [
+    conditions: list[Any] = [
         Run.organisation_id == org_id,
         Run.guardrail_summary_json.is_not(None),
         Run.created_at >= date_from,
         Run.created_at <= date_to,
     ]
-    return sa.select(
+    stmt = sa.select(
         sa.func.count().label("runs_total"),
         sa.func.sum(sa.case((bound > 0, 1), else_=0)).label("runs_with_guardrail"),
         sa.func.sum(sa.case((violated > 0, 1), else_=0)).label("runs_with_violations"),
@@ -185,13 +194,20 @@ def _build_runs_scorecard_stmt(
         sa.func.coalesce(sa.func.sum(_json_int(g, "skipped", dialect)), 0).label("skipped_total"),
         sa.func.coalesce(sa.func.sum(_json_int(g, "expected_skips", dialect)), 0).label("expected_skips_total"),
         sa.func.coalesce(sa.func.sum(_json_int(g, "unexpected_skips", dialect)), 0).label("unexpected_skips_total"),
-    ).where(*conditions)
+    )
+    if team_ids is not None:
+        stmt = stmt.outerjoin(Pipeline, Pipeline.id == Run.pipeline_id)
+        condition = team_scope_condition(Pipeline.owner_team_id, team_ids, {})
+        if condition is not None:
+            stmt = stmt.where(condition)
+    return stmt.where(*conditions)
 
 
 def _build_corrections_stmt(
     org_id: uuid.UUID,
     date_from: datetime,
     date_to: datetime,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> sa.Select[Any]:
     """One aggregate row of single-node correction outcomes in range.
 
@@ -200,8 +216,13 @@ def _build_corrections_stmt(
     verdict transitions the record to ``resolved``); ``escalated_hitl`` =
     ``escalated`` (every non-resolved verdict escalates to HITL);
     ``dismissed`` / ``in_flight`` complete the status distribution.
+
+    ``team_ids`` (#1795): a scoped caller's corrections resolve through the
+    feedback record's run and that run's pipeline owner — records whose run
+    belongs to another team or an owned pipeline they are not a member of are
+    excluded; org-shared runs (NULL owner team) stay visible.
     """
-    return sa.select(
+    stmt = sa.select(
         sa.func.count().label("corrections_total"),
         sa.func.sum(sa.case((FeedbackRecord.feedback_status == "resolved", 1), else_=0)).label("converged_clean"),
         sa.func.sum(sa.case((FeedbackRecord.feedback_status == "escalated", 1), else_=0)).label("escalated_hitl"),
@@ -215,6 +236,12 @@ def _build_corrections_stmt(
         FeedbackRecord.created_at >= date_from,
         FeedbackRecord.created_at <= date_to,
     )
+    if team_ids is not None:
+        stmt = stmt.join(Run, Run.id == FeedbackRecord.run_id).outerjoin(Pipeline, Pipeline.id == Run.pipeline_id)
+        condition = team_scope_condition(Pipeline.owner_team_id, team_ids, {})
+        if condition is not None:
+            stmt = stmt.where(condition)
+    return stmt
 
 
 def _build_budget_exhausted_stmt(
@@ -229,6 +256,11 @@ def _build_budget_exhausted_stmt(
     ``guardrail.correction_escalated`` audit event's ``payload_json.verdict``
     (the FeedbackRecord status collapses every non-resolved verdict to
     ``escalated``). Counting that verdict is the exact budget-exhausted signal.
+
+    Residual (accepted): this count stays org-wide even for team-scoped
+    callers (#1795) — the audit event carries no run/pipeline reference to
+    resolve an effective owner through, and the correct boundary would
+    require a schema change to link escalation events to runs.
     """
     return sa.select(sa.func.count()).where(
         AuditEvent.organisation_id == org_id,
@@ -427,6 +459,7 @@ async def _run_scorecard_queries(
     account_id: uuid.UUID | None,
     org_role: str | None,
     settings: Settings,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> tuple[Any, Any, int, Any]:
     """Open a session and run the four scorecard aggregate queries.
 
@@ -445,10 +478,12 @@ async def _run_scorecard_queries(
                 await _maybe_apply_postgres_timeout(session, settings)
 
             runs_row = (
-                await session.execute(_build_runs_scorecard_stmt(dialect, org_id, effective_from, effective_to))
+                await session.execute(
+                    _build_runs_scorecard_stmt(dialect, org_id, effective_from, effective_to, team_ids)
+                )
             ).one()
             corrections_row = (
-                await session.execute(_build_corrections_stmt(org_id, effective_from, effective_to))
+                await session.execute(_build_corrections_stmt(org_id, effective_from, effective_to, team_ids))
             ).one()
             budget_exhausted = int(
                 (
@@ -457,7 +492,9 @@ async def _run_scorecard_queries(
                 or 0
             )
             baseline_row = (
-                await session.execute(_build_runs_scorecard_stmt(dialect, org_id, baseline_from, effective_from))
+                await session.execute(
+                    _build_runs_scorecard_stmt(dialect, org_id, baseline_from, effective_from, team_ids)
+                )
             ).one()
     except asyncio.CancelledError:
         raise
@@ -476,6 +513,7 @@ async def run_guardrail_scorecard(
     org_role: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """Compute the advisory guardrail scorecard for *org_id* over the range.
 
@@ -506,6 +544,7 @@ async def run_guardrail_scorecard(
         account_id=account_id,
         org_role=org_role,
         settings=settings,
+        team_ids=team_ids,
     )
 
     return _assemble_scorecard(

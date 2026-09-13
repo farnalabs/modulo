@@ -131,6 +131,44 @@ class TestStatementBuilders:
         for status in ("pending", "routing", "correcting"):
             assert f"'{status}'" in sql, f"in-flight status {status} missing"
 
+    def test_runs_stmt_team_boundary_resolves_through_pipeline(self) -> None:
+        # #1795: Run has no owner team of its own — the scoped caller's runs
+        # boundary resolves through the run's pipeline owner, coalescing with
+        # org-shared rows (IS NULL) and binding team ids, never interpolating.
+        date_from, date_to = self._bounds()
+        team_a = uuid.uuid4()
+        stmt = gr._build_runs_scorecard_stmt("postgresql", _ORG, date_from, date_to, team_ids=(team_a,))
+        sql = str(stmt.compile())
+        assert "pipelines" in sql
+        assert "pipelines.owner_team_id IS NULL" in sql
+        assert "scoped_team_ids" in sql, "the membership boundary must be bound, never interpolated"
+        assert str(team_a) not in sql, "team ids must be bound, never interpolated"
+        unscoped = str(gr._build_runs_scorecard_stmt("postgresql", _ORG, date_from, date_to).compile())
+        assert "pipelines" not in unscoped, "unscoped callers must not pay the join"
+
+    def test_corrections_stmt_team_boundary_joins_run_and_pipeline(self) -> None:
+        # #1795: correction records for another team's runs never surface to a
+        # scoped caller — the boundary joins runs → pipelines on the record.
+        date_from, date_to = self._bounds()
+        team_a = uuid.uuid4()
+        stmt = gr._build_corrections_stmt(_ORG, date_from, date_to, team_ids=(team_a,))
+        sql = str(stmt.compile())
+        assert "runs" in sql
+        assert "pipelines" in sql
+        assert "pipelines.owner_team_id IS NULL" in sql
+        assert "scoped_team_ids" in sql
+        assert str(team_a) not in sql
+
+    def test_budget_stmt_documented_org_wide_residual(self) -> None:
+        # The budget-exhausted proxy has no run reference to resolve an owner
+        # through — it stays org-wide (residual risk documented on the
+        # builder). Guard: it must never silently gain an unconstrained join.
+        date_from, date_to = self._bounds()
+        stmt = gr._build_budget_exhausted_stmt("postgresql", _ORG, date_from, date_to)
+        sql = str(stmt.compile())
+        assert "pipelines" not in sql
+        assert "runs" not in sql
+
 
 # ---------------------------------------------------------------------------
 # _rate — null-safe ratio

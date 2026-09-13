@@ -155,11 +155,53 @@ class AnalyticsQuery:
     status: AnalyticsStatus | None = None
     pipeline_ids: tuple[uuid.UUID, ...] = ()
     team_id: uuid.UUID | None = None
+    # Explicit team boundary for non-admin callers (#1795): the caller's OWN
+    # team memberships, resolved by the route under its RLS org context.
+    # ``None`` = the caller is NOT team-scoped (org admin — unconstrained);
+    # an empty tuple means the member belongs to NO teams and stays fail-closed
+    # to org-level (NULL-owner) rows only.
+    team_ids: tuple[uuid.UUID, ...] | None = None
     error_code: str | None = None
     folder_id: uuid.UUID | None = None
     date_from: date | None = None
     date_to: date | None = None
     limit: int = 1000
+
+    def scoped_team_ids(self) -> tuple[uuid.UUID, ...] | None:
+        """Merged team boundary for the SQL predicate.
+
+        ``None`` when the caller is unscoped (org admin). Otherwise the union
+        of the membership boundary and any explicit ``team_id`` filter, deduped
+        and order-stable.
+        """
+        if self.team_ids is None:
+            return None
+        merged: list[uuid.UUID] = list(self.team_ids)
+        if self.team_id is not None and self.team_id not in merged:
+            merged.append(self.team_id)
+        return tuple(merged)
+
+
+def team_scope_condition(
+    effective_team: Any,
+    scoped_team_ids: tuple[uuid.UUID, ...] | None,
+    params: dict[str, Any],
+) -> Any | None:
+    """WHERE clause for the effective-team boundary, or ``None`` when unscoped.
+
+    Mirrors :func:`team_scope_clause` for the multi-team case: a scoped caller
+    (org member) sees rows whose effective owner team is one of THEIR teams
+    plus org-level rows with NO owner team. With an empty membership list the
+    boundary degrades to org-level rows only — over-broad team ownership never
+    widens the set a team-scoped principal can read (#1795, fail closed).
+    """
+    if scoped_team_ids is None:
+        return None
+    if not scoped_team_ids:
+        return effective_team.is_(None)
+    params["scoped_team_ids"] = list(scoped_team_ids)
+    bind = sa.bindparam("scoped_team_ids", type_=sa.Uuid, expanding=True)
+    return sa.or_(effective_team.is_(None), effective_team.in_(bind))
 
 
 # Allowlisted dimension → group column. Keys are enum members only — the dict
@@ -314,16 +356,24 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
     if query.pipeline_ids:
         params["pipeline_ids"] = list(query.pipeline_ids)
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
-    if query.team_id is not None:
-        # A team-scoped caller sees its own team's facts plus org-level facts
-        # (no owner team) — the same boundary the MCP guard applies. The fact's
-        # stamped team is the source of truth; facts predating the create-time
-        # run stamp (NULL) fall back to the pipeline's owner so a NULL stamp
-        # can never widen the boundary.
+    if query.team_id is not None and query.team_ids is None:
+        # Legacy explicit single-team filter from an UNSCOPED caller (org
+        # admin picking a team in the UI) — unchanged bind shape.
         params["team_id"] = query.team_id
         stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
         effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
         stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
+    elif query.team_ids is not None:
+        # Team-scoped caller (#1795): the boundary arrives from the route as
+        # the caller's OWN memberships (plus any explicit team filter). The
+        # fact's stamped team is the source of truth; facts predating the
+        # create-time run stamp (NULL) fall back to the pipeline's owner so a
+        # NULL stamp can never widen the boundary.
+        stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+        effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
+        condition = team_scope_condition(effective_team, query.scoped_team_ids(), params)
+        if condition is not None:
+            stmt = stmt.where(condition)
     if query.error_code is not None:
         stmt = stmt.where(build_error_code_condition(params, query.error_code))
     if query.folder_id is not None:
@@ -387,16 +437,21 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
     if query.pipeline_ids:
         params["pipeline_ids"] = list(query.pipeline_ids)
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
-    if query.team_id is not None:
-        # A team-scoped caller sees its own team's facts plus org-level facts
-        # (no owner team) — the same boundary the MCP guard applies. The fact's
-        # stamped team is the source of truth; facts predating the create-time
-        # run stamp (NULL) fall back to the pipeline's owner so a NULL stamp
-        # can never widen the boundary.
+    if query.team_id is not None and query.team_ids is None:
+        # Legacy explicit single-team filter from an UNSCOPED caller —
+        # unchanged bind shape (mirrors build_facts_query).
         params["team_id"] = query.team_id
         stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
         effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
         stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
+    elif query.team_ids is not None:
+        # Team-scoped caller (#1795) — the same multi-team boundary as the
+        # facts query: own teams + org-level rows, never another team's.
+        stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+        effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
+        condition = team_scope_condition(effective_team, query.scoped_team_ids(), params)
+        if condition is not None:
+            stmt = stmt.where(condition)
     if query.error_code is not None:
         stmt = stmt.where(build_error_code_condition(params, query.error_code))
     if query.folder_id is not None:
