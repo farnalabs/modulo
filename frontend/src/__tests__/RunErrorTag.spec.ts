@@ -5,7 +5,7 @@ import RunErrorTag from '../components/shared/RunErrorTag.vue'
 describe('RunErrorTag', () => {
   it('renders the i18n label for a known dotted code', () => {
     const wrapper = mount(RunErrorTag, { props: { code: 'agent.stall' } })
-    expect(wrapper.text()).toBe('Worker claimed run but dispatched no node (recovered by re-dispatch)')
+    expect(wrapper.text()).toBe('Worker stall')
   })
 
   it('falls back to Unknown error for an unknown code', () => {
@@ -27,7 +27,13 @@ describe('RunErrorTag', () => {
 
   it('sets the detail title tooltip', () => {
     const wrapper = mount(RunErrorTag, { props: { code: 'node.timeout', detail: 'hit the timeout guard' } })
-    expect(wrapper.attributes('title')).toBe('hit the timeout guard')
+    expect(wrapper.attributes('title')).toContain('hit the timeout guard')
+  })
+
+  it('uses the errorCodeDescription for the tooltip when detail is absent', () => {
+    const wrapper = mount(RunErrorTag, { props: { code: 'agent.stall' } })
+    const title = wrapper.attributes('title') ?? ''
+    expect(title).toContain('recovered by re-dispatch')
   })
 
   it('renders provider codes with a warning-style pill and their i18n label', () => {
@@ -46,6 +52,6 @@ describe('RunErrorTag', () => {
     const sideEffect = mount(RunErrorTag, { props: { code: 'script.side_effect_unknown' } })
     expect(sideEffect.text()).toBe('Script side effects unknown')
     const sessionLost = mount(RunErrorTag, { props: { code: 'script.session_lost' } })
-    expect(sessionLost.text()).toBe('Script session lost')
+    expect(sessionLost.text()).toBe('Session lost')
   })
 })

@@ -13,7 +13,7 @@
         <div>
           <div class="flex items-center gap-3">
             <PageHeader :title="$t('views.RunDetailView.run_detail')" />
-            <span :class="statusBadgeClass" class="capitalize">{{ runStatusLabel(run.status) }}</span>
+            <span :class="statusBadgeClass" class="capitalize" :title="runStatusDescription(run.status, t)" :aria-label="runStatusDescription(run.status, t)">{{ runStatusLabel(run.status) }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
             Pipeline: <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
@@ -253,7 +253,7 @@
           :disabled="rerunning"
           data-testid="run-rerun"
           :aria-label="$t('views.RunDetailView.rerun')"
-          class="inline-flex items-center gap-2 rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50"
+          class="inline-flex items-center gap-2 whitespace-nowrap rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-accent disabled:opacity-50"
           @click="onRerunClick"
         >
           <svg v-if="rerunning" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
@@ -764,7 +764,7 @@ import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
 import { isTerminalStatus } from '../constants/runStatuses'
-import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel } from '../utils/runUtils'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'

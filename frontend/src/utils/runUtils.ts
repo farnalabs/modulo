@@ -44,6 +44,21 @@ export function runStatusLabel(status: string | null | undefined): string {
   return status.replace(/_/g, ' ')
 }
 
+/**
+ * Full explanatory description for a run status, surfaced as a hover tooltip
+ * and accessible name on the status badge. Looked up in the locale's
+ * `statusDescriptions` section (mirroring the `errorCodeDescriptions` pattern
+ * for error codes); falls back to the short label when the locale has no
+ * description for the status, so the accessible name is never erased for
+ * statuses the locale doesn't yet describe.
+ */
+export function runStatusDescription(status: string | null | undefined, t: (key: string) => string): string {
+  if (status == null) return ''
+  const key = `statusDescriptions.${status}`
+  const translated = t(key)
+  return translated === key ? runStatusLabel(status) : translated
+}
+
 const triggerTypeLabelKeys: Record<string, string> = {
   manual: 'common.trigger_types.manual',
   webhook: 'common.trigger_types.webhook',
@@ -131,4 +146,15 @@ export function errorCodeLabel(code: string | null | undefined, t: (key: string)
   const key = `errorCodes.${code}`
   const translated = t(key)
   return translated === key ? t('errorCodes._unknown') : translated
+}
+
+/** Full explanatory description for a dotted run error code (e.g. `agent.stall`
+ * → "The worker claimed the run but never dispatched a node; it was recovered
+ * by re-dispatch."), looked up in the locale's `errorCodeDescriptions` section.
+ * Falls back to the short label when no description entry exists. */
+export function errorCodeDescription(code: string | null | undefined, t: (key: string) => string): string {
+  if (!code) return ''
+  const key = `errorCodeDescriptions.${code}`
+  const translated = t(key)
+  return translated === key ? errorCodeLabel(code, t) : translated
 }

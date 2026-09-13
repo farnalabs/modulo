@@ -3872,7 +3872,7 @@ export default {
     "agent": {
       "failed": "Agent failed",
       "no_op": "No output",
-      "stall": "Worker claimed run but dispatched no node (recovered by re-dispatch)"
+      "stall": "Worker stall"
     },
     "contract": {
       "schema": "Output rejected",
@@ -3882,7 +3882,7 @@ export default {
       "failed": "Script failed",
       "invalid_output": "Invalid script output",
       "side_effect_unknown": "Script side effects unknown",
-      "session_lost": "Script session lost"
+      "session_lost": "Session lost"
     },
     "harness": {
       "unknown": "Unknown error",
@@ -3929,6 +3929,85 @@ export default {
     },
     "eval": { "blocked": "Eval blocked", "failed": "Eval failed" },
     "config": { "error": "Configuration error", "invalid": "Invalid configuration" }
+  },
+  "errorCodeDescriptions": {
+    "agent": {
+      "failed": "The agent process exited with an error before completing its task.",
+      "no_op": "The agent completed but produced no output.",
+      "stall": "The worker claimed the run but never dispatched a node; it was recovered by re-dispatch."
+    },
+    "contract": {
+      "schema": "The agent output was rejected because it did not match the expected schema.",
+      "no_output": "The agent produced no output when a response was required."
+    },
+    "script": {
+      "failed": "The user-provided script exited with a non-zero status.",
+      "invalid_output": "The script returned output that could not be parsed.",
+      "side_effect_unknown": "The script executed but its side effects could not be determined.",
+      "session_lost": "The script's runtime session was lost before it completed."
+    },
+    "harness": {
+      "unknown": "An unexpected error occurred in the orchestration harness.",
+      "db": { "connection_lost": "The database connection was lost during execution." },
+      "state_serialization": "Internal state could not be serialized for persistence.",
+      "sdk_task_cancelled": "The agent SDK task was cancelled externally.",
+      "executor_failed": "The run executor encountered an internal error.",
+      "executor_heartbeat_lost": "The executor stopped sending heartbeats and is presumed dead.",
+      "dispatch_failed": "The harness failed to dispatch the next node.",
+      "worker_failed": "The sandbox worker process failed.",
+      "node_cancelled": "A node was cancelled before it could complete.",
+      "gate_creation_failed": "The system failed to create a HITL gate for this run.",
+      "late_write": "A state write arrived after the run had already moved on.",
+      "idempotency_gate": "A retry was blocked because the pipeline is idempotent."
+    },
+    "sandbox": {
+      "no_output_json": "The sandbox produced no structured JSON output.",
+      "spawn": "The sandbox environment failed to start.",
+      "network": "A network error occurred inside the sandbox."
+    },
+    "node": {
+      "timeout": "The node exceeded its maximum allowed execution time.",
+      "runaway": "The node exceeded its maximum allowed steps without finishing.",
+      "cancelled": "The node was cancelled before completion."
+    },
+    "run": { "superseded": "This run was superseded by a newer run." },
+    "connector": {
+      "invalid_key": "The connector key is invalid or missing.",
+      "permission": "The connector does not have permission to access the resource.",
+      "rate_limit": "The connector hit an API rate limit.",
+      "network": "A network error occurred while calling the connector."
+    },
+    "capacity": {
+      "org": "The organisation has reached its maximum concurrent run limit.",
+      "pipeline": "This pipeline has reached its maximum concurrent run limit.",
+      "claim": "All available capacity slots were claimed and none remain.",
+      "timeout": "The run timed out waiting for an available capacity slot."
+    },
+    "provider": {
+      "unavailable": "The LLM provider is currently unavailable.",
+      "authentication": "Authentication with the LLM provider failed.",
+      "rate_limited": "The LLM provider returned a rate-limit error.",
+      "connection": "A network error occurred while calling the LLM provider."
+    },
+    "eval": { "blocked": "A guardrail eval blocked the run from continuing.", "failed": "A guardrail eval failed during execution." },
+    "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." }
+  },
+  "statusDescriptions": {
+    "complete": "The run finished successfully.",
+    "failed": "The run encountered an error and did not complete.",
+    "cancelled": "The run was cancelled by a user or the system.",
+    "eval_failed": "A guardrail evaluation blocked or failed the run.",
+    "stalled": "The run stopped producing output and was terminated.",
+    "budget_exceeded": "The per-agent token budget was exceeded.",
+    "router_no_match": "A router node had no matching rule and no default.",
+    "cost_ceiling_exceeded": "The organisation-wide spend ceiling was exceeded.",
+    "compensation_failed": "A watched node and its compensation path both failed.",
+    "pending": "The run is queued and waiting to start.",
+    "running": "The run is currently executing.",
+    "awaiting_human": "The run is waiting for a human decision at a HITL gate.",
+    "claimed": "A worker has claimed the run and will execute it.",
+    "hitl_parked": "The HITL gate expired unanswered; the run is parked pending a decision.",
+    "unknown": "The run is in an unrecognised state."
   },
   "connectors": {
     "rest": {
