@@ -839,6 +839,19 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         description="Max retained stdout/stderr bytes when stdout_retention_mode=='full'. "
         "Ignored in 'tail' mode. Must be a positive integer. Only valid on sandbox_agent nodes.",
     )
+    # FAR-802 (ADR 033): managed workspace inputs — checked-out repositories
+    # provisioned inside the sandbox workspace at run time. Declared here so the
+    # REST + MCP Pydantic contracts do NOT silently drop the key on save (a
+    # silently-dropped declarative field would create permanent plan drift — the
+    # runtime would never see the input). Only valid on sandbox_agent nodes and
+    # validated by the shared ``_validate_sandbox_managed_inputs_config`` helper
+    # in ``_validate_sandbox_agent_node`` so save-time and run-time agree.
+    workspace_inputs: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Managed workspace inputs: a list of repository input descriptors "
+        "(each with dest/ref/url) checked out into the sandbox workspace. Only valid "
+        "on sandbox_agent nodes. Validated for safe dest traversal, ref.kind, and URL scheme.",
+    )
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod
@@ -983,6 +996,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             _validate_sandbox_egress_allowlist_config,
             _validate_sandbox_egress_config,
             _validate_sandbox_git_credentials_config,
+            _validate_sandbox_managed_inputs_config,
             _validate_sandbox_mode_config,
             _validate_sandbox_read_only_config,
             _validate_sandbox_resource_limits_config,
@@ -1019,6 +1033,11 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             self.timeout_seconds,
             str(self.id),
         )
+        # FAR-802 (ADR 033): managed workspace inputs save-time validation.
+        # Wired through the SHARED helper so REST + MCP + GraphValidator +
+        # node runner all agree; an invalid dest traversal / ref.kind / URL
+        # scheme is rejected at authoring time, never silently ignored.
+        _validate_sandbox_managed_inputs_config(self.model_dump())
         if not self.template_id:
             raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
         self._validate_sandbox_env_vars()
