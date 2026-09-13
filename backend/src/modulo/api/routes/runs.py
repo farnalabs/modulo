@@ -62,6 +62,7 @@ from modulo.core.pipeline_engine.recovery import (
     guardrail_override,
     recover_node,
 )
+from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.core.secret_patterns import mask_secret_values_in_text
 from modulo.core.trigger_engine import TriggerEngine
@@ -244,6 +245,45 @@ async def _do_get_otel_endpoint(
     except Exception:
         _log.warning("runs.otel_endpoint_unavailable", extra={"org_id": str(org_id)}, exc_info=True)
         return ""
+
+
+async def _do_get_workspace_inputs(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> list[dict[str, Any]] | None:
+    """Load workspace input audit records for a run (FAR-802).
+
+    Reads the ``run_node_outputs`` row keyed by ``(run_id, _mwi_audit,
+    <attempt_key>)`` and returns the ``workspace_inputs`` list from the
+    stored payload.  Returns None when no audit record exists (run had no
+    workspace inputs configured).  Best-effort: a DB failure degrades to
+    None (the run response is valid without workspace inputs).
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            row = (
+                await session.execute(
+                    select(RunNodeOutput).where(
+                        RunNodeOutput.run_id == run_id,
+                        RunNodeOutput.node_id == AUDIT_NODE_ID,
+                    )
+                )
+            ).scalar_one_or_none()
+        if row is None or not isinstance(row.outputs_json, dict):
+            return None
+        inputs = row.outputs_json.get("workspace_inputs")
+        return inputs if isinstance(inputs, list) else None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "runs.workspace_inputs_unavailable",
+            extra={"run_id": str(run_id)},
+            exc_info=True,
+        )
+        return None
 
 
 def _select_trigger_actor(
@@ -743,6 +783,11 @@ class RunResponse(BaseModel):
     # by the guardrails module, AND re-masked defensively here via
     # _mask_output_value so no unmasked input is ever served.
     input_payload: dict[str, Any] | None = None
+    # FAR-802: resolved workspace input audit records (from run_node_outputs
+    # where node_id == "_mwi_audit").  Each entry carries redacted URLs and
+    # resolved/final SHAs — never credentials.  Absent when no workspace
+    # inputs were configured for this run.
+    workspace_inputs: list[dict[str, Any]] | None = None
 
 
 async def _run_gate_fired(session: AsyncSession, run: Any) -> bool:
@@ -833,6 +878,7 @@ def _build_run_response(
     ctx: _RunDisplayContext | None = None,
     *,
     gate_fired: bool = False,
+    workspace_inputs: list[dict[str, Any]] | None = None,
 ) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields.
 
@@ -909,6 +955,7 @@ def _build_run_response(
         capacity=ctx.capacity,
         warnings=compute_run_warnings(run.cost_breakdown),
         input_payload=input_payload,
+        workspace_inputs=workspace_inputs,
     )
 
 
@@ -1434,6 +1481,7 @@ async def get_run_status(
         trigger_actor, capacity, child_runs = await _run_with_retry(
             lambda: _do_get_run_observability(factory, principal, run)
         )
+        workspace_inputs = await _run_with_retry(lambda: _do_get_workspace_inputs(factory, principal, run_id))
     except IntegrityError:
         _log.exception("runs.get_run_status")
         raise HTTPException(
@@ -1481,6 +1529,7 @@ async def get_run_status(
             capacity=capacity,
         ),
         gate_fired=gate_fired,
+        workspace_inputs=workspace_inputs,
     )
 
 
