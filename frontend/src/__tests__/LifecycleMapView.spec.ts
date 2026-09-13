@@ -599,3 +599,61 @@ describe('LifecycleMapView journeys loading spinner (FAR-818)', () => {
     expect(wrapper.find('[role="status"]').exists()).toBe(false)
   })
 })
+
+describe('LifecycleMapView node position persistence (FAR-829)', () => {
+  let localStorageStore: Record<string, string>
+
+  beforeEach(() => {
+    localStorageStore = {}
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => localStorageStore[key] ?? null),
+      setItem: vi.fn((key: string, value: string) => { localStorageStore[key] = value }),
+      removeItem: vi.fn((key: string) => { delete localStorageStore[key] }),
+    })
+  })
+
+  it('loads saved positions from localStorage on mount', async () => {
+    localStorageStore['lifecycle-map-positions:map-1:1'] = JSON.stringify({ 'stage-1': { x: 500, y: 600 } })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const renderer = wrapper.findComponent(LifecycleMapRenderer)
+    expect(renderer.props('savedPositions')).toEqual({ 'stage-1': { x: 500, y: 600 } })
+  })
+
+  it('passes empty savedPositions when nothing in localStorage', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const renderer = wrapper.findComponent(LifecycleMapRenderer)
+    expect(renderer.props('savedPositions')).toEqual({})
+  })
+
+  it('persists positions to localStorage when positions-changed fires', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
+    vm.handlePositionsChanged({ 'stage-1': { x: 123, y: 456 } })
+    await vi.advanceTimersByTimeAsync(600)
+
+    expect(localStorageStore['lifecycle-map-positions:map-1:1']).toBe(JSON.stringify({ 'stage-1': { x: 123, y: 456 } }))
+    vi.useRealTimers()
+  })
+
+  it('shows saved indicator after successful persistence', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { handlePositionsChanged: (p: Record<string, { x: number; y: number }>) => void }
+    vm.handlePositionsChanged({ 'stage-1': { x: 123, y: 456 } })
+    await vi.advanceTimersByTimeAsync(600)
+
+    const status = wrapper.find('[data-testid="lifecycle-map-save-status"]')
+    expect(status.exists()).toBe(true)
+    expect(status.text()).toContain('saved')
+    vi.useRealTimers()
+  })
+})
