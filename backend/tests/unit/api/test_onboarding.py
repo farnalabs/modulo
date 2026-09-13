@@ -345,7 +345,7 @@ def test_seed_examples_no_model_backend(client: TestClient, mock_session: AsyncM
     assert "model backend" in resp.json()["detail"]
     mock_create_schema.assert_not_called()
     mock_create_pipeline.assert_not_called()
-    assert progress.completed_actions == []
+    assert not progress.completed_actions
 
 
 # ---------------------------------------------------------------------------
