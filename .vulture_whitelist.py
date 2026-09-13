@@ -352,4 +352,15 @@ __all__ = [
     "resolve_clone_credential",
     "assert_clone_credential_is_read_only",
     "build_provisioning_credential_scripts",
+    # --- FAR-800 workspace input orchestration (test-referenced; production
+    #     callers land in the provisioning layer, so vulture cannot see a
+    #     prod call site yet) ---
+    "ResolvedInput",
+    "DriftResult",
+    "ProvisioningError",
+    "resolve_managed_inputs_host_side",
+    "provision_workspace_inputs_in_sandbox",
+    "detect_workspace_input_drift",
+    "workspace_drift",
+    "workspace_drift_detected",
 ]
