@@ -896,15 +896,15 @@ def test_derive_node_agent_map_reads_agent_ids() -> None:
 def test_derive_node_agent_map_not_dict() -> None:
     from modulo.core.cost_controller.finalize import derive_node_agent_map
 
-    assert derive_node_agent_map(None) == {}
-    assert derive_node_agent_map("bad") == {}
-    assert derive_node_agent_map({"nodes": "not-list"}) == {}
+    assert not derive_node_agent_map(None)
+    assert not derive_node_agent_map("bad")
+    assert not derive_node_agent_map({"nodes": "not-list"})
 
 
 def test_derive_node_agent_map_empty_nodes() -> None:
     from modulo.core.cost_controller.finalize import derive_node_agent_map
 
-    assert derive_node_agent_map({"nodes": []}) == {}
+    assert not derive_node_agent_map({"nodes": []})
 
 
 # ---------------------------------------------------------------------------
@@ -946,7 +946,7 @@ def test_accumulate_agent_tokens_skips_non_dict_entries() -> None:
 def test_accumulate_agent_tokens_empty_usage() -> None:
     from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
 
-    assert _accumulate_agent_tokens(None, {}) == {}
+    assert not _accumulate_agent_tokens(None, {})
 
 
 # ---------------------------------------------------------------------------
@@ -957,7 +957,7 @@ def test_accumulate_agent_tokens_empty_usage() -> None:
 def test_trim_duplicate_events_empty() -> None:
     from modulo.core.cost_controller.finalize import _trim_duplicate_events
 
-    assert _trim_duplicate_events([]) == []
+    assert not _trim_duplicate_events([])
 
 
 def test_trim_duplicate_events_keeps_recent() -> None:
@@ -1230,21 +1230,21 @@ def test_collect_node_emission_sources_skips_non_dict_nodes() -> None:
     from modulo.core.cost_controller.finalize import _collect_node_emission_sources
 
     outputs = {"node-a": "not-a-dict", "node-b": 42}
-    assert _collect_node_emission_sources(outputs) == []
+    assert not _collect_node_emission_sources(outputs)
 
 
 def test_collect_node_emission_sources_skips_non_dict_output() -> None:
     from modulo.core.cost_controller.finalize import _collect_node_emission_sources
 
     outputs = {"node-a": {"output": "not-a-dict"}}
-    assert _collect_node_emission_sources(outputs) == []
+    assert not _collect_node_emission_sources(outputs)
 
 
 def test_collect_node_emission_sources_skips_non_list_refs() -> None:
     from modulo.core.cost_controller.finalize import _collect_node_emission_sources
 
     outputs = {"node-a": {"output": {"work_item_refs": "not-a-list"}}}
-    assert _collect_node_emission_sources(outputs) == []
+    assert not _collect_node_emission_sources(outputs)
 
 
 def test_collect_node_emission_sources_skips_malformed_ref() -> None:
