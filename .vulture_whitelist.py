@@ -345,4 +345,11 @@ __all__ = [
     "generate_pinned_known_hosts",
     "SshHostRefusedError",
     "SshTransportConfig",
+    # --- FAR-797 workspace input credentials (test-referenced; production
+    #     callers land in the provisioning layer, so vulture cannot see a
+    #     prod call site yet) ---
+    "is_forge_allowlisted",
+    "resolve_clone_credential",
+    "assert_clone_credential_is_read_only",
+    "build_provisioning_credential_scripts",
 ]
