@@ -33,7 +33,7 @@ curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 
 curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 --max-time 300 -o "${work_dir}/checksums.txt" "${base_url}/flyctl_${version_num}_checksums.txt"
 
 expected_sha="$(awk -v file="${tarball}" '$2 == file { print $1 }' "${work_dir}/checksums.txt")"
-if [ -z "${expected_sha}" ]; then
+if [[ -z "${expected_sha}" ]]; then
   echo "::error::No checksum published for ${tarball} in ${FLYCTL_VERSION} checksums.txt - refusing to install." >&2
   exit 1
 fi

@@ -158,7 +158,7 @@ verify_sums_in_dir() {
     local sum path actual
     while read -r sum path; do
       actual="$(sha256_of "${dir}/${path}")"
-      [ "$actual" = "$sum" ] || die "bundle integrity check FAILED for ${path}: expected ${sum}, got ${actual}"
+      [[ "$actual" = "$sum" ]] || die "bundle integrity check FAILED for ${path}: expected ${sum}, got ${actual}"
     done < "${dir}/SHA256SUMS"
   fi
 }
@@ -174,16 +174,16 @@ LOCK_FILE="${DATA_DIR}.lock"
 # recorded PID is either a live holder or (after SIGKILL) a stale identity.
 lock_holder_pid() {
   local pid
-  [ -f "${LOCK_FILE}" ] || return 1
+  [[ -f "${LOCK_FILE}" ]] || return 1
   pid="$(grep -o '"pid": *[0-9]*' "${LOCK_FILE}" 2>/dev/null | grep -o '[0-9]*' | head -n 1)" || return 1
-  [ -n "${pid}" ] || return 1
+  [[ -n "${pid}" ]] || return 1
   printf '%s' "${pid}"
 }
 
 # lock_holder_mode — the holder's recorded lock mode (backup/restore/serve),
 # for the refusal transcript. Empty when the record lacks a mode field.
 lock_holder_mode() {
-  [ -f "${LOCK_FILE}" ] || return 1
+  [[ -f "${LOCK_FILE}" ]] || return 1
   grep -o '"mode": *"[^"]*"' "${LOCK_FILE}" 2>/dev/null | head -n 1 | sed 's/"mode": *//' || true
 }
 
@@ -197,9 +197,9 @@ lock_holder_mode() {
 refuse_when_locked() {
   local holder_pid holder_mode
   holder_pid="$(lock_holder_pid)" || return 0
-  [ -n "${holder_pid}" ] || return 0
+  [[ -n "${holder_pid}" ]] || return 0
   holder_mode="$(lock_holder_mode)"
-  if [ -d "/proc/${holder_pid}" ]; then
+  if [[ -d "/proc/${holder_pid}" ]]; then
     holder_pid="$(lock_holder_pid)" || return 0
     holder_mode="$(lock_holder_mode)"
     die "Refusing: the data dir is locked by another launcher (holder PID ${holder_pid}${holder_mode:+, mode ${holder_mode}}).\nStop it first:  modulo stop\nThen re-run this installer. The enforced pre-upgrade snapshot already on disk is reused when you pass --skip-backup:\n  bash modulo-install.sh --skip-backup"
@@ -218,8 +218,8 @@ run_pre_upgrade_dump() {
   local py="${old_root}/runtime/bin/python3"
   local helper="${old_root}/backend/src/modulo/launcher/upgrade.py"
   local rc snapshot_path
-  [ -x "${py}" ] || die "cannot run the pre-upgrade pg_dump: no bundled runtime at ${py} (no prior native install to upgrade — remove the populated data dir or ignore)"
-  [ -f "${helper}" ] || die "cannot run the pre-upgrade pg_dump: the installed bundle predates the launcher upgrade helper (${helper})"
+  [[ -x "${py}" ]] || die "cannot run the pre-upgrade pg_dump: no bundled runtime at ${py} (no prior native install to upgrade — remove the populated data dir or ignore)"
+  [[ -f "${helper}" ]] || die "cannot run the pre-upgrade pg_dump: the installed bundle predates the launcher upgrade helper (${helper})"
   info "Pre-upgrade pg_dump (enforced by FAR-672) — the bundled stack must be running..."
   if snapshot_path="$(PYTHONPATH="${old_root}/backend/src${PYTHONPATH:+:${PYTHONPATH}}" \
       MODULO_BUNDLED_BIN_DIR="${old_root}/pg" \
@@ -229,7 +229,7 @@ run_pre_upgrade_dump() {
     rc=$?
     die "pre-upgrade pg_dump FAILED (exit ${rc}) — upgrade ABORTED, no binary swap was made. The installer aborted BEFORE installing anything; fix the dump failure and re-run. If a verified snapshot ALREADY exists in ${DATA_DIR} and the bundled stack is stopped (a stopped stack cannot be dumped), re-run with --skip-backup:\n  bash modulo-install.sh --skip-backup"
   fi
-  [ -d "${snapshot_path}" ] || die "pre-upgrade pg_dump succeeded but the snapshot path is missing: '${snapshot_path}'"
+  [[ -d "${snapshot_path}" ]] || die "pre-upgrade pg_dump succeeded but the snapshot path is missing: '${snapshot_path}'"
   UPGRADE_SNAPSHOT_PATH="${snapshot_path}"
   info "Pre-upgrade snapshot verified: ${UPGRADE_SNAPSHOT_PATH}"
   info "  Restore later with: modulo restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
@@ -252,7 +252,7 @@ resolve_latest_tag() {
 }
 
 preflight() {
-  [ "$(uname -s)" = "Linux" ] || die "this installer supports Linux only (P1a). macOS and Windows installers come later — see ADR 031."
+  [[ "$(uname -s)" = "Linux" ]] || die "this installer supports Linux only (P1a). macOS and Windows installers come later — see ADR 031."
   command -v curl >/dev/null 2>&1 || die "curl is required (install it, e.g. 'apt install curl')"
   command -v tar >/dev/null 2>&1 || die "tar is required (install it, e.g. 'apt install tar')"
   command -v python3 >/dev/null 2>&1 || die "python3 is required: install.sh extracts the sha256 + release fields from the SIGNED release manifest with it (FAR-675). Install it, e.g. 'apt install python3'."
@@ -269,14 +269,14 @@ preflight() {
 
 # --- argument parsing -------------------------------------------------------
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --force)
       FORCE=1
       shift
       ;;
     --from-file)
-      [ $# -ge 2 ] || die "--from-file requires a path to modulo-<version>-linux-<arch>.tar.gz"
+      [[ $# -ge 2 ]] || die "--from-file requires a path to modulo-<version>-linux-<arch>.tar.gz"
       FROM_FILE="$2"
       shift 2
       ;;
@@ -299,8 +299,8 @@ preflight
 
 # --- resolve version --------------------------------------------------------
 
-if [ -n "${FROM_FILE}" ]; then
-  [ -f "${FROM_FILE}" ] || die "--from-file: no such file: ${FROM_FILE}"
+if [[ -n "${FROM_FILE}" ]]; then
+  [[ -f "${FROM_FILE}" ]] || die "--from-file: no such file: ${FROM_FILE}"
   tarball_name="$(basename "${FROM_FILE}")"
   case "${tarball_name}" in
     modulo-*-linux-*.tar.gz)
@@ -313,7 +313,7 @@ if [ -n "${FROM_FILE}" ]; then
   esac
   RELEASE_TAG="(offline: ${tarball_name})"
 else
-  if [ -n "${VERSION:-}" ] && [ "${VERSION:-}" != "latest" ]; then
+  if [[ -n "${VERSION:-}" ]] && [[ "${VERSION:-}" != "latest" ]]; then
     RELEASE_TAG="${VERSION}"
     case "${RELEASE_TAG}" in
       bundle-v*) : ;;
@@ -369,7 +369,7 @@ _openssl_ed25519_check() {
 hex_to_bin() {
   # hex_to_bin <hex> -> binary on stdout (the ed25519 signature input).
   local hex="$1" out="" pair
-  while [ ${#hex} -ge 2 ]; do
+  while [[ ${#hex} -ge 2 ]]; do
     pair="${hex%${hex#??}}"
     hex="${hex#??}"
     out="${out}\x${pair}"
@@ -379,7 +379,7 @@ hex_to_bin() {
 
 b64_to_der() {
   # b64_to_der <b64> <output>: decode the trust-store SPKI DER key file.
-  [ -n "$1" ] || die "b64_to_der: empty key body"
+  [[ -n "$1" ]] || die "b64_to_der: empty key body"
   printf '%s' "$1" | base64 -d > "$2" 2>/dev/null || die "base64 decode of the trust-store key failed (coreutils base64 required)"
 }
 
@@ -398,15 +398,15 @@ verify_shipped_manifest() {
   local manifest_file="$1" signature_file="$2" tarball_file="$3" expected_release="$4"
   _openssl_ed25519_check
   command -v base64 >/dev/null 2>&1 || die "coreutils base64 is required to decode the trust-store keys"
-  [ -f "${manifest_file}" ] || die "the signed release manifest is missing: ${manifest_file}"
-  [ -f "${signature_file}" ] || die "the signature file is missing: ${signature_file}"
-  [ -n "${TRUST_KEY_CURRENT_B64}" ] || [ -n "${TRUST_KEY_NEXT_B64}" ] || die \
+  [[ -f "${manifest_file}" ]] || die "the signed release manifest is missing: ${manifest_file}"
+  [[ -f "${signature_file}" ]] || die "the signature file is missing: ${signature_file}"
+  [[ -n "${TRUST_KEY_CURRENT_B64}" ]] || [[ -n "${TRUST_KEY_NEXT_B64}" ]] || die \
     "no production trust keys are provisioned in this installer (TRUST_KEY_CURRENT_B64/NEXT_B64 are empty) - refusing to verify anything (provisioning: backend/src/modulo/launcher/manifest.py PROVISIONING_NOTE)"
   local key_file sig_file sig_hex sig_key_id candidate_keys key_b64 verified=0
   key_file="$(mktemp)"
   sig_file="$(mktemp)"
   sig_hex="$(sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]\{128\}\)".*/\1/p' "${signature_file}" | head -n 1)"
-  [ -n "${sig_hex}" ] || die "the signature file's 'signature' field is malformed (expected 128 hex chars)"
+  [[ -n "${sig_hex}" ]] || die "the signature file's 'signature' field is malformed (expected 128 hex chars)"
   sig_key_id="$(_sig_key_id "${signature_file}")" || sig_key_id=""
   case "${sig_key_id}" in
     "") # key_id unparsable: try both embedded store keys (never unknown ones)
@@ -419,7 +419,7 @@ verify_shipped_manifest() {
   hex_to_bin "${sig_hex}" > "${sig_file}"
   for slot in ${candidate_keys}; do
     case "${slot}" in current) key_b64="${TRUST_KEY_CURRENT_B64}" ;; next) key_b64="${TRUST_KEY_NEXT_B64}" ;; esac
-    [ -n "${key_b64}" ] || continue
+    [[ -n "${key_b64}" ]] || continue
     b64_to_der "${key_b64}" "${key_file}"
     if openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" >/dev/null 2>&1; then
       verified=1
@@ -428,7 +428,7 @@ verify_shipped_manifest() {
     fi
   done
   rm -f "${key_file}" "${sig_file}"
-  [ "${verified}" -eq 1 ] || die "release-manifest signature FAILED to verify against the embedded trust store - do not use this download; report it at https://github.com/${REPO}/issues (openssl 1.1.1+ required for the ed25519 -rawin mode)"
+  [[ "${verified}" -eq 1 ]] || die "release-manifest signature FAILED to verify against the embedded trust store - do not use this download; report it at https://github.com/${REPO}/issues (openssl 1.1.1+ required for the ed25519 -rawin mode)"
   local expected actual
   expected="$(python3 - "$manifest_file" "$tarball_name" <<'PYEOF'
 import json, sys
@@ -442,21 +442,21 @@ else:
     sys.exit(1)
 PYEOF
 )" || die "cannot read the signed manifest (python3 is required at install time)"
-  [ -n "${expected}" ] || die "${tarball_name} is not covered by the SIGNED release manifest - refusing to install an unlisted artifact"
+  [[ -n "${expected}" ]] || die "${tarball_name} is not covered by the SIGNED release manifest - refusing to install an unlisted artifact"
   actual="$(sha256_of "${tarball_file}")"
-  [ "${actual}" = "${expected}" ] || die "sha256 mismatch for ${tarball_name} (signed manifest): expected ${expected}, got ${actual}"
+  [[ "${actual}" = "${expected}" ]] || die "sha256 mismatch for ${tarball_name} (signed manifest): expected ${expected}, got ${actual}"
   info "sha256 verified against the SIGNED manifest: ${actual}"
   # The manifest's release field must BE the bundle the operator asked for
   # (never sign bundle-v1.2.0 and ship bundle-v9.9.9's bytes).
   local release_in_manifest
   release_in_manifest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["release"])' "${manifest_file}" 2>/dev/null)" || \
     die "cannot read the signed manifest's release field"
-  [ "${release_in_manifest}" = "${expected_release}" ] || \
+  [[ "${release_in_manifest}" = "${expected_release}" ]] || \
     die "the signed release manifest describes '${release_in_manifest}', not the requested bundle '${expected_release}' - refusing the cross-version mismatch"
 }
 
 
-if [ -n "${FROM_FILE}" ]; then
+if [[ -n "${FROM_FILE}" ]]; then
   info "Offline install from ${FROM_FILE}"
   manifest_file="${FROM_FILE%/*}/RELEASE_MANIFEST.json"
   signature_file="${manifest_file}.sig"
@@ -464,7 +464,7 @@ if [ -n "${FROM_FILE}" ]; then
   # signature is exactly the bypass this design closes - the offline escape
   # hatch verifies against the SAME embedded trust store; there is no
   # SHA256SUMS-only fallback.
-  if [ ! -f "${manifest_file}" ] || [ ! -f "${signature_file}" ]; then
+  if [[ ! -f "${manifest_file}" ]] || [[ ! -f "${signature_file}" ]]; then
     die "offline install REFUSED: the SIGNED release manifest must sit beside the tarball: ${manifest_file} (+ .sig). The bundle's internal SHA256SUMS is verified too, but a signature over the SIGNED manifest is REQUIRED (ADR 031 Decision 3) - download exactly these two release assets from the matched bundle release."
   fi
   verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" "bundle-v${VERSION_NUM}"
@@ -484,11 +484,11 @@ fi
 
 tar -xzf "${tmp}/${tarball_name}" -C "${tmp}"
 set -- "${tmp}"/*/
-if [ "$#" -ne 1 ]; then
+if [[ "$#" -ne 1 ]]; then
   die "unexpected archive layout: expected exactly one top-level directory, found $#, in ${tarball_name}"
 fi
 bundle_dir="${1%/}"
-[ -f "${bundle_dir}/SHA256SUMS" ] || die "malformed bundle: SHA256SUMS missing from the archive"
+[[ -f "${bundle_dir}/SHA256SUMS" ]] || die "malformed bundle: SHA256SUMS missing from the archive"
 verify_sums_in_dir "${bundle_dir}"
 info "bundle internal SHA256SUMS verified"
 
@@ -507,12 +507,12 @@ newest_pre_upgrade_snapshot() {
 }
 
 UPGRADE_SNAPSHOT_PATH=""
-if [ -f "${DATA_DIR}/state.json" ]; then
-  if [ -f "${INSTALL_ROOT}/current/runtime/bin/python3" ]; then
-    if [ "${SKIP_BACKUP}" -eq 1 ]; then
+if [[ -f "${DATA_DIR}/state.json" ]]; then
+  if [[ -f "${INSTALL_ROOT}/current/runtime/bin/python3" ]]; then
+    if [[ "${SKIP_BACKUP}" -eq 1 ]]; then
       printf 'WARNING: --skip-backup: installing WITHOUT creating a new pre-upgrade snapshot.\nYou (the operator) passed the loud explicit flag: confirm a verified snapshot already\nexists in %s and that the bundled stack is stopped (a stopped stack cannot be dumped;\nthe previous installer run printed its snapshot path and left it in the data dir).\n' "${DATA_DIR}" >&2
       newest_snapshot="$(newest_pre_upgrade_snapshot)"
-      if [ -n "${newest_snapshot}" ]; then
+      if [[ -n "${newest_snapshot}" ]]; then
         UPGRADE_SNAPSHOT_PATH="${newest_snapshot}"
         info "Newest pre-upgrade snapshot found in ${DATA_DIR}: ${UPGRADE_SNAPSHOT_PATH}"
         info "Restore later with: modulo restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
@@ -528,7 +528,7 @@ if [ -f "${DATA_DIR}/state.json" ]; then
   # whether or not a prior native install existed. (The dump branch NEEDS
   # the running stack, so the refusal sits AFTER the dump, before the swap.)
   refuse_when_locked
-  if [ -n "${UPGRADE_SNAPSHOT_PATH}" ]; then
+  if [[ -n "${UPGRADE_SNAPSHOT_PATH}" ]]; then
     info "Upgrade snapshot requirement satisfied (snapshot: ${UPGRADE_SNAPSHOT_PATH})"
   else
     info "Upgrade snapshot requirement satisfied (--skip-backup run; the existing snapshot in ${DATA_DIR} must be verified by the operator)"
@@ -546,7 +546,7 @@ mv "${bundle_dir}" "${staging}"
 # Re-run over the SAME version keeps the old bytes at <target>.prev-<ts>
 # (never destroyed before any post-install verification), matching the
 # upgrade flow's restore guidance.
-if [ -e "${target}" ]; then
+if [[ -e "${target}" ]]; then
   mv "${target}" "${target}.prev-$(date +%Y%m%d%H%M%S)"
 fi
 mv "${staging}" "${target}"
@@ -566,8 +566,8 @@ info "current -> $(readlink "${INSTALL_ROOT}/current")"
 # we will not replace a file we did not create.
 
 legacy_shim="/usr/local/bin/modulo"
-if [ -e "${legacy_shim}" ]; then
-  if [ -f "${MARKER_FILE}" ] || [ "${FORCE}" -eq 1 ]; then
+if [[ -e "${legacy_shim}" ]]; then
+  if [[ -f "${MARKER_FILE}" ]] || [[ "${FORCE}" -eq 1 ]]; then
     backup="${legacy_shim}.pre-native-$(date +%Y%m%d%H%M%S)"
     mv "${legacy_shim}" "${backup}" || die "could not rename ${legacy_shim} — re-run with sudo, or remove it manually"
     info "neutralised previous ${legacy_shim} (renamed to ${backup})"
@@ -600,7 +600,7 @@ chmod 755 "${shim}"
 
 path_updated=0
 for rc_file in "${HOME}/.bashrc" "${HOME}/.profile" "${HOME}/.zshrc"; do
-  [ -f "${rc_file}" ] || continue
+  [[ -f "${rc_file}" ]] || continue
   if grep -Fqs "${BIN_DIR}" "${rc_file}"; then
     continue
   fi
@@ -618,14 +618,14 @@ info ""
 info "Modulo bundle ${VERSION_NUM} installed."
 info "  Bundle: ${INSTALL_ROOT}/current"
 info "  Shim:   ${shim}"
-if [ -n "${UPGRADE_SNAPSHOT_PATH}" ]; then
+if [[ -n "${UPGRADE_SNAPSHOT_PATH}" ]]; then
   info "  Pre-upgrade snapshot: ${UPGRADE_SNAPSHOT_PATH}"
 fi
-if [ "${bin_on_path}" -eq 0 ] && [ "${path_updated}" -eq 0 ]; then
+if [[ "${bin_on_path}" -eq 0 ]] && [[ "${path_updated}" -eq 0 ]]; then
   info ""
   info "NOTE: ${BIN_DIR} is not on your PATH and no shell rc file was updated."
   info "Add this to your shell rc:  export PATH=\"${BIN_DIR}:\$PATH\""
-elif [ "${bin_on_path}" -eq 0 ]; then
+elif [[ "${bin_on_path}" -eq 0 ]]; then
   info ""
   info "Start a new shell (or: source ~/.bashrc) to pick up the updated PATH."
 fi
