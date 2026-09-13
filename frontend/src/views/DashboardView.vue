@@ -37,7 +37,7 @@
     <template v-else-if="summary">
       <!-- Row 1: Summary stat cards -->
       <div :class="['grid gap-4 sm:grid-cols-2 lg:grid-cols-4 transition-opacity duration-200', periodRefreshing ? 'opacity-60' : 'opacity-100']">
-        <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
+        <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :neutral-trend="true">
           <template #icon><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></template>
         </StatCard>
         <StatCard :label="$t('views.DashboardView.total_runs')" :value="cardValue(summary.period?.metrics?.total_runs?.current, summary.total_runs)" color="primary" to="/runs" :delta="periodMetrics?.total_runs ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined">
