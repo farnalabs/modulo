@@ -10,8 +10,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
-import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,7 +28,6 @@ from modulo.core.pipeline_engine.workspace_input_orchestration import (
     provision_workspace_inputs_in_sandbox,
     resolve_managed_inputs_host_side,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -141,9 +138,11 @@ class TestRunGitLsRemote:
         proc_mock = AsyncMock()
         proc_mock.communicate = AsyncMock(return_value=(b"", b"fatal: repository not found"))
         proc_mock.returncode = 128
-        with patch("asyncio.create_subprocess_exec", return_value=proc_mock):
-            with pytest.raises(ConnectionError, match="git ls-remote failed"):
-                await _run_git_ls_remote("https://github.com/org/nonexistent.git")
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=proc_mock),
+            pytest.raises(ConnectionError, match="git ls-remote failed"),
+        ):
+            await _run_git_ls_remote("https://github.com/org/nonexistent.git")
 
 
 class TestResolveRefWithRetry:
@@ -177,18 +176,20 @@ class TestResolveRefWithRetry:
     async def test_ref_not_found_raises(self) -> None:
         from modulo.core.pipeline_engine.workspace_inputs import RefResolutionError
 
-        with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
-            new_callable=AsyncMock,
-            return_value=_FAKE_LS_REMOTE_OUTPUT,
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+                new_callable=AsyncMock,
+                return_value=_FAKE_LS_REMOTE_OUTPUT,
+            ),
+            pytest.raises(RefResolutionError, match="not found"),
         ):
-            with pytest.raises(RefResolutionError, match="not found"):
-                await _resolve_ref_with_retry(
-                    "https://github.com/org/repo.git",
-                    "branch",
-                    "nonexistent",
-                    max_retries=2,
-                )
+            await _resolve_ref_with_retry(
+                "https://github.com/org/repo.git",
+                "branch",
+                "nonexistent",
+                max_retries=2,
+            )
 
     @pytest.mark.asyncio
     async def test_transient_error_retries(self) -> None:
@@ -219,17 +220,19 @@ class TestResolveRefWithRetry:
         async def _always_failing(url: str) -> str:
             raise ConnectionError("network error")
 
-        with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
-            side_effect=_always_failing,
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+                side_effect=_always_failing,
+            ),
+            pytest.raises(ConnectionError),
         ):
-            with pytest.raises(ConnectionError):
-                await _resolve_ref_with_retry(
-                    "https://github.com/org/repo.git",
-                    "branch",
-                    "main",
-                    max_retries=2,
-                )
+            await _resolve_ref_with_retry(
+                "https://github.com/org/repo.git",
+                "branch",
+                "main",
+                max_retries=2,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -274,26 +277,30 @@ class TestResolveManagedInputsHostSide:
     @pytest.mark.asyncio
     async def test_ref_not_found_raises_permanent(self) -> None:
         inputs = [_make_input(kind="branch", value="nonexistent")]
-        with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
-            new_callable=AsyncMock,
-            return_value=_FAKE_LS_REMOTE_OUTPUT,
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+                new_callable=AsyncMock,
+                return_value=_FAKE_LS_REMOTE_OUTPUT,
+            ),
+            pytest.raises(ProvisioningError, match="resolution failed") as exc_info,
         ):
-            with pytest.raises(ProvisioningError, match="resolution failed") as exc_info:
-                await resolve_managed_inputs_host_side(inputs, org_id="org-1")
+            await resolve_managed_inputs_host_side(inputs, org_id="org-1")
         assert exc_info.value.error_code == "sandbox.input_resolution_failed"
         assert exc_info.value.retryable is False
 
     @pytest.mark.asyncio
     async def test_network_error_raises_transient(self) -> None:
         inputs = [_make_input(kind="branch", value="main")]
-        with patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
-            new_callable=AsyncMock,
-            side_effect=ConnectionError("network down"),
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote",
+                new_callable=AsyncMock,
+                side_effect=ConnectionError("network down"),
+            ),
+            pytest.raises(ProvisioningError, match="transient") as exc_info,
         ):
-            with pytest.raises(ProvisioningError, match="transient") as exc_info:
-                await resolve_managed_inputs_host_side(inputs, org_id="org-1", max_retries=0)
+            await resolve_managed_inputs_host_side(inputs, org_id="org-1", max_retries=0)
         assert exc_info.value.error_code == "sandbox.input_resolution_failed"
         assert exc_info.value.retryable is True
 
@@ -408,7 +415,7 @@ class TestProvisionWorkspaceInputsInSandbox:
             nonlocal call_count
             call_count += 1
             if call_count == 3:  # teardown call
-                raise Exception("teardown failed")
+                raise RuntimeError("teardown failed")
             return MagicMock()
 
         sandbox = MagicMock()
