@@ -439,10 +439,22 @@ class TestBuildProvisioningScripts:
         teardown_path = self._write_tmp_script(teardown)
         try:
             assert (
-                subprocess.run(["sh", "-n", str(setup_path)], capture_output=True, check=False).returncode == 0  # noqa: S603,S607
+                subprocess.run(  # noqa: S603
+                    ["sh", "-n", str(setup_path)],  # noqa: S607
+                    capture_output=True,
+                    check=False,
+                    timeout=30,
+                ).returncode
+                == 0
             )
             assert (
-                subprocess.run(["sh", "-n", str(teardown_path)], capture_output=True, check=False).returncode == 0  # noqa: S603,S607
+                subprocess.run(  # noqa: S603
+                    ["sh", "-n", str(teardown_path)],  # noqa: S607
+                    capture_output=True,
+                    check=False,
+                    timeout=30,
+                ).returncode
+                == 0
             )
         finally:
             setup_path.unlink(missing_ok=True)
@@ -467,6 +479,7 @@ class TestBuildProvisioningScripts:
                 text=True,
                 env=env,
                 check=False,
+                timeout=30,
             )
             assert run.returncode == 0, run.stderr
 
@@ -487,11 +500,11 @@ class TestBuildProvisioningScripts:
 
             # GIT_ASKPASS helper: Username then Password.
             username_out = subprocess.run(  # noqa: S603
-                [str(askpass_file), "Username"], capture_output=True, text=True, env=env, check=False
+                [str(askpass_file), "Username"], capture_output=True, text=True, env=env, check=False, timeout=30
             )
             assert username_out.stdout.strip() == "x-access-token"
             password_out = subprocess.run(  # noqa: S603
-                [str(askpass_file), "Password"], capture_output=True, text=True, env=env, check=False
+                [str(askpass_file), "Password"], capture_output=True, text=True, env=env, check=False, timeout=30
             )
             # GIT_ASKPASS emits the credential-file contents; git strips the
             # trailing newline, so the effective password is the bare secret.
@@ -504,6 +517,7 @@ class TestBuildProvisioningScripts:
                 text=True,
                 env=env,
                 check=False,
+                timeout=30,
             )
             assert tear.returncode == 0, tear.stderr
             assert not Path(cred_file).exists()
