@@ -4256,6 +4256,12 @@ elements:
       - testid: settings-teams-add-member
         type: button
         dynamic_testid: false
+      - testid: settings-teams-remove-confirm
+        type: button
+        dynamic_testid: false
+      - testid: settings-teams-remove-cancel
+        type: button
+        dynamic_testid: false
       - testid: team-notif-add-button
         type: button
         dynamic_testid: false

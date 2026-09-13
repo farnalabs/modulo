@@ -522,6 +522,13 @@ describe('SettingsTeamsView', () => {
     await flushPromises()
     await nextTick()
 
+    // the Remove action opens an inline confirm row; confirm to actually delete
+    const confirmBtn = panel.find('[data-testid="settings-teams-remove-confirm"]')
+    expect(confirmBtn.exists()).toBe(true)
+    await confirmBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
     const delCall = vi.mocked(api.DELETE).mock.calls[0]
     expect(delCall[0]).toBe('/api/v1/teams/{team_id}/members/{membership_id}')
     expect((delCall[1] as any).params.path).toEqual({ team_id: 't1', membership_id: 'm1' })
@@ -538,8 +545,15 @@ describe('SettingsTeamsView', () => {
     await flushPromises()
     await nextTick()
 
-    const removeBtns = wrapper.find('#settings-teams-panel-t1').findAll('button').filter((b) => b.text().trim() === 'Remove')
+    const panel = wrapper.find('#settings-teams-panel-t1')
+    const removeBtns = panel.findAll('button').filter((b) => b.text().trim() === 'Remove')
     await removeBtns[0].trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // the Remove action opens an inline confirm row; confirm to trigger the delete
+    const confirmBtn = panel.find('[data-testid="settings-teams-remove-confirm"]')
+    await confirmBtn.trigger('click')
     await flushPromises()
     await nextTick()
 
