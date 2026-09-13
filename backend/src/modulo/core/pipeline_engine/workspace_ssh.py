@@ -38,6 +38,8 @@ database or LangGraph into them.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -45,29 +47,52 @@ from dataclasses import dataclass
 from modulo.core.ssrf import _is_blocked_ip, _resolve_all_sync, normalize_allow_networks
 
 # ---------------------------------------------------------------------------
-# GitHub published SSH host keys (pinned at module level)
+# GitHub / GitLab published SSH host keys (pinned at module level)
 # ---------------------------------------------------------------------------
-# Source: https://api.github.com/meta  (keys SSH_HOST_KEYS field).
-# These are the authoritative public keys GitHub uses for SSH connections.
-# Ephemeral sandboxes cannot trust first-use key acceptance — they must
-# verify against a pinned set.
+# Source of truth: these blobs are the authoritative public host keys for the
+# named hosts, captured via ``ssh-keyscan <host>`` and cross-verified against the
+# SHA256 fingerprints GitHub publishes at https://api.github.com/meta
+# (``ssh_key_fingerprints``) and GitLab publishes at
+# https://gitlab.com/help/instance_configuration (``SSH host key fingerprints``).
+# Ephemeral sandboxes cannot trust first-use key acceptance, so they must verify
+# against this pinned set.  :func:`verify_pinned_host_keys` enforces that every
+# embedded blob's SHA256 fingerprint still matches the published value at build
+# time (the REFUSE-TO-SHIP gate) — if GitHub/GitLab ever rotates a host key the
+# gate fails closed instead of silently shipping a stale or fabricated key.
 
-# Real GitHub host keys — used in the pinned known_hosts file.
+# Real GitHub host keys — verified against api.github.com/meta ssh_key_fingerprints.
 # Format: "<hostname> <key-type> <key-blob>" — one per line.
 # SSH key blobs are inherently long; line-length enforcement is suppressed.
 GITHUB_HOST_KEYS: tuple[str, ...] = (
-    # The RSA key is the longest; ruff E501 is suppressed per-key.
-    "github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZKAR/DBWNMDSGNLlKmHkK2PqKwgG5BtSF0e9zN2BX2VOh3n+0rNlGEhPj7G4g3s8iBqb2c2s8SPlXg0dH4K0vG7dFDTTHRYOYJVOGT6JFbDH7bO7uI0DjbN3BcT1S2MA2nUk9s+Oj3GFOb8g4Yh6L5kK8JDqJJDm4e+Vz1eLz6aXJz7Y4N1sN0i5x8z9u0v6b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z",  # noqa: E501
-    "github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uKggGhJRNQP1GBEmM2hiJr5YhVz9oUAB+g==",  # noqa: E501
+    "github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=",  # noqa: E501
+    "github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=",  # noqa: E501
     "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
 )
 
-# Also include commonly-used Git hosting hosts for broader coverage.
+# Real GitLab host keys — verified against GitLab's published SSH host key
+# fingerprints.  Included so non-GitHub git remotes can also be pinned.
 _GITLAB_HOST_KEYS: tuple[str, ...] = (
-    "gitlab.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDQeJzhupRu0u0cdegZIa8e5POo2LsWQGm/5x5sGL0OT2UZ8zrB90K0GiGF7lOFPt6h5G0iG6PpGKKKPHqW3Mq2pNBPo2dPq2r2k0r5x6y7z8a9b0c1d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d8e9f0",  # noqa: E501
-    "gitlab.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBSPkF2XHcZCdFvjZA2CZ0hGFImTO1c+1KZJRuBqPy0h1Yj5Ck5Bp7oL0d0h1Yj5",  # noqa: E501
-    "gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIazEu89wgQZ4bqs3d63QSMzYVa0MuJ2e2gKTKqu+UUO",
+    "gitlab.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCsj2bNKTBSpIYDEGk9KxsGh3mySTRgMtXL583qmBpzeQ+jqCMRgBqB98u3z++J1sKlXHWfM9dyhSevkMwSbhoR8XIq/U0tCNyokEi/ueaBMCvbcTHhO7FcwzY92WK4Yt0aGROY5qX2UKSeOvuP4D6TPqKF1onrSzH9bx9XUf2lEdWT/ia1NEKjunUqu1xOB/StKDHMoX4/OKyIzuS0q/T1zOATthvasJFoPrAjkohTyaDUz2LN5JoH839hViyEG82yB+MjcFV5MU3N1l1QL3cVUCh93xSaua1N85qivl+siMkPGbO5xR/En4iEY6K2XPASUEMaieWVNTRCtJ4S8H+9",  # noqa: E501
+    "gitlab.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFSMqzJeV9rUzU4kWitGjeR4PWSa29SPqJ1fVkhtj3Hw9xjLVXVYrU9QlYWrOLXBpQ6KWjbjTDTdDkoohFzgbEY=",  # noqa: E501
+    "gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf",
 )
+
+# SHA256 fingerprints (from the authoritative published sources above) used to
+# verify the embedded host keys have not been tampered with or gone stale.  Keyed
+# by hostname then key type.  These are the values :func:`verify_pinned_host_keys`
+# checks each embedded blob against.
+PUBLISHED_HOST_KEY_FINGERPRINTS: dict[str, dict[str, str]] = {
+    "github.com": {
+        "ssh-rsa": "SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s",
+        "ecdsa-sha2-nistp256": "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM",
+        "ssh-ed25519": "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU",
+    },
+    "gitlab.com": {
+        "ssh-rsa": "SHA256:ROQFvPThGrW4RuWLoL9tq9I9zJ42fK4XywyRtbOz/EQ",
+        "ecdsa-sha2-nistp256": "SHA256:HbW3g8zUjNSksFbqTiUWPWg2Bq1x8xdGUrliXFzSnUw",
+        "ssh-ed25519": "SHA256:eUXGGm1YGsMAS7vkcx6JOJdOGHPem5gQp4taiCfCLB8",
+    },
+}
 
 # Mapping of known hosts to their published keys. Callers extend this
 # mapping as new hosts are supported.
@@ -75,6 +100,54 @@ KNOWN_HOSTS_BY_HOSTNAME: dict[str, tuple[str, ...]] = {
     "github.com": GITHUB_HOST_KEYS,
     "gitlab.com": _GITLAB_HOST_KEYS,
 }
+
+# ---------------------------------------------------------------------------
+# Host key fingerprint verification (REFUSE-TO-SHIP gate)
+# ---------------------------------------------------------------------------
+
+
+def ssh_public_key_fingerprint(key: str) -> str:
+    """Return the SHA256 fingerprint of an SSH public key.
+
+    Accepts either a full ``known_hosts`` line (``<host> <type> <blob>``) or a
+    bare base64 key blob.  The fingerprint is computed exactly as OpenSSH
+    ``ssh-keygen -lf`` does — SHA256 over the base64-decoded key body — and is
+    returned in ``SHA256:<base64>`` form.  This lets the module prove (in tests
+    and at build time) that each pinned blob is the genuine published key rather
+    than a hand-crafted placeholder.
+    """
+    key = key.strip()
+    if " " in key:
+        key = key.split(" ", 2)[2]
+    key += "=" * (-len(key) % 4)
+
+    digest = hashlib.sha256(base64.b64decode(key)).digest()
+    return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
+
+
+def verify_pinned_host_keys() -> None:
+    """Verify every pinned host key matches its published SHA256 fingerprint.
+
+    Raises ``ValueError`` if any embedded host-key blob does not produce the
+    published fingerprint for its hostname/type.  This is the REFUSE-TO-SHIP
+    gate for the key material itself: a fabricated, stale, or tampered key is
+    rejected before it can ever be written into a sandbox known_hosts file.
+
+    Call this from build/CI/provisioning paths (it is invoked by
+    :func:`build_ssh_transport`) so a key rotation upstream fails closed.
+    """
+    for hostname, keys in KNOWN_HOSTS_BY_HOSTNAME.items():
+        published = PUBLISHED_HOST_KEY_FINGERPRINTS[hostname]
+        for entry in keys:
+            key_type = entry.split(" ", 2)[1]
+            expected = published[key_type]
+            actual = ssh_public_key_fingerprint(entry)
+            if actual != expected:
+                raise ValueError(
+                    f"Pinned {key_type} host key for {hostname!r} does not match the "
+                    f"published fingerprint. Expected {expected}, got {actual}. "
+                    "The pinned key is stale, tampered, or fabricated — refusing to ship."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +299,7 @@ def build_ssh_command(
     *,
     hostname: str,
     known_hosts_path: str,
+    user: str = "git",
     extra_args: list[str] | None = None,
 ) -> str:
     """Build a complete ``ssh`` command string with hardened transport options.
@@ -234,6 +308,11 @@ def build_ssh_command(
     shell script.  The command includes all hardened SSH options from
     :func:`build_ssh_options` followed by any ``extra_args`` and the target
     ``user@<validated_ip>``.
+
+    The ``user`` defaults to ``git`` (the conventional git-over-SSH user), but
+    is a parameter so non-GitHub remotes (e.g. ``git@gitlab.com``) can pin a
+    different login — the connection still targets the validated IP while
+    ``HostKeyAlias`` matches the host key against ``hostname``.
 
     Example output::
 
@@ -246,7 +325,7 @@ def build_ssh_command(
         parts.extend(extra_args)
     # Target: user@validated_ip — the connection goes to the validated IP,
     # while HostKeyAlias ensures the key is matched against the hostname.
-    parts.append(f"git@{validated_ip}")
+    parts.append(f"{user}@{validated_ip}")
     return " ".join(parts)
 
 
@@ -311,7 +390,7 @@ def build_ssh_transport_script(
     git_ssh_cmd = f"ssh {opts_str}"
     return (
         f"mkdir -p -m 0700 $(dirname {shlex.quote(known_hosts_path)})\n"
-        f"printf '%s\\n' '{escaped_content}' > {shlex.quote(known_hosts_path)}\n"
+        f"printf '%s' '{escaped_content}' > {shlex.quote(known_hosts_path)}\n"
         f"chmod 0600 {shlex.quote(known_hosts_path)}\n"
         f"export GIT_SSH_COMMAND={shlex.quote(git_ssh_cmd)}\n"
     )
@@ -347,39 +426,52 @@ def build_ssh_transport(
     *,
     known_hosts_path: str = "/home/user/.ssh/known_hosts",
     allow_networks: Sequence[str] | None = None,
+    user: str = "git",
 ) -> SshTransportConfig:
     """Validate an SSH hostname and produce a complete hardened transport configuration.
 
     This is the main entry point for FAR-799's SSH transport hardening.  It:
 
-    1. Resolves ``hostname`` via DNS and validates every resolved address
+    1. Verifies every pinned host key still matches its published SHA256
+       fingerprint (fail closed — see :func:`verify_pinned_host_keys`).  This is
+       the REFUSE-TO-SHIP gate for the key material: a fabricated, stale, or
+       tampered key is rejected before anything is built.
+    2. Resolves ``hostname`` via DNS and validates every resolved address
        through the SSRF guard (fail closed — see :func:`validate_and_pin_ip`).
-    2. Generates a pinned known_hosts entry for the host (fail closed if the
+    3. Generates a pinned known_hosts entry for the host (fail closed if the
        host's keys are not in :data:`KNOWN_HOSTS_BY_HOSTNAME`).
-    3. Builds SSH options that enforce ``StrictHostKeyChecking=yes``,
+    4. Builds SSH options that enforce ``StrictHostKeyChecking=yes``,
        ``HostKeyAlias=<hostname>``, and ``HostName=<validated_ip>`` so the
        connection targets the validated IP while the host key is matched
        against the hostname entry.
-    4. Produces a POSIX ``sh`` snippet that writes the known_hosts file and
+    5. Produces a POSIX ``sh`` snippet that writes the known_hosts file and
        exports ``GIT_SSH_COMMAND`` inside the sandbox.
+
+    The ``user`` (default ``git``) is the SSH login used in the rendered
+    ``ssh`` command — parameterised so non-GitHub remotes (e.g.
+    ``git@gitlab.com``) can pin a different login.
 
     Raises ``SshHostRefusedError`` when the hostname resolves to a blocked
     address (fail closed — the REFUSE-TO-SHIP gate).  Raises
-    ``ValueError`` when the host's published keys are not pinned (fail closed
-    — the REFUSE-TO-SHIP gate requires pinned keys for every host).
+    ``ValueError`` when a pinned host key does not match its published
+    fingerprint, or when the host's published keys are not pinned (fail closed
+    — the REFUSE-TO-SHIP gate requires genuine pinned keys for every host).
     """
-    # Step 1: validate + pin IP.
+    # Step 1: verify pinned key material against published fingerprints.
+    verify_pinned_host_keys()
+
+    # Step 2: validate + pin IP.
     validated_ips = validate_and_pin_ip(hostname, allow_networks=allow_networks)
     validated_ip = validated_ips[0]
 
-    # Step 2: pinned known_hosts.
+    # Step 3: pinned known_hosts.
     known_hosts_content = generate_pinned_known_hosts(hostname)
 
-    # Step 3: SSH options + commands.
+    # Step 4: SSH options + commands.
     git_ssh_command = build_git_ssh_command(validated_ip, hostname=hostname, known_hosts_path=known_hosts_path)
-    ssh_command = build_ssh_command(validated_ip, hostname=hostname, known_hosts_path=known_hosts_path)
+    ssh_command = build_ssh_command(validated_ip, hostname=hostname, known_hosts_path=known_hosts_path, user=user)
 
-    # Step 4: script snippet.
+    # Step 5: script snippet.
     script_snippet = build_ssh_transport_script(
         hostname=hostname,
         validated_ip=validated_ip,

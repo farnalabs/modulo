@@ -18,6 +18,7 @@ import pytest
 
 from modulo.core.pipeline_engine.workspace_ssh import (
     GITHUB_HOST_KEYS,
+    PUBLISHED_HOST_KEY_FINGERPRINTS,
     SshHostRefusedError,
     SshTransportConfig,
     build_git_ssh_command,
@@ -27,7 +28,9 @@ from modulo.core.pipeline_engine.workspace_ssh import (
     build_ssh_transport_script,
     generate_known_hosts_entry,
     generate_pinned_known_hosts,
+    ssh_public_key_fingerprint,
     validate_and_pin_ip,
+    verify_pinned_host_keys,
 )
 
 # ---------------------------------------------------------------------------
@@ -554,3 +557,194 @@ class TestBuildSshTransport:
             assert config.validated_ip == resolved_ip
             # Target user@ must be the exact resolved IP.
             assert f"git@{resolved_ip}" in config.ssh_command
+
+
+# ---------------------------------------------------------------------------
+# Host key fingerprint verification (REFUSE-TO-SHIP gate)
+# ---------------------------------------------------------------------------
+
+
+class TestHostKeyFingerprints:
+    """Prove the embedded host keys are GENUINE, not fabricated placeholders.
+
+    Each test asserts the embedded key parses as a valid public key and that its
+    SHA256 fingerprint matches the fingerprint the provider publishes — so a
+    hand-crafted or stale blob can never be shipped as a "pinned" key.
+    """
+
+    def test_every_embedded_key_matches_published_fingerprint(self) -> None:
+        """Every pinned key's SHA256 fingerprint equals the published value."""
+        for hostname, published in PUBLISHED_HOST_KEY_FINGERPRINTS.items():
+            from modulo.core.pipeline_engine.workspace_ssh import (
+                KNOWN_HOSTS_BY_HOSTNAME,
+            )
+
+            for entry in KNOWN_HOSTS_BY_HOSTNAME[hostname]:
+                key_type = entry.split(" ", 2)[1]
+                expected = published[key_type]
+                actual = ssh_public_key_fingerprint(entry)
+                assert actual == expected, f"{hostname} {key_type} fingerprint {actual} != published {expected}"
+
+    def test_verify_pinned_host_keys_passes_on_genuine_keys(self) -> None:
+        """The gate accepts the real, published keys."""
+        verify_pinned_host_keys()
+
+    def test_tampered_key_is_refused(self) -> None:
+        """A key whose blob does not match the published fingerprint is rejected."""
+        from modulo.core.pipeline_engine.workspace_ssh import (
+            KNOWN_HOSTS_BY_HOSTNAME,
+        )
+
+        # Swap a github key for a gitlab one: the fingerprint will no longer match.
+        bad = list(KNOWN_HOSTS_BY_HOSTNAME["github.com"])
+        bad[0] = KNOWN_HOSTS_BY_HOSTNAME["gitlab.com"][0]
+        original = KNOWN_HOSTS_BY_HOSTNAME["github.com"]
+        try:
+            KNOWN_HOSTS_BY_HOSTNAME["github.com"] = tuple(bad)
+            with pytest.raises(ValueError, match="does not match the published"):
+                verify_pinned_host_keys()
+        finally:
+            KNOWN_HOSTS_BY_HOSTNAME["github.com"] = original
+
+    def test_embedded_key_parses_with_ssh_keygen(self) -> None:
+        """Each embedded key is a parseable public key (ssh-keygen -lf)."""
+        import shutil
+        import subprocess
+        import tempfile
+
+        ssh_keygen = shutil.which("ssh-keygen")
+        if ssh_keygen is None:
+            pytest.skip("ssh-keygen not available")
+        from modulo.core.pipeline_engine.workspace_ssh import (
+            KNOWN_HOSTS_BY_HOSTNAME,
+        )
+
+        for hostname, keys in KNOWN_HOSTS_BY_HOSTNAME.items():
+            for entry in keys:
+                with tempfile.NamedTemporaryFile("w", suffix=".pub") as fh:
+                    fh.write(entry + "\n")
+                    fh.flush()
+                    result = subprocess.run(  # noqa: S603
+                        [ssh_keygen, "-lf", fh.name],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                assert result.returncode == 0, f"{hostname} key did not parse: {result.stderr.strip()}"
+
+
+# ---------------------------------------------------------------------------
+# build_ssh_command: user parameter
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSshCommandUser:
+    def test_default_user_is_git(self) -> None:
+        cmd = build_ssh_command(
+            "140.82.121.3",
+            hostname="github.com",
+            known_hosts_path="/pinned/known_hosts",
+        )
+        assert "git@140.82.121.3" in cmd
+
+    def test_custom_user_is_honoured(self) -> None:
+        """Non-GitHub remotes (e.g. gitlab.com) can pin a different login."""
+        cmd = build_ssh_command(
+            "140.82.121.3",
+            hostname="gitlab.com",
+            known_hosts_path="/pinned/known_hosts",
+            user="git",
+        )
+        assert "git@140.82.121.3" in cmd
+
+    def test_user_parameter_propagates_to_transport(self) -> None:
+        resolved_ip = "140.82.121.3"
+        with patch(
+            "modulo.core.pipeline_engine.workspace_ssh._resolve_all_sync",
+            return_value=[resolved_ip],
+        ):
+            config = build_ssh_transport("github.com", user="custom")
+            assert f"custom@{resolved_ip}" in config.ssh_command
+
+
+# ---------------------------------------------------------------------------
+# build_ssh_transport_script: end-to-end round-trip through /bin/sh
+# ---------------------------------------------------------------------------
+
+
+class TestSshTransportScriptRoundTrip:
+    """The only true round-trip for the printf-escaping logic: run the script
+    with ``sh`` and confirm the known_hosts file is written and parseable."""
+
+    def test_script_writes_parseable_known_hosts(self) -> None:
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        sh_bin = shutil.which("sh")
+        ssh_keygen = shutil.which("ssh-keygen")
+        if sh_bin is None or ssh_keygen is None:
+            pytest.skip("sh or ssh-keygen not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            known_hosts = tmp_path / "known_hosts"
+            script = build_ssh_transport_script(
+                hostname="github.com",
+                validated_ip="140.82.121.3",
+                known_hosts_path=str(known_hosts),
+            )
+            script_path = tmp_path / "setup.sh"
+            script_path.write_text(script)
+            script_path.chmod(0o700)
+            result = subprocess.run(  # noqa: S603
+                [sh_bin, str(script_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=tmp,
+            )
+            assert result.returncode == 0, result.stderr
+            # The known_hosts file must exist and be non-empty.
+            assert known_hosts.exists()
+            written = known_hosts.read_text()
+            expected = generate_known_hosts_entry("github.com")
+            assert written == expected
+            # ssh-keygen must be able to read back the entry (valid format).
+            lookup = subprocess.run(  # noqa: S603
+                [ssh_keygen, "-F", "github.com", "-f", str(known_hosts)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert lookup.returncode == 0, lookup.stderr
+            assert "github.com" in lookup.stdout
+
+    def test_script_exports_git_ssh_command_with_validated_ip(self) -> None:
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        sh_bin = shutil.which("sh")
+        if sh_bin is None:
+            pytest.skip("sh not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            known_hosts = Path(tmp) / "known_hosts"
+            script = build_ssh_transport_script(
+                hostname="github.com",
+                validated_ip="140.82.121.3",
+                known_hosts_path=str(known_hosts),
+            )
+            # Sourcing the script must put a GIT_SSH_COMMAND using the validated
+            # IP onto the environment.
+            check = script + '\necho "GIT_SSH_COMMAND=$GIT_SSH_COMMAND"\n'
+            result = subprocess.run(  # noqa: S603
+                [sh_bin, "-c", check],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=tmp,
+            )
+            assert result.returncode == 0, result.stderr
+            assert "HostName=140.82.121.3" in result.stdout
