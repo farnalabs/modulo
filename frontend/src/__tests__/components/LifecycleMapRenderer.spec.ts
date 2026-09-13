@@ -12,7 +12,7 @@ vi.mock('@vue-flow/core', () => ({
   MarkerType: { ArrowClosed: 'arrowclosed' },
   VueFlow: {
     name: 'VueFlowStub',
-    props: ['nodes', 'edges', 'defaultEdgeOptions'],
+    props: ['nodes', 'edges', 'defaultEdgeOptions', 'nodesDraggable', 'nodesConnectable', 'edgesUpdatable'],
     template: `
       <div class="vueflow-stub">
         <template v-for="n in nodes" :key="n.id">
@@ -296,6 +296,12 @@ describe('LifecycleMapRenderer', () => {
     const cards = wrapper.findAll('.journey-card-stub')
     expect(cards).toHaveLength(MAX_CARDS_PER_NODE + 1)
     expect(wrapper.find('[data-testid="journey-overflow-chip"]').text()).toContain('+2 more')
+  })
+
+  it('enables node dragging on the VueFlow instance', () => {
+    const wrapper = mountRenderer({ mapData: makeMap() })
+    const flow = wrapper.findComponent({ name: 'VueFlowStub' })
+    expect(flow.props('nodesDraggable')).toBe(true)
   })
 
   it('applies type-specific styling classes to stage nodes', () => {

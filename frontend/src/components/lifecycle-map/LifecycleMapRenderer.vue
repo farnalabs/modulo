@@ -10,7 +10,7 @@
       :default-edge-options="defaultEdgeOptions"
       fit-view-on-init
       :fit-view-options="{ padding: 0.3 }"
-      :nodes-draggable="false"
+      :nodes-draggable="true"
       :nodes-connectable="false"
       :edges-updatable="false"
       :min-zoom="0.3"
@@ -88,7 +88,7 @@ export const MAX_CARDS_PER_NODE = 5
 </script>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { MarkerType, VueFlow, type DefaultEdgeOptions } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -168,7 +168,8 @@ function stageNodeClasses(data: Record<string, unknown>): Record<string, boolean
   }
 }
 
-const flowNodes = computed<Node<Record<string, unknown>>[]>(() => {
+/** Build the node list from mapData (computed for derivation, ref for mutation). */
+function buildNodes(): Node<Record<string, unknown>>[] {
   if (!props.mapData) return []
   const stages = props.mapData.stages ?? []
   const transitions = props.mapData.transitions ?? []
@@ -197,6 +198,16 @@ const flowNodes = computed<Node<Record<string, unknown>>[]>(() => {
       },
     }
   })
+}
+
+// Mutable ref so VueFlow can update positions on drag. Seeded from mapData
+// (explicit positions or auto-layout); re-seeded when mapData changes (version
+// switch, re-fetch). Dragged positions persist for the session so toggling
+// "Show work items" or journey filters does not reset the user's arrangement.
+const flowNodes = ref(buildNodes())
+
+watch(() => [props.mapData?.id, props.mapData?.stages, props.mapData?.transitions] as const, () => {
+  flowNodes.value = buildNodes()
 })
 
 const flowEdges = computed<Edge[]>(() => {
