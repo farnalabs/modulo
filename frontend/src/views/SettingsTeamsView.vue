@@ -2,9 +2,9 @@
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
     <div class="page-wide">
     <header class="flex items-center justify-between">
-      <PageHeader title="Teams" subtitle="Manage teams and team membership" />
+      <PageHeader :title="$t('views.SettingsTeamsView.page_title')" :subtitle="$t('views.SettingsTeamsView.page_subtitle')" />
       <Button class="border-primary/30 hover:border-primary/60" data-testid="settings-teams-create-team" @click="showCreateForm = true">
-        Create Team
+        {{ $t('views.SettingsTeamsView.create_team') }}
       </Button>
     </header>
 
@@ -22,7 +22,7 @@
               type="text"
               data-testid="settings-teams-create-name"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="e.g. Platform Engineering"
+              :placeholder="$t('views.SettingsTeamsView.placeholder_name')"
             />
           </div>
           <div>
@@ -32,15 +32,15 @@
               rows="2"
               data-testid="settings-teams-create-description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              placeholder="Optional description"
+              :placeholder="$t('views.SettingsTeamsView.placeholder_description')"
             ></textarea>
           </div>
           <div class="flex items-center gap-2">
             <Button :disabled="!createName.trim() || creatingTeam" data-testid="settings-teams-create-submit" @click="createTeam">
-              {{ creatingTeam ? 'Creating...' : 'Create' }}
+              {{ creatingTeam ? $t('views.SettingsTeamsView.creating') : $t('views.SettingsTeamsView.create') }}
             </Button>
             <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-create-cancel" @click="cancelCreate">
-              Cancel
+              {{ $t('views.SettingsTeamsView.cancel') }}
             </button>
           </div>
         </div>
@@ -48,10 +48,11 @@
         <div v-if="createSuccess" class="mt-3 text-sm text-success">{{ createSuccess }}</div>
       </div>
 
-      <div v-if="teams.length === 0" class="card p-8 text-center">
-        <p class="text-lg font-medium">{{ $t('views.SettingsTeamsView.no_teams_yet') }}</p>
-        <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.SettingsTeamsView.create_your_first_team_to_organize_members_and_resources') }}</p>
-      </div>
+      <EmptyState
+        v-if="teams.length === 0"
+        :title="$t('views.SettingsTeamsView.no_teams_yet')"
+        :description="$t('views.SettingsTeamsView.create_your_first_team_to_organize_members_and_resources')"
+      />
 
       <div class="space-y-3">
         <div v-for="team in teams" :key="team.id" class="card">
@@ -64,16 +65,14 @@
               :aria-controls="'settings-teams-panel-' + team.id"
               @click="toggleExpand(team.id)"
             >
-              <svg class="h-4 w-4 shrink-0 text-muted-foreground transition-transform" :class="{ 'rotate-90': expandedTeamId === team.id }" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="m9 18 6-6-6-6" />
-              </svg>
+              <ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground transition-transform" :class="{ 'rotate-90': expandedTeamId === team.id }" aria-hidden="true" />
               <div>
                 <p class="font-medium">{{ team.name }}</p>
                 <p v-if="team.description" class="text-sm text-muted-foreground">{{ team.description }}</p>
               </div>
             </button>
             <div class="flex shrink-0 items-center gap-3">
-              <span class="text-sm text-muted-foreground">{{ team.member_count }} member{{ team.member_count !== 1 ? 's' : '' }}</span>
+              <span class="text-sm text-muted-foreground">{{ $t('views.SettingsTeamsView.member_count', team.member_count) }}</span>
               <span class="text-sm text-muted-foreground" data-testid="settings-teams-owned-resource-count">
                 {{ $t('views.SettingsTeamsView.owned_resource_count', { count: team.owned_resource_count ?? 0 }) }}
               </span>
@@ -83,24 +82,24 @@
 
           <section v-if="expandedTeamId === team.id" :id="'settings-teams-panel-' + team.id" class="p-4" :aria-label="$t('views.SettingsTeamsView.team_details', { name: team.name })">
             <div v-if="renameTeamId === team.id" class="mb-4 flex items-center gap-2">
-              <input aria-label="text" v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
+              <input :aria-label="$t('views.SettingsTeamsView.name')" v-model="renameName" type="text" data-testid="settings-teams-rename-name" class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @keyup.enter="saveRename" />
               <Button :disabled="!renameName.trim() || renamingTeam" data-testid="settings-teams-rename-save" @click="saveRename">
-                {{ renamingTeam ? 'Saving...' : 'Save' }}
+                {{ renamingTeam ? $t('views.SettingsTeamsView.saving') : $t('views.SettingsTeamsView.save') }}
               </Button>
               <button type="button" class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-rename-cancel" @click="cancelRename">
-                Cancel
+                {{ $t('views.SettingsTeamsView.cancel') }}
               </button>
             </div>
 
             <div v-if="deleteConfirmTeamId === team.id" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
-              <p class="text-sm font-medium text-destructive">Delete "{{ team.name }}"?</p>
+              <p class="text-sm font-medium text-destructive">{{ $t('views.SettingsTeamsView.delete_confirm_title', { name: team.name }) }}</p>
               <p class="mt-1 text-sm text-destructive/80">{{ $t('views.SettingsTeamsView.this_action_cannot_be_undone') }}</p>
               <div class="mt-3 flex items-center gap-2">
                 <button type="button" :disabled="deletingTeam" data-testid="settings-teams-delete-confirm" class="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" @click="deleteTeam(team.id)">
-                  {{ deletingTeam ? 'Deleting...' : 'Delete' }}
+                  {{ deletingTeam ? $t('views.SettingsTeamsView.deleting') : $t('views.SettingsTeamsView.delete') }}
                 </button>
                 <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-delete-cancel" @click="deleteConfirmTeamId = null; deleteError = null">
-                  Cancel
+                  {{ $t('views.SettingsTeamsView.cancel') }}
                 </button>
                 <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
               </div>
@@ -117,7 +116,7 @@
             </div>
             <div v-else>
               <div v-if="membersByTeam[team.id]?.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-                No members yet.
+                {{ $t('views.SettingsTeamsView.no_members_yet') }}
               </div>
               <div v-else class="overflow-x-auto">
                 <table class="w-full text-sm">
@@ -130,15 +129,16 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="member in membersByTeam[team.id]" :key="member.id" class="border-b last:border-0">
+                  <template v-for="member in membersByTeam[team.id]" :key="member.id">
+                  <tr class="border-b last:border-0">
                     <td class="py-2">{{ userDisplayName(member.user_id) }}</td>
                     <td class="py-2 text-muted-foreground">{{ userEmail(member.user_id) }}</td>
                     <td class="py-2">
                       <Select
-  aria-label="Member role"
+  :aria-label="$t('views.SettingsTeamsView.aria_label_member_role')"
   v-model="member.role"
   @update:model-value="changeMemberRole(team.id, member)"
-  placeholder="Select role"
+  :placeholder="$t('views.SettingsTeamsView.select_role')"
   data-testid="settings-teams-member-role"
   :options="[{ value: 'viewer', label: $t('views.SettingsTeamsView.viewer') }, { value: 'runner', label: $t('views.SettingsTeamsView.runner') }, { value: 'operator', label: $t('views.SettingsTeamsView.operator') }]"
   option-label="label"
@@ -153,6 +153,20 @@
                       <TableActions :actions="memberActions(team.id, member)" />
                     </td>
                   </tr>
+                  <tr v-if="removeConfirmMemberId === member.id" class="bg-destructive/5">
+                    <td colspan="4" class="px-2 py-3">
+                      <div class="flex items-center gap-3">
+                        <span class="text-sm text-destructive">{{ $t('views.SettingsTeamsView.remove_member_confirm') }}</span>
+                        <button type="button" :disabled="removingMember" data-testid="settings-teams-remove-confirm" class="rounded-lg bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" @click="removeMember(team.id, member)">
+                          {{ removingMember ? $t('views.SettingsTeamsView.deleting') : $t('views.SettingsTeamsView.delete') }}
+                        </button>
+                        <button type="button" data-testid="settings-teams-remove-cancel" class="rounded-lg border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent" @click="removeConfirmMemberId = null">
+                          {{ $t('views.SettingsTeamsView.cancel') }}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  </template>
                 </tbody>
               </table>
               </div>
@@ -160,9 +174,9 @@
 
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">
               <Select
-  aria-label="Select user"
+  :aria-label="$t('views.SettingsTeamsView.aria_label_select_user')"
   v-model="addMemberUserId"
-  placeholder="Select a user..."
+  :placeholder="$t('views.SettingsTeamsView.select_user')"
   data-testid="settings-teams-add-member-user"
   class="flex-1"
   :options="availableUsers(team.id).map(user => ({ value: user.id, label: user.display_name + '(' + user.email + ')' }))"
@@ -174,9 +188,9 @@
   </template>
 </Select>
               <Select
-  aria-label="Select role"
+  :aria-label="$t('views.SettingsTeamsView.aria_label_select_role')"
   v-model="addMemberRole"
-  placeholder="Select role"
+  :placeholder="$t('views.SettingsTeamsView.select_role')"
   data-testid="settings-teams-add-member-role"
   :options="[{ value: 'viewer', label: $t('views.SettingsTeamsView.viewer') }, { value: 'runner', label: $t('views.SettingsTeamsView.runner') }, { value: 'operator', label: $t('views.SettingsTeamsView.operator') }]"
   option-label="label"
@@ -187,18 +201,16 @@
   </template>
 </Select>
               <Button :disabled="!addMemberUserId || addingMember" data-testid="settings-teams-add-member-submit" @click="addMember(team.id)">
-                {{ addingMember ? 'Adding...' : 'Add' }}
+                {{ addingMember ? $t('views.SettingsTeamsView.adding') : $t('views.SettingsTeamsView.add') }}
               </Button>
               <button type="button" class="rounded-lg border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent" data-testid="settings-teams-add-member-cancel" @click="addMemberTeamId = null">
-                Cancel
+                {{ $t('views.SettingsTeamsView.cancel') }}
               </button>
             </div>
 
             <button type="button" v-else class="mt-3 flex items-center gap-1 text-sm text-primary hover:underline" data-testid="settings-teams-add-member" @click="addMemberTeamId = team.id">
-              <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M5 12h14" /><path d="M12 5v14" />
-              </svg>
-              Add member
+              <Plus class="h-4 w-4" aria-hidden="true" />
+              {{ $t('views.SettingsTeamsView.add_member') }}
             </button>
 
             <div v-if="memberActionError[team.id]" class="mt-2 text-sm text-destructive">
@@ -217,6 +229,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import Button from 'primevue/button'
 import TableActions from '../components/shared/TableActions.vue'
@@ -225,14 +238,17 @@ import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import TeamNotificationEndpoints from '../components/TeamNotificationEndpoints.vue'
 import FeatureGate from '../components/FeatureGate.vue'
+import { ChevronRight, Plus } from '@lucide/vue'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import Select from 'primevue/select'
 
 const planStore = usePlanStore()
+const { t } = useI18n()
 
 type AdminTeamItem = components['schemas']['AdminTeamItem']
 type MembershipResponse = components['schemas']['MembershipResponse']
@@ -284,6 +300,9 @@ const addMemberUserId = ref('')
 const addMemberRole = ref('viewer')
 const addingMember = ref(false)
 
+const removeConfirmMemberId = ref<string | null>(null)
+const removingMember = ref(false)
+
 const userMap = ref<Record<string, AdminUserListItem>>({})
 
 function userDisplayName(userId: string): string {
@@ -321,12 +340,12 @@ async function loadMembers(teamId: string) {
       params: { path: { team_id: teamId } },
     })
     if (err) {
-      membersError.value[teamId] = `Failed to load members: ${formatApiError(err)}`
+      membersError.value[teamId] = `${t('views.SettingsTeamsView.failed_to_load_members')} ${formatApiError(err)}`
     } else if (data) {
       membersByTeam.value[teamId] = data.items
     }
   } catch (e: unknown) {
-    membersError.value[teamId] = `Failed to load members: ${formatApiError(e)}`
+    membersError.value[teamId] = `${t('views.SettingsTeamsView.failed_to_load_members')} ${formatApiError(e)}`
   } finally {
     membersLoading.value[teamId] = false
   }
@@ -372,7 +391,7 @@ async function createTeam() {
     if (err) {
       createError.value = formatApiError(err)
     } else if (data) {
-      createSuccess.value = `Team "${data.name}" created.`
+      createSuccess.value = t('views.SettingsTeamsView.team_created', { name: data.name })
       createName.value = ''
       createDescription.value = ''
       await loadTeams()
@@ -411,14 +430,14 @@ async function saveRename() {
       },
     })
     if (err) {
-      memberActionError.value[renameTeamId.value] = `Rename failed: ${formatApiError(err)}`
+      memberActionError.value[renameTeamId.value] = `${t('views.SettingsTeamsView.rename_failed')} ${formatApiError(err)}`
     } else {
       renameTeamId.value = null
       renameName.value = ''
       await loadTeams()
     }
   } catch (e: unknown) {
-    memberActionError.value[renameTeamId.value ?? ''] = `Rename failed: ${formatApiError(e)}`
+    memberActionError.value[renameTeamId.value ?? ''] = `${t('views.SettingsTeamsView.rename_failed')} ${formatApiError(e)}`
   } finally {
     renamingTeam.value = false
   }
@@ -465,7 +484,7 @@ async function addMember(teamId: string) {
       },
     })
     if (err) {
-      memberActionError.value[teamId] = `Add member failed: ${formatApiError(err)}`
+      memberActionError.value[teamId] = `${t('views.SettingsTeamsView.add_member_failed')} ${formatApiError(err)}`
     } else if (data) {
       membersByTeam.value[teamId] = [...(membersByTeam.value[teamId] ?? []), data]
       addMemberUserId.value = ''
@@ -475,7 +494,7 @@ async function addMember(teamId: string) {
       if (team) team.member_count++
     }
   } catch (e: unknown) {
-    memberActionError.value[teamId] = `Add member failed: ${formatApiError(e)}`
+    memberActionError.value[teamId] = `${t('views.SettingsTeamsView.add_member_failed')} ${formatApiError(e)}`
   } finally {
     addingMember.value = false
   }
@@ -489,32 +508,36 @@ async function changeMemberRole(teamId: string, member: MembershipResponse) {
       body: { role: member.role },
     })
     if (err) {
-      memberActionError.value[teamId] = `Role change failed: ${formatApiError(err)}`
+      memberActionError.value[teamId] = `${t('views.SettingsTeamsView.role_change_failed')} ${formatApiError(err)}`
       await loadMembers(teamId)
     } else if (data) {
       membersByTeam.value[teamId] = membersByTeam.value[teamId].map(m => m.id === data.id ? data : m)
     }
   } catch (e: unknown) {
-    memberActionError.value[teamId] = `Role change failed: ${formatApiError(e)}`
+    memberActionError.value[teamId] = `${t('views.SettingsTeamsView.role_change_failed')} ${formatApiError(e)}`
     await loadMembers(teamId)
   }
 }
 
 async function removeMember(teamId: string, member: MembershipResponse) {
   memberActionError.value[teamId] = ''
+  removingMember.value = true
   try {
     const { error: err, response } = await api.DELETE('/api/v1/teams/{team_id}/members/{membership_id}', {
       params: { path: { team_id: teamId, membership_id: member.id } },
     })
     if (err) {
-      memberActionError.value[teamId] = `Remove failed: ${formatApiError(err)}`
+      memberActionError.value[teamId] = `${t('views.SettingsTeamsView.remove_failed')} ${formatApiError(err)}`
     } else if (response.status === 204 || response.ok) {
       membersByTeam.value[teamId] = membersByTeam.value[teamId].filter(m => m.id !== member.id)
       const team = teams.value.find(t => t.id === teamId)
       if (team) team.member_count--
+      removeConfirmMemberId.value = null
     }
   } catch (e: unknown) {
-    memberActionError.value[teamId] = `Remove failed: ${formatApiError(e)}`
+    memberActionError.value[teamId] = `${t('views.SettingsTeamsView.remove_failed')} ${formatApiError(e)}`
+  } finally {
+    removingMember.value = false
   }
 }
 
@@ -526,24 +549,24 @@ function teamActions(team: AdminTeamItem) {
   return [
     {
       key: 'rename',
-      label: 'Rename',
+      label: t('views.SettingsTeamsView.rename'),
       onClick: () => startRename(team),
     },
     {
       key: 'delete',
-      label: 'Delete',
+      label: t('views.SettingsTeamsView.delete'),
       onClick: () => confirmDelete(team),
       danger: true,
     },
   ]
 }
 
-function memberActions(teamId: string, member: MembershipResponse) {
+function memberActions(_teamId: string, member: MembershipResponse) {
   return [
     {
       key: 'remove',
-      label: 'Remove',
-      onClick: () => removeMember(teamId, member),
+      label: t('views.SettingsTeamsView.remove'),
+      onClick: () => { removeConfirmMemberId.value = member.id },
       danger: true,
     },
   ]
