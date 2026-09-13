@@ -7,6 +7,7 @@ Each sample is a dict with connector_type, resource, and raw records.
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorType
@@ -17,24 +18,16 @@ logger = logging.getLogger(__name__)
 _QUERY_TIMEOUT = 30.0
 
 
+@dataclass
 class ScanSample:
     """A single sample of data from a connector."""
 
-    def __init__(
-        self,
-        connector_id: uuid.UUID,
-        connector_type: ConnectorType,
-        resource: str,
-        records: list[dict[str, Any]],
-        sample_count: int,
-        error: str | None = None,
-    ) -> None:
-        self.connector_id = connector_id
-        self.connector_type = connector_type
-        self.resource = resource
-        self.records = records
-        self.sample_count = sample_count
-        self.error = error
+    connector_id: uuid.UUID
+    connector_type: ConnectorType
+    resource: str
+    records: list[dict[str, Any]]
+    sample_count: int
+    error: str | None = None
 
 
 _SAMPLE_LIMIT = 25

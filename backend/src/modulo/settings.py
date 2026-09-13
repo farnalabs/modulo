@@ -1069,6 +1069,7 @@ def work_item_refs_cap() -> int:
     try:
         raw = get_settings().modulo_work_item_refs_cap
     except Exception:  # pragma: no cover - broken settings must not break refs
+        _log.warning("Failed to read modulo_work_item_refs_cap, using default", exc_info=True)
         return 100
     return max(_WORK_ITEM_REFS_CAP_FLOOR, min(int(raw), _WORK_ITEM_REFS_CAP_CEILING))
 

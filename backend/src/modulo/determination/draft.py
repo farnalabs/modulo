@@ -1,6 +1,7 @@
 """Pipeline draft generator — converts determination findings into an editable pipeline graph."""
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from modulo.connectors.base import Capability
 from modulo.determination.inference import Finding
@@ -45,7 +46,16 @@ def _has_sampled_data(samples: list[ScanSample]) -> bool:
     return bool(sampled & data_resources)
 
 
-def _detect_stages(findings: list[Finding]) -> tuple[bool, bool, bool, bool]:
+class _StageDetection(NamedTuple):
+    """Which pipeline stages are implied by inference findings."""
+
+    planning: bool
+    development: bool
+    review: bool
+    ci: bool
+
+
+def _detect_stages(findings: list[Finding]) -> _StageDetection:
     """Resolve which pipeline stages are implied by the inference findings."""
     has_planning = any(f.category == "stage" and "Planning" in f.finding for f in findings)
     has_development = any(f.category == "stage" and "Development" in f.finding for f in findings)
@@ -54,7 +64,7 @@ def _detect_stages(findings: list[Finding]) -> tuple[bool, bool, bool, bool]:
         f.category == "automation" and "CI/CD configuration detected in repository metadata" in f.finding
         for f in findings
     )
-    return has_planning, has_development, has_review, has_ci
+    return _StageDetection(has_planning, has_development, has_review, has_ci)
 
 
 def _git_provider(samples: list[ScanSample], resources: tuple[str, ...]) -> str:
@@ -165,15 +175,15 @@ def generate_draft(samples: list[ScanSample], findings: list[Finding]) -> Pipeli
     automation_suggestions: list[dict[str, str]] = []
     stage_node_ids: list[str] = []
 
-    has_planning, has_development, has_review, has_ci = _detect_stages(findings)
+    stages = _detect_stages(findings)
 
-    if has_planning:
+    if stages.planning:
         _add_planning_stage(nodes, edges, automation_suggestions, stage_node_ids)
-    if has_development:
-        _add_development_stage(samples, nodes, edges, stage_node_ids, has_planning)
-    if has_review:
-        _add_review_stage(samples, nodes, edges, automation_suggestions, stage_node_ids, has_development)
-    if has_ci:
+    if stages.development:
+        _add_development_stage(samples, nodes, edges, stage_node_ids, stages.planning)
+    if stages.review:
+        _add_review_stage(samples, nodes, edges, automation_suggestions, stage_node_ids, stages.development)
+    if stages.ci:
         _add_ci_stage(nodes, edges, stage_node_ids)
 
     nodes.append(DraftNode(id="end", node_type="placeholder", label="End"))
