@@ -46,11 +46,13 @@ BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
 MIGRATION_REV = "0222_journey_provenance"
 PREV_REV = "0219_eval_cluster_check_constraints"
-# 0221's actual down_revision (FAR-582's merged migration). The idempotency
-# re-run must rewind exactly one revision (to 0220) so only the guarded 0221
-# migration re-executes — rewinding to PREV_REV (0219) would re-run 0220's
-# unconditional `add_column artifacts_json` and raise DuplicateColumn.
-DOWN_REV = "0220_run_node_artifacts"
+# 0222's immediate predecessor on the renumbered chain is
+# 0221_workspace_inputs_env_profiles — a pre-existing, UNGUARDED migration from
+# FAR-802. The idempotency re-run must rewind exactly one revision (to 0221)
+# so ONLY the PR's guarded 0222 migration re-executes. Rewinding further (to
+# 0220) would also re-run 0221's unconditional `add_column workspace_inputs`
+# against the already-migrated DB and raise DuplicateColumn.
+DOWN_REV = "0221_workspace_inputs_env_profiles"
 
 # Runs seeded with rows whose work_item_refs carry 'reported' so the backfill
 # has real work; runs whose refs are derived-only or NULL must be untouched.
@@ -288,10 +290,10 @@ async def test_0221_upgrade_backfills_and_is_idempotent(isolated_db_url: str) ->
     assert await _refs(isolated_db_url, seeded["run_derived"]) == [{"source": "derived"}]
     assert await _refs(isolated_db_url, seeded["run_null"]) is None
 
-    # Idempotency: rewind alembic_version one revision and re-run the REAL
-    # 0221 migration against the already-backfilled data — the column guards
-    # / CREATE INDEX IF NOT EXISTS are no-ops, the batching predicates match
-    # zero rows, and nothing changes or degrades.
+    # Idempotency: rewind alembic_version one revision (to DOWN_REV=0221) and
+    # re-run the REAL 0222 migration against the already-backfilled data — the
+    # column guards / CREATE INDEX IF NOT EXISTS are no-ops, the batching
+    # predicates match zero rows, and nothing changes or degrades.
     engine = create_async_engine(isolated_db_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
