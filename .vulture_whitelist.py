@@ -327,4 +327,17 @@ __all__ = [
     "parse_ls_remote",
     "resolve_movable_ref",
     "build_input_clone_script",
+    # --- FAR-799 SSH transport hardening functions (test-referenced;
+    #     production callers land in the provisioning layer, so vulture cannot
+    #     see a prod call site yet) ---
+    "build_ssh_transport",
+    "build_ssh_transport_script",
+    "validate_and_pin_ip",
+    "build_ssh_options",
+    "build_ssh_command",
+    "build_git_ssh_command",
+    "generate_known_hosts_entry",
+    "generate_pinned_known_hosts",
+    "SshHostRefusedError",
+    "SshTransportConfig",
 ]
