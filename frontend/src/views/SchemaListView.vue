@@ -7,7 +7,7 @@
     <div class="page-wide">
     <PageHeader :title="$t('views.SchemaListView.schemas')" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
 
-    <div class="flex">
+    <div class="flex flex-1 min-h-0">
       <!-- Folder sidebar -->
       <FolderTree
         :selected-folder-id="selectedFolderId"
