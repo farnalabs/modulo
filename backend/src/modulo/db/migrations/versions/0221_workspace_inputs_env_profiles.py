@@ -8,8 +8,9 @@ Nullable: existing profiles have no inputs.  The server default ``'[]'``
 ensures that raw-SQL inserts that omit the column get an empty list rather
 than NULL, consistent with the ORM-level ``default=list``.
 
-Renumbered from 0218_add_workspace_inputs_to_env_profiles after rebase onto
-main (which already had 0218/0219/0220).
+Renumbered from 0218_add_workspace_inputs_to_env_profiles to
+0221_workspace_inputs_env_profiles after rebase onto main (which already had
+0218/0219/0220).
 """
 
 import sqlalchemy as sa

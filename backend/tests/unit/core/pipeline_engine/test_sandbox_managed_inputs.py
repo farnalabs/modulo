@@ -328,6 +328,31 @@ class TestInputItemValidation:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Security regression: Jinja-split git clone bypass (PR #425 review MINOR)
+# ---------------------------------------------------------------------------
+
+
+class TestJinjaSplitCloneBypass:
+    def test_literal_git_clone_in_jinja_block_rejected(self) -> None:
+        """``{{ 'git clone' }}`` renders to a clone at runtime — must be rejected."""
+        node = _base_node(agent_command="{{ 'git clone' }} https://x.com/r.git")
+        with pytest.raises(ValueError, match="literal 'git clone'"):
+            _validate_sandbox_managed_inputs_config(node)
+
+    def test_git_clone_var_in_jinja_block_rejected(self) -> None:
+        """``git {{ clone_cmd }}`` (variable resolves to clone) must be rejected."""
+        node = _base_node(agent_command="git {{ clone_cmd }}")
+        with pytest.raises(ValueError, match="literal 'git clone'"):
+            _validate_sandbox_managed_inputs_config(node)
+
+    def test_git_jinja_var_clone_rejected(self) -> None:
+        """``git {{ x }} clone`` (empties to a clone) must be rejected."""
+        node = _base_node(agent_command="git {{ x }} clone https://x.com/r.git")
+        with pytest.raises(ValueError, match="literal 'git clone'"):
+            _validate_sandbox_managed_inputs_config(node)
+
+
 class TestErrorCodeConstants:
     """Verify the new error codes are registered in the error-code registry."""
 

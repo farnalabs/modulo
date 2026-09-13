@@ -50,7 +50,7 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
     initialisation_strategy: Mapped[str] = mapped_column(String(30), nullable=False, server_default="git_clone")
     secret_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     # ADR 033 — managed workspace inputs: list of input descriptors declared
-    # on the profile.  Server default is '[]' (set in migration 0218); the
+    # on the profile.  Server default is '[]' (set in migration 0221_workspace_inputs_env_profiles); the
     # Python-level default applies to new ORM instances only.
     workspace_inputs: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True, default=list)
     persistence_policy: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ephemeral")

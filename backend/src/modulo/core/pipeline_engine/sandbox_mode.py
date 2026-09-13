@@ -495,15 +495,20 @@ _MAX_DEST_DEPTH = 8
 
 
 def _strip_jinja_blocks(text: str) -> str:
-    """Remove ``{{ ... }}`` and ``{% ... %}`` blocks from *text*.
+    """Normalise ``{{ ... }}`` / ``{% ... %}`` blocks in *text* for literal checks.
 
-    Jinja-rendered segments are replaced with empty strings so that literal
-    substring checks (e.g. ``git clone``) match only the static parts of the
-    command.  Interpolation blocks can never contain a literal ``git clone``
-    — they produce runtime values — so stripping them is safe and prevents
-    false positives from template expressions.
+    Jinja block delimiters are removed but their INNER expression text is kept
+    (``{{ 'git clone' }}`` becomes ``'git clone'``, ``git {{ clone_cmd }}``
+    becomes ``git clone_cmd``).  This keeps a ``git``/``clone`` pair detectable
+    when it is split across a Jinja boundary — the previous behaviour (dropping
+    the block contents entirely) let a clone command smuggled inside a Jinja
+    block bypass the literal ``git clone`` check, because blocks were stripped
+    before substring matching.  Whitespace is then collapsed so ``git {{ x }}
+    clone`` still reads as ``git clone``.
     """
-    return _JINJA_BLOCK_RE.sub("", text)
+    # Keep the inner expression text; drop only the surrounding delimiters.
+    normalized = _JINJA_BLOCK_RE.sub(lambda m: m.group(0)[2:-2], text)
+    return _re.sub(r"\s+", " ", normalized)
 
 
 def _validate_sandbox_managed_inputs_config(node_def: dict[str, Any]) -> None:
@@ -517,9 +522,12 @@ def _validate_sandbox_managed_inputs_config(node_def: dict[str, Any]) -> None:
 
     Rules enforced:
 
-    * ``agent_command`` must NOT contain a literal ``git clone`` after Jinja
-      blocks are stripped — managed inputs handle checkout; a user-provided
-      ``git clone`` would race with or bypass the managed checkout.
+    * ``agent_command`` must NOT contain a literal ``git clone`` — managed inputs
+      handle checkout; a user-provided ``git clone`` would race with or bypass
+      the managed checkout.  The check is Jinja-aware: a ``git``/``clone`` pair
+      split across a Jinja block (e.g. ``{{ 'git clone' }}`` or ``git
+      {{ clone_cmd }}``) is still detected, while a bare ``{{ git_clone }}``
+      interpolation is allowed.
     * Each input's ``dest`` (after canonicalisation to an absolute POSIX path)
       must:
       - be non-empty and not just ``"."`` or ``"/home/user"``
@@ -542,11 +550,20 @@ def _validate_sandbox_managed_inputs_config(node_def: dict[str, Any]) -> None:
     if not workspace_inputs:
         return
 
-    # --- (a) literal git clone check (Jinja-stripped) ---
+    # --- (a) literal git clone check (Jinja-aware) ---
     agent_command = node_def.get("agent_command")
     if agent_command and isinstance(agent_command, str):
-        stripped = _strip_jinja_blocks(agent_command)
-        if "git clone" in stripped:
+        # A ``git``/``clone`` pair may be split across a Jinja boundary, so check
+        # two normalised views:
+        #   1. inner-kept    — block delimiters dropped, inner expression kept
+        #      (catches ``{{ 'git clone' }}`` and ``git {{ clone_cmd }}``);
+        #   2. block-stripped — blocks replaced with a single space
+        #      (catches ``git {{ x }} clone`` where the variable resolves empty).
+        # Both collapse whitespace first so adjacency survives.  A bare
+        # ``{{ git_clone }}`` interpolation is correctly allowed by neither.
+        inner_kept = _strip_jinja_blocks(agent_command)
+        block_stripped = _re.sub(r"\s+", " ", _JINJA_BLOCK_RE.sub(" ", agent_command))
+        if "git clone" in inner_kept or "git clone" in block_stripped:
             raise ValueError(
                 f"sandbox_agent node '{node_id}' agent_command contains a literal "
                 "'git clone' after Jinja block removal — managed workspace inputs "
