@@ -4127,7 +4127,7 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         empty (this includes the ``{}`` column default AND the FAR-525 GUI's
         no-op panel save ``{on: [], max_retries: 0, backoff_schedule: {...}}``):
         re-dispatch while ``claim_count`` is within the configurable budget
-        (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 2). Zero nodes have
+        (``SAQ_NODELESS_REDISPATCH_BUDGET``, default 4 since FAR-812). Zero nodes have
         executed, so every re-dispatch is safe; terminal-fail applies once the
         budget is exhausted. The decision keys on the POLICY's EVENT CONTENT
         (what it covers), never on dict non-emptiness — a no-op panel save
@@ -4167,7 +4167,8 @@ def _should_redispatch_nodeless(row: Any) -> bool:
         # to the budget-default repair (SAQ_NODELESS_REDISPATCH_BUDGET).
     # No stall coverage (no/empty/None policy, an empty/missing `on`, or the
     # GUI's no-op all-empty panel save): re-dispatch while within the
-    # configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2 — FAR-509;
+    # configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 4 since
+    # FAR-812, raised from 2 — FAR-509;
     # claim_count is 1 for the un-re-dispatched initial claim). This bounds the
     # successful-claim cycles, NOT the enqueue rate — the rate is throttled in
     # the repair branch (one re-dispatch per nodeless window per run).

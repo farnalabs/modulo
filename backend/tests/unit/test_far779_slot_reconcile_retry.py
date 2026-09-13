@@ -14,12 +14,18 @@ write ``heartbeat_at`` in time.  The sweep then permanently kills the run.
 Fix (FAR-779):
   1. Auto-retry: reset heartbeat-stale runs to ``pending`` (clearing
      ``dispatched_at``/``dispatcher``/``heartbeat_at``) so
-     ``dispatcher_reconcile`` re-dispatches them on its next 60s tick.
+     ``dispatcher_reconcile`` re-dispatches them on their next 60s tick.
      Terminal-fail only when ``claim_count`` exceeds the retry budget
      (``HEARTBEAT_STALE_RETRY_BUDGET``).
   2. Backpressure: ``dispatch_run`` refuses new admissions when the
      pipeline's active slots are at >= 90%% saturation, preventing
      heartbeat-stale kills under slot exhaustion.
+
+FAR-812 (2026-09-13): the retry budget lives in settings now
+(``HEARTBEAT_STALE_RETRY_BUDGET``, default 3, was a hardcoded 1). A run that
+goes heartbeat-stale on its second or third claim is still flaking on a
+transient dispatch wobble (zero nodes executed, so nothing could double-
+execute) — only a claim beyond the raised budget is genuinely stuck.
 
 Mock/fake based — no Postgres, no Redis.
 """
@@ -34,7 +40,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import modulo.core.run_admission as ra
-from modulo.core.run_admission import HEARTBEAT_STALE_RETRY_BUDGET, reconcile_pipeline_slots
+from modulo.core.run_admission import reconcile_pipeline_slots
+from modulo.settings import get_settings
+
+# Mirrors the settings default (HEARTBEAT_STALE_RETRY_BUDGET), raised 1 -> 3
+# by FAR-812. Tests key fixture rows off this so boundary cases pin the exact
+# semantics: claims 0..budget reset to pending, only a claim beyond the budget
+# terminal-fails.
+DEFAULT_HEARTBEAT_RETRY_BUDGET = 3
 
 ORG_ID = uuid.UUID("18348064-eca3-4aa7-be96-8f6c9123efd0")
 PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000006666")
@@ -129,7 +142,10 @@ class TestHeartbeatStaleRetry:
     it resets to pending (retry) instead of terminal-failing."""
 
     def _settings(self, stale_seconds: int = 1800) -> Any:
-        return SimpleNamespace(slot_reconcile_stale_seconds=stale_seconds)
+        return SimpleNamespace(
+            slot_reconcile_stale_seconds=stale_seconds,
+            heartbeat_stale_retry_budget=DEFAULT_HEARTBEAT_RETRY_BUDGET,
+        )
 
     async def test_low_claim_count_resets_to_pending(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """claim_count=0 (first heartbeat-stale) -> pending (retry)."""
@@ -153,11 +169,11 @@ class TestHeartbeatStaleRetry:
         # the retry path is verified by released==0 + retried==1.
 
     async def test_claim_count_exceeding_budget_terminal_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """claim_count > HEARTBEAT_STALE_RETRY_BUDGET -> terminal-fail."""
+        """claim_count > budget (DEFAULT_HEARTBEAT_RETRY_BUDGET) -> terminal-fail."""
         statements: list[str] = []
         engine = _RetryEngine(
             statements,
-            [_released_row(claim_count=HEARTBEAT_STALE_RETRY_BUDGET + 1)],
+            [_released_row(claim_count=DEFAULT_HEARTBEAT_RETRY_BUDGET + 1)],
         )
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
         with patch.object(ra, "_advance_released_run", new_callable=AsyncMock):
@@ -176,11 +192,11 @@ class TestHeartbeatStaleRetry:
         assert len(advance_stmts) == 1
 
     async def test_claim_count_at_budget_resets_to_pending(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """claim_count == budget -> still retry (budget is exclusive upper bound)."""
+        """claim_count == budget -> still retry (budget is an inclusive upper bound)."""
         statements: list[str] = []
         engine = _RetryEngine(
             statements,
-            [_released_row(claim_count=HEARTBEAT_STALE_RETRY_BUDGET)],
+            [_released_row(claim_count=DEFAULT_HEARTBEAT_RETRY_BUDGET)],
         )
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
         with patch.object(ra, "_advance_released_run", new_callable=AsyncMock):
@@ -206,7 +222,7 @@ class TestHeartbeatStaleRetry:
         statements: list[str] = []
         engine = _RetryEngine(
             statements,
-            [_released_row(claim_count=HEARTBEAT_STALE_RETRY_BUDGET + 1)],
+            [_released_row(claim_count=DEFAULT_HEARTBEAT_RETRY_BUDGET + 1)],
         )
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
         with patch.object(ra, "_advance_released_run", new_callable=AsyncMock) as advance:
@@ -224,7 +240,7 @@ class TestHeartbeatStaleRetry:
             id=uuid.uuid4(),
             organisation_id=ORG_ID,
             pipeline_id=PIPELINE_ID,
-            claim_count=HEARTBEAT_STALE_RETRY_BUDGET + 1,
+            claim_count=DEFAULT_HEARTBEAT_RETRY_BUDGET + 1,
         )  # terminal-failed
         engine = _RetryEngine(statements, [run_a, run_b])
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
@@ -237,10 +253,49 @@ class TestHeartbeatStaleRetry:
         advance.assert_awaited_once()
         assert advance.await_args.args[1] == run_b.id
 
-    def test_retry_budget_constant_is_positive(self) -> None:
-        """Sanity: the budget must be a positive int."""
-        assert isinstance(HEARTBEAT_STALE_RETRY_BUDGET, int)
-        assert HEARTBEAT_STALE_RETRY_BUDGET >= 1
+    def test_retry_budget_default_is_positive(self) -> None:
+        """Sanity: the fixture budget mirrors the raised settings default — the
+        budget must be a positive int and exceed the pre-FAR-812 default of 1,
+        and the fixture constant stays pinned to the real ``Settings`` default so
+        a default change in settings.py forces this test to be updated rather
+        than silently re-pinning every boundary test to a stale budget."""
+        assert isinstance(DEFAULT_HEARTBEAT_RETRY_BUDGET, int)
+        assert DEFAULT_HEARTBEAT_RETRY_BUDGET >= 1
+        assert DEFAULT_HEARTBEAT_RETRY_BUDGET > 1
+        assert get_settings(_fresh=True).heartbeat_stale_retry_budget == DEFAULT_HEARTBEAT_RETRY_BUDGET
+
+    # --- FAR-812: raised default keeps earlier claims alive -----------------
+
+    @pytest.mark.parametrize("claim_count", [0, 1, 2])
+    async def test_first_claims_reset_to_pending(self, monkeypatch: pytest.MonkeyPatch, claim_count: int) -> None:
+        """FAR-812 regression: the first ``budget - 1`` heartbeat-stale claims
+        (claim_count 0..2 at the raised default 3) all reset to pending. Under
+        the pre-FAR-812 default of 1, claim_count=2 (a run typed for re-dispatch
+        once and whose retry also went stale) would already have been
+        terminal-failed — losing a task that executed zero nodes."""
+        statements: list[str] = []
+        engine = _RetryEngine(statements, [_released_row(claim_count=claim_count)])
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with patch.object(ra, "_advance_released_run", new_callable=AsyncMock):
+            result = await reconcile_pipeline_slots(engine)  # type: ignore[arg-type]
+
+        assert result["released"] == 0
+        assert result["retried"] == 1
+
+    @pytest.mark.parametrize("claim_count", [DEFAULT_HEARTBEAT_RETRY_BUDGET + 1, DEFAULT_HEARTBEAT_RETRY_BUDGET + 2])
+    async def test_claims_past_raised_budget_terminal_fail(
+        self, monkeypatch: pytest.MonkeyPatch, claim_count: int
+    ) -> None:
+        """Only a claim BEYOND the raised budget terminal-fails (4, 5 at the
+        default 3) — the budget still bounds a genuinely-stuck run."""
+        statements: list[str] = []
+        engine = _RetryEngine(statements, [_released_row(claim_count=claim_count)])
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        with patch.object(ra, "_advance_released_run", new_callable=AsyncMock):
+            result = await reconcile_pipeline_slots(engine)  # type: ignore[arg-type]
+
+        assert result["released"] == 1
+        assert result["retried"] == 0
 
 
 # ---------------------------------------------------------------------------
