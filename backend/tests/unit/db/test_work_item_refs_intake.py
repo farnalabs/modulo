@@ -25,7 +25,7 @@ against an in-memory SQLite database (no mocks of the function under test):
 """
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from typing import Any, cast
 
 import pytest
@@ -568,6 +568,146 @@ class TestRankGuardedJourneyHydration:
         )
         assert len(rows) == 1
         assert rows[0].provenance == "caller"
+
+
+class TestAgentMintFlagHydration:
+    """FAR-795 slice B: agent-sourced hydrate mints are gated by the org flag.
+
+    Exercises the REAL ``_hydrate_journeys`` path (no mocks of the function
+    under test); the org flag is read through the mirrored reader in
+    ``modulo.db.crud.run`` exactly as production does.
+    """
+
+    _FLAG_KEY = "work_item_agent_minting_enabled"
+
+    @pytest.fixture(autouse=True)
+    def _clear_flag_caches(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> Generator[None]:
+        import modulo.db.crud.run as run_mod
+        from modulo.core.runtime_config import org_flags as org_flags_mod
+
+        self.run_mod = run_mod
+        self.org_flags_mod = org_flags_mod
+        run_mod.clear_agent_mint_flag_cache()
+        org_flags_mod.clear_org_flag_cache()
+        yield
+        run_mod.clear_agent_mint_flag_cache()
+        org_flags_mod.clear_org_flag_cache()
+
+    def _org(self, *, flag: bool | None) -> dict[str, Any] | None:
+        if flag is None:
+            return None
+        return {self._FLAG_KEY: flag} if flag else {"other_flag": "x"}
+
+    async def _seed_org_with_flag(self, session: AsyncSession, flag: bool | None) -> None:
+        session.add(
+            Organisation(
+                id=_ORG,
+                name="test org",
+                slug=f"test-{_ORG}",
+                settings_json=self._org(flag=flag),
+            )
+        )
+        await session.flush()
+
+    async def test_flag_on_mints_agent_ref_with_agent_provenance(
+        self, session: AsyncSession, refs_events: list
+    ) -> None:
+        await self._seed_org_with_flag(session, flag=True)
+        await _hydrate_journeys(session, _ORG, [{"kind": "github", "ref": "a/b#5", "source": "agent"}])
+        session.expire_all()
+        journey = await _journey_for(session, "github", "a/b#5")
+        assert journey is not None
+        assert journey.provenance == "agent"
+        assert journey.first_seen_source == "agent"
+        assert ("agent_minted", {"count": 1}) in refs_events
+        assert not any(e[0] == "agent_mint_suppressed_by_flag" for e in refs_events)
+
+    async def test_flag_omitted_stores_without_mint_and_counts_suppressed(
+        self, session: AsyncSession, refs_events: list
+    ) -> None:
+        """No settings entry, no org row, or an explicit-false value: OFF."""
+        await self._seed_org_with_flag(session, flag=False)
+        await _hydrate_journeys(
+            session,
+            _ORG,
+            [
+                {"kind": "github", "ref": "a/b#5", "source": "agent"},
+                {"kind": "linear", "ref": "FAR-1", "source": "agent"},
+            ],
+        )
+        assert await _journey_for(session, "github", "a/b#5") is None
+        assert await _journey_for(session, "linear", "FAR-1") is None
+        assert ("agent_mint_suppressed_by_flag", {"count": 2}) in refs_events
+        assert not any(e[0] == "agent_minted" for e in refs_events)
+
+    async def test_missing_org_stores_without_mint(self, session: AsyncSession, refs_events: list) -> None:
+        """A missing (or never-concluded) org state resolves OFF fail-closed."""
+        # Deliberately NO organisation row.
+        await _hydrate_journeys(session, _ORG, [{"kind": "github", "ref": "a/b#5", "source": "agent"}])
+        assert await _journey_for(session, "github", "a/b#5") is None
+        assert ("agent_mint_suppressed_by_flag", {"count": 1}) in refs_events
+
+    async def test_flag_read_error_fails_closed_without_raising(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, refs_events: list
+    ) -> None:
+        async def _boom(*_a: Any, **_k: Any) -> None:
+            raise RuntimeError("db outage")
+
+        monkeypatch.setattr(self.run_mod, "get_organisation", _boom)
+        # No exception escapes — hydration failure must never abort create_run.
+        await _hydrate_journeys(session, _ORG, [{"kind": "github", "ref": "a/b#5", "source": "agent"}])
+        assert await _journey_for(session, "github", "a/b#5") is None
+        assert ("agent_mint_suppressed_by_flag", {"count": 1}) in refs_events
+
+    async def test_existing_row_is_provenance_noop_not_counted_as_mint(
+        self, session: AsyncSession, refs_events: list
+    ) -> None:
+        """An agent ref whose journey already exists (minted earlier by
+        caller/derived above rank) is a rank-0 no-op: not a fresh mint, no
+        agent stamp upgrade, no minted counter."""
+        assert self.org_flags_mod is not None
+        await self._seed_org_with_flag(session, flag=True)
+        await _create(session, trigger_type="manual", work_item_refs=[{"kind": "github", "ref": "a/b#5"}])
+        before = await _journey_for(session, "github", "a/b#5")
+        assert before is not None
+        assert before.provenance == "caller"
+
+        await _hydrate_journeys(session, _ORG, [{"kind": "github", "ref": "a/b#5", "source": "agent"}])
+        session.expire_all()
+        after = await _journey_for(session, "github", "a/b#5")
+        assert after is not None
+        assert after.provenance == "caller"
+        assert not any(e[0] == "agent_minted" for e in refs_events)
+        assert not any(e[0] == "agent_mint_suppressed_by_flag" for e in refs_events)
+
+    async def test_agent_mint_never_downgrades_existing_higher_rank(
+        self, session: AsyncSession, refs_events: list
+    ) -> None:
+        """Multiple agent entries: only the genuinely-new row is minted and
+        counted; the caller-owned row is untouched."""
+        await self._seed_org_with_flag(session, flag=True)
+        await _create(session, trigger_type="manual", work_item_refs=[{"kind": "github", "ref": "a/b#5"}])
+        events_before = len(refs_events)
+        await _hydrate_journeys(
+            session,
+            _ORG,
+            [
+                {"kind": "github", "ref": "a/b#5", "source": "agent"},
+                {"kind": "github", "ref": "a/b#7", "source": "agent"},
+            ],
+        )
+        session.expire_all()
+        kept = await _journey_for(session, "github", "a/b#5")
+        assert kept is not None
+        assert kept.provenance == "caller"
+        fresh = await _journey_for(session, "github", "a/b#7")
+        assert fresh is not None
+        assert fresh.provenance == "agent"
+        assert fresh.first_seen_source == "agent"
+        assert ("agent_minted", {"count": 1}) in refs_events[events_before:]
 
 
 class TestCoalesceRefsMerge:
