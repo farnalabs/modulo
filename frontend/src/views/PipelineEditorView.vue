@@ -274,7 +274,7 @@
               :options="nodeTypeOptions"
               option-label="label"
               option-value="value"
-              class="toolbar-select w-32 text-xs"
+              class="toolbar-select w-40 text-xs"
               append-to="self"
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
               :title="$t('views.PipelineEditorView.new_node_type_hint')"
@@ -355,7 +355,7 @@
               :options="nodeTypeOptions"
               option-label="label"
               option-value="value"
-              class="toolbar-select w-36 text-xs"
+              class="toolbar-select w-40 text-xs"
               append-to="self"
               :aria-label="$t('views.PipelineEditorView.new_node_type')"
             />
