@@ -2084,3 +2084,107 @@ describe('RunDetailView rendering extras', () => {
     wrapper2.unmount()
   })
 })
+
+describe('RunDetailView FAR-582 artifact listing', () => {
+  let mockArtifactArtifacts: Array<Record<string, unknown>> = []
+
+  async function mountWithArtifacts(data: Record<string, unknown>, io: Record<string, unknown>) {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io') return Promise.resolve({ data: io, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/workspace-lease') return Promise.resolve({ data: null, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/nodes/{node_id}/artifacts') {
+        return Promise.resolve({ data: { artifacts: mockArtifactArtifacts }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  beforeEach(() => {
+    mockArtifactArtifacts = []
+  })
+
+  it('renders artifact download links when artifacts exist', async () => {
+    mockArtifactArtifacts = [
+      { attempt_key: 'run:test-run-id:node:node-a:0', stream: 'stdout', size_bytes: 1024, sha256: 'aa', compression: 'zstd' },
+      { attempt_key: 'run:test-run-id:node:node-a:0', stream: 'stderr', size_bytes: 512, sha256: 'bb', compression: 'zstd' },
+    ]
+    const wrapper = await mountWithArtifacts(
+      { ...baseDetail(), node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20 } } },
+      {
+        outputs_json: { 'node-a': { input: {}, output: {} } },
+        node_telemetry: { 'node-a': { agent_stdout: 'hello', agent_stderr: 'err' } },
+      },
+    )
+    // Open the logs panel
+    const logBtn = wrapper.find('[data-testid="run-detail-toggle-logs"]')
+    expect(logBtn.exists()).toBe(true)
+    await logBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // Artifact section should appear
+    const section = wrapper.find('[data-testid="run-detail-node-artifacts"]')
+    expect(section.exists()).toBe(true)
+    // Both stdout and stderr links
+    expect(wrapper.find('[data-testid="run-detail-artifact-stdout"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-detail-artifact-stderr"]').exists()).toBe(true)
+    // Download URL contains the correct path
+    const stdoutLink = wrapper.find('[data-testid="run-detail-artifact-stdout"]') as any
+    expect(stdoutLink.attributes('href')).toContain('/api/v1/runs/test-run-id/nodes/node-a/attempts/')
+    expect(stdoutLink.attributes('href')).toContain('/artifacts/stdout')
+    wrapper.unmount()
+  })
+
+  it('does not render artifact section when no artifacts exist', async () => {
+    mockArtifactArtifacts = []
+    const wrapper = await mountWithArtifacts(
+      { ...baseDetail(), node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20 } } },
+      {
+        outputs_json: { 'node-a': { input: {}, output: {} } },
+        node_telemetry: { 'node-a': { agent_stdout: 'hello' } },
+      },
+    )
+    const logBtn = wrapper.find('[data-testid="run-detail-toggle-logs"]')
+    await logBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="run-detail-node-artifacts"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-artifact-stdout"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('builds the correct download URL for multi-attempt nodes', async () => {
+    mockArtifactArtifacts = [
+      { attempt_key: 'run:test-run-id:node:node-a:1', stream: 'stdout', size_bytes: 200, sha256: 'cc', compression: 'none' },
+      { attempt_key: 'run:test-run-id:node:node-a:0', stream: 'stdout', size_bytes: 100, sha256: 'dd', compression: 'zstd' },
+    ]
+    const wrapper = await mountWithArtifacts(
+      { ...baseDetail(), node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20 } } },
+      {
+        outputs_json: { 'node-a': { input: {}, output: {} } },
+        node_telemetry: { 'node-a': { agent_stdout: 'log' } },
+      },
+    )
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const link = wrapper.find('[data-testid="run-detail-artifact-stdout"]') as any
+    const href = link.attributes('href')
+    // Attempt key should be URL-encoded in the path
+    expect(href).toContain('/attempts/')
+    expect(href).toContain('/artifacts/stdout')
+    wrapper.unmount()
+  })
+})

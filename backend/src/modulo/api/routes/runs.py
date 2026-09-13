@@ -3036,13 +3036,102 @@ async def diff_node_output(
 
 
 # ---------------------------------------------------------------------------
-# FAR-582: artifact side-car download
+# FAR-582: artifact side-car endpoints (listing + download)
 # ---------------------------------------------------------------------------
 
 _CODE_RUN_ARTIFACT = "runs.get_run_artifact"
 
 _MSG_ARTIFACT_STREAM_NOT_FOUND = "Artifact stream not found"
 _MSG_ARTIFACT_NOT_CONFIGURED = "Artifact storage is not enabled"
+
+
+class ArtifactPointerResponse(BaseModel):
+    """One artifact pointer returned by the listing endpoint."""
+
+    attempt_key: str
+    stream: str
+    size_bytes: int
+    sha256: str
+    compression: str
+
+
+class ArtifactListResponse(BaseModel):
+    """Response for the per-node artifact listing endpoint."""
+
+    run_id: uuid.UUID
+    node_id: str
+    artifacts: list[ArtifactPointerResponse]
+
+
+@router.get("/{run_id}/nodes/{node_id}/artifacts")
+@handle_db_errors("runs.list_run_artifacts")
+async def list_run_artifacts(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_ARTIFACT),
+) -> ArtifactListResponse:
+    """List all artifact pointers for a node across all attempts.
+
+    Returns an empty list when the node has no artifacts.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            rows = (
+                (
+                    await session.execute(
+                        select(RunNodeOutput).where(
+                            RunNodeOutput.run_id == run_id,
+                            RunNodeOutput.node_id == node_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+    except ProgrammingError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_RUN_NOT_FOUND,
+        )
+
+    # Sort rows by attempt_key descending so the listing is newest-first.
+    sorted_rows = sorted(rows, key=lambda r: r.attempt_key, reverse=True)
+
+    artifacts: list[ArtifactPointerResponse] = []
+    for row in sorted_rows:
+        if not row.artifacts_json:
+            continue
+        artifacts.extend(
+            ArtifactPointerResponse(
+                attempt_key=row.attempt_key,
+                stream=ptr.get("stream", ""),
+                size_bytes=ptr.get("size_bytes", 0),
+                sha256=ptr.get("sha256", ""),
+                compression=ptr.get("compression", "none"),
+            )
+            for ptr in row.artifacts_json
+        )
+
+    return ArtifactListResponse(
+        run_id=run_id,
+        node_id=node_id,
+        artifacts=artifacts,
+    )
 
 
 @router.get("/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}")

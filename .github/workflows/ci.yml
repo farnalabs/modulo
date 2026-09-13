@@ -760,7 +760,7 @@ jobs:
     # had no automated fix mechanism. The Branch Fixer creates its own
     # fix branch from main — branchName: main, prNumber: 0 signals this.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && always()
-    needs: [backend-lint, backend-test, integration-changed, frontend, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, runner-ci-harness, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -769,7 +769,11 @@ jobs:
         # Only dispatch on a real failure. A manually cancelled main run is an
         # intentional action, not a CI break, so we must not dispatch the
         # Branch Fixer for it.
-        if: failure()
+        # Step-level failure() only reflects failures in previous steps WITHIN
+        # THIS JOB — it does NOT see failed jobs in `needs:`. Use
+        # `needs.*.result` instead (cf. self-report-ci job and deploy.yml's
+        # fixer job which use the same pattern).
+        if: contains(needs.*.result, 'failure')
         env:
           WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}

@@ -3420,6 +3420,12 @@ elements:
       - testid: run-detail-node-summary
         type: element
         dynamic_testid: false
+      - testid: run-detail-node-artifacts
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-artifact-error
+        type: element
+        dynamic_testid: false
       - testid: run-detail-cost-clamped
         type: element
         dynamic_testid: false
@@ -4847,6 +4853,9 @@ features:
             - "[x] The run detail page surfaces run-level warnings in a single top strip (id=warnings) that scrolls into view when navigated from the list badge (?warn=1) or a #warnings deep link"
             # Masked input payload on run detail (list-shape parity)
             - "[x] The run detail response (GET /api/v1/runs/{id}) includes the run's input_payload masked through the same sensitive-key mask as the list item's input_payload (parity with GET /api/v1/runs) — persisted state is already post-redaction and the mask is applied again defensively at serialization; a Null or corrupt (non-dict) stored value degrades to null, never a 500"
+            # FAR-582: side-car artifact viewer (listing endpoint + download links)
+            - "[x] GET /api/v1/runs/{run_id}/nodes/{node_id}/artifacts (runs.get_run_artifact permission, org-scoped via RLS) lists all artifact pointers across all attempts for a (run, node) pair, returning attempt_key, stream, size_bytes, sha256, and compression — newest first; 404 when the node has no rows"
+            - "[x] The run detail page fetches the artifact listing when a node's logs panel opens and renders per-stream download links (stdout / stderr) pointing at the existing GET /api/v1/runs/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream} endpoint; multi-attempt nodes show the attempt number alongside each stream; loading, empty, and error states are handled with aria-live regions"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered
