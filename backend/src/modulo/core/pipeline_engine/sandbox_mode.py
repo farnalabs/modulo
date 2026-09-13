@@ -69,6 +69,12 @@ SANDBOX_CAPABILITY_GIT_CREDENTIALS = "sandbox.git_credentials"
 # workspace instead of the default empty home directory. False/None when
 # absent or explicitly disabled.
 SANDBOX_CAPABILITY_WORKSPACE_INPUTS = "sandbox.workspace_inputs"
+# FAR-798: boolean capability — True when >1 distinct host is granted via
+# the multi-host git credential helper. Derived mechanically from the
+# ``allowed_hosts`` field on the node definition (a dict with >1 key means
+# multi-host). The capability stays boolean; a set-valued capability would
+# break the ``dict[str, bool | None]`` conformance contract (ADR 033).
+SANDBOX_CAPABILITY_MULTI_HOST = "sandbox.git_credentials.multi_host"
 
 # FAR-212 PR B: ``sandbox.write_files`` and ``sandbox.git_credentials`` are now
 # MECHANICALLY DERIVABLE from validated + enforced node config:
@@ -162,6 +168,17 @@ def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | No
         caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = git_credentials == "scoped"
     else:
         caps[SANDBOX_CAPABILITY_GIT_CREDENTIALS] = None
+
+    # FAR-798: multi_host is a BOOLEAN capability — True when >1 distinct
+    # host is granted via the ``allowed_hosts`` field on the node definition.
+    # The capability stays boolean; a set-valued capability would break the
+    # ``dict[str, bool | None]`` conformance contract (ADR 033). Derived
+    # mechanically from the node's validated ``allowed_hosts`` dict.
+    allowed_hosts = node_def.get("allowed_hosts")
+    if isinstance(allowed_hosts, dict) and len(allowed_hosts) > 1:
+        caps[SANDBOX_CAPABILITY_MULTI_HOST] = True
+    else:
+        caps[SANDBOX_CAPABILITY_MULTI_HOST] = False
 
     return caps
 
