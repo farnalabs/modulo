@@ -21,6 +21,8 @@
       <Controls :show-interactive="false" position="bottom-right" />
       <template #node-stage="nodeProps">
         <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+          @keydown="onStageKeydown(nodeProps, $event)"
+          :aria-label="stageNodeAriaLabel(nodeProps.data)"
           class="stage-node rounded-lg border-2 px-4 py-3 shadow-sm min-w-[180px] max-w-[260px] transition-shadow hover:shadow-md"
           :class="stageNodeClasses(nodeProps.data)"
           @click="onStageClick(nodeProps)"
@@ -85,6 +87,13 @@
  * journeys render first; the remainder collapses into a "+N more" chip.
  */
 export const MAX_CARDS_PER_NODE = 5
+
+/**
+ * Pixels a focused node moves per arrow-key press. Provides the keyboard
+ * equivalent for node repositioning required by ux-conformance A11Y-3 (the
+ * `:nodes-draggable="true"` drag interaction has no other keyboard path).
+ */
+export const NODE_NUDGE_STEP = 16
 </script>
 
 <script setup lang="ts">
@@ -223,6 +232,48 @@ const flowEdges = computed<Edge[]>(() => {
     title: t.description ?? t.trigger_type ?? undefined,
   }))
 })
+
+/** Accessible label for a stage node: names it and documents the arrow-key reposition path. */
+function stageNodeAriaLabel(data: Record<string, unknown>): string {
+  const label = (data.label as string) ?? 'stage'
+  return `${label}. Press arrow keys to reposition the node.`
+}
+
+/**
+ * Keyboard equivalent for dragging (ux-conformance A11Y-3): when a node is
+ * focused, arrow keys nudge it one step in the pressed direction. Ignores any
+ * other key so Enter/Space click handling is unaffected.
+ */
+function onStageKeydown(nodeProps: { id: string; data: Record<string, unknown> }, event: KeyboardEvent): void {
+  let dx = 0
+  let dy = 0
+  if (event.key === 'ArrowLeft') dx = -1
+  else if (event.key === 'ArrowRight') dx = 1
+  else if (event.key === 'ArrowUp') dy = -1
+  else if (event.key === 'ArrowDown') dy = 1
+  else return
+  event.preventDefault()
+  nudgeNode(nodeProps, dx, dy)
+}
+
+/**
+ * Moves the target node one step in the pressed direction. Mutates the bound
+ * flowNodes ref so VueFlow's v-model:nodes carries the new position for the
+ * session (same persistence model as a drag).
+ */
+function nudgeNode(nodeProps: { id: string; data: Record<string, unknown> }, dx: number, dy: number): void {
+  const nodes = flowNodes.value
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]
+    if (node.id !== nodeProps.id) continue
+    const pos = node.position
+    node.position = {
+      x: (pos?.x ?? 0) + dx * NODE_NUDGE_STEP,
+      y: (pos?.y ?? 0) + dy * NODE_NUDGE_STEP,
+    }
+    return
+  }
+}
 
 function onStageClick(nodeProps: { id: string; data: Record<string, unknown> }): void {
   const type = nodeProps.data.type as string
