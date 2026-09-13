@@ -12,7 +12,7 @@ vi.mock('@vue-flow/core', () => ({
   MarkerType: { ArrowClosed: 'arrowclosed' },
   VueFlow: {
     name: 'VueFlowStub',
-    props: ['nodes', 'edges', 'defaultEdgeOptions'],
+    props: ['nodes', 'edges', 'defaultEdgeOptions', 'nodesDraggable', 'nodesConnectable', 'edgesUpdatable'],
     template: `
       <div class="vueflow-stub">
         <template v-for="n in nodes" :key="n.id">
@@ -36,7 +36,7 @@ vi.mock('../../components/lifecycle-map/JourneyCard.vue', () => ({
   },
 }))
 
-import LifecycleMapRenderer, { MAX_CARDS_PER_NODE } from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
+import LifecycleMapRenderer, { MAX_CARDS_PER_NODE, NODE_NUDGE_STEP } from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
 
 const i18n = createI18n({
   legacy: false,
@@ -296,6 +296,26 @@ describe('LifecycleMapRenderer', () => {
     const cards = wrapper.findAll('.journey-card-stub')
     expect(cards).toHaveLength(MAX_CARDS_PER_NODE + 1)
     expect(wrapper.find('[data-testid="journey-overflow-chip"]').text()).toContain('+2 more')
+  })
+
+  it('enables node dragging on the VueFlow instance', () => {
+    const wrapper = mountRenderer({ mapData: makeMap() })
+    const flow = wrapper.findComponent({ name: 'VueFlowStub' })
+    expect(flow.props('nodesDraggable')).toBe(true)
+  })
+
+  it('nudges the focused node position with arrow keys (keyboard equivalent for drag, A11Y-3)', async () => {
+    const wrapper = mountRenderer({ mapData: makeMap() })
+    const stage = wrapper.find('.stage-node')
+    await stage.trigger('keydown', { key: 'ArrowRight' })
+    await nextTick()
+    let nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100 + NODE_NUDGE_STEP, y: 200 })
+
+    await wrapper.find('.stage-node').trigger('keydown', { key: 'ArrowUp' })
+    await nextTick()
+    nodes = (wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>)
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100 + NODE_NUDGE_STEP, y: 200 - NODE_NUDGE_STEP })
   })
 
   it('applies type-specific styling classes to stage nodes', () => {

@@ -533,3 +533,69 @@ describe('LifecycleMapView work-items toggle and filters (FAR-742)', () => {
     expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(false)
   })
 })
+
+describe('LifecycleMapView journeys loading spinner (FAR-818)', () => {
+  async function mountFlagOn() {
+    seedPlan({ lifecycle_map_journeys: true })
+    const wrapper = mountView()
+    await flushPromises()
+    return wrapper
+  }
+
+  it('shows a loading spinner while journeys are being fetched', async () => {
+    // Use a deferred fetch so isLoadingJourneys stays true while we check.
+    let resolveJourneys!: (value: Response) => void
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) {
+        return new Promise((resolve) => { resolveJourneys = resolve })
+      }
+      if (String(url).includes('/export')) {
+        return Promise.resolve(okJson({
+          primitive_type: 'lifecycle_map', format_version: '1', name: 'Launch Flow',
+          description: null, content_json: { stages: [], edges: [] },
+        }))
+      }
+      return Promise.resolve(okJson(mapDetail))
+    })
+
+    const wrapper = await mountFlagOn()
+    // Check the "Show work items" checkbox to trigger the journeys fetch.
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
+    await flushPromises()
+
+    const spinner = wrapper.find('[role="status"]')
+    expect(spinner.exists()).toBe(true)
+    expect(spinner.text()).toContain('Loading journey...')
+    expect(spinner.find('.animate-spin').exists()).toBe(true)
+
+    // Resolve the fetch to clean up.
+    resolveJourneys(okJson({ items: [] }))
+    await flushPromises()
+  })
+
+  it('hides the loading spinner once journeys have loaded', async () => {
+    let resolveJourneys!: (value: Response) => void
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes('/journeys')) {
+        return new Promise((resolve) => { resolveJourneys = resolve })
+      }
+      if (String(url).includes('/export')) {
+        return Promise.resolve(okJson({
+          primitive_type: 'lifecycle_map', format_version: '1', name: 'Launch Flow',
+          description: null, content_json: { stages: [], edges: [] },
+        }))
+      }
+      return Promise.resolve(okJson(mapDetail))
+    })
+
+    const wrapper = await mountFlagOn()
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
+    await flushPromises()
+
+    expect(wrapper.find('[role="status"]').exists()).toBe(true)
+
+    resolveJourneys(okJson({ items: [] }))
+    await flushPromises()
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+  })
+})
