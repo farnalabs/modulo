@@ -496,4 +496,18 @@ describe('AdminAuditView — exports', () => {
     expect(wrapper.text()).toContain('jsonl denied')
     expect(clickSpy).not.toHaveBeenCalled()
   })
+
+  it('expands an audit row via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
+    const wrapper = await mountLoaded()
+    const row = wrapper.find('[data-testid="admin-audit-event-row-evt-1"]')
+    expect(row.exists()).toBe(true)
+
+    await row.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(true)
+
+    await row.trigger('keydown', { key: ' ', code: 'Space' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(false)
+  })
 })

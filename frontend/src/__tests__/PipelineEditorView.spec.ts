@@ -1152,6 +1152,45 @@ describe('PipelineEditorView — run dialog', () => {
     wrapper.unmount()
   })
 
+  it('closes the run dialog when Escape is fired on the backdrop element (FAR-821 a11y)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent Node', description: '' } }]
+    await nextTick()
+
+    await wrapper.find('[data-testid="pipeline-editor-run"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-run-prompt"]').exists()).toBe(true)
+
+    const backdrop = wrapper.find('[data-testid="pipeline-editor-run-dialog-backdrop"]')
+    expect(backdrop.exists()).toBe(true)
+    await backdrop.trigger('keydown', { key: 'Escape' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-run-prompt"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('exposes keyboard handlers on the version-timeline toolbar without side effects (FAR-821 a11y)', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = await mountEditorLoaded()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
+    await nextTick()
+
+    const button = wrapper.find('[data-testid="pipeline-editor-version-timeline"]')
+    // The toolbar <div> wraps the button with @keydown.enter.stop /
+    // @keydown.space.prevent.stop; key events on the button bubble up to it.
+    await button.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    await button.trigger('keydown', { key: ' ', code: 'Space' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-version-timeline"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('renames the pipeline and reflects the new name', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
