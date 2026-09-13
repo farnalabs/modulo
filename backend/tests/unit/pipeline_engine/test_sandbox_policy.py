@@ -348,6 +348,46 @@ async def test_apply_sandbox_policy_git_scoped_registers_agent_config() -> None:
     assert "/home/user/.gitconfig" in sandbox.commands.runs[0]
 
 
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_multi_host_helper_reachable() -> None:
+    """FAR-798 (blocking 1): when allowed_hosts is passed with scoped
+    credentials, the multi-host helper is installed (not the single-host one),
+    so the multi_host capability is genuinely enforced — the branch is
+    reachable and not dead code."""
+    sandbox = _FakeSandbox()
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=False,
+        git_credentials="scoped",
+        egress_policy="default",
+        egress_allowlist=None,
+        allowed_hosts={"github.com": "MODULO_GIT_CRED_0", "gitlab.com": "MODULO_GIT_CRED_1"},
+    )
+    # The installed helper must be the multi-host variant (both host case arms).
+    assert "github.com" in sandbox.commands.runs[0]
+    assert "gitlab.com" in sandbox.commands.runs[0]
+    # Must not be the single-host scoped script (which only ever grants
+    # github.com and never references a second host).
+    assert "MODULO_GIT_CRED_1" in sandbox.commands.runs[0]
+
+
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_scoped_without_allowed_hosts_is_single_host() -> None:
+    """FAR-798 (regression): scoped credentials without allowed_hosts still
+    install the byte-identical single-host helper."""
+    sandbox = _FakeSandbox()
+    await apply_sandbox_policy(
+        sandbox,
+        read_only=False,
+        git_credentials="scoped",
+        egress_policy="default",
+        egress_allowlist=None,
+        allowed_hosts=None,
+    )
+    assert "github.com" in sandbox.commands.runs[0]
+    assert "MODULO_GIT_CRED" not in sandbox.commands.runs[0]
+
+
 # ---------------------------------------------------------------------------
 # PipelineGraphNode field validation helpers
 # ---------------------------------------------------------------------------

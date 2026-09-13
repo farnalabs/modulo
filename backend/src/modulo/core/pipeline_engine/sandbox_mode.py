@@ -172,13 +172,37 @@ def derive_sandbox_capabilities(node_def: dict[str, Any]) -> dict[str, bool | No
     # FAR-798: multi_host is a BOOLEAN capability — True when >1 distinct
     # host is granted via the ``allowed_hosts`` field on the node definition.
     # The capability stays boolean; a set-valued capability would break the
-    # ``dict[str, bool | None]`` conformance contract (ADR 033). Derived
-    # mechanically from the node's validated ``allowed_hosts`` dict.
+    # ``dict[str, bool | None]`` conformance contract (ADR 033).
+    #
+    # The derivation reads the node config FAIL-CLOSED like the other
+    # capabilities: only a validated ``dict[str, str]`` (host -> env-var name)
+    # is trusted. Any other shape (a smuggled dict whose values are not host/
+    # env-var strings, or a non-dict) resolves ``None`` so a block guardrail
+    # can never certify a deny-guarantee from an unvalidated key — a smuggled
+    # dict with >1 keys must NOT silently certify True with no enforcement
+    # behind it.
     allowed_hosts = node_def.get("allowed_hosts")
-    if isinstance(allowed_hosts, dict) and len(allowed_hosts) > 1:
-        caps[SANDBOX_CAPABILITY_MULTI_HOST] = True
-    else:
+    if isinstance(allowed_hosts, dict):
+        items = list(allowed_hosts.items())
+        if not items:
+            # Empty dict: no host granted -> multi_host is False (not unknown).
+            caps[SANDBOX_CAPABILITY_MULTI_HOST] = False
+        elif any(not isinstance(k, str) or not isinstance(v, str) for k, v in items):
+            # Smuggled / non-string keys/values: fail CLOSED to None so a block
+            # guardrail can never certify a deny-guarantee from an unvalidated
+            # key (matches the read_only / git_credentials capabilities).
+            caps[SANDBOX_CAPABILITY_MULTI_HOST] = None
+        else:
+            # Validated shape (str keys -> str env-var names): multi-host iff
+            # more than one host is granted.
+            caps[SANDBOX_CAPABILITY_MULTI_HOST] = len(items) > 1
+    elif allowed_hosts is None:
+        # Absent: no multi-host credential is granted (normal scoped single-host
+        # default) — multi_host is False, not unknown.
         caps[SANDBOX_CAPABILITY_MULTI_HOST] = False
+    else:
+        # Non-dict shape is unvalidated input: fail CLOSED to None.
+        caps[SANDBOX_CAPABILITY_MULTI_HOST] = None
 
     return caps
 

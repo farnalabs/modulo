@@ -192,14 +192,33 @@ class TestMultiHostCapability:
         caps = derive_sandbox_capabilities(node_def)
         assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is False
 
-    def test_multi_host_false_for_non_dict(self) -> None:
-        """multi_host is False when allowed_hosts is not a dict."""
+    def test_multi_host_none_for_non_dict(self) -> None:
+        """multi_host is None (fail-closed) when allowed_hosts is not a dict.
+
+        A non-dict shape is unvalidated input and must not silently certify
+        False (a deny-guarantee) — it resolves None so a block guardrail fails
+        closed.
+        """
         node_def = {
             "node_type": "sandbox_agent",
             "allowed_hosts": ["github.com"],
         }
         caps = derive_sandbox_capabilities(node_def)
-        assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is False
+        assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is None
+
+    def test_multi_host_none_for_smuggled_dict(self) -> None:
+        """A smuggled dict whose values are not host/env-var strings resolves None.
+
+        FAR-798 review (blocking 2): a smuggled dict with >1 keys must NOT
+        certify multi_host=True with no enforcement behind it — it fails closed
+        to None.
+        """
+        node_def = {
+            "node_type": "sandbox_agent",
+            "allowed_hosts": {1: "VAR0", 2: "VAR1"},
+        }
+        caps = derive_sandbox_capabilities(node_def)
+        assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is None
 
     def test_constant_name(self) -> None:
         """The capability constant is the expected dotted string."""
