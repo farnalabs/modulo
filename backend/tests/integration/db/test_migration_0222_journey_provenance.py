@@ -1,6 +1,6 @@
-"""Integration test for migration 0221_journey_provenance (FAR-794 slice 1).
+"""Integration test for migration 0222_journey_provenance (FAR-794 slice 1).
 
-Runs the real Alembic ``upgrade``/``downgrade`` of revision 0221 against a live
+Runs the real Alembic ``upgrade``/``downgrade`` of revision 0222 against a live
 Postgres (testcontainers) on an ISOLATED database (the migration drops data-leg
 columns on downgrade — never touch the shared session DB) and verifies:
 
@@ -44,7 +44,7 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0221_journey_provenance"
+MIGRATION_REV = "0222_journey_provenance"
 PREV_REV = "0219_eval_cluster_check_constraints"
 # 0221's actual down_revision (FAR-582's merged migration). The idempotency
 # re-run must rewind exactly one revision (to 0220) so only the guarded 0221

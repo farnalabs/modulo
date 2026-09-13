@@ -1,7 +1,7 @@
 """Add ``journeys.provenance``/``first_seen_source`` + canon ``reported`` → ``agent`` (FAR-794 slice 1).
 
-Revision ID: 0221_journey_provenance
-Revises: 0220_run_node_artifacts
+Revision ID: 0222_journey_provenance
+Revises: 0221_workspace_inputs_env_profiles
 Create Date: 2026-09-12
 
 Schema legs (Postgres only; SQLite/ORM-created test schemas get the columns
@@ -70,8 +70,8 @@ from sqlalchemy import text
 
 from modulo.db.migrations._rls_ceremony import is_postgres as _is_postgres
 
-revision: str = "0221_journey_provenance"
-down_revision: str | None = "0220_run_node_artifacts"
+revision: str = "0222_journey_provenance"
+down_revision: str | None = "0221_workspace_inputs_env_profiles"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

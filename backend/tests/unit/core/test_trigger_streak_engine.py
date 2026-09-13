@@ -323,10 +323,11 @@ class TestMigrationBackfillGrace:
         # and FAR-748's 0216_audit_events_sweep_detection_index chains on top of 0215,
         # and 0217_hitl_claims_decided_by chains on top of 0216,
         # and 0219_eval_cluster_check_constraints chains on top of 0218,
-        # and 0220_run_node_artifacts chains on top of 0219, and FAR-794's
-        # 0221_journey_provenance chains on top of 0220,
+        # and 0220_run_node_artifacts chains on top of 0219,
+        # and FAR-802's 0221_workspace_inputs_env_profiles chains on top of 0220,
+        # and FAR-794's 0222_journey_provenance chains on top of 0221,
         # so it is now the single linear head of the chain.
-        assert heads == ["0221_journey_provenance"], f"expected a single head, got {heads}"
+        assert heads == ["0222_journey_provenance"], f"expected a single head, got {heads}"
 
 
 # ---------------------------------------------------------------------------

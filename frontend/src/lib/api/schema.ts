@@ -14444,6 +14444,13 @@ export interface components {
              * @description Max retained stdout/stderr bytes when stdout_retention_mode=='full'. Ignored in 'tail' mode. Must be a positive integer. Only valid on sandbox_agent nodes.
              */
             stdout_max_bytes?: number | null;
+            /**
+             * Workspace Inputs
+             * @description Managed workspace inputs: a list of repository input descriptors (each with dest/ref/url) checked out into the sandbox workspace. Only valid on sandbox_agent nodes. Validated for safe dest traversal, ref.kind, and URL scheme.
+             */
+            workspace_inputs?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** PipelineGraphResponse */
         PipelineGraphResponse: {

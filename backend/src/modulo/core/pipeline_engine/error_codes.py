@@ -66,6 +66,12 @@ _CODE_SANDBOX_BINDING_RESOLUTION = "sandbox.binding_resolution"
 # FAR-592 (D6): the Local (host-subprocess) provider tier refused a
 # bindings-carrying agent without an explicit opt-in (D7-refusal posture).
 _CODE_SANDBOX_TIER_REFUSED = "sandbox.tier_refused"
+# FAR-802: managed workspace input error codes.
+_CODE_SANDBOX_INPUT_CREDENTIAL_FAILED = "sandbox.input_credential_failed"
+_CODE_SANDBOX_INPUT_CHECKOUT_FAILED = "sandbox.input_checkout_failed"
+_CODE_SANDBOX_INPUT_HOST_MISMATCH = "sandbox.input_host_mismatch"
+_CODE_SANDBOX_INPUT_RESOLUTION_FAILED = "sandbox.input_resolution_failed"
+_CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED = "sandbox.workspace_inputs_disabled"
 _CODE_CAPACITY_ORG = "capacity.org"
 # FAR-410: a connector write was cancelled mid-send (per-attempt timeout), so
 # the upstream side-effect state is unknowable. This is a DISTINCT terminal
@@ -319,6 +325,39 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
             "Local provider tier refused runner bindings; opt in via the profile's "
             "allow_runner_env_bindings flag or switch tiers."
         ),
+    ),
+    # FAR-802: managed workspace input error codes. These surface when a
+    # managed input fails at runtime (credential, checkout, host-mismatch,
+    # resolution) or when the feature is explicitly disabled.
+    _CODE_SANDBOX_INPUT_CREDENTIAL_FAILED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Managed workspace input credential could not be resolved or was rejected.",
+    ),
+    _CODE_SANDBOX_INPUT_CHECKOUT_FAILED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Managed workspace input git checkout failed (clone/checkout error).",
+    ),
+    _CODE_SANDBOX_INPUT_HOST_MISMATCH: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Managed workspace input URL host does not match the connector's allowed host.",
+    ),
+    _CODE_SANDBOX_INPUT_RESOLUTION_FAILED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Managed workspace input ref (branch/tag/sha) could not be resolved.",
+    ),
+    _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Managed workspace inputs are disabled for this organisation or pipeline.",
     ),
     # --- node guard codes ------------------------------------------------
     _CODE_NODE_TIMEOUT: ErrorCodeSpec(
