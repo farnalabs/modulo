@@ -26,9 +26,11 @@ bdd:
   - backend/tests/bdd/features/library/tiering.feature
   - backend/tests/bdd/features/library/auto_update.feature
   - backend/tests/bdd/features/library/community_registry.feature
+  - backend/tests/bdd/features/library/contribute.feature
   - backend/tests/bdd/features/library/schemas.feature
   - backend/tests/bdd/steps/test_library.py
   - backend/tests/bdd/steps/test_community_registry.py
+  - backend/tests/bdd/steps/test_library_contributions.py
   - backend/tests/bdd/steps/test_schemas.py
 depends-on:
   - feat-pipelines
@@ -62,6 +64,13 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
       (`tiering.feature`)
 - [x] Community sync/install and the community registry are covered
       (`community_registry.feature`, `core/library_sync`, `test_community_install.py`)
+- [x] Fixture contributions are exercised end to end through
+      `/api/v1/library/contribute` (`contributions.py`): a `draft` is created (201),
+      missing fields are rejected 422, a draft is submitted to the `review_queue`,
+      a non-draft submit is 409, publish (admin-only, 403 for viewers) sets
+      `visibility=community`, a published contribution is versioned into a fresh
+      `draft` (201, 409 on a draft original), and contributions/versions are
+      listed (`contribute.feature`, `test_library_contributions.py`)
 - [x] Library-schema seeding and dogfood schemas underpin create-pipeline from a template
       (`library/schemas.feature`, `test_schema_seeds.py`)
 - [x] Library collections (FAR-760): a `library_collection` primitive can be created as a
@@ -76,13 +85,20 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
 
 ## Known Gaps
 
-- **`library/contribute.feature` is not bound to any step file** — the community
-  contribution BDD scenarios exist but are not exercised by the BDD suite (contribution is
-  unit-tested only: `tests/unit/library_service/test_contribution_flow.py`).
 - **`community_registry.feature` is a separate surface from contribution** — contribution
   authoring and registry browsing are tracked under one feature here but cited separately.
 
 ## QA History
+
+- 2026-09-13: **improve-architecture (product-map walk)** — closed the contribution BDD
+  gap: wired `library/contribute.feature` into the executing suite via the new
+  `steps/test_library_contributions.py` (11 scenarios) and dropped the file from the
+  tracked orphaned-BDD debt list (`_ORPHANED_BDD_FEATURES`). The rewritten feature
+  exercises the real `/api/v1/library/contribute` routes (`contributions.py`) with only
+  the DB service functions patched: draft create (201) / missing-field 422, draft →
+  `review_queue` submit (409 on non-draft), admin-only publish (403 for viewers,
+  `contribution.publish`), version-bump (201 draft, 409 on draft original) and the
+  contribution/version list surfaces. Contribution is no longer unit-tested only.
 
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
