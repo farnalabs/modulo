@@ -157,15 +157,15 @@
         >
           <template v-if="saveStatus === 'saving'">
             <div class="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
-            Saving positions…
+            {{ $t('views.LifecycleMapView.save_status_saving') }}
           </template>
           <template v-else-if="saveStatus === 'saved'">
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
-            Positions saved
+            {{ $t('views.LifecycleMapView.save_status_saved') }}
           </template>
           <template v-else-if="saveStatus === 'error'">
             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-destructive"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-            <span class="text-destructive">Failed to save positions</span>
+            <span class="text-destructive">{{ $t('views.LifecycleMapView.save_status_failed') }}</span>
           </template>
         </div>
 
