@@ -150,6 +150,36 @@ describe('PipelineEditorView', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
+  it('closes the run dialog on Escape for keyboard accessibility', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    await nextTick()
+
+    // Seed a node so the Run button is enabled (it is disabled when the
+    // canvas has no nodes).
+    const vm = wrapper.vm as unknown as { flowNodes: unknown[] }
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent' } }]
+    await nextTick()
+
+    const runBtn = wrapper.find('[data-testid="pipeline-editor-run"]')
+    expect(runBtn.attributes('disabled')).toBeUndefined()
+
+    await runBtn.trigger('click')
+    await nextTick()
+
+    const backdrop = wrapper.find('[data-testid="pipeline-editor-run-dialog-backdrop"]')
+    expect(backdrop.exists()).toBe(true)
+
+    // Escape on the backdrop closes the dialog (the new keyboard handler).
+    // Dispatch a native, bubbling event so the element-level @keydown.escape
+    // binding (and the document-level onRunDialogKeydown listener) fire.
+    backdrop.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    expect(wrapper.find('[data-testid="pipeline-editor-run-dialog-backdrop"]').exists()).toBe(false)
+  })
+
   it('renders the capability scope panel for an agent node and persists edits', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
