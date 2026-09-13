@@ -2897,6 +2897,9 @@ elements:
       - testid: pipeline-editor-run
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-run-dialog-backdrop
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-max-duration
         type: input
         dynamic_testid: false
