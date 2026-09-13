@@ -787,7 +787,6 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>
               <dd class="mt-1">
                 <SandboxCommandsEditor
-                  v-model:scalar-command="selectedNodeData.agent_command"
                   v-model:commands="selectedNodeData.agent_commands"
                   v-model:joiner="selectedNodeData.commands_concatenation_string"
                 />
@@ -832,17 +831,15 @@
             </div>
           </template>
           <!-- Non-sandbox nodes: commands are read-only. The authoring editor is
-               sandbox-only — a scalar typed on an agent node would flow into the
+               sandbox-only — a command typed on an agent node would flow into the
                graph save and FAR-488a would then overwrite the bound Agent's row
-               command. What the graph already carries is displayed, never edited. -->
+               command. What the graph already carries (the bound Agent's
+               agent_commands list) is displayed, never edited. The scalar
+               agent_command field was removed in FAR-820. -->
           <div
-            v-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_command"
+            v-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_commands && selectedNodeData.agent_commands.length > 0"
             data-testid="pipeline-editor-node-commands-readonly"
           >
-            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>
-            <dd class="font-mono text-xs break-all">{{ selectedNodeData.agent_command }}</dd>
-          </div>
-          <template v-else-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_commands && selectedNodeData.agent_commands.length > 0">
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.commands') }}</dt>
             <dd>
               <ul class="list-inside list-decimal text-xs font-mono text-muted-foreground">
@@ -852,7 +849,7 @@
                 {{ $t('views.PipelineEditorView.commands_concatenated_with') }} <code class="font-mono">{{ selectedNodeData.commands_concatenation_string }}</code>
               </div>
             </dd>
-          </template>
+          </div>
           <!-- Lifecycle maps -->
           <div v-if="linkedLifecycleMaps.length > 0">
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.lifecycle_maps') }}</dt>
@@ -2527,33 +2524,33 @@ onBeforeUnmount(() => {
 // Sandbox command authoring → graph-save payload. The graph save REPLACES
 // graph_nodes_json wholesale, so every command field must be serialised here
 // or it is wiped. Mirrors the backend contract (routes/pipelines.py +
-// sandbox_mode): agent_command XOR agent_commands on sandbox_agent nodes
-// (the save clears the scalar when a non-empty list is present; empty list ==
-// no commands), and the joiner is persisted as a non-empty string — a null
-// joiner would crash the runtime join (None.join), so an unset joiner saves
-// the " && " default. Non-sandbox nodes never gain command mutations here:
-// the commands editor is sandbox-gated and the spread round-trips whatever
-// the graph already carried (FAR-488a syncs a bound Agent's row from a
-// node-level command — the editor must not fabricate one).
+// sandbox_mode): sandbox_agent nodes carry ONLY the agent_commands list
+// (the scalar agent_command field was removed in FAR-820 — the backend
+// PipelineGraphNode no longer declares it, so any scalar save is silently
+// dropped and the runtime join would crash on a missing list). The joiner is
+// persisted as a non-empty string — a null joiner would crash the runtime
+// join (None.join), so an unset joiner saves the " && " default. Non-sandbox
+// nodes never gain command mutations here: the commands editor is
+// sandbox-gated and the spread round-trips whatever the graph already
+// carried (FAR-488a syncs a bound Agent's row from a node-level command —
+// the editor must not fabricate one).
 function nodeCommandFields(n: any): {
-  agent_command?: string | null
   agent_commands?: string[] | null
   commands_concatenation_string?: string | null
 } {
   if (n.node_type !== 'sandbox_agent') {
     return {}
   }
-  const scalar = typeof n.agent_command === 'string' && n.agent_command.trim() !== '' ? n.agent_command : null
   const rows = (Array.isArray(n.agent_commands) ? n.agent_commands : [])
     .map((c: unknown) => (typeof c === 'string' ? c : String(c ?? '')))
     .filter((c: string) => c.trim() !== '')
   if (rows.length === 0) {
-    return { agent_command: scalar, agent_commands: null, commands_concatenation_string: null }
+    return { agent_commands: null, commands_concatenation_string: null }
   }
   const joiner = typeof n.commands_concatenation_string === 'string' && n.commands_concatenation_string.length > 0
     ? n.commands_concatenation_string
     : ' && '
-  return { agent_command: null, agent_commands: rows, commands_concatenation_string: joiner }
+  return { agent_commands: rows, commands_concatenation_string: joiner }
 }
 
 // View-only / UI-only keys that must never leak into a graph-save payload.
@@ -2564,6 +2561,8 @@ function nodeCommandFields(n: any): {
 // ever being merged into rawNodes and silently persisted. model_backend_id is
 // an Agent-level field (convert-to-agent endpoint), not a PipelineGraphNode
 // field; the model tolerates extras, but it is omitted for hygiene.
+// agent_command is the removed scalar (FAR-820); PipelineGraphNode no longer
+// declares it, so any legacy value must never be persisted.
 const VIEW_ONLY_NODE_KEYS = new Set([
   'type',
   'data',
@@ -2572,6 +2571,7 @@ const VIEW_ONLY_NODE_KEYS = new Set([
   'dimensions',
   'hasCapabilityScope',
   'model_backend_id',
+  'agent_command',
 ])
 
 // Build one node's save payload by spreading the raw node data — the GET

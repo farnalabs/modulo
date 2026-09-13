@@ -5,8 +5,7 @@ import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.
 
 // Harness wires the exact v-model contract the pipeline editor uses, so
 // emitted updates feed back into props like they do in the real parent.
-function mountHarness(initial: { scalarCommand?: string; commands?: string[]; joiner?: string } = {}) {
-  const scalar = ref<string | null>(initial.scalarCommand ?? null)
+function mountHarness(initial: { commands?: string[]; joiner?: string } = {}) {
   const commands = ref<string[] | null>(initial.commands ?? null)
   const joiner = ref<string | null>(initial.joiner ?? null)
   const Harness = defineComponent({
@@ -14,10 +13,6 @@ function mountHarness(initial: { scalarCommand?: string; commands?: string[]; jo
     setup() {
       return () =>
         h(SandboxCommandsEditor, {
-          scalarCommand: scalar.value,
-          'onUpdate:scalarCommand': (v: string) => {
-            scalar.value = v
-          },
           commands: commands.value,
           'onUpdate:commands': (v: string[]) => {
             commands.value = v
@@ -29,16 +24,15 @@ function mountHarness(initial: { scalarCommand?: string; commands?: string[]; jo
         })
     },
   })
-  return { wrapper: mount(Harness), scalar, commands, joiner }
+  return { wrapper: mount(Harness), commands, joiner }
 }
 
 describe('SandboxCommandsEditor', () => {
-  it('renders pre-existing single-command data in the scalar input', () => {
-    const { wrapper } = mountHarness({ scalarCommand: 'opencode run --auto' })
-    const scalar = wrapper.find('[data-testid="pipeline-editor-node-command-scalar"]')
-    expect(scalar.exists()).toBe(true)
-    expect((scalar.element as HTMLInputElement).value).toBe('opencode run --auto')
-    // A scalar-only node has no rows and no joiner UI
+  it('renders the empty list editor when no commands are present (no scalar input)', () => {
+    const { wrapper } = mountHarness()
+    // No scalar input exists anymore — commands are list-only (FAR-820).
+    expect(wrapper.find('[data-testid="pipeline-editor-node-command-scalar"]').exists()).toBe(false)
+    // A commandless node shows the empty-state and no joiner UI.
     expect(wrapper.find('[data-testid="pipeline-editor-node-command-empty"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="pipeline-editor-node-command-joiner"]').exists()).toBe(false)
   })
@@ -69,23 +63,6 @@ describe('SandboxCommandsEditor', () => {
     await wrapper.find('[data-testid="pipeline-editor-node-command-joiner"]').setValue(' ; ')
     expect(joiner.value).toBe(' ; ')
     expect(wrapper.find('[data-testid="pipeline-editor-node-command-preview"]').text()).toContain('cmd-a ; cmd-b')
-  })
-
-  it('clears the scalar command when the node arrives with both scalar and list set', async () => {
-    // Hand-authored / API-authored nodes can carry both; the runtime resolves
-    // the list first, so the editor immediately clears the stale scalar.
-    const { wrapper, scalar } = mountHarness({ scalarCommand: 'legacy-scalar', commands: ['cmd-a'] })
-    await nextTick()
-    expect(scalar.value).toBe('')
-    expect((wrapper.find('[data-testid="pipeline-editor-node-command-scalar"]').element as HTMLInputElement).disabled).toBe(true)
-  })
-
-  it('disables the list rows and add button while a scalar command is set, without clearing the list', () => {
-    const { wrapper, commands } = mountHarness({ scalarCommand: 'opencode run --auto', commands: ['   '] })
-    expect((wrapper.find('[data-testid="pipeline-editor-node-command-row-0"]').element as HTMLInputElement).disabled).toBe(true)
-    expect((wrapper.find('[data-testid="pipeline-editor-node-command-add"]').element as HTMLButtonElement).disabled).toBe(true)
-    // no premature clearing of the list itself — the user may toggle back
-    expect(commands.value).toEqual(['   '])
   })
 
   it('removes a row and emits the remaining list', async () => {
@@ -119,12 +96,11 @@ describe('SandboxCommandsEditor', () => {
   })
 
   it('whitespace-only rows do not activate the list (empty list == no commands)', async () => {
-    const { wrapper, scalar } = mountHarness()
+    const { wrapper } = mountHarness()
     await wrapper.find('[data-testid="pipeline-editor-node-command-add"]').trigger('click')
     await wrapper.find('[data-testid="pipeline-editor-node-command-row-0"]').setValue('   ')
-    // list not active: joiner UI absent, the scalar stays untouched
+    // list not active: joiner UI absent
     expect(wrapper.find('[data-testid="pipeline-editor-node-command-joiner"]').exists()).toBe(false)
-    expect(scalar.value).toBeNull()
     // positive control: a non-empty row activates the list UI
     await wrapper.find('[data-testid="pipeline-editor-node-command-row-0"]').setValue('cmd-a')
     expect(wrapper.find('[data-testid="pipeline-editor-node-command-joiner"]').exists()).toBe(true)

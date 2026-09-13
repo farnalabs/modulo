@@ -641,7 +641,7 @@ def test_extract_agent_command_sync_updates_rejects_bad_shapes() -> None:
         {"agent_id": agent_id, "agent_commands": [""]},
     ]
     updates = _extract_agent_command_sync_updates(nodes)  # type: ignore[arg-type]
-    assert updates == {agent_id: "cmd"}
+    assert updates == {agent_id: ["cmd"]}
 
 
 def test_endpoint_events_normalisation() -> None:

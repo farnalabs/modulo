@@ -589,11 +589,11 @@ describe('PipelineEditorView', () => {
     // list + custom joiner survive the save payload (round-trip)
     expect(savedNode.agent_commands).toEqual(['opencode run', '--model oxf'])
     expect(savedNode.commands_concatenation_string).toBe(' ; ')
-    // mutual exclusion: the scalar is cleared when a non-empty list is authored
-    expect(savedNode.agent_command).toBeNull()
+    // the removed scalar field is never persisted (FAR-820)
+    expect(savedNode).not.toHaveProperty('agent_command')
   })
 
-  it('saves a scalar-only sandbox command without inventing a list', async () => {
+  it('saves a commandless sandbox node as a null list (no scalar invented)', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
@@ -605,6 +605,7 @@ describe('PipelineEditorView', () => {
         node_type: 'sandbox_agent',
         template_id: 'opencode',
         agent_prompt: 'do the thing',
+        // legacy scalar field carried on the node — must be dropped, not persisted
         agent_command: 'opencode run --auto',
         label: 'Sandbox',
         description: '',
@@ -618,9 +619,11 @@ describe('PipelineEditorView', () => {
     await vm.saveGraph()
 
     const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
-    expect(savedNode.agent_command).toBe('opencode run --auto')
+    // FAR-820: only the agent_commands list is persisted; a commandless node
+    // saves a null list + null joiner, and the dead scalar is never sent.
     expect(savedNode.agent_commands).toBeNull()
     expect(savedNode.commands_concatenation_string).toBeNull()
+    expect(savedNode).not.toHaveProperty('agent_command')
   })
 
   it('falls back the join operator to the default when a list is saved without one', async () => {
@@ -649,11 +652,10 @@ describe('PipelineEditorView', () => {
     await vm.saveGraph()
 
     const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
-    // unset joiner saves as the runtime default; the scalar is cleared by the
-    // list's presence (mutual exclusion at the payload boundary too)
+    // unset joiner saves as the runtime default
     expect(savedNode.commands_concatenation_string).toBe(' && ')
     expect(savedNode.agent_commands).toEqual(['opencode run', '--model oxf'])
-    expect(savedNode.agent_command).toBeNull()
+    expect(savedNode).not.toHaveProperty('agent_command')
   })
 
   it('filters empty command rows and keeps a scalar-only node intact on save', async () => {
@@ -682,9 +684,9 @@ describe('PipelineEditorView', () => {
 
     await vm.saveGraph()
     const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
-    // empty/whitespace rows are dropped; the remaining list wins over the scalar
+    // empty/whitespace rows are dropped; the remaining list wins
     expect(savedNode.agent_commands).toEqual(['cmd-a'])
-    expect(savedNode.agent_command).toBeNull()
+    expect(savedNode).not.toHaveProperty('agent_command')
     expect(savedNode.commands_concatenation_string).toBe(' ; ')
   })
 
@@ -741,8 +743,9 @@ describe('PipelineEditorView', () => {
     expect(savedNode.output_schema_json).toEqual({ type: 'object' })
     expect(savedNode.autonomy_recommendation).toBe('autonomy_low')
     expect(savedNode.input_schema_pin).toEqual({ schema_id: 'schema-1', schema_version: 'v1' })
-    // command normalisation still layers on top of the spread
-    expect(savedNode.agent_command).toBe('opencode run --auto')
+    // command normalisation still layers on top of the spread; the removed
+    // scalar field is never persisted (FAR-820)
+    expect(savedNode).not.toHaveProperty('agent_command')
     expect(savedNode.agent_commands).toBeNull()
   })
 
@@ -791,7 +794,7 @@ describe('PipelineEditorView', () => {
     expect(savedNode).not.toHaveProperty('model_backend_id')
   })
 
-  it('shows commands read-only for an agent node and round-trips its payload without command mutations', async () => {
+  it('shows no command editor or read-only block for an agent node and never fabricates commands', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
@@ -802,7 +805,6 @@ describe('PipelineEditorView', () => {
         id: 'node-1',
         node_type: 'agent',
         agent_id: 'agent-1',
-        agent_command: 'node-level-legacy-command',
         agent_commands: null,
         commands_concatenation_string: ' && ',
         label: 'Agent Node',
@@ -815,19 +817,17 @@ describe('PipelineEditorView', () => {
     vm.onNodeClick({ node: { id: 'node-1' } })
     await nextTick()
 
-    // the authoring editor is sandbox-only; the read-only display renders instead
+    // the authoring editor is sandbox-only; an agent node with no agent_commands
+    // list shows neither the editor nor a read-only command block
     expect(wrapper.find('[data-testid="pipeline-editor-node-commands-editor"]').exists()).toBe(false)
-    const readonly = wrapper.find('[data-testid="pipeline-editor-node-commands-readonly"]')
-    expect(readonly.exists()).toBe(true)
-    expect(readonly.text()).toContain('node-level-legacy-command')
+    expect(wrapper.find('[data-testid="pipeline-editor-node-commands-readonly"]').exists()).toBe(false)
 
     await vm.saveGraph()
 
     const savedNode = (vi.mocked(api.PATCH).mock.calls[0][1] as any).body.nodes[0]
-    // the save payload round-trips the stored command verbatim — the editor
-    // never fabricates or rewrites commands on a non-sandbox node (FAR-488a
-    // syncs a node-level agent_command into the bound Agent's row)
-    expect(savedNode.agent_command).toBe('node-level-legacy-command')
+    // the editor never fabricates or rewrites commands on a non-sandbox node
+    // (FAR-488a syncs a bound Agent's row); the removed scalar is never sent
+    expect(savedNode).not.toHaveProperty('agent_command')
     expect(savedNode.agent_commands).toBeNull()
     expect(savedNode.commands_concatenation_string).toBe(' && ')
   })

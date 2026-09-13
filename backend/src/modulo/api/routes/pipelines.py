@@ -1705,17 +1705,21 @@ async def _validate_graph_save(
     ]
 
 
-def _extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uuid.UUID, str]:
-    """FAR-488a: first-carried ``agent_commands`` per distinct bound agent.
+def _extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uuid.UUID, list[str]]:
+    """FAR-488a: full ``agent_commands`` list per distinct bound agent.
 
     A node WITHOUT an ``agent_id`` needs no sync (its node-level command always
     stands at snapshot time — ``_apply_agent_fields`` only materializes bound
     agents). A node carrying no usable ``agent_commands`` value has nothing to
-    sync. When several nodes bind the SAME agent, the FIRST node's command wins
-    (deterministic; snapshot materialization applies one row value to every
-    node bound to that agent, so per-node divergence is not representable).
+    sync. The WHOLE list is carried (not just its first item) so a multi-item
+    bound node keeps every command at snapshot time — the Agent row is what
+    actually runs, and truncating to the first item would be a silent
+    divergence (FAR-488-class). When several nodes bind the SAME agent, the
+    FIRST node's list wins (deterministic; snapshot materialization applies one
+    row value to every node bound to that agent, so per-node divergence is not
+    representable).
     """
-    updates: dict[uuid.UUID, str] = {}
+    updates: dict[uuid.UUID, list[str]] = {}
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -1723,14 +1727,15 @@ def _extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uui
         agent_commands = node.get("agent_commands")
         if raw_agent_id is None or not isinstance(agent_commands, list) or not agent_commands:
             continue
-        command = agent_commands[0]
-        if not isinstance(command, str) or not command:
+        # Skip genuinely commandless nodes (no non-empty string item at all) so
+        # an empty-string-only list does not clobber a populated Agent row.
+        if not any(isinstance(c, str) and c for c in agent_commands):
             continue
         try:
             agent_id = uuid.UUID(str(raw_agent_id))
         except (TypeError, ValueError):
             continue
-        updates.setdefault(agent_id, command)
+        updates.setdefault(agent_id, list(agent_commands))
     return updates
 
 
@@ -1752,8 +1757,10 @@ async def _sync_agent_row_commands(
 
     Deliberate skip cases: a node without ``agent_id`` (nothing bound — the
     node value already stands); an Agent row with a NULL ``agent_commands``
-    (the node value already stands at snapshot time); an incoming command
-    equal to the row value (no-op). Returns the number of Agent rows updated.
+    (the node value already stands at snapshot time); an incoming list equal to
+    the row value (no-op — including a multi-item list already matching the
+    node, so re-saving an unchanged multi-item bound node does NOT drop items).
+    Returns the number of Agent rows updated.
     """
     updates = _extract_agent_command_sync_updates(nodes)
     if not updates:
@@ -1762,13 +1769,13 @@ async def _sync_agent_row_commands(
     changed = 0
     for agent in result.scalars():
         incoming = updates.get(agent.id)
-        if incoming is None or agent.agent_commands is None or agent.agent_commands == [incoming]:
+        if incoming is None or agent.agent_commands is None or agent.agent_commands == incoming:
             continue
         logger.info(
             "pipeline.graph.agent_commands_synced",
             extra={"agent_id": str(agent.id), "organisation_id": str(org_id)},
         )
-        agent.agent_commands = [incoming]
+        agent.agent_commands = list(incoming)
         changed += 1
     return changed
 

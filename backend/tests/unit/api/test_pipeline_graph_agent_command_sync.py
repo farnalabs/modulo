@@ -51,7 +51,8 @@ def _node(node_id: uuid.UUID, *, agent_id: uuid.UUID | None, agent_commands: lis
 
 def test_extract_updates_first_command_per_distinct_agent() -> None:
     """Two nodes bound to the same agent yield ONE update (first node wins);
-    distinct agents each yield their own."""
+    distinct agents each yield their own. The FULL list is carried, not just
+    the first item."""
     agent_a = uuid.uuid4()
     agent_b = uuid.uuid4()
     nodes = [
@@ -60,7 +61,26 @@ def test_extract_updates_first_command_per_distinct_agent() -> None:
         _node(uuid.uuid4(), agent_id=agent_b, agent_commands=["other"]),
     ]
     updates = _extract_agent_command_sync_updates(nodes)
-    assert updates == {agent_a: "first", agent_b: "other"}
+    assert updates == {agent_a: ["first"], agent_b: ["other"]}
+
+
+def test_extract_updates_carries_full_multi_item_list() -> None:
+    """A multi-item node command list is carried in full (not truncated to the
+    first item) so every command reaches the bound Agent row."""
+    agent_id = uuid.uuid4()
+    nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["a", "b", "c"])]
+    updates = _extract_agent_command_sync_updates(nodes)
+    assert updates == {agent_id: ["a", "b", "c"]}
+
+
+def test_extract_updates_does_not_skip_leading_empty_item() -> None:
+    """A node whose first item is empty (["", "b"]) is NOT skipped — the usable
+    items still sync, so a leading empty string no longer silently drops the
+    rest of the list."""
+    agent_id = uuid.uuid4()
+    nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["", "b"])]
+    updates = _extract_agent_command_sync_updates(nodes)
+    assert updates == {agent_id: ["", "b"]}
 
 
 def test_extract_updates_skips_unbound_and_commandless_nodes() -> None:
@@ -121,6 +141,47 @@ async def test_sync_noop_when_command_already_equal() -> None:
     changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
 
     assert changed == 0
+
+
+async def test_sync_preserves_multi_item_list() -> None:
+    """A PATCHed multi-item node command list is synced to the Agent row in
+    full — no truncation to a single item (FAR-488-class silent divergence)."""
+    agent_id = uuid.uuid4()
+    agent = SimpleNamespace(id=agent_id, agent_commands=["old-command"])
+    session = _session_returning([agent])
+    nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["a", "b", "c"])]
+
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+
+    assert changed == 1
+    assert agent.agent_commands == ["a", "b", "c"]
+
+
+async def test_sync_noop_when_multi_item_already_equal() -> None:
+    """Re-saving an unchanged multi-item bound node is a no-op — the row
+    already equals the node's full list, so items are NOT dropped."""
+    agent_id = uuid.uuid4()
+    agent = SimpleNamespace(id=agent_id, agent_commands=["a", "b", "c"])
+    session = _session_returning([agent])
+    nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["a", "b", "c"])]
+
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+
+    assert changed == 0
+    assert agent.agent_commands == ["a", "b", "c"]
+
+
+async def test_sync_detects_change_for_reordered_multi_item() -> None:
+    """A reordered multi-item list is treated as a real change and synced."""
+    agent_id = uuid.uuid4()
+    agent = SimpleNamespace(id=agent_id, agent_commands=["a", "b"])
+    session = _session_returning([agent])
+    nodes = [_node(uuid.uuid4(), agent_id=agent_id, agent_commands=["b", "a"])]
+
+    changed = await _sync_agent_row_commands(session, org_id=_ORG_ID, nodes=nodes)
+
+    assert changed == 1
+    assert agent.agent_commands == ["b", "a"]
 
 
 async def test_sync_noop_without_bound_nodes() -> None:
