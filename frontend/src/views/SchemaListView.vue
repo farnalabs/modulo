@@ -109,8 +109,11 @@
                     v-for="schema in schemas"
                     :key="schema.id"
                     class="cursor-pointer hover:bg-muted/30 transition-colors"
-                    :data-testid="`schema-row-${schema.id}`"
+                    tabindex="0"
                     @click="openEditor(schema)"
+                    @keydown.enter="openEditor(schema)"
+                    @keydown.space.prevent="openEditor(schema)"
+                    :data-testid="`schema-row-${schema.id}`"
                     draggable="true"
                     @dragstart="onSchemaDragStart(schema, $event)"
                     @dragover.prevent

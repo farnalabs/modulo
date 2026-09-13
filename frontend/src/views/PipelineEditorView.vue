@@ -47,7 +47,7 @@
             <button v-if="planStore.featureEnabled('pipeline_diff_rollback')" type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-version-timeline" @click="showVersionTimeline = !showVersionTimeline">
               {{ $t('views.PipelineEditorView.versions') }}
             </button>
-            <div class="relative" @click.stop>
+            <div class="relative" @click.stop @keydown.enter.stop @keydown.space.prevent.stop>
               <button
                 type="button"
                 :class="btnToolbarSecondary"
@@ -363,11 +363,13 @@
           </div>
         </div>
         <!-- Run dialog modal -->
-        <!-- eslint-disable-next-line vuejs-accessibility/click-events-have-key-events, vuejs-accessibility/no-static-element-interactions -->
         <div
           v-if="showRunDialog"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
           @click.self="closeRunDialog"
+          @keydown.escape="closeRunDialog"
+          tabindex="-1"
+          data-testid="pipeline-editor-run-dialog-backdrop"
         >
           <dialog
             open

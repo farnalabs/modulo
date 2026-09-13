@@ -186,7 +186,10 @@
                   <tr
                     v-else-if="row.type === 'pipeline'"
                     class="cursor-pointer transition-colors hover:bg-muted/30"
+                    tabindex="0"
                     @click="openPipeline(row.data as PipelineItem)"
+                    @keydown.enter="openPipeline(row.data as PipelineItem)"
+                    @keydown.space.prevent="openPipeline(row.data as PipelineItem)"
                     :data-testid="`pipeline-tree-row-${(row.data as PipelineItem).id}`"
                     draggable="true"
                     @dragstart="onPipelineDragStart(row.data as PipelineItem, $event)"

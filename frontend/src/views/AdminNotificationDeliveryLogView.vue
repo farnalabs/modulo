@@ -144,7 +144,10 @@
               v-for="entry in items"
               :key="entry.id"
               class="transition-colors hover:bg-muted/30 cursor-pointer"
+              tabindex="0"
               @click="toggleRow(entry.id)"
+              @keydown.enter="toggleRow(entry.id)"
+              @keydown.space.prevent="toggleRow(entry.id)"
             >
               <td class="table-cell text-muted-foreground">
                 <button
