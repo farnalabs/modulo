@@ -224,7 +224,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const { get, post, delete: deleteRequest } = useApi()
+const { get, post, patch, delete: deleteRequest } = useApi()
 
 const apiBase = computed(() => props.apiBase ?? '/api/v1/pipeline-folders')
 const counts = computed(() => props.itemCounts ?? props.pipelineCounts)

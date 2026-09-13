@@ -369,8 +369,8 @@ describe('FolderTree alphabetical sorting', () => {
     ])
     const items = wrapper.findAll('[data-testid^="folder-tree-item-"]')
     expect(items.map(i => i.attributes('data-testid'))).toEqual([
-      'folder-tree-item-f2',
       'folder-tree-item-f1',
+      'folder-tree-item-f2',
       'folder-tree-item-f3',
     ])
   })
