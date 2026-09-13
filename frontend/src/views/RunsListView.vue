@@ -80,8 +80,8 @@
               <span
                 :class="runStatusBadgeClass(value as string)"
                 class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize"
-                :title="runStatusDescription(value as string)"
-                :aria-label="runStatusDescription(value as string)"
+                :title="runStatusDescription(value as string, t)"
+                :aria-label="runStatusDescription(value as string, t)"
               >
                 {{ value }}
               </span>

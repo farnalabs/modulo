@@ -3986,6 +3986,23 @@ export default {
     "eval": { "blocked": "A guardrail eval blocked the run from continuing.", "failed": "A guardrail eval failed during execution." },
     "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." }
   },
+  "statusDescriptions": {
+    "complete": "The run finished successfully.",
+    "failed": "The run encountered an error and did not complete.",
+    "cancelled": "The run was cancelled by a user or the system.",
+    "eval_failed": "A guardrail evaluation blocked or failed the run.",
+    "stalled": "The run stopped producing output and was terminated.",
+    "budget_exceeded": "The per-agent token budget was exceeded.",
+    "router_no_match": "A router node had no matching rule and no default.",
+    "cost_ceiling_exceeded": "The organisation-wide spend ceiling was exceeded.",
+    "compensation_failed": "A watched node and its compensation path both failed.",
+    "pending": "The run is queued and waiting to start.",
+    "running": "The run is currently executing.",
+    "awaiting_human": "The run is waiting for a human decision at a HITL gate.",
+    "claimed": "A worker has claimed the run and will execute it.",
+    "hitl_parked": "The HITL gate expired unanswered; the run is parked pending a decision.",
+    "unknown": "The run is in an unrecognised state."
+  },
   "connectors": {
     "rest": {
       "name": "Generic REST",

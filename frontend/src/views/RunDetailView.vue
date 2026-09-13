@@ -13,7 +13,7 @@
         <div>
           <div class="flex items-center gap-3">
             <PageHeader :title="$t('views.RunDetailView.run_detail')" />
-            <span :class="statusBadgeClass" class="capitalize" :title="runStatusDescription(run.status)" :aria-label="runStatusDescription(run.status)">{{ runStatusLabel(run.status) }}</span>
+            <span :class="statusBadgeClass" class="capitalize" :title="runStatusDescription(run.status, t)" :aria-label="runStatusDescription(run.status, t)">{{ runStatusLabel(run.status) }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
             Pipeline: <span class="font-medium text-foreground">{{ formatRun(run) }}</span>

@@ -44,28 +44,19 @@ export function runStatusLabel(status: string | null | undefined): string {
   return status.replace(/_/g, ' ')
 }
 
-/** Full explanatory description for a run status, surfaced as a hover tooltip
- * on the status badge. Covers every status in the DB CHECK constraint. */
-const RUN_STATUS_DESCRIPTIONS: Record<string, string> = {
-  complete: 'The run finished successfully.',
-  failed: 'The run encountered an error and did not complete.',
-  cancelled: 'The run was cancelled by a user or the system.',
-  eval_failed: 'A guardrail evaluation blocked or failed the run.',
-  stalled: 'The run stopped producing output and was terminated.',
-  budget_exceeded: 'The per-agent token budget was exceeded.',
-  router_no_match: 'A router node had no matching rule and no default.',
-  cost_ceiling_exceeded: 'The organisation-wide spend ceiling was exceeded.',
-  compensation_failed: 'A watched node and its compensation path both failed.',
-  pending: 'The run is queued and waiting to start.',
-  running: 'The run is currently executing.',
-  awaiting_human: 'The run is waiting for a human decision at a HITL gate.',
-  claimed: 'A worker has claimed the run and will execute it.',
-  hitl_parked: 'The HITL gate expired unanswered; the run is parked pending a decision.',
-}
-
-export function runStatusDescription(status: string | null | undefined): string {
+/**
+ * Full explanatory description for a run status, surfaced as a hover tooltip
+ * and accessible name on the status badge. Looked up in the locale's
+ * `statusDescriptions` section (mirroring the `errorCodeDescriptions` pattern
+ * for error codes); falls back to the short label when the locale has no
+ * description for the status, so the accessible name is never erased for
+ * statuses the locale doesn't yet describe.
+ */
+export function runStatusDescription(status: string | null | undefined, t: (key: string) => string): string {
   if (status == null) return ''
-  return RUN_STATUS_DESCRIPTIONS[status] ?? ''
+  const key = `statusDescriptions.${status}`
+  const translated = t(key)
+  return translated === key ? runStatusLabel(status) : translated
 }
 
 const triggerTypeLabelKeys: Record<string, string> = {
