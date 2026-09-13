@@ -610,6 +610,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/work-item-agent-minting": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Get Work Item Agent Minting */
+        get: operations["admin_get_work_item_agent_minting_api_v1_admin_org_work_item_agent_minting_get"];
+        /** Admin Update Work Item Agent Minting */
+        put: operations["admin_update_work_item_agent_minting_api_v1_admin_org_work_item_agent_minting_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/org/run-concurrency": {
         parameters: {
             query?: never;
@@ -17563,6 +17581,11 @@ export interface components {
             /** Is Active */
             is_active?: boolean | null;
         };
+        /** UpdateWorkItemAgentMintingRequest */
+        UpdateWorkItemAgentMintingRequest: {
+            /** Work Item Agent Minting Enabled */
+            work_item_agent_minting_enabled: boolean;
+        };
         /** UserInfo */
         UserInfo: {
             /** Username */
@@ -18040,6 +18063,17 @@ export interface components {
              * @description Optional team scope; when set, only that team's events hit this endpoint
              */
             team_id?: string | null;
+        };
+        /**
+         * WorkItemAgentMintingResponse
+         * @description Public admin response for the agent-minting kill-switch flag.
+         */
+        WorkItemAgentMintingResponse: {
+            /**
+             * Work Item Agent Minting Enabled
+             * @default false
+             */
+            work_item_agent_minting_enabled: boolean;
         };
         /** WsTokenResponse */
         WsTokenResponse: {
@@ -19681,6 +19715,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SandboxConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_get_work_item_agent_minting_api_v1_admin_org_work_item_agent_minting_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkItemAgentMintingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_work_item_agent_minting_api_v1_admin_org_work_item_agent_minting_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWorkItemAgentMintingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkItemAgentMintingResponse"];
                 };
             };
             /** @description Validation Error */
