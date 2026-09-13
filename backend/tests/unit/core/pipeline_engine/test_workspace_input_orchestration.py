@@ -6,6 +6,8 @@ Covers:
   - Post-agent drift detection (SHA match, mismatch, detection failure)
   - Transient vs permanent error classification
   - Envelope integration (workspace_drift, workspace_drift_detected fields)
+  - Gap 1: Connector-backed inputs without explicit URL
+  - Gap 2: Read-only credential assertion wiring
 """
 
 from __future__ import annotations
@@ -306,7 +308,7 @@ class TestResolveManagedInputsHostSide:
         assert exc_info.value.retryable is True
 
     @pytest.mark.asyncio
-    async def test_no_url_raises_permanent(self) -> None:
+    async def test_no_url_no_connector_raises(self) -> None:
         inputs = [{"dest": "/home/user/repo", "ref": {"kind": "branch", "value": "main"}}]
         with pytest.raises(ProvisioningError, match="no url"):
             await resolve_managed_inputs_host_side(inputs, org_id="org-1")
@@ -651,6 +653,11 @@ async def test_resolve_managed_inputs_connector_credential_resolution(monkeypatc
         "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
     )
+    # Stub the read-only assertion to pass (SSH key → auto-accepted).
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
+        AsyncMock(),
+    )
     factory = _make_factory
     resolved = await resolve_managed_inputs_host_side(
         [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
@@ -736,6 +743,347 @@ async def test_resolve_managed_inputs_credential_unexpected_error_permanent(monk
             [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
             org_id="org-1",
             session_factory=factory,
+        )
+    assert exc.value.error_code == "sandbox.input_credential_failed"
+    assert exc.value.retryable is False
+
+
+# ---------------------------------------------------------------------------
+# Gap 1: Connector-backed inputs without explicit URL
+# ---------------------------------------------------------------------------
+
+
+class _FakeCi:
+    """Minimal ConnectorInstance stand-in for URL-derivation tests."""
+
+    def __init__(self, connector_type_id: str, config_json: dict[str, Any]) -> None:
+        self.id = uuid.uuid4()
+        self.connector_type_id = connector_type_id
+        self.config_json = config_json
+
+
+class _FakeResult:
+    def __init__(self, ci: _FakeCi | None) -> None:
+        self._ci = ci
+
+    def scalar_one_or_none(self) -> _FakeCi | None:
+        return self._ci
+
+
+class _FakeSessionForUrl:
+    def __init__(self, ci: _FakeCi | None) -> None:
+        self._ci = ci
+
+    async def execute(self, _stmt: Any) -> _FakeResult:
+        return _FakeResult(self._ci)
+
+    def begin(self) -> _FakeBegin:
+        return _FakeBegin()
+
+
+class _FakeSessionCtxForUrl:
+    def __init__(self, ci: _FakeCi | None) -> None:
+        self._ci = ci
+
+    async def __aenter__(self) -> _FakeSessionForUrl:
+        return _FakeSessionForUrl(self._ci)
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def begin(self) -> _FakeBegin:
+        return _FakeBegin()
+
+
+class _FactoryForUrl:
+    def __init__(self, ci: _FakeCi | None) -> None:
+        self._ci = ci
+
+    def __call__(self) -> _FakeSessionCtxForUrl:
+        return _FakeSessionCtxForUrl(self._ci)
+
+
+async def test_connector_backed_input_derives_url_from_github_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connector-backed input without URL derives the clone URL from the
+    GitHub connector's stored config (repo + base_url) — FAR-800 follow-up Gap 1."""
+    fake_ci = _FakeCi("github", {"repo": "org/repo", "base_url": "https://api.github.com"})
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    # Also mock credential resolution (the connector_instance_id triggers it).
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=None),
+    )
+    factory = _FactoryForUrl(fake_ci)
+    resolved = await resolve_managed_inputs_host_side(
+        [
+            {
+                "dest": "/home/user/repo",
+                "connector_instance_id": str(uuid.uuid4()),
+                "ref": {"kind": "branch", "value": "main"},
+            }
+        ],
+        org_id="org-1",
+        session_factory=factory,
+    )
+    assert len(resolved) == 1
+    assert resolved[0].url == "https://github.com/org/repo.git"
+
+
+async def test_connector_backed_input_strips_trailing_slash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trailing slash on the repo config key is stripped before appending .git."""
+    fake_ci = _FakeCi("github", {"repo": "org/repo/", "base_url": "https://api.github.com"})
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=None),
+    )
+    factory = _FactoryForUrl(fake_ci)
+    resolved = await resolve_managed_inputs_host_side(
+        [
+            {
+                "dest": "/home/user/repo",
+                "connector_instance_id": str(uuid.uuid4()),
+                "ref": {"kind": "branch", "value": "main"},
+            }
+        ],
+        org_id="org-1",
+        session_factory=factory,
+    )
+    assert resolved[0].url == "https://github.com/org/repo.git"
+
+
+async def test_connector_backed_input_no_connector_raises() -> None:
+    """An input with no URL and no connector_instance_id raises."""
+    with pytest.raises(ProvisioningError, match="no connector_instance_id"):
+        await resolve_managed_inputs_host_side(
+            [{"dest": "/home/user/repo", "ref": {"kind": "branch", "value": "main"}}],
+            org_id="org-1",
+        )
+
+
+async def test_connector_backed_input_no_session_factory_raises() -> None:
+    """An input with no URL but a connector_instance_id and no session_factory raises."""
+    with pytest.raises(ProvisioningError, match="session_factory"):
+        await resolve_managed_inputs_host_side(
+            [
+                {
+                    "dest": "/home/user/repo",
+                    "connector_instance_id": str(uuid.uuid4()),
+                    "ref": {"kind": "branch", "value": "main"},
+                }
+            ],
+            org_id="org-1",
+            session_factory=None,
+        )
+
+
+async def test_connector_backed_input_connector_not_found_raises() -> None:
+    """When the connector instance is not in the DB, raises ProvisioningError."""
+    factory = _FactoryForUrl(None)  # None = connector not found
+    with pytest.raises(ProvisioningError, match="not found"):
+        await resolve_managed_inputs_host_side(
+            [
+                {
+                    "dest": "/home/user/repo",
+                    "connector_instance_id": str(uuid.uuid4()),
+                    "ref": {"kind": "branch", "value": "main"},
+                }
+            ],
+            org_id="org-1",
+            session_factory=factory,
+        )
+
+
+async def test_connector_backed_input_unsupported_type_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connector type without URL derivation raises ProvisioningError."""
+    fake_ci = _FakeCi("slack", {"webhook_url": "https://hooks.slack.com/..."})
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _FactoryForUrl(fake_ci)
+    with pytest.raises(ProvisioningError, match="does not support URL derivation"):
+        await resolve_managed_inputs_host_side(
+            [
+                {
+                    "dest": "/home/user/repo",
+                    "connector_instance_id": str(uuid.uuid4()),
+                    "ref": {"kind": "branch", "value": "main"},
+                }
+            ],
+            org_id="org-1",
+            session_factory=factory,
+        )
+
+
+async def test_connector_backed_input_derives_url_ghe_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A GitHub Enterprise base_url reuses the same host for the clone URL."""
+    fake_ci = _FakeCi("github", {"repo": "acme/widgets", "base_url": "https://ghe.acme.com/api/v3"})
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=None),
+    )
+    factory = _FactoryForUrl(fake_ci)
+    resolved = await resolve_managed_inputs_host_side(
+        [
+            {
+                "dest": "/home/user/repo",
+                "connector_instance_id": str(uuid.uuid4()),
+                "ref": {"kind": "branch", "value": "main"},
+            }
+        ],
+        org_id="org-1",
+        session_factory=factory,
+    )
+    assert resolved[0].url == "https://ghe.acme.com/acme/widgets.git"
+
+
+async def test_connector_backed_input_missing_repo_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A github connector without a 'repo' key cannot derive a clone URL."""
+    fake_ci = _FakeCi("github", {"base_url": "https://api.github.com"})
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _FactoryForUrl(fake_ci)
+    with pytest.raises(ProvisioningError, match="no 'repo'"):
+        await resolve_managed_inputs_host_side(
+            [
+                {
+                    "dest": "/home/user/repo",
+                    "connector_instance_id": str(uuid.uuid4()),
+                    "ref": {"kind": "branch", "value": "main"},
+                }
+            ],
+            org_id="org-1",
+            session_factory=factory,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Gap 2: Read-only credential assertion
+# ---------------------------------------------------------------------------
+
+
+async def test_read_only_credential_assertion_called_when_http_client_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When http_client is provided, assert_clone_credential_is_read_only is called
+    during credential resolution (FAR-800 follow-up Gap 2)."""
+    fake_cred = MagicMock()
+    fake_cred.kind = "ssh"
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=fake_cred),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        MagicMock(return_value=("SETUP", "TEARDOWN")),
+    )
+    mock_assert = AsyncMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
+        mock_assert,
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    fake_http = MagicMock()
+    factory = _make_factory
+    resolved = await resolve_managed_inputs_host_side(
+        [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
+        org_id="org-1",
+        session_factory=factory,
+        http_client=fake_http,
+    )
+    assert len(resolved) == 1
+    mock_assert.assert_called_once_with(fake_cred, http_client=fake_http)
+
+
+async def test_read_only_credential_assertion_skipped_without_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When http_client is None, the assertion is NOT called (backward compat)."""
+    fake_cred = MagicMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=fake_cred),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        MagicMock(return_value=("SETUP", "TEARDOWN")),
+    )
+    mock_assert = AsyncMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
+        mock_assert,
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _make_factory
+    resolved = await resolve_managed_inputs_host_side(
+        [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
+        org_id="org-1",
+        session_factory=factory,
+        http_client=None,
+    )
+    assert len(resolved) == 1
+    mock_assert.assert_not_called()
+
+
+async def test_read_only_credential_assertion_failure_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the credential assertion fails (push-capable token), raises ProvisioningError."""
+    from modulo.core.pipeline_engine.workspace_input_credentials import CredentialResolutionError
+
+    fake_cred = MagicMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=fake_cred),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        MagicMock(return_value=("SETUP", "TEARDOWN")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.assert_clone_credential_is_read_only",
+        AsyncMock(side_effect=CredentialResolutionError("token is push-capable")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _make_factory
+    with pytest.raises(ProvisioningError, match="credential is not read-only") as exc:
+        await resolve_managed_inputs_host_side(
+            [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
+            org_id="org-1",
+            session_factory=factory,
+            http_client=MagicMock(),
         )
     assert exc.value.error_code == "sandbox.input_credential_failed"
     assert exc.value.retryable is False

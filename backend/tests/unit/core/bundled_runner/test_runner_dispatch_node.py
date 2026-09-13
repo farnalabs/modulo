@@ -769,3 +769,26 @@ def test_no_output_message(patch_node_runner) -> None:
 
 def test_run_broker_for_empty_run_id(patch_node_runner) -> None:
     assert _run_broker_for("") is None
+
+
+# ---------------------------------------------------------------------------
+# Gap 3: Bundled Runner workspace-inputs fail-closed
+# ---------------------------------------------------------------------------
+
+
+async def test_run_bundled_runner_fails_closed_on_workspace_inputs(patch_node_runner) -> None:
+    """The Bundled Runner path does NOT support managed workspace inputs.
+    When inputs are configured, it must raise SandboxNodeFailedError
+    rather than silently ignoring them (FAR-800 follow-up Gap 3)."""
+    cfg = _config(
+        workspace_inputs=[
+            {
+                "dest": "/home/user/repo",
+                "url": "https://github.com/org/repo.git",
+                "ref": {"kind": "branch", "value": "main"},
+            }
+        ]
+    )
+    # SandboxNodeFailedError is monkeypatched to _FakeError by patch_node_runner.
+    with pytest.raises(_FakeError, match="workspace inputs"):
+        await runner_dispatch.run_bundled_runner_node(_state(), cfg, _route())
