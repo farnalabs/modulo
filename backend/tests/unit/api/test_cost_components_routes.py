@@ -142,7 +142,7 @@ class TestGetComponents:
             stack.enter_context(_rls_cm())
             resp = client.get("/api/v1/admin/costs/components")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
 
 # ---------------------------------------------------------------------------
