@@ -27,10 +27,35 @@ branch_labels: str | None = None
 depends_on: str | None = None
 
 
+def _artifacts_column_exists(bind: sa.Connection) -> bool:
+    """True when ``run_node_outputs.artifacts_json`` already exists.
+
+    Needed so re-running this migration (e.g. idempotency tests that rewind
+    ``alembic_version`` to the previous revision and re-apply the chain) is a
+    no-op instead of raising ``DuplicateColumn``.
+    """
+    return bool(
+        bind.execute(
+            sa.text(
+                "SELECT count(*) FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'run_node_outputs' "
+                "AND column_name = 'artifacts_json'"
+            )
+        ).scalar()
+    )
+
+
 def upgrade() -> None:
-    """Add ``artifacts_json`` (JSONB on Postgres, JSON on SQLite)."""
-    dialect = op.get_bind().dialect.name
+    """Add ``artifacts_json`` (JSONB on Postgres, JSON on SQLite).
+
+    Existence-guarded so re-applies are no-ops (see ``_artifacts_column_exists``).
+    """
+    bind = op.get_bind()
+    dialect = bind.dialect.name
     col_type = sa.JSON().with_variant(sa.dialects.postgresql.JSONB(), "postgresql")
+    if _artifacts_column_exists(bind):
+        _log.info("FAR-582: artifacts_json column already present on run_node_outputs; skipping add")
+        return
     op.add_column(
         "run_node_outputs",
         sa.Column("artifacts_json", col_type, nullable=True),
@@ -42,6 +67,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop ``artifacts_json``."""
-    op.drop_column("run_node_outputs", "artifacts_json")
-    _log.info("FAR-582: dropped artifacts_json column from run_node_outputs")
+    """Drop ``artifacts_json`` (idempotent)."""
+    if _artifacts_column_exists(op.get_bind()):
+        op.drop_column("run_node_outputs", "artifacts_json")
+        _log.info("FAR-582: dropped artifacts_json column from run_node_outputs")

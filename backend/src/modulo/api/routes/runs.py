@@ -71,6 +71,7 @@ from modulo.db.crud.observability import get_otel_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import (
+    WorkItemRefsRequiredError,
     count_active_runs_for_org,
     create_run,
     get_child_run_rollup,
@@ -658,6 +659,11 @@ def _serialize_node_token_usage(ntu: dict[str, Any] | None) -> dict[str, Any] | 
 class TriggerRunRequest(BaseModel):
     pipeline_id: uuid.UUID
     input_payload: dict[str, Any] = Field(default_factory=dict)
+    # FAR-794 slice 2a — caller-supplied work-item refs. Provenance is
+    # ENGINE-ASSIGNED at create time (``caller`` for this channel); any wire
+    # ``source`` value is ignored, and each entry is shape-validated +
+    # canonicalised server-side (malformed entries are dropped, not rejected).
+    work_item_refs: list[dict[str, Any]] | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1033,6 +1039,9 @@ async def _create_manual_run(
         trigger_type="manual",
         input_payload=req.input_payload,
         rate_limit_key=rate_limit_key,
+        # FAR-794 slice 2a: caller-supplied refs; provenance is engine-assigned
+        # (caller) inside create_run — the wire source is never trusted.
+        work_item_refs=req.work_item_refs,
         # FAR-620 run attribution: the CALLER's account (the account of the
         # authenticating credential, NOT the human operator behind it). This
         # enables the reject→correction guardrail dispatch for manually
@@ -1123,6 +1132,16 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
+        ) from None
+
+    except WorkItemRefsRequiredError as exc:
+        # FAR-794 slice 2a: the pipeline declares work_item_refs_required and
+        # the delivery carried none. 422 (not 500): a client-fixable input
+        # validation failure.
+        _log.info("runs.trigger_run work_item_refs_required pipeline=%s", exc.pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="This pipeline requires work_item_refs but none were supplied",
         ) from None
 
     except StorageExhaustedError:
@@ -1293,6 +1312,17 @@ async def trigger_rerun(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
+        ) from None
+
+    except WorkItemRefsRequiredError as exc:
+        # FAR-794 slice 2a: the rerun copied the source payload server-side and
+        # the merged ref set is empty while the pipeline requires refs. 422:
+        # the operator must supply refs via a fresh trigger (a rerun carries no
+        # request body to fix them with).
+        _log.info("runs.trigger_rerun work_item_refs_required pipeline=%s", exc.pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="This pipeline requires work_item_refs but the source run carried none",
         ) from None
 
     except StorageExhaustedError:
@@ -3036,13 +3066,117 @@ async def diff_node_output(
 
 
 # ---------------------------------------------------------------------------
-# FAR-582: artifact side-car download
+# FAR-582: artifact side-car endpoints (listing + download)
 # ---------------------------------------------------------------------------
 
 _CODE_RUN_ARTIFACT = "runs.get_run_artifact"
+_CODE_RUN_ARTIFACT_LIST = "runs.list_run_artifacts"
 
 _MSG_ARTIFACT_STREAM_NOT_FOUND = "Artifact stream not found"
 _MSG_ARTIFACT_NOT_CONFIGURED = "Artifact storage is not enabled"
+
+
+class ArtifactPointerResponse(BaseModel):
+    """One artifact pointer returned by the listing endpoint."""
+
+    attempt_key: str
+    stream: str
+    size_bytes: int
+    sha256: str
+    compression: str
+
+
+class ArtifactListResponse(BaseModel):
+    """Response for the per-node artifact listing endpoint."""
+
+    run_id: uuid.UUID
+    node_id: str
+    artifacts: list[ArtifactPointerResponse]
+
+
+@router.get("/{run_id}/nodes/{node_id}/artifacts")
+@handle_db_errors("runs.list_run_artifacts")
+async def list_run_artifacts(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_ARTIFACT_LIST),
+) -> ArtifactListResponse:
+    """List all artifact pointers for a node across all attempts.
+
+    Returns an empty list when the node has no artifacts.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            rows = (
+                (
+                    await session.execute(
+                        select(RunNodeOutput).where(
+                            RunNodeOutput.run_id == run_id,
+                            RunNodeOutput.node_id == node_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+    except ProgrammingError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_RUN_NOT_FOUND,
+        )
+
+    # Sort rows by the trailing attempt suffix descending so the listing is
+    # newest-first. Attempt keys end in a numeric suffix (e.g.
+    # ``run:...:node:node-a:11``); a plain lexicographic sort would put ``9``
+    # after ``10``, so we parse the integer. Non-numeric suffixes (e.g.
+    # ``__final__``) fall back to the raw string so they still sort
+    # deterministically instead of raising.
+    def _attempt_sort_key(row: "RunNodeOutput") -> "tuple[int, str]":
+        suffix = row.attempt_key.rsplit(":", 1)[-1]
+        try:
+            return (1, f"{int(suffix):020d}")
+        except ValueError:
+            # Non-numeric suffixes (e.g. ``__final__``) are an edge category
+            # that trails all numeric attempts rather than shadowing them.
+            return (0, suffix)
+
+    sorted_rows = sorted(rows, key=_attempt_sort_key, reverse=True)
+
+    artifacts: list[ArtifactPointerResponse] = []
+    for row in sorted_rows:
+        if not row.artifacts_json:
+            continue
+        artifacts.extend(
+            ArtifactPointerResponse(
+                attempt_key=row.attempt_key,
+                stream=ptr.get("stream", ""),
+                size_bytes=ptr.get("size_bytes", 0),
+                sha256=ptr.get("sha256", ""),
+                compression=ptr.get("compression", "none"),
+            )
+            for ptr in row.artifacts_json
+        )
+
+    return ArtifactListResponse(
+        run_id=run_id,
+        node_id=node_id,
+        artifacts=artifacts,
+    )
 
 
 @router.get("/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}")

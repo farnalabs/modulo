@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,7 +71,7 @@ from modulo.core.run_admission import (
 from modulo.db.crud.pipeline_snapshot_versioning import (
     resolve_snapshot_for_channel,
 )
-from modulo.db.crud.run import coalesce_pending_run, create_run
+from modulo.db.crud.run import WorkItemRefsRequiredError, coalesce_pending_run, create_run
 from modulo.db.lifecycle_refs import _RESERVED_INPUT_PAYLOAD_KEYS
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
@@ -1384,6 +1385,33 @@ class TriggerEngine:
                 exc.rate_limit_key,
                 rate_limit.max_triggers,
                 rate_limit.window_seconds,
+            ) from exc
+        except WorkItemRefsRequiredError as exc:
+            # FAR-794 slice 2b: a required-refs pipeline refused a delivery that
+            # supplied no work-item refs. The delivery is REJECT-and-retry, not
+            # acked-as-accepted: raise a 422 HTTPException — the webhook route's
+            # passthrough ``except HTTPException: raise`` (the same contract
+            # core.trigger_validation already relies on) surfaces it verbatim as
+            # ``422 work_item_refs_required`` so the SENDER can react; it must
+            # never become a 500.
+            _log.warning(
+                "Required work-item refs missing for pipeline %s",
+                delivery.trigger.pipeline_id,
+            )
+            await self._log_event(
+                session,
+                trigger=delivery.trigger,
+                org_id=delivery.org_id,
+                payload_hash=payload_hash,
+                result="required_refs_missing",
+                error_detail=str(exc),
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "work_item_refs_required",
+                    "pipeline_id": str(delivery.trigger.pipeline_id),
+                },
             ) from exc
 
         # Audit log + store raw payload for replay (re-replay support)

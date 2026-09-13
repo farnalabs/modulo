@@ -178,7 +178,7 @@ def test_get_preferences_returns_full_category_map(client: TestClient) -> None:
     resp = client.get(_PREFERENCES_PATH)
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["dashboard_level"] == "warning"
+    assert body["dashboard_level"] == "info"
     assert set(body["notification_opt_outs"]) == set(notification_categories())
     assert not any(body["notification_opt_outs"].values())
 
@@ -343,3 +343,71 @@ def test_put_preferences_dashboard_write_happy_path_unchanged(client: TestClient
     get_back = client.get(_PREFERENCES_PATH).json()
     assert get_back["dashboard_level"] == "error"
     assert not any(get_back["notification_opt_outs"].values())
+
+
+def test_dashboard_returns_info_level_notifications_by_default(client: TestClient) -> None:
+    """FAR-817: the default dashboard level is 'info', so info-level
+    notifications must appear on the dashboard panel."""
+    # Warm the client (engine + tables created on first request), then seed.
+    assert client.get(_PREFERENCES_PATH).status_code == 200
+
+    # Seed an info-level notification via direct DB write.
+    async def _seed_info() -> None:
+        engine = _CREATED_ENGINES[-1]
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as session, session.begin():
+            session.add(
+                Notification(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG_ID,
+                    scope="org",
+                    level="info",
+                    category="deploy",
+                    title="Deploy info",
+                    body="deploy body",
+                    expires_at=datetime.now(UTC) + timedelta(days=1),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+
+    asyncio.run(_seed_info())
+
+    dashboard = client.get(_DASHBOARD_PATH).json()
+    categories = {n["category"] for n in dashboard["notifications"]}
+    assert "deploy" in categories, f"Expected info-level 'deploy' notification in dashboard, got {categories}"
+
+
+def test_dashboard_respects_stored_preference(client: TestClient) -> None:
+    """FAR-817: when the user has set dashboard_level='warning', info-level
+    notifications are excluded from the dashboard."""
+    resp = client.put(_PREFERENCES_PATH, json={"dashboard_level": "warning"})
+    assert resp.status_code == 200, resp.text
+
+    # Seed an info-level notification.
+    async def _seed_info() -> None:
+        engine = _CREATED_ENGINES[-1]
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as session, session.begin():
+            session.add(
+                Notification(
+                    id=uuid.uuid4(),
+                    organisation_id=_ORG_ID,
+                    scope="org",
+                    level="info",
+                    category="deploy",
+                    title="Deploy info",
+                    body="deploy body",
+                    expires_at=datetime.now(UTC) + timedelta(days=1),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+
+    asyncio.run(_seed_info())
+
+    dashboard = client.get(_DASHBOARD_PATH).json()
+    categories = {n["category"] for n in dashboard["notifications"]}
+    assert "deploy" not in categories, (
+        f"Info-level notification should be excluded with warning preference, got {categories}"
+    )

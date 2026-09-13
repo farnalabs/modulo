@@ -192,6 +192,9 @@ describe('PipelineEditorView toolbar & fit-on-load', () => {
     const toolbarSelect = wrapper.find('[data-testid="pipeline-editor-node-type-select"]')
     expect(toolbarSelect.exists()).toBe(true)
     expect(toolbarSelect.classes()).toContain('toolbar-select')
+    // w-40 (10rem) is wide enough for "Inline Prompt" with the chevron and
+    // .p-select-label padding — the longest option must not truncate.
+    expect(toolbarSelect.classes()).toContain('w-40')
 
     // flowNodes is empty at mount, so the empty-state overlay renders its own
     // node-type picker for the same row.

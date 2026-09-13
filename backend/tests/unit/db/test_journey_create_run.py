@@ -285,7 +285,9 @@ class TestCreateRunPathMatrix:
     async def test_refs_stamped_when_provided(self, session: AsyncSession) -> None:
         await _seed_org(session)
         run = await _create(session, work_item_refs=_REF_ENTRIES)
-        assert run.work_item_refs == [{"kind": "github_issue", "ref": "a/b#5", "source": "derived"}]
+        # FAR-794 slice 2a: provenance is engine-assigned — a manual trigger
+        # stamps ``caller`` regardless of the wire source claim.
+        assert run.work_item_refs == [{"kind": "github_issue", "ref": "a/b#5", "source": "caller"}]
 
     async def test_no_refs_means_no_refs_stamped(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -316,7 +318,8 @@ class TestJourneyHydration:
         journey = await _journey_for(session, "github_issue", "a/b#5")
         assert journey is not None
         assert journey.canonical_work_item_id == canonical_work_item_id(_ORG, "github_issue", "a/b#5")
-        assert run.work_item_refs == [{"kind": "github_issue", "ref": "a/b#5", "source": "derived"}]
+        # FAR-794 slice 2a: manual triggers stamp ``caller`` provenance.
+        assert run.work_item_refs == [{"kind": "github_issue", "ref": "a/b#5", "source": "caller"}]
 
     async def test_same_ref_is_on_conflict_noop(self, session: AsyncSession) -> None:
         await _seed_org(session)

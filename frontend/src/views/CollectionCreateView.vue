@@ -98,7 +98,7 @@
           </div>
         </div>
         <div class="flex justify-end gap-2">
-          <Button as="router-link" to="/library?type=library_collection" class="px-4 py-1.5">
+          <Button as="router-link" to="/library?type=library_collection" severity="secondary" outlined class="px-4 py-1.5">
             {{ $t('views.LibraryView.collection_cancel') }}
           </Button>
           <Button

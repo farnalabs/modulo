@@ -132,6 +132,13 @@ class Settings(BaseSettings):
     # expires — the 4h cap bounds that residual exposure window.
     modulo_demo_token_minutes: int = Field(120, ge=1, le=240)
 
+    # FAR-794 slice 2b: the ONE work-item refs cap for the whole refs pipeline —
+    # self-report normalisation, finalise merge, and node input injection all
+    # read pivot on the same value (env override MODULO_WORK_ITEM_REFS_CAP).
+    # Consumers additionally clamp defensively via work_item_refs_cap() below,
+    # so an out-of-range module default still yields a positive integer.
+    modulo_work_item_refs_cap: int = Field(100)
+
     modulo_public_url: str = Field("http://localhost:8000")
     modulo_license_key: str = Field("")
     # Ed25519 public key (hex) for license signature verification.
@@ -1028,6 +1035,27 @@ def get_settings(_fresh: bool = False) -> Settings:
     if _pinned_env_file is not None:
         return Settings(_env_file=_pinned_env_file)
     return Settings()
+
+
+_WORK_ITEM_REFS_CAP_FLOOR = 1
+_WORK_ITEM_REFS_CAP_CEILING = 100000
+
+
+@lru_cache
+def work_item_refs_cap() -> int:
+    """The unified work-item refs cap (FAR-794 slice 2b).
+
+    Reads the ``modulo_work_item_refs_cap`` setting (env override
+    ``MODULO_WORK_ITEM_REFS_CAP``) and clamps it defensively to
+    ``[1, 100000]`` so a mis-excavated or edge-case setting can never produce
+    a zero/negative cap anywhere in the refs pipeline. Cached like
+    ``get_settings`` — tests override via ``work_item_refs_cap.cache_clear()``.
+    """
+    try:
+        raw = get_settings().modulo_work_item_refs_cap
+    except Exception:  # pragma: no cover - broken settings must not break refs
+        return 100
+    return max(_WORK_ITEM_REFS_CAP_FLOOR, min(int(raw), _WORK_ITEM_REFS_CAP_CEILING))
 
 
 def break_glass_boot_findings(settings: Settings) -> list[tuple[bool, str]]:

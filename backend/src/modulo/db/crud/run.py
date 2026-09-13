@@ -34,7 +34,17 @@ from modulo.db.crud.run_node_outputs import (
 from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
+    _SOURCE_RANK,
+    REFS_EVENT_ASSIGNED_SOURCE,
+    REFS_EVENT_MALFORMED,
+    REFS_EVENT_UNKNOWN_SOURCE,
+    WIRE_REFS_ALIAS_KEY,
+    WORK_ITEM_REFS_KEY,
+    assigned_source_for_trigger,
     canonical_work_item_id,
+    notify_refs_event,
+    notify_refs_shadow_strip_hit,
+    sort_canonical_refs,
     validate_ref_entry,
 )
 from modulo.db.models.pipeline import Pipeline
@@ -65,6 +75,22 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 
 # Day-key format used for run-usage bucketing and the --older-than parser.
 _DAY_FORMAT = "%Y-%m-%d"
+
+
+class WorkItemRefsRequiredError(Exception):
+    """A pipeline requires work-item refs but the delivery supplied none (FAR-794).
+
+    Raised by ``create_run`` / ``coalesce_pending_run`` when the pipeline's
+    ``run_context_defaults.work_item_refs_required`` flag is set and the
+    canonicalised ref set is empty. The API layer maps this to HTTP 422 so the
+    caller knows the delivery was rejected for a missing, not malformed,
+    field.
+    """
+
+    def __init__(self, pipeline_id: uuid.UUID) -> None:
+        self.pipeline_id = pipeline_id
+        super().__init__(f"pipeline {pipeline_id} requires work_item_refs but none were supplied")
+
 
 # FAR-438 run-record idempotency-key persistence. The run record stores its STABLE
 # logical idempotency identity ``<pipeline_id>:<run_number>`` (NOT a per-replay
@@ -229,14 +255,24 @@ def _strip_reserved_keys(input_payload: dict[str, Any]) -> dict[str, Any]:
     """Remove reserved system keys from ``input_payload`` before hash + storage.
 
     Reserved keys (``_work_item_id``, ``_modulo.work_item``,
-    ``_feedback_correction``) are system-managed and must never be forgeable
-    via webhook payloads or manual POST /runs bodies. Stripping centrally in
-    ``create_run`` (the single chokepoint all paths funnel through) BEFORE the
-    hash means an injected reserved key neither alters the run's hash nor
-    reaches the stored payload. System data flows through explicit
-    ``create_run`` kwargs, never ``input_payload``.
+    ``_feedback_correction``, ``_coalesce_key``) are system-managed and must
+    never be forgeable via webhook payloads or manual POST /runs bodies.
+    Stripping centrally in ``create_run`` (the single chokepoint all paths
+    funnel through) BEFORE the hash means an injected reserved key neither
+    alters the run's hash nor reaches the stored payload. System data flows
+    through explicit ``create_run`` kwargs, never ``input_payload``.
+
+    ``_work_item_refs`` (FAR-794 slice 2a) is reserved but EXEMPT from the
+    strip: it is the system-managed carrier for the run's canonical refs and
+    must survive to the re-stamp step (which replaces any wire value with
+    engine-canonicalised, engine-assigned entries — a forged key cannot
+    escalate provenance, it can only be counted). A collision is recorded via
+    the shadow-mode counter; the key itself is re-stamped or removed before
+    the hash.
     """
-    return {k: v for k, v in input_payload.items() if k not in _RESERVED_INPUT_PAYLOAD_KEYS}
+    if WORK_ITEM_REFS_KEY in input_payload:
+        notify_refs_shadow_strip_hit("input_payload")
+    return {k: v for k, v in input_payload.items() if k == WORK_ITEM_REFS_KEY or k not in _RESERVED_INPUT_PAYLOAD_KEYS}
 
 
 async def _load_registered_guardrail_capabilities(
@@ -340,59 +376,170 @@ async def _resolve_work_item_id(
     return _floor_work_item_id(org_id, run_id)
 
 
-def _canonicalise_ref_entries(entries: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+def _canonicalise_ref_entries(
+    entries: list[dict[str, Any]] | None,
+    *,
+    force_source: str | None = None,
+) -> list[dict[str, Any]] | None:
     """Canonicalise + validate a list of raw work-item ref entries.
 
     Each entry goes through ``validate_ref_entry`` (canonical kind + ref, valid
     source/status). A malformed entry is dropped with a warning — the stamp is
     best-effort and must never abort run creation. Returns ``None`` for an
     empty/None input.
+
+    FAR-794 slice 2a intake mode (*force_source* set): the wire ``source`` is
+    NEVER trusted — every surviving entry is re-stamped with the
+    engine-assigned source for the channel, and the wire's disagreement with
+    the assignment (``refs_unknown_source_submissions``) plus the malformed
+    drops (``refs_malformed``) are counted through the lifecycle_refs event
+    hook. The final assigned-source total (``refs_by_source``) is emitted once
+    for the surviving set.
     """
     if not entries:
         return None
     canonical: list[dict[str, Any]] = []
+    unknown_source = 0
+    malformed = 0
     for entry in entries:
+        if force_source is not None and isinstance(entry, dict):
+            wire_source = entry.get("source")
+            if wire_source is not None and wire_source != force_source:
+                unknown_source += 1
         try:
-            canonical.append(validate_ref_entry(entry))
+            if force_source is not None:
+                canonical.append(validate_ref_entry(entry, force_source=force_source))
+            else:
+                canonical.append(validate_ref_entry(entry))
         except (ValueError, TypeError) as exc:
+            malformed += 1
             _log.warning("dropping invalid work-item ref entry: %s", exc)
+    if force_source is not None:
+        if unknown_source:
+            notify_refs_event(REFS_EVENT_UNKNOWN_SOURCE, count=unknown_source)
+        if malformed:
+            notify_refs_event(REFS_EVENT_MALFORMED, count=malformed)
+        if canonical:
+            notify_refs_event(REFS_EVENT_ASSIGNED_SOURCE, source=force_source, count=len(canonical))
     return canonical or None
+
+
+def _harvest_wire_refs(stored_payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Harvest caller-supplied refs from a run-creation payload (FAR-794 slice 2a).
+
+    Supply channels, in precedence order: the reserved system carrier
+    ``_work_item_refs`` (a trigger ``payload_mapping`` can never target it, but
+    the strip exemption lets an explicit body value reach this point where it
+    is re-stamped) > the unprefixed ``work_item_refs`` wire alias. Returns
+    ``None`` when neither channel supplied a list.
+    """
+    for key in (WORK_ITEM_REFS_KEY, WIRE_REFS_ALIAS_KEY):
+        value = stored_payload.get(key)
+        if isinstance(value, list):
+            return value
+    return None
+
+
+def _merge_rank_guarded_refs(
+    existing: list[dict[str, Any]] | None,
+    incoming: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Rank-guarded union of two canonical ref lists (FAR-794 slice 2a).
+
+    Keyed by canonical ``(kind, ref)``; the entry with the HIGHER provenance
+    rank wins (``agent < derived < caller`` — provenance never downgrades).
+    On a rank tie the EXISTING entry is kept (first-seen wins). Entries that
+    are not well-formed dicts with kind+ref are ignored. Returns ``None`` when
+    the union is empty.
+    """
+    best: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
+    for entry in list(existing or []) + list(incoming or []):
+        if not isinstance(entry, dict) or not entry.get("kind") or not entry.get("ref"):
+            continue
+        key = (str(entry["kind"]), str(entry["ref"]))
+        rank = _SOURCE_RANK.get(str(entry.get("source", "")), 0)
+        current = best.get(key)
+        if current is None or rank > current[0]:
+            best[key] = (rank, entry)
+    if not best:
+        return None
+    return sort_canonical_refs([entry for _, entry in best.values()])
+
+
+# Rank-guarded create-time journey upsert (FAR-794 slice 2a). Mint semantics
+# are preserved for everything the finalise path owns (``latest_*``,
+# ``run_count`` are NOT in the column list); the ONLY conflict-arm write is a
+# rank-guarded ``provenance`` upgrade: ``agent(0) < derived(1) < caller(2)``,
+# never a downgrade, unknown/NULL legacy values rank lowest (ELSE 0).
+# ``first_seen_source`` is deliberately absent from the DO UPDATE arm — it is
+# written only on INSERT and immutable afterwards. The rank CASE is inlined
+# (no SQL functions) so the statement is portable across Postgres and SQLite.
+# Parameters are bound per-row (:id0, :kind0, ...) — the assembled string
+# carries only bind placeholders, never values (parameterised-SQL rule).
+_HYDRATE_UPSERT_PREFIX = (
+    "INSERT INTO journeys "
+    "(id, organisation_id, kind, ref, canonical_work_item_id, provenance, first_seen_source, "
+    "created_at, updated_at) VALUES "
+)
+_HYDRATE_UPSERT_SUFFIX = (
+    " ON CONFLICT (organisation_id, kind, ref) DO UPDATE SET "
+    "provenance = CASE "
+    "WHEN (CASE excluded.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
+    "> (CASE journeys.provenance WHEN 'caller' THEN 2 WHEN 'derived' THEN 1 WHEN 'agent' THEN 0 ELSE 0 END) "
+    "THEN excluded.provenance ELSE journeys.provenance END"
+)
+_HYDRATE_VALUES_TEMPLATE = (
+    "(:id{i}, :org_id, :kind{i}, :ref{i}, :canonical_id{i}, :prov{i}, :prov{i}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+)
+
+# Only caller/derived refs mint journey rows at create time. ``agent`` refs
+# (node emissions / reported claims) are stored on the run but never mint —
+# minting stays owned by engine-assigned provenance (FAR-794 slice 2a).
+_MINTABLE_SOURCES: frozenset[str] = frozenset({"caller", "derived"})
 
 
 async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list[dict[str, Any]] | None) -> None:
     """Mint journey rows for the run's canonical work-item refs (create-time).
 
-    ``INSERT ... ON CONFLICT (organisation_id, kind, ref) DO NOTHING`` — MINT
-    ONLY: ``latest_*`` / ``run_count`` are owned by the finalise path (FAR-143)
-    and are never touched here. Wrapped in its own SAVEPOINT and fail-open: a
+    ``INSERT ... ON CONFLICT (organisation_id, kind, ref) DO UPDATE`` with a
+    rank-guarded ``provenance`` upgrade — MINT-ONLY for everything else:
+    ``latest_*`` / ``run_count`` are owned by the finalise path (FAR-143) and
+    are never touched here. ``agent``-sourced entries are NOT minted (stored
+    on the run only). Duplicates of the same canonical ``(kind, ref)`` are
+    collapsed in Python to the highest-rank entry first — Postgres rejects two
+    ON CONFLICT updates to the same row within one statement, so the batch
+    must arrive deduplicated. Wrapped in its own SAVEPOINT and fail-open: a
     journey write failure logs + continues — a lost create-stamp is recoverable
     at finalise via the deterministic canonical id. A journey write failure
     must NEVER abort ``create_run``.
     """
     if not refs:
         return
+    mintable = [e for e in refs if isinstance(e, dict) and e.get("source") in _MINTABLE_SOURCES]
+    if not mintable:
+        return
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in mintable:
+        key = (str(entry["kind"]), str(entry["ref"]))
+        current = deduped.get(key)
+        if current is None or _SOURCE_RANK.get(str(entry["source"]), 0) > _SOURCE_RANK.get(str(current["source"]), 0):
+            deduped[key] = entry
+    rows = sort_canonical_refs(list(deduped.values()))
     try:
         async with session.begin_nested():
-            for entry in refs:
-                canonical_id = canonical_work_item_id(org_id, entry["kind"], entry["ref"])
-                # Hex-form UUID bindings for the raw INSERT — the portable form
-                # that matches both Postgres (accepts 32-hex uuid input) and
-                # SQLite (the Uuid type stores 32-char hex).
-                await session.execute(
-                    text(
-                        "INSERT INTO journeys "
-                        "(id, organisation_id, kind, ref, canonical_work_item_id, created_at, updated_at) "
-                        "VALUES (:id, :org_id, :kind, :ref, :canonical_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
-                        "ON CONFLICT (organisation_id, kind, ref) DO NOTHING"
-                    ),
-                    {
-                        "id": uuid.uuid4().hex,
-                        "org_id": org_id.hex,
-                        "kind": entry["kind"],
-                        "ref": entry["ref"],
-                        "canonical_id": canonical_id.hex,
-                    },
-                )
+            # Hex-form UUID bindings for the raw INSERT — the portable form
+            # that matches both Postgres (accepts 32-hex uuid input) and
+            # SQLite (the Uuid type stores 32-char hex).
+            params: dict[str, Any] = {"org_id": org_id.hex}
+            values: list[str] = []
+            for i, entry in enumerate(rows):
+                values.append(_HYDRATE_VALUES_TEMPLATE.format(i=i))
+                params[f"id{i}"] = uuid.uuid4().hex
+                params[f"kind{i}"] = entry["kind"]
+                params[f"ref{i}"] = entry["ref"]
+                params[f"canonical_id{i}"] = canonical_work_item_id(org_id, entry["kind"], entry["ref"]).hex
+                params[f"prov{i}"] = entry["source"]
+            await session.execute(text(_HYDRATE_UPSERT_PREFIX + ", ".join(values) + _HYDRATE_UPSERT_SUFFIX), params)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -1191,6 +1338,23 @@ async def _resolve_owner_team_id(
     ).scalar_one_or_none()
 
 
+async def _read_work_item_refs_required(session: AsyncSession, pipeline_id: uuid.UUID) -> bool:
+    """Read the pipeline's ``work_item_refs_required`` flag (FAR-794 slice 2a).
+
+    The flag lives in ``Pipeline.run_context_defaults`` (the existing JSON
+    defaults column — no schema change) as ``work_item_refs_required: true``.
+    Fail-open on any unreadable/missing shape: the flag is an intake
+    validation convenience, not a security control, so a malformed defaults
+    blob degrades to "not required" rather than blocking run creation.
+    """
+    defaults = (
+        await session.execute(select(Pipeline.run_context_defaults).where(Pipeline.id == pipeline_id))
+    ).scalar_one_or_none()
+    if not isinstance(defaults, dict):
+        return False
+    return defaults.get("work_item_refs_required") is True
+
+
 async def _persist_guardrail_eval_results(
     session: AsyncSession,
     *,
@@ -1392,7 +1556,32 @@ async def create_run(
         parent_run_id=parent_run_id,
         explicit=work_item_id,
     )
-    canonical_refs = _canonicalise_ref_entries(work_item_refs)
+
+    # FAR-794 slice 2a — refs supply channels + engine-assigned provenance.
+    # Precedence: explicit ``work_item_refs`` kwarg (trigger-engine extraction)
+    # > payload ``_work_item_refs`` carrier > the unprefixed wire alias. The
+    # wire ``source`` is NEVER trusted: every surviving entry is re-stamped
+    # with the channel's engine-assigned source (caller for manual/rerun,
+    # derived for every extraction-driven channel).
+    assigned_source = assigned_source_for_trigger(trigger_type)
+    wire_refs = _harvest_wire_refs(stored_payload)
+    supplied_refs = work_item_refs if work_item_refs is not None else wire_refs
+    canonical_refs = _canonicalise_ref_entries(supplied_refs, force_source=assigned_source)
+
+    # Re-stamp the canonical refs into the stored payload so they fold into
+    # ``input_hash`` and survive coalesce identity. The wire carrier is
+    # removed first: a forged/unparseable ``_work_item_refs`` must never
+    # persist verbatim — only engine-canonicalised entries (or nothing) may.
+    stored_payload.pop(WORK_ITEM_REFS_KEY, None)
+    if canonical_refs is not None:
+        stored_payload[WORK_ITEM_REFS_KEY] = sort_canonical_refs(canonical_refs)
+
+    # Required-refs gate (FAR-794 slice 2a): a pipeline that declares
+    # ``work_item_refs_required`` refuses a delivery that supplied none. The
+    # flag is only queried when the canonical set is empty, so the hot path
+    # (refs present) pays no extra round-trip.
+    if canonical_refs is None and await _read_work_item_refs_required(session, pipeline_id):
+        raise WorkItemRefsRequiredError(pipeline_id)
 
     owner_team_id = await _resolve_owner_team_id(session, owner_team_id, pipeline_id)
 
@@ -1479,6 +1668,7 @@ async def coalesce_pending_run(
     pipeline_id: uuid.UUID,
     coalesce_key: str,
     input_payload: dict[str, Any],
+    trigger_type: str | None = None,
 ) -> Run | None:
     """Fold a new trigger delivery into the pipeline's UNSTARTED pending run (FAR-604).
 
@@ -1501,12 +1691,22 @@ async def coalesce_pending_run(
     wrong — and on non-PostgreSQL backends (no RLS) it is the ONLY org
     guard.
 
+    FAR-794 slice 2a: the surviving run's work-item refs are merged with the
+    new delivery's (rank-guarded union — provenance never downgrades), the
+    merged set is re-stamped into the stored payload (folding into
+    ``input_hash``) and written back to ``run.work_item_refs``, and the
+    pipeline's ``work_item_refs_required`` flag is evaluated against the
+    MERGED set (a required pipeline stays satisfied as long as either
+    delivery carried refs). *trigger_type* assigns the new delivery's
+    provenance; it defaults to ``derived`` — every current coalesce caller is
+    an extraction-driven channel, so absent information degrades
+    conservatively.
+
     The stored payload is the strip + key-inject shape ``create_run`` would
     have persisted, and ``input_hash`` is recomputed from it.
     """
     stored_payload = _strip_reserved_keys(input_payload)
     stored_payload[_COALESCE_KEY_FIELD] = coalesce_key
-    new_hash = _input_hash(stored_payload)
 
     dialect = await _get_dialect_name(session)
     if dialect == "postgresql":
@@ -1552,9 +1752,29 @@ async def coalesce_pending_run(
         )
     if run is None:
         return None
+
+    # FAR-794 slice 2a — merge the surviving run's refs with the new
+    # delivery's, rank-guarded. The wire ``source`` is never trusted: the new
+    # entries are re-stamped with the channel's engine-assigned source before
+    # the union.
+    assigned_source = assigned_source_for_trigger(trigger_type)
+    wire_refs = _harvest_wire_refs(stored_payload)
+    new_canonical = _canonicalise_ref_entries(wire_refs, force_source=assigned_source)
+    merged_refs = _merge_rank_guarded_refs(run.work_item_refs, new_canonical)
+
+    if merged_refs is None and await _read_work_item_refs_required(session, pipeline_id):
+        raise WorkItemRefsRequiredError(pipeline_id)
+
+    stored_payload.pop(WORK_ITEM_REFS_KEY, None)
+    if merged_refs is not None:
+        stored_payload[WORK_ITEM_REFS_KEY] = merged_refs
     run.input_payload = stored_payload
-    run.input_hash = new_hash
+    run.input_hash = _input_hash(stored_payload)
+    run.work_item_refs = merged_refs
     run.created_at = datetime.now(UTC)
+    # Mint any newly-seen (kind, ref) from the merged set — mint-only +
+    # rank-guarded, fail-open (a journey write failure never aborts the fold).
+    await _hydrate_journeys(session, org_id, merged_refs)
     await session.flush()
     return run
 

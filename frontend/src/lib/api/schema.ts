@@ -4154,6 +4154,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/nodes/{node_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Run Artifacts
+         * @description List all artifact pointers for a node across all attempts.
+         *
+         *     Returns an empty list when the node has no artifacts.
+         */
+        get: operations["list_run_artifacts_api_v1_runs__run_id__nodes__node_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}": {
         parameters: {
             query?: never;
@@ -9555,6 +9577,37 @@ export interface components {
             };
             /** Notes */
             notes?: string | null;
+        };
+        /**
+         * ArtifactListResponse
+         * @description Response for the per-node artifact listing endpoint.
+         */
+        ArtifactListResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Node Id */
+            node_id: string;
+            /** Artifacts */
+            artifacts: components["schemas"]["ArtifactPointerResponse"][];
+        };
+        /**
+         * ArtifactPointerResponse
+         * @description One artifact pointer returned by the listing endpoint.
+         */
+        ArtifactPointerResponse: {
+            /** Attempt Key */
+            attempt_key: string;
+            /** Stream */
+            stream: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Sha256 */
+            sha256: string;
+            /** Compression */
+            compression: string;
         };
         /** AutomationSuggestion */
         AutomationSuggestion: {
@@ -17323,6 +17376,10 @@ export interface components {
             input_payload?: {
                 [key: string]: unknown;
             };
+            /** Work Item Refs */
+            work_item_refs?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** TriggerUpdate */
         TriggerUpdate: {
@@ -27937,6 +27994,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeOutputDiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_run_artifacts_api_v1_runs__run_id__nodes__node_id__artifacts_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactListResponse"];
                 };
             };
             /** @description Validation Error */

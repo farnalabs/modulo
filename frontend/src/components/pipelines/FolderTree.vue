@@ -22,7 +22,8 @@
     <div class="py-1 flex-1 min-h-0 overflow-y-auto">
       <button type="button"
         data-testid="folder-tree-all-pipelines"
-        class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+        class="flex w-full items-center gap-2 py-2 text-sm hover:bg-accent transition-colors text-left"
+        :style="{ paddingLeft: '12px', paddingRight: '8px' }"
         :class="[
           selectedFolderId === null ? 'bg-accent text-accent-foreground font-medium' : 'text-foreground',
           dragOverRoot ? 'bg-accent/70 ring-1 ring-inset ring-primary' : '',
@@ -49,63 +50,50 @@
         No folders yet
       </div>
 
-      <draggable
-        v-model="draggableItems"
-        :item-key="(item: FlatTreeItem) => item.folder.id"
-        ghost-class="opacity-40"
-        :animation="200"
-        handle=".drag-handle"
-        @end="onDragEnd"
-        @change="onDragChange"
-      >
-        <template #item="{ element }">
-          <div
-            :data-testid="`folder-tree-item-${element.folder.id}`"
-            :class="[
-              'group flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left',
-              selectedFolderId === element.folder.id ? 'bg-accent text-accent-foreground font-medium' : 'text-foreground',
-            ]"
-            :style="{ paddingLeft: `${12 + element.depth * 16}px` }"
-            role="button"
-            tabindex="0"
-            @click="$emit('select-folder', element.folder.id)"
-            @keydown.enter="$emit('select-folder', element.folder.id)"
-            @keydown.space.prevent="$emit('select-folder', element.folder.id)"
-            @dragover.prevent
-            @drop="onFolderDrop(element.folder.id, $event)"
-          >
-            <!-- Drag handle -->
-            <span class="drag-handle cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-muted-foreground hover:text-foreground">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="19" r="1"/></svg>
-            </span>
+      <div>
+        <div
+          v-for="element in flatTree"
+          :key="element.folder.id"
+          :data-testid="`folder-tree-item-${element.folder.id}`"
+          :class="[
+            'group flex w-full items-center gap-2 py-2 text-sm hover:bg-accent transition-colors text-left',
+            selectedFolderId === element.folder.id ? 'bg-accent text-accent-foreground font-medium' : 'text-foreground',
+          ]"
+          :style="{ paddingLeft: `${12 + element.depth * 16}px`, paddingRight: '8px' }"
+          role="button"
+          tabindex="0"
+          @click="$emit('select-folder', element.folder.id)"
+          @keydown.enter="$emit('select-folder', element.folder.id)"
+          @keydown.space.prevent="$emit('select-folder', element.folder.id)"
+          @dragover.prevent
+          @drop="onFolderDrop(element.folder.id, $event)"
+        >
+          <!-- Folder icon -->
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
 
-            <!-- Folder icon -->
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+          <!-- Folder name -->
+          <span class="truncate">{{ element.folder.name }}</span>
+          <span v-if="counts?.[element.folder.id] !== undefined" class="ml-1 text-xs text-muted-foreground shrink-0">{{ counts[element.folder.id] }}</span>
 
-            <!-- Folder name -->
-            <span class="truncate">{{ element.folder.name }}</span>
-            <span v-if="counts?.[element.folder.id] !== undefined" class="ml-1 text-xs text-muted-foreground shrink-0">{{ counts[element.folder.id] }}</span>
-
-            <!-- Action buttons (rename, delete) -->
-            <div class="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-              <button type="button"
-                class="rounded p-0.5 hover:bg-accent-foreground/10 text-muted-foreground hover:text-foreground transition-colors"
-                @click.stop="openRenameDialog(element.folder)"
-                :aria-label="labels.renameFolder"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-              </button>
-              <button type="button"
-                class="rounded p-0.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                @click.stop="openDeleteConfirm(element.folder)"
-                :aria-label="labels.deleteFolder"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-              </button>
-            </div>
+          <!-- Action buttons (rename, delete) -->
+          <div class="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+            <button type="button"
+              class="rounded p-0.5 hover:bg-accent-foreground/10 text-muted-foreground hover:text-foreground transition-colors"
+              @click.stop="openRenameDialog(element.folder)"
+              :aria-label="labels.renameFolder"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+            </button>
+            <button type="button"
+              class="rounded p-0.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+              @click.stop="openDeleteConfirm(element.folder)"
+              :aria-label="labels.deleteFolder"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+            </button>
           </div>
-        </template>
-      </draggable>
+        </div>
+      </div>
     </div>
 
     <!-- Create Folder Dialog -->
@@ -192,9 +180,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import draggable from 'vuedraggable'
 import { useApi } from '@/composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
 import Button from 'primevue/button'
@@ -260,7 +247,6 @@ const allFolders = ref<FolderItem[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 
-const draggableItems = ref<FlatTreeItem[]>([])
 const dragOverRoot = ref(false)
 const showCreateDialog = ref(false)
 const newFolderName = ref('')
@@ -279,6 +265,9 @@ const deleteTarget = ref<FolderItem | null>(null)
 const deleteError = ref<string | null>(null)
 const deleting = ref(false)
 
+const nameCompare = (a: FolderItem, b: FolderItem) =>
+  a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+
 const folderChildren = computed(() => {
   const children = new Map<string, FolderItem[]>()
   for (const f of allFolders.value) {
@@ -287,11 +276,12 @@ const folderChildren = computed(() => {
       children.get(f.parent_id)!.push(f)
     }
   }
+  for (const list of children.values()) list.sort(nameCompare)
   return children
 })
 
 const folderRoots = computed(() =>
-  allFolders.value.filter(f => !f.parent_id)
+  allFolders.value.filter(f => !f.parent_id).sort(nameCompare)
 )
 
 const flatTree = computed(() => {
@@ -331,10 +321,6 @@ async function loadFolders() {
   }
 }
 
-watch(allFolders, () => {
-  draggableItems.value = [...flatTree.value]
-}, { immediate: true })
-
 function onFolderDrop(folderId: string, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
   if (pipelineId) {
@@ -350,36 +336,6 @@ function onRootDrop(event: DragEvent) {
     emit('move-pipeline', { pipelineId: itemId, folderId: null })
     emit('folders-changed')
   }
-}
-
-async function onDragEnd() {
-  try {
-    const itemsByDepth: Record<number, FlatTreeItem[]> = {}
-    for (const item of draggableItems.value) {
-      if (!itemsByDepth[item.depth]) itemsByDepth[item.depth] = []
-      itemsByDepth[item.depth].push(item)
-    }
-
-    for (const depthStr of Object.keys(itemsByDepth)) {
-      const items = itemsByDepth[Number(depthStr)]
-      for (let i = 0; i < items.length; i++) {
-        const folder = items[i].folder
-        if (folder.sort_order !== i) {
-          try {
-            await patch(`${apiBase.value}/${folder.id}/move`, { sort_order: i })
-          } catch {
-            console.warn(`Failed to update sort_order for folder ${folder.id}`)
-          }
-        }
-      }
-    }
-  } catch {
-    await loadFolders()
-  }
-}
-
-function onDragChange() {
-  // Visual feedback only — persistence handled in onDragEnd
 }
 
 function openCreateDialog() {

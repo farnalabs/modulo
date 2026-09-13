@@ -48,11 +48,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST as _GIT_ALLOWED_HOST
 
 _log = logging.getLogger(__name__)
+
+# FAR-798 (PR #430 review finding #3): host names are interpolated raw into a
+# shell ``case`` pattern position, so shell metacharacters (``| * ? [ ]``) could
+# corrupt the generated case statement / inject. Reject anything that is not a
+# strict hostname label, and reject env-var names that are not valid POSIX
+# identifiers, BEFORE the script is built — fail-closed (ValueError) rather than
+# emitting a malformed or injectable helper.
+_HOSTNAME_RE = re.compile(r"[A-Za-z0-9.\-]+")
+_ENV_VAR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # The E2B sandbox runs the agent as the DEFAULT NON-ROOT user (node_runner
 # starts the agent command without a ``user`` override — see
@@ -164,6 +174,73 @@ def build_git_scoped_script() -> str:
     )
 
 
+def _multi_host_credential_helper_script(hosts: dict[str, str]) -> str:
+    """A credential helper that grants per-host tokens via exact literal match.
+
+    ``git credential fill`` feeds the credential description (protocol, host,
+    path, username) on stdin — it never sends the password — so the helper reads
+    the host from stdin and matches it against the ordered host list by EXACT
+    literal equality (no globs, no file reads — no TOCTOU). Each host's token
+    comes from its own per-host env var (e.g. ``MODULO_GIT_CRED_0``), never a
+    single shared var, so host A's token is never visible to host B.
+
+    *hosts* is an ordered dict mapping hostname -> env var name containing the
+    token. The script uses a ``case`` statement for exact match: each host is a
+    separate arm, and only the matching arm's env var is read. Unknown hosts
+    produce no output (deny).
+    """
+    cases = []
+    for host, env_var in hosts.items():
+        if not isinstance(host, str) or not _HOSTNAME_RE.fullmatch(host):
+            raise ValueError(f"invalid git-credential host {host!r}: must be a hostname containing only [A-Za-z0-9.-]")
+        if not isinstance(env_var, str) or not _ENV_VAR_RE.fullmatch(env_var):
+            raise ValueError(
+                f"invalid git-credential env var {env_var!r} for host {host!r}: must be a valid POSIX identifier"
+            )
+        cases.append(
+            f'  "{host}")\n'
+            f'    if [ -n "${{{env_var}}}" ]; then\n'
+            f"      printf 'username=x-access-token\\npassword=%s\\n' \"${{{env_var}}}\"\n"
+            f"    fi\n"
+            f"    ;;"
+        )
+    return f"""#!/bin/sh
+host=""
+while read -r l; do
+  [ "$l" = "" ] && break
+  case "$l" in
+    host=*) host="${{l#host=}}" ;;
+  esac
+done
+case "$host" in
+{chr(10).join(cases)}
+esac
+"""
+
+
+def build_git_multi_host_script(hosts: dict[str, str]) -> str:
+    """Build the shell script that installs a multi-host git credential helper.
+
+    FAR-798: extends the single-host scoped helper to support multiple hosts.
+    Each host's token comes from its own per-host env var, and the generated
+    script matches hosts by EXACT literal equality (no globs, no TOCTOU).
+
+    The helper is registered in the AGENT's git config (``_AGENT_GIT_CONFIG``)
+    — same as :func:`build_git_scoped_script` — and the same
+    ``--file``-only register constraint applies.
+    """
+    return (
+        "set -e\n"
+        f"mkdir -p {_WORKSPACE}/.git-policy\n"
+        f"cat > {_WORKSPACE}/.git-policy/cred-helper.sh <<'POLICY_EOF'\n"
+        f"{_multi_host_credential_helper_script(hosts)}"
+        f"POLICY_EOF\n"
+        f"chmod +x {_WORKSPACE}/.git-policy/cred-helper.sh\n"
+        f"git config --file {_AGENT_GIT_CONFIG} credential.helper "
+        f'"{_WORKSPACE}/.git-policy/cred-helper.sh"\n'
+    )
+
+
 def build_git_none_script() -> str:
     """Build the shell script that provisions NO git credentials.
 
@@ -238,6 +315,7 @@ async def apply_sandbox_policy(
     git_credentials: str | None,
     egress_policy: str | None,
     egress_allowlist: list[dict[str, Any]] | None,
+    allowed_hosts: dict[str, str] | None = None,
     command_timeout: float = 60.0,
 ) -> None:
     """Run the enforced sandbox policy in the sandbox (FAR-212 PR B).
@@ -302,7 +380,13 @@ async def apply_sandbox_policy(
     # registered into the AGENT's config file (see _AGENT_GIT_CONFIG), so the
     # executing (root) user is irrelevant to where the agent reads its config.
     if git_credentials == "scoped":
-        await _run_step(build_git_scoped_script(), user="root", enforce=True)
+        # FAR-798: when allowed_hosts is provided, use the multi-host helper;
+        # when None (default), use the single-host scoped helper — BYTE-
+        # IDENTICAL to today for the github.com-only case.
+        if allowed_hosts:
+            await _run_step(build_git_multi_host_script(allowed_hosts), user="root", enforce=True)
+        else:
+            await _run_step(build_git_scoped_script(), user="root", enforce=True)
     elif git_credentials == "none":
         await _run_step(build_git_none_script(), user="root", enforce=True)
     if egress_policy == "selected" and egress_allowlist:
@@ -314,6 +398,7 @@ async def apply_sandbox_policy(
 __all__ = [
     "apply_sandbox_policy",
     "build_egress_selected_script",
+    "build_git_multi_host_script",
     "build_git_none_script",
     "build_git_scoped_script",
     "build_read_only_script",

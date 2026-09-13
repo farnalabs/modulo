@@ -14,8 +14,6 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-conflict-reconcile.yml"
 
-_BRANCH_FIXER_NAME = "Fix: Modulo Branch Fixer"
-
 
 def _raw() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
@@ -67,12 +65,15 @@ def test_filters_on_conflicting() -> None:
     assert "CONFLICTING" in raw, "Does not filter on mergeable=CONFLICTING"
 
 
-# --- Branch Fixer dispatch by name ---
+# --- Branch Fixer dispatch wiring ---
 
 
 def test_dispatches_branch_fixer_by_name() -> None:
+    """After FAR-807, the exact workflow name 'Fix: Modulo Branch Fixer' is no
+    longer referenced (the old gh run list dedup that cited it was removed).
+    The dispatch step must still exist and reference 'Branch Fixer'."""
     raw = _raw()
-    assert _BRANCH_FIXER_NAME in raw, f"Does not reference Branch Fixer workflow by name '{_BRANCH_FIXER_NAME}'"
+    assert "Branch Fixer" in raw, "Does not reference Branch Fixer anywhere"
 
 
 # --- Dispatch step must carry GH_TOKEN so the in-flight dedup `gh run list` auths ---
@@ -120,3 +121,28 @@ def test_mentions_modulo_cannot_fix_label() -> None:
 def test_fail_open_warning_path_exists() -> None:
     raw = _raw()
     assert "::warning::" in raw, "No fail-open ::warning:: path found"
+
+
+# --- FAR-807: inert dedup replaced with fixer-commit recency signal ---
+
+
+def test_no_inert_gh_run_list_dedup() -> None:
+    """The old dedup used `gh run list --workflow "Fix: Modulo Branch Fixer"` which
+    never matched because the Branch Fixer is triggered via webhook, not GitHub
+    Actions. This guard must be absent after FAR-807."""
+    raw = _raw()
+    assert "gh run list --workflow" not in raw, "Inert gh run list --workflow dedup still present (FAR-807)"
+
+
+def test_references_fixer_commit_signal() -> None:
+    """The fixer commits as 'modulo-branch-fixer' — the workflow must use this
+    committer name as the dedup signal."""
+    raw = _raw()
+    assert "modulo-branch-fixer" in raw, "Workflow must reference 'modulo-branch-fixer' committer name for dedup"
+
+
+def test_recency_window_constant_present() -> None:
+    """The 30-minute recency window must be documented as a constant or comment
+    so the guard's limits are honest."""
+    raw = _raw()
+    assert "30" in raw, "30-minute recency window constant/comment missing"

@@ -920,9 +920,17 @@ def _judge_backend_id() -> str:
     return "11111111-2222-3333-4444-555555555555"
 
 
+def _stub_run_coroutine_sync(content: str) -> Callable[[Any], SimpleNamespace]:
+    def _fake(coro: Any) -> SimpleNamespace:
+        coro.close()
+        return SimpleNamespace(content=content)
+
+    return _fake
+
+
 def test_llm_judge_non_json_response_falls_back(monkeypatch: pytest.MonkeyPatch):
     judge = nr._build_llm_judge_callable(MagicMock(), _judge_backend_id())
-    monkeypatch.setattr(nr, "_run_coroutine_sync", lambda coro: SimpleNamespace(content="model said: no"))
+    monkeypatch.setattr(nr, "_run_coroutine_sync", _stub_run_coroutine_sync("model said: no"))
     result = judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
     assert result["passed"] is False
     assert result["score"] == 0.0
@@ -934,7 +942,7 @@ def test_llm_judge_parses_structured_response(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         nr,
         "_run_coroutine_sync",
-        lambda coro: SimpleNamespace(content='{"passed": true, "score": 0.9, "detail": "good"}'),
+        _stub_run_coroutine_sync('{"passed": true, "score": 0.9, "detail": "good"}'),
     )
     result = judge({"answer": "hello"}, SimpleNamespace(config={"field": "answer"}))
     assert result["passed"] is True
