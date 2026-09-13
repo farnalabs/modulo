@@ -697,16 +697,12 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     parameter_overrides: dict[str, Any] | None = None
     template_id: str | None = None
     # FAR-296: sandbox_agent mode — "llm" (default, dispatches an LLM agent with
-    # agent_command + rendered prompt) or "script" (runs script_command verbatim
+    # agent_commands + rendered prompt) or "script" (runs script_command verbatim
     # with the full run input at /home/user/input.json).
     mode: Literal["llm", "script"] = "llm"
-    agent_command: str | None = None
-    # Sandbox commands list: the legible alternative to one long agent_command
-    # string. Joined at runtime by commands_concatenation_string
+    # Sandbox commands list: joined at runtime by commands_concatenation_string
     # (sandbox_mode._validate_sandbox_mode_config) and Jinja-validated as a
-    # whole by validate_sandbox_agent_command_jinja. Mutually exclusive with
-    # agent_command (the runtime resolves the list first; authoring UIs keep
-    # one or the other).
+    # whole by validate_sandbox_agent_command_jinja.
     agent_commands: list[str] | None = None
     commands_concatenation_string: str = Field(
         default=" && ",
@@ -1009,15 +1005,8 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
 
         _validate_sandbox_mode_config(self.model_dump())
         # Node-level mutual exclusion, mirroring the Agent create/update schemas
-        # (routes/agents.py): a node sets agent_command OR agent_commands, never
-        # both. The runtime resolves the list first, so a both-set node would
-        # silently ignore its scalar command — reject it at authoring time
-        # instead. (agent_command/agent_commands vs script_command exclusivity
-        # is already covered by _validate_sandbox_mode_config above.)
-        if self.agent_commands and self.agent_command and self.agent_command.strip():
-            raise ValueError(
-                "sandbox_agent node cannot set both agent_command and agent_commands — set one or the other"
-            )
+        # agent_commands vs script_command exclusivity is already covered by
+        # _validate_sandbox_mode_config above.
         _validate_sandbox_egress_config(self.model_dump())
         _validate_sandbox_egress_allowlist_config(
             self.egress_policy,
@@ -1717,11 +1706,11 @@ async def _validate_graph_save(
 
 
 def _extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uuid.UUID, str]:
-    """FAR-488a: first-carried ``agent_command`` per distinct bound agent.
+    """FAR-488a: first-carried ``agent_commands`` per distinct bound agent.
 
     A node WITHOUT an ``agent_id`` needs no sync (its node-level command always
     stands at snapshot time — ``_apply_agent_fields`` only materializes bound
-    agents). A node carrying no usable ``agent_command`` value has nothing to
+    agents). A node carrying no usable ``agent_commands`` value has nothing to
     sync. When several nodes bind the SAME agent, the FIRST node's command wins
     (deterministic; snapshot materialization applies one row value to every
     node bound to that agent, so per-node divergence is not representable).
@@ -1731,8 +1720,11 @@ def _extract_agent_command_sync_updates(nodes: list[dict[str, Any]]) -> dict[uui
         if not isinstance(node, dict):
             continue
         raw_agent_id = node.get("agent_id")
-        command = node.get("agent_command")
-        if raw_agent_id is None or not isinstance(command, str) or not command:
+        agent_commands = node.get("agent_commands")
+        if raw_agent_id is None or not isinstance(agent_commands, list) or not agent_commands:
+            continue
+        command = agent_commands[0]
+        if not isinstance(command, str) or not command:
             continue
         try:
             agent_id = uuid.UUID(str(raw_agent_id))
@@ -1748,10 +1740,10 @@ async def _sync_agent_row_commands(
     org_id: uuid.UUID,
     nodes: list[dict[str, Any]],
 ) -> int:
-    """FAR-488a: sync a PATCHed node ``agent_command`` into the bound Agent row.
+    """FAR-488a: sync a PATCHed node ``agent_commands`` into the bound Agent row.
 
     At snapshot time ``_apply_agent_fields`` overwrites a bound node's
-    ``agent_command`` with the Agent row's non-NULL value, while the graph PATCH
+    ``agent_commands`` with the Agent row's non-NULL value, while the graph PATCH
     used to persist node-level commands to ``graph_nodes_json`` only — so an
     operator's PATCH read back correctly but every run silently executed the
     stale Agent-row command (FAR-488 incident, 2026-08-29). Syncing the row
@@ -1759,7 +1751,7 @@ async def _sync_agent_row_commands(
     what runs" hold.
 
     Deliberate skip cases: a node without ``agent_id`` (nothing bound — the
-    node value already stands); an Agent row with a NULL ``agent_command``
+    node value already stands); an Agent row with a NULL ``agent_commands``
     (the node value already stands at snapshot time); an incoming command
     equal to the row value (no-op). Returns the number of Agent rows updated.
     """
@@ -1770,13 +1762,13 @@ async def _sync_agent_row_commands(
     changed = 0
     for agent in result.scalars():
         incoming = updates.get(agent.id)
-        if incoming is None or agent.agent_command is None or agent.agent_command == incoming:
+        if incoming is None or agent.agent_commands is None or agent.agent_commands == [incoming]:
             continue
         logger.info(
-            "pipeline.graph.agent_command_synced",
+            "pipeline.graph.agent_commands_synced",
             extra={"agent_id": str(agent.id), "organisation_id": str(org_id)},
         )
-        agent.agent_command = incoming
+        agent.agent_commands = [incoming]
         changed += 1
     return changed
 
@@ -1837,7 +1829,7 @@ async def replace_pipeline_graph_endpoint(
             )
             if graph is not None:
                 # FAR-488a: keep the bound Agent rows in step with node-level
-                # agent_command PATCHes INSIDE the same transaction, so the
+                # agent_commands PATCHes INSIDE the same transaction, so the
                 # next snapshot materializes the command the operator saved.
                 await _sync_agent_row_commands(session, org_id=principal.organisation_id, nodes=node_data)
                 issues = await _validate_graph_save(

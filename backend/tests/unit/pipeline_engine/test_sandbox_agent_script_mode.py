@@ -133,8 +133,8 @@ def _matrix_cell(
         node["mode"] = mode
     if prompt:
         node["agent_prompt"] = "Do the thing"
-    if command == "agent_command":
-        node["agent_command"] = "opencode run --auto"
+    if command == "agent_commands":
+        node["agent_commands"] = ["opencode run --auto"]
     elif command == "script_command":
         node["script_command"] = "python3 main.py"
     if output_schema:
@@ -145,21 +145,21 @@ def _matrix_cell(
 def _expected_valid(mode: str | None, prompt: bool, command: str) -> bool:
     """The ground truth for the 16-cell matrix.
 
-    llm mode requires agent_prompt AND agent_command; script mode requires
+    llm mode requires agent_prompt AND agent_commands; script mode requires
     script_command (agent_prompt is optional and ignored). The command field
     that does NOT match the mode makes the cell invalid.
     """
     effective_mode = mode or "llm"
     if effective_mode == "script":
         return command == "script_command"
-    return prompt and command == "agent_command"
+    return prompt and command == "agent_commands"
 
 
 _MATRIX_CELLS: list[tuple[str, bool, str, bool]] = [
     (mode, prompt, command, output_schema)
     for mode in ("llm", "script")
     for prompt in (True, False)
-    for command in ("agent_command", "script_command")
+    for command in ("agent_commands", "script_command")
     for output_schema in (True, False)
 ]
 
@@ -217,38 +217,38 @@ def test_16_cell_matrix_all_gates_agree(mode, prompt, command, output_schema):
 
 def test_legacy_no_mode_snapshot_reads_as_llm():
     """A node WITHOUT a mode key (legacy snapshot) reads as ``llm``."""
-    legacy_valid = _matrix_cell(None, True, "agent_command", False)
+    legacy_valid = _matrix_cell(None, True, "agent_commands", False)
     assert _validate_sandbox_mode_config(legacy_valid)[0] == "llm"
 
-    legacy_missing_prompt = _matrix_cell(None, False, "agent_command", False)
+    legacy_missing_prompt = _matrix_cell(None, False, "agent_commands", False)
     with pytest.raises(ValueError, match="missing required 'agent_prompt'"):
         _validate_sandbox_mode_config(legacy_missing_prompt)
 
-    assert _expected_valid(None, True, "agent_command") is True
+    assert _expected_valid(None, True, "agent_commands") is True
     assert PipelineGraphNode.model_validate(legacy_valid).mode == "llm"
 
 
 def test_mode_validation_error_messages_are_distinct():
     """Each invalid combination surfaces a distinct, descriptive message."""
     base = {"id": "n1"}
-    with pytest.raises(ValueError, match="BOTH agent_command"):
+    with pytest.raises(ValueError, match="BOTH agent_commands"):
         _validate_sandbox_mode_config(
-            {**base, "mode": "llm", "agent_prompt": "x", "agent_command": "a", "script_command": "b"}
+            {**base, "mode": "llm", "agent_prompt": "x", "agent_commands": ["a"], "script_command": "b"}
         )
     with pytest.raises(ValueError, match="invalid mode"):
-        _validate_sandbox_mode_config({**base, "mode": "docker", "agent_command": "a"})
+        _validate_sandbox_mode_config({**base, "mode": "docker", "agent_commands": ["a"]})
     with pytest.raises(ValueError, match="mode='script' requires"):
-        _validate_sandbox_mode_config({**base, "mode": "script", "agent_command": "a"})
+        _validate_sandbox_mode_config({**base, "mode": "script", "agent_commands": ["a"]})
 
 
 # ---------------------------------------------------------------------------
-# FAR-226: agent_command Jinja syntax validation
+# FAR-226: agent_commands Jinja syntax validation
 # ---------------------------------------------------------------------------
 
 
 def test_jinja_helper_accepts_plain_command():
-    """A plain agent_command (no Jinja syntax) validates clean."""
-    assert validate_sandbox_agent_command_jinja({"id": "n1", "mode": "llm", "agent_command": "opencode run"}) is None
+    """A plain agent_commands (no Jinja syntax) validates clean."""
+    assert validate_sandbox_agent_command_jinja({"id": "n1", "mode": "llm", "agent_commands": ["opencode run"]}) is None
 
 
 def test_jinja_helper_accepts_undefined_var_template():
@@ -256,7 +256,7 @@ def test_jinja_helper_accepts_undefined_var_template():
     undefined vars are lenient (render to empty), matching run-time handling."""
     assert (
         validate_sandbox_agent_command_jinja(
-            {"id": "n1", "mode": "llm", "agent_command": "opencode --model {{ input.model }} --auto"}
+            {"id": "n1", "mode": "llm", "agent_commands": ["opencode --model {{ input.model }} --auto"]}
         )
         is None
     )
@@ -265,10 +265,10 @@ def test_jinja_helper_accepts_undefined_var_template():
 def test_jinja_helper_rejects_broken_template():
     """An invalid backslash inside {{ }} is a TemplateSyntaxError -> error message."""
     err = validate_sandbox_agent_command_jinja(
-        {"id": "n1", "mode": "llm", "agent_command": "opencode --model {{ \\\\ }}"}
+        {"id": "n1", "mode": "llm", "agent_commands": ["opencode --model {{ \\\\ }}"]}
     )
     assert err is not None
-    assert "agent_command" in err
+    assert "agent_commands" in err
     assert "n1" in err
 
 
@@ -280,8 +280,8 @@ def test_jinja_helper_skips_script_mode():
 
 
 def test_jinja_helper_skips_empty_command():
-    """An empty/missing agent_command is left to the mode validator, not the Jinja check."""
-    assert validate_sandbox_agent_command_jinja({"id": "n1", "mode": "llm", "agent_command": ""}) is None
+    """An empty/missing agent_commands is left to the mode validator, not the Jinja check."""
+    assert validate_sandbox_agent_command_jinja({"id": "n1", "mode": "llm", "agent_commands": [""]}) is None
 
 
 def test_jinja_helper_validates_agent_commands_list():
@@ -292,7 +292,7 @@ def test_jinja_helper_validates_agent_commands_list():
     bad = {"id": "n1", "mode": "llm", "agent_commands": ["opencode run", "--model {{ \\\\ }}"]}
     err = validate_sandbox_agent_command_jinja(bad)
     assert err is not None
-    assert "agent_command" in err
+    assert "agent_commands" in err
     assert "n1" in err
 
 
@@ -586,7 +586,7 @@ async def test_llm_mode_still_injects_host_credentials():
         "position": {"x": 0, "y": 0},
         "template_id": "opencode",
         "mode": "llm",
-        "agent_command": "opencode run --auto --format json < /home/user/prompt.md",
+        "agent_commands": ["opencode run --auto --format json < /home/user/prompt.md"],
         "agent_prompt": "Do the thing",
     }
     fn = make_sandbox_agent_fn(node_def)
@@ -905,7 +905,7 @@ async def test_llm_mode_does_not_inject_run_api_key():
         "position": {"x": 0, "y": 0},
         "template_id": "opencode",
         "mode": "llm",
-        "agent_command": "opencode run --auto --format json < /home/user/prompt.md",
+        "agent_commands": ["opencode run --auto --format json < /home/user/prompt.md"],
         "agent_prompt": "Do the thing",
     }
     fn = make_sandbox_agent_fn(node_def, session_factory=_run_api_key_session_factory())
@@ -1428,7 +1428,7 @@ async def test_dispatch_capacity_checked_for_llm_mode():
         "template_id": "opencode",
         "mode": "llm",
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run --auto",
+        "agent_commands": ["opencode run --auto"],
     }
 
     async def _fake_count(*_a: Any, **_kw: Any) -> int:
@@ -1507,7 +1507,7 @@ async def test_dispatch_capacity_llm_mode_without_session_factory_fails_open():
         "template_id": "opencode",
         "mode": "llm",
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run --auto",
+        "agent_commands": ["opencode run --auto"],
     }
     fn = make_sandbox_agent_fn(node_def)
     sandbox = MagicMock()

@@ -112,7 +112,7 @@ def _sandbox_node_def(**overrides: Any) -> dict[str, Any]:
     node_def: dict[str, Any] = {
         "id": "n1",
         "agent_prompt": "Do the thing",
-        "agent_command": _AGENT_COMMAND,
+        "agent_commands": [_AGENT_COMMAND],
     }
     node_def.update(overrides)
     return node_def

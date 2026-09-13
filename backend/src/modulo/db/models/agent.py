@@ -52,7 +52,6 @@ class Agent(OrgScoped):
     template_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("composite_templates.id", ondelete="SET NULL"), nullable=True, default=None
     )
-    agent_command: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     agent_commands: Mapped[list[str] | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=True, default=None
     )

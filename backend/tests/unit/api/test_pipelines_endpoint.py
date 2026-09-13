@@ -597,7 +597,7 @@ def _sandbox_node_json() -> dict[str, object]:
         "position": {"x": 10, "y": 20},
         "connector_binding": None,
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run --auto < /home/user/prompt.md",
+        "agent_commands": ["opencode run --auto < /home/user/prompt.md"],
         "template_id": "opencode",
     }
 
@@ -644,7 +644,6 @@ def test_pipeline_graph_node_agent_commands_round_trip() -> None:
     node = PipelineGraphNode.model_validate(
         {
             **_sandbox_node_json(),
-            "agent_command": None,
             "agent_commands": ["opencode run", "--model oxf"],
             "commands_concatenation_string": " ; ",
         }
@@ -663,22 +662,20 @@ def test_pipeline_graph_node_agent_commands_round_trip() -> None:
 
 
 def test_pipeline_graph_node_agent_commands_defaults() -> None:
-    """Legacy nodes without the fields read as "no list, default joiner", and an
+    """Legacy nodes without the agent_commands field read as "no list, default joiner", and an
     explicitly null/empty joiner is normalised to the runtime default instead of
     persisting a value that would crash sandbox_mode's join."""
-    legacy = PipelineGraphNode.model_validate(_sandbox_node_json())
+    # A node without agent_commands at all
+    legacy_node = {**_sandbox_node_json()}
+    del legacy_node["agent_commands"]
+    legacy = PipelineGraphNode.model_validate(legacy_node)
     assert legacy.agent_commands is None
     assert legacy.commands_concatenation_string == " && "
 
     for raw_joiner in (None, ""):
-        normalised = PipelineGraphNode.model_validate(
-            {
-                **_sandbox_node_json(),
-                "agent_command": None,
-                "agent_commands": ["opencode run"],
-                "commands_concatenation_string": raw_joiner,
-            }
-        )
+        node_with_joiner = {**_sandbox_node_json(), "commands_concatenation_string": raw_joiner}
+        del node_with_joiner["agent_commands"]
+        normalised = PipelineGraphNode.model_validate(node_with_joiner)
         assert normalised.commands_concatenation_string == " && "
 
     # Legacy non-sandbox nodes never carried the key either.
@@ -702,17 +699,15 @@ def test_pipeline_graph_node_agent_commands_sandbox_only() -> None:
     assert ok.commands_concatenation_string == " && "
 
 
-def test_pipeline_graph_node_agent_command_and_list_mutually_exclusive() -> None:
-    """A sandbox node sets agent_command OR agent_commands — mirroring the Agent
-    create/update schemas. Both set would silently drop the scalar at runtime
-    (the list wins), so authoring it is rejected instead."""
-    both = {
-        **_sandbox_node_json(),
-        "agent_command": "opencode run",
-        "agent_commands": ["opencode run", "--model oxf"],
+def test_pipeline_graph_node_agent_commands_requires_sandbox() -> None:
+    """A non-sandbox node cannot set agent_commands — only sandbox_agent nodes can."""
+    node = {
+        **_minimal_node(),
+        "node_type": "agent",
+        "agent_commands": ["opencode run"],
     }
-    with pytest.raises(ValidationError, match="cannot set both agent_command and agent_commands"):
-        PipelineGraphNode.model_validate(both)
+    with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set agent_commands"):
+        PipelineGraphNode.model_validate(node)
 
 
 def test_pipeline_graph_node_stall_detector_round_trip() -> None:
@@ -1883,7 +1878,7 @@ def test_graph_node_idempotent_defaults_to_true() -> None:
             **common,
             "node_type": "sandbox_agent",
             "template_id": "opencode",
-            "agent_command": "opencode run",
+            "agent_commands": ["opencode run"],
             "agent_prompt": "do the thing",
         },
     ]

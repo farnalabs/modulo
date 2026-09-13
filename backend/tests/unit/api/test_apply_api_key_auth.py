@@ -416,7 +416,6 @@ def _agent_row() -> SimpleNamespace:
         prompt_always_visible=False,
         required_environment_capabilities=[],
         template_id=None,
-        agent_command=None,
         agent_commands=None,
         account_id=_USER_ID,
         created_at=_NOW_STAMP,

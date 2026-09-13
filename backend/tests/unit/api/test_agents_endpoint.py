@@ -60,11 +60,9 @@ def _make_agent() -> MagicMock:
     a.token_budget = None
     a.library_id = None
     a.template_id = None
-    a.agent_command = None
     a.account_id = uuid.uuid4()
     a.required_environment_capabilities = []
     a.template_id = None
-    a.agent_command = None
     a.created_at = _NOW
     a.updated_at = _NOW
     return a
@@ -369,7 +367,7 @@ def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) 
         prompt_always_visible=False,
         required_environment_capabilities=[],
         template_id=None,
-        agent_command=None,
+        agent_commands=[None],
         created_at=_NOW,
         updated_at=_NOW,
     )

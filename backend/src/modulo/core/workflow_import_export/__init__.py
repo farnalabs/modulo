@@ -534,7 +534,7 @@ async def _build_v2_agents_list(
             "output_schema": str(a.output_schema_id) if a.output_schema_id else None,
             "prompt_template": a.prompt_template,
             "template_id": a.template_id,
-            "agent_command": a.agent_command,
+            "agent_commands": a.agent_commands,
             "connector_type_refs": list(a.connector_type_refs or []),
             "evals": list(a.evals or []),
             "retry_policy": dict(a.retry_policy or {}),

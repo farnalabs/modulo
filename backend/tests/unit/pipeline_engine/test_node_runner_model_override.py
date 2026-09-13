@@ -211,7 +211,7 @@ async def _run_sandbox_with_model_override(
     node_def = {
         "id": "sbx-1",
         "agent_prompt": "Do the thing",
-        "agent_command": agent_command,
+        "agent_commands": [agent_command],
     }
     fn = make_sandbox_agent_fn(node_def)
 
@@ -277,7 +277,7 @@ async def test_sandbox_agent_command_undefined_model_falls_back_verbatim() -> No
     node_def = {
         "id": "sbx-2",
         "agent_prompt": "Do the thing",
-        "agent_command": "opencode run --model {{ run_context._run_overrides.model }} --auto < /home/user/prompt.md",
+        "agent_commands": ["opencode run --model {{ run_context._run_overrides.model }} --auto < /home/user/prompt.md"],
     }
     fn = make_sandbox_agent_fn(node_def)
     sandbox = MagicMock()
@@ -342,7 +342,7 @@ async def test_sandbox_agent_context_scope_allows_in_scope_key() -> None:
     node_def = {
         "id": "sbx-a",
         "agent_prompt": "Do the thing",
-        "agent_command": "echo {{ run_context.input.task }}",
+        "agent_commands": ["echo {{ run_context.input.task }}"],
         "capability_scope": {"context_scope": ["input"]},
     }
     state = {
@@ -369,7 +369,7 @@ async def test_sandbox_agent_context_scope_filters_out_of_scope_key() -> None:
     node_def = {
         "id": "sbx-b",
         "agent_prompt": "Do the thing",
-        "agent_command": "echo {{ run_context.secret_tokens.value }}",
+        "agent_commands": ["echo {{ run_context.secret_tokens.value }}"],
         "capability_scope": {"context_scope": ["input"]},
     }
     state = {
@@ -393,7 +393,7 @@ async def test_sandbox_agent_absent_context_scope_preserves_legacy() -> None:
     node_def = {
         "id": "sbx-c",
         "agent_prompt": "Do the thing",
-        "agent_command": "echo {{ run_context.secret_tokens }}",
+        "agent_commands": ["echo {{ run_context.secret_tokens }}"],
     }
     state = {
         "run_context": {"input": {"task": "scoped-task"}, "secret_tokens": "s3cr3t"},
