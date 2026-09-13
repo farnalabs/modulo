@@ -1597,6 +1597,11 @@ export default {
       "node_state_running": "running",
       "node_state_failed": "failed",
       "node_state_pending": "pending",
+      "full_logs": "Full Logs",
+      "artifact_download_aria": "Download {stream} log (attempt {attempt})",
+      "artifact_load_error": "Failed to load artifact listing.",
+      "artifact_load_retry": "Retry",
+      "artifact_load_retry_aria": "Retry loading the artifact listing",
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",

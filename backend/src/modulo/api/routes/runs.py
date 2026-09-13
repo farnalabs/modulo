@@ -3036,13 +3036,117 @@ async def diff_node_output(
 
 
 # ---------------------------------------------------------------------------
-# FAR-582: artifact side-car download
+# FAR-582: artifact side-car endpoints (listing + download)
 # ---------------------------------------------------------------------------
 
 _CODE_RUN_ARTIFACT = "runs.get_run_artifact"
+_CODE_RUN_ARTIFACT_LIST = "runs.list_run_artifacts"
 
 _MSG_ARTIFACT_STREAM_NOT_FOUND = "Artifact stream not found"
 _MSG_ARTIFACT_NOT_CONFIGURED = "Artifact storage is not enabled"
+
+
+class ArtifactPointerResponse(BaseModel):
+    """One artifact pointer returned by the listing endpoint."""
+
+    attempt_key: str
+    stream: str
+    size_bytes: int
+    sha256: str
+    compression: str
+
+
+class ArtifactListResponse(BaseModel):
+    """Response for the per-node artifact listing endpoint."""
+
+    run_id: uuid.UUID
+    node_id: str
+    artifacts: list[ArtifactPointerResponse]
+
+
+@router.get("/{run_id}/nodes/{node_id}/artifacts")
+@handle_db_errors("runs.list_run_artifacts")
+async def list_run_artifacts(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_ARTIFACT_LIST),
+) -> ArtifactListResponse:
+    """List all artifact pointers for a node across all attempts.
+
+    Returns an empty list when the node has no artifacts.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            rows = (
+                (
+                    await session.execute(
+                        select(RunNodeOutput).where(
+                            RunNodeOutput.run_id == run_id,
+                            RunNodeOutput.node_id == node_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+    except ProgrammingError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_RUN_NOT_FOUND,
+        )
+
+    # Sort rows by the trailing attempt suffix descending so the listing is
+    # newest-first. Attempt keys end in a numeric suffix (e.g.
+    # ``run:...:node:node-a:11``); a plain lexicographic sort would put ``9``
+    # after ``10``, so we parse the integer. Non-numeric suffixes (e.g.
+    # ``__final__``) fall back to the raw string so they still sort
+    # deterministically instead of raising.
+    def _attempt_sort_key(row: "RunNodeOutput") -> "tuple[int, str]":
+        suffix = row.attempt_key.rsplit(":", 1)[-1]
+        try:
+            return (1, f"{int(suffix):020d}")
+        except ValueError:
+            # Non-numeric suffixes (e.g. ``__final__``) are an edge category
+            # that trails all numeric attempts rather than shadowing them.
+            return (0, suffix)
+
+    sorted_rows = sorted(rows, key=_attempt_sort_key, reverse=True)
+
+    artifacts: list[ArtifactPointerResponse] = []
+    for row in sorted_rows:
+        if not row.artifacts_json:
+            continue
+        artifacts.extend(
+            ArtifactPointerResponse(
+                attempt_key=row.attempt_key,
+                stream=ptr.get("stream", ""),
+                size_bytes=ptr.get("size_bytes", 0),
+                sha256=ptr.get("sha256", ""),
+                compression=ptr.get("compression", "none"),
+            )
+            for ptr in row.artifacts_json
+        )
+
+    return ArtifactListResponse(
+        run_id=run_id,
+        node_id=node_id,
+        artifacts=artifacts,
+    )
 
 
 @router.get("/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}")
