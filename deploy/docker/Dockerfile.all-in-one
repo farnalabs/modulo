@@ -8,7 +8,8 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     if [ ! -f node_modules/reka-ui/dist/index.d.ts ] && [ -f node_modules/reka-ui/dist/index.d.cts ]; then \
         cp node_modules/reka-ui/dist/index.d.cts node_modules/reka-ui/dist/index.d.ts; \
     fi && \
-    if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
+    if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] \
+        && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
         cp node_modules/@internationalized/date/dist/index.js node_modules/@internationalized/date/dist/index.mjs; \
     fi
 COPY frontend/ ./
@@ -42,7 +43,14 @@ ENV PATH="/app/.venv/bin:$PATH"
 # under /var/lib/nginx (not /var/cache/nginx), so those dirs are pre-created
 # and chowned. supervisord log/pid paths are chowned so both write as
 # www-data.
-RUN mkdir -p /var/cache/nginx /var/lib/nginx/body /var/lib/nginx/fastcgi /var/lib/nginx/proxy /var/lib/nginx/scgi /var/lib/nginx/uwsgi /var/log/supervisor \
+RUN mkdir -p \
+    /var/cache/nginx \
+    /var/lib/nginx/body \
+    /var/lib/nginx/fastcgi \
+    /var/lib/nginx/proxy \
+    /var/lib/nginx/scgi \
+    /var/lib/nginx/uwsgi \
+    /var/log/supervisor \
     && chown -R www-data:www-data /var/cache/nginx \
     && chown -R www-data:www-data /var/lib/nginx \
     && chown -R www-data:www-data /var/log/nginx \

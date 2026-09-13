@@ -4,7 +4,8 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml .npmrc pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     npm install -g pnpm@11.21.0 --ignore-scripts && pnpm install --frozen-lockfile --ignore-scripts && \
-    if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
+    if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] \
+        && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
         cp node_modules/@internationalized/date/dist/index.js node_modules/@internationalized/date/dist/index.mjs; \
     fi
 # S6470: copy only the sources needed to build instead of `COPY . .`

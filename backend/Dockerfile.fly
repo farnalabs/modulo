@@ -21,7 +21,8 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     if [ ! -f node_modules/reka-ui/dist/index.d.ts ] && [ -f node_modules/reka-ui/dist/index.d.cts ]; then \
         cp node_modules/reka-ui/dist/index.d.cts node_modules/reka-ui/dist/index.d.ts; \
     fi && \
-    if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
+    if [ ! -f node_modules/@internationalized/date/dist/index.mjs ] \
+        && [ -f node_modules/@internationalized/date/dist/index.js ]; then \
         cp node_modules/@internationalized/date/dist/index.js node_modules/@internationalized/date/dist/index.mjs; \
     fi
 
@@ -93,7 +94,13 @@ RUN chmod +x /release.sh
 # runtime-config.js into /usr/share/nginx/html at boot, hence the html chown.
 # Debian nginx keeps proxy/body temp files under /var/lib/nginx (not
 # /var/cache/nginx), so those dirs are pre-created and chowned for non-root.
-RUN mkdir -p /var/cache/nginx /var/lib/nginx/body /var/lib/nginx/fastcgi /var/lib/nginx/proxy /var/lib/nginx/scgi /var/lib/nginx/uwsgi \
+RUN mkdir -p \
+    /var/cache/nginx \
+    /var/lib/nginx/body \
+    /var/lib/nginx/fastcgi \
+    /var/lib/nginx/proxy \
+    /var/lib/nginx/scgi \
+    /var/lib/nginx/uwsgi \
     && chown -R www-data:www-data /var/cache/nginx \
     && chown -R www-data:www-data /var/lib/nginx \
     && chown -R www-data:www-data /var/log/nginx \
