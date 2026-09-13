@@ -318,9 +318,7 @@ async def test_killswitch_disabled_blocks_workspace_inputs_before_sandbox(
     resolve_mock.assert_not_called()
 
 
-async def test_killswitch_enabled_allows_workspace_inputs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_killswitch_enabled_allows_workspace_inputs() -> None:
     """Complementary path: with the kill-switch ON the disabled error is never
     raised and host-side resolution actually runs (proving the gate is conditional,
     not always-on). Mirrors the autouse fixture's enabled state.
