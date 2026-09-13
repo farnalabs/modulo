@@ -15,6 +15,8 @@ this being a lightweight module.
 
 from __future__ import annotations
 
+import posixpath
+import re as _re
 from typing import Any
 
 import jinja2
@@ -61,6 +63,12 @@ _SANDBOX_RESOURCE_LIMIT_KEYS = frozenset(
 SANDBOX_CAPABILITY_WRITE_FILES = "sandbox.write_files"
 SANDBOX_CAPABILITY_EGRESS = "sandbox.egress"
 SANDBOX_CAPABILITY_GIT_CREDENTIALS = "sandbox.git_credentials"
+# FAR-802: managed workspace inputs. Boolean capability — when True, the
+# organisation has at least one managed workspace input configured on the
+# environment profile, and the sandbox runtime provisions the checked-out
+# workspace instead of the default empty home directory. False/None when
+# absent or explicitly disabled.
+SANDBOX_CAPABILITY_WORKSPACE_INPUTS = "sandbox.workspace_inputs"
 
 # FAR-212 PR B: ``sandbox.write_files`` and ``sandbox.git_credentials`` are now
 # MECHANICALLY DERIVABLE from validated + enforced node config:
@@ -455,3 +463,218 @@ def _validate_sandbox_wallclock_budget_config(
     # first). The comparison is only validated for TYPE: ``sandbox_timeout_seconds``
     # is a positive int when present, so an incomparable budget was already rejected
     # above. Kept as a named parameter so the signature documents the relationship.
+
+
+# ---------------------------------------------------------------------------
+# FAR-802: managed workspace inputs — save-time validation
+# ---------------------------------------------------------------------------
+
+# Jinja block pattern: ``{{ ... }}`` or ``{% ... %}`` (non-greedy, any content).
+_JINJA_BLOCK_RE = _re.compile(r"\{\{.*?\}\}|\{%.*?%\}", _re.DOTALL)
+
+# Destination paths that must never be written by managed inputs.
+_DEST_DENYLIST = frozenset(
+    {
+        ".git",
+        "agent.log",
+        "output.json",
+        ".gitconfig",
+        ".git-policy",
+        ".ssh",
+    }
+)
+
+# Supported URL schemes for managed-input refs.
+_SUPPORTED_URL_SCHEMES = frozenset({"https", "ssh", "git@"})
+
+# Valid ref kinds.
+_VALID_REF_KINDS = frozenset({"branch", "tag", "sha"})
+
+# Maximum dest depth below /home/user/ (segments after /home/user/).
+_MAX_DEST_DEPTH = 8
+
+
+def _strip_jinja_blocks(text: str) -> str:
+    """Normalise ``{{ ... }}`` / ``{% ... %}`` blocks in *text* for literal checks.
+
+    Jinja block delimiters are removed but their INNER expression text is kept
+    (``{{ 'git clone' }}`` becomes ``'git clone'``, ``git {{ clone_cmd }}``
+    becomes ``git clone_cmd``).  This keeps a ``git``/``clone`` pair detectable
+    when it is split across a Jinja boundary — the previous behaviour (dropping
+    the block contents entirely) let a clone command smuggled inside a Jinja
+    block bypass the literal ``git clone`` check, because blocks were stripped
+    before substring matching.  Whitespace is then collapsed so ``git {{ x }}
+    clone`` still reads as ``git clone``.
+    """
+    # Keep the inner expression text; drop only the surrounding delimiters.
+    normalized = _JINJA_BLOCK_RE.sub(lambda m: m.group(0)[2:-2], text)
+    return _re.sub(r"\s+", " ", normalized)
+
+
+def _validate_sandbox_managed_inputs_config(node_def: dict[str, Any]) -> None:
+    """Validate a sandbox_agent node's managed workspace inputs configuration.
+
+    FAR-802: managed workspace inputs allow an organisation to provision
+    checked-out repositories inside the sandbox workspace.  This validator
+    enforces safety invariants at save time (GraphValidator / MCP
+    ``update_pipeline_graph`` / Pydantic model) so invalid configurations are
+    rejected before a run is ever dispatched.
+
+    Rules enforced:
+
+    * ``agent_command`` must NOT contain a literal ``git clone`` — managed inputs
+      handle checkout; a user-provided ``git clone`` would race with or bypass
+      the managed checkout.  The check is Jinja-aware: a ``git``/``clone`` pair
+      split across a Jinja block (e.g. ``{{ 'git clone' }}`` or ``git
+      {{ clone_cmd }}``) is still detected, while a bare ``{{ git_clone }}``
+      interpolation is allowed.
+    * Each input's ``dest`` (after canonicalisation to an absolute POSIX path)
+      must:
+      - be non-empty and not just ``"."`` or ``"/home/user"``
+      - resolve to a path UNDER ``/home/user/`` (no traversal to ``/tmp/`` etc.)
+      - NOT be on the denylist (``.git``, ``agent.log``, ``output.json``,
+        ``.gitconfig``, ``.git-policy/``, ``.ssh/``)
+    * Each input's ``ref.kind`` must be one of ``branch``, ``tag``, ``sha``.
+    * Each input's ``url`` must use a supported scheme (``https``, ``ssh``,
+      ``git@``).
+
+    Connector-credential checks (hosted profile ``repo_url``/``repo_ref``) are
+    DEFERRED — the profile data is not reachable from this validation layer.
+    The runtime executor enforces that constraint; see the deferred work note
+    in the slice-B report.
+
+    Raises ``ValueError`` with a descriptive message on any violation.
+    """
+    node_id: str = str(node_def.get("id", ""))
+    workspace_inputs: list[dict[str, Any]] | None = node_def.get("workspace_inputs")
+    if not workspace_inputs:
+        return
+
+    # --- (a) literal git clone check (Jinja-aware) ---
+    agent_command = node_def.get("agent_command")
+    if agent_command and isinstance(agent_command, str):
+        # A ``git``/``clone`` pair may be split across a Jinja boundary, so check
+        # two normalised views:
+        #   1. inner-kept    — block delimiters dropped, inner expression kept
+        #      (catches ``{{ 'git clone' }}`` and ``git {{ clone_cmd }}``);
+        #   2. block-stripped — blocks replaced with a single space
+        #      (catches ``git {{ x }} clone`` where the variable resolves empty).
+        # Both collapse whitespace first so adjacency survives.  A bare
+        # ``{{ git_clone }}`` interpolation is correctly allowed by neither.
+        inner_kept = _strip_jinja_blocks(agent_command)
+        block_stripped = _re.sub(r"\s+", " ", _JINJA_BLOCK_RE.sub(" ", agent_command))
+        if "git clone" in inner_kept or "git clone" in block_stripped:
+            raise ValueError(
+                f"sandbox_agent node '{node_id}' agent_command contains a literal "
+                "'git clone' after Jinja block removal — managed workspace inputs "
+                "handle checkout; a user-provided git clone would race with or "
+                "bypass the managed checkout"
+            )
+
+    # --- per-input validation ---
+    for index, inp in enumerate(workspace_inputs):
+        if not isinstance(inp, dict):
+            raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] must be an object, got {inp!r}")
+        _validate_managed_input_dest(inp.get("dest"), index, node_id)
+        _validate_managed_input_ref(inp.get("ref"), index, node_id)
+        _validate_managed_input_url(inp.get("url"), index, node_id)
+
+
+def _validate_managed_input_dest(dest: Any, index: int, node_id: str) -> None:
+    """Validate the ``dest`` field of a managed workspace input.
+
+    The destination is canonicalised to an absolute POSIX path and checked
+    against traversal, denylist, and minimum-depth rules.
+    """
+    if not isinstance(dest, str) or not dest.strip():
+        raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'dest' must be a non-empty string")
+    dest = dest.strip()
+
+    # Canonicalise to absolute POSIX path.
+    if not posixpath.isabs(dest):
+        # Relative paths are resolved relative to /home/user/.
+        dest = posixpath.join("/home/user", dest)
+    dest = posixpath.normpath(dest)
+
+    # Reject "." or "/" or bare "/home/user".
+    if dest in (".", "/", "/home/user"):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
+            f"'dest' {dest!r} is not a valid target — must be a specific "
+            "subdirectory under /home/user/"
+        )
+
+    # Must be under /home/user/.
+    home_prefix = "/home/user/"
+    if not dest.startswith(home_prefix) and dest != "/home/user":
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
+            f"'dest' {dest!r} resolves outside /home/user/ — workspace "
+            "inputs must not traverse to other filesystem locations"
+        )
+
+    # Depth check (too deep is suspicious).
+    rel = dest[len("/home/user/") :] if dest.startswith(home_prefix) else ""
+    depth = len([p for p in rel.split("/") if p])
+    if depth > _MAX_DEST_DEPTH:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
+            f"'dest' {dest!r} is {depth} levels deep (max {_MAX_DEST_DEPTH})"
+        )
+
+    # Denylist check — compare the leaf name and trailing path component.
+    parts = [p for p in dest.split("/") if p]
+    for part in parts:
+        if part in _DEST_DENYLIST:
+            raise ValueError(
+                f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
+                f"'dest' {dest!r} contains denied path component '{part}'"
+            )
+
+
+def _validate_managed_input_ref(ref: Any, index: int, node_id: str) -> None:
+    """Validate the ``ref`` field of a managed workspace input.
+
+    ``ref`` must be a dict with a ``kind`` key whose value is one of
+    ``branch``, ``tag``, or ``sha``.
+    """
+    if ref is None:
+        # No ref — default (HEAD/main) is fine.
+        return
+    if not isinstance(ref, dict):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'ref' must be an object, got {ref!r}"
+        )
+    kind = ref.get("kind")
+    if not isinstance(kind, str) or kind not in _VALID_REF_KINDS:
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
+            f"'ref.kind' {kind!r} is not valid — expected one of "
+            f"{sorted(_VALID_REF_KINDS)}"
+        )
+
+
+def _validate_managed_input_url(url: Any, index: int, node_id: str) -> None:
+    """Validate the ``url`` field of a managed workspace input.
+
+    The URL must use a supported scheme (``https``, ``ssh``, or ``git@``).
+    """
+    if url is None:
+        # No URL — the input may reference a connector instead (deferred).
+        return
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'url' must be a non-empty string when provided"
+        )
+    url = url.strip()
+    # Valid prefixes: ``https://``, ``ssh://`` (scheme + authority), and
+    # ``git@`` (SCP-style: ``git@host:path``).  ``git@`` is a bare prefix —
+    # no ``://`` separator — so it is handled separately from the ``://`` schemes.
+    _colon_slash_schemes = frozenset(s for s in _SUPPORTED_URL_SCHEMES if s != "git@")
+    _valid_prefixes = (*[s + "://" for s in _colon_slash_schemes], "git@")
+    if not url.startswith(_valid_prefixes):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
+            f"'url' {url!r} uses an unsupported scheme — supported schemes "
+            f"are {sorted(_SUPPORTED_URL_SCHEMES)}"
+        )

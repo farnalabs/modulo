@@ -82,6 +82,13 @@ __all__ = [
     # tests/unit/graph_validator/test_edges_and_sandbox_validation.py (FAR-410); the validate
     # path uses _check_node_send_budget_bindings, so vulture cannot see a prod call site.
     "_check_node_send_budget",
+    # FAR-802: managed workspace inputs — save-time validator wired into production
+    # via GraphValidator._check_sandbox_managed_inputs (graph_validator/__init__.py),
+    # api/routes/pipelines.py._validate_sandbox_agent_node, and
+    # api/mcp_server.py._validate_sandbox_nodes, plus exercised by
+    # tests/unit/core/pipeline_engine/test_sandbox_managed_inputs.py.  Vulture
+    # cannot see the call sites because all three imports are lazy (function-local).
+    "_validate_sandbox_managed_inputs_config",
     # --- Service methods exercised by tests / framework wiring (no direct prod call site vulture can see) ---
     "get_override",
     "expire_stale",

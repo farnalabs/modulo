@@ -2537,6 +2537,7 @@ def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | Non
     all sandbox_agent nodes validate, otherwise the error dict.
     """
     from modulo.core.pipeline_engine.sandbox_mode import (
+        _validate_sandbox_managed_inputs_config,
         _validate_sandbox_mode_config,
         validate_sandbox_agent_command_jinja,
     )
@@ -2550,6 +2551,10 @@ def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | Non
             jinja_err = validate_sandbox_agent_command_jinja(node)
             if jinja_err:
                 return {"error": "validation_failed", "field": "nodes", "detail": jinja_err}
+            try:
+                _validate_sandbox_managed_inputs_config(node)
+            except ValueError as exc:
+                return {"error": "validation_failed", "field": "nodes", "detail": str(exc)}
     return None
 
 

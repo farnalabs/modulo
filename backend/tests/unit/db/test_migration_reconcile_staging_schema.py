@@ -48,8 +48,8 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0215_drop_runs_blob_columns chains off 0213, FAR-748's 0216_audit_events_sweep_detection_index
 # chains off 0215, 0217_hitl_claims_decided_by chains off 0216,
 # and 0219_eval_cluster_check_constraints chains off 0218,
-# and 0220_run_node_artifacts chains off 0219 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0220_run_node_artifacts"
+# and 0221_workspace_inputs_env_profiles chains off 0220 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0221_workspace_inputs_env_profiles"
 
 
 def _source(name: str) -> str:

@@ -1429,6 +1429,63 @@ async def test_sandbox_wallclock_budget_non_int_is_error():
 
 
 # ---------------------------------------------------------------------------
+# Managed workspace inputs validation (FAR-802)
+# ---------------------------------------------------------------------------
+
+
+async def test_sandbox_managed_inputs_valid_config_passes_graph_save():
+    """A valid workspace_inputs config passes graph save (FAR-802)."""
+    graph = {
+        "nodes": [
+            _sandbox_node(
+                workspace_inputs=[
+                    {"dest": "/home/user/repo", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}
+                ]
+            )
+        ],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert result.is_valid
+    assert not any(i.code == "SANDBOX_MANAGED_INPUTS_INVALID" for i in result.issues)
+
+
+async def test_sandbox_managed_inputs_invalid_dest_is_error():
+    """An invalid workspace_inputs dest is rejected at save time (FAR-802)."""
+    graph = {
+        "nodes": [
+            _sandbox_node(
+                workspace_inputs=[
+                    {"dest": "/tmp/evil", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}
+                ]
+            )
+        ],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_MANAGED_INPUTS_INVALID" for i in result.issues)
+
+
+async def test_sandbox_managed_inputs_git_clone_in_agent_command_is_error():
+    """A literal git clone in agent_command is rejected at save time (FAR-802)."""
+    graph = {
+        "nodes": [
+            _sandbox_node(
+                agent_command="git clone https://example.com/repo.git && do_stuff",
+                workspace_inputs=[
+                    {"dest": "/home/user/repo", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}
+                ],
+            )
+        ],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_MANAGED_INPUTS_INVALID" for i in result.issues)
+
+
+# ---------------------------------------------------------------------------
 # Node send-budget reconcile (FAR-410 / FAR-411)
 # ---------------------------------------------------------------------------
 

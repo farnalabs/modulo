@@ -999,6 +999,28 @@ def _check_sandbox_wallclock_budget(node: dict[str, Any], nid: str, result: Vali
         )
 
 
+def _check_sandbox_managed_inputs(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check 15 (FAR-802 / ADR 033): managed workspace inputs must be safe.
+
+    Routed through the SHARED ``_validate_sandbox_managed_inputs_config`` helper
+    (the same one the Pydantic node model and MCP ``update_pipeline_graph`` use)
+    so save-time and run-time validation agree. An invalid dest traversal /
+    ref.kind / URL scheme / literal ``git clone`` in agent_command is a hard
+    ERROR (fail-closed): a malformed managed input would let a checkout write
+    outside ``/home/user/`` or bypass the managed checkout.
+    """
+    from modulo.core.pipeline_engine.sandbox_mode import _validate_sandbox_managed_inputs_config
+
+    try:
+        _validate_sandbox_managed_inputs_config(node)
+    except ValueError as exc:
+        result.error(
+            "SANDBOX_MANAGED_INPUTS_INVALID",
+            f"Sandbox agent node '{nid}' managed workspace inputs are invalid: {exc}",
+            node_id=nid,
+        )
+
+
 def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
     """Sandbox check 8: loop_intercept config shape (FAR-211).
 
@@ -2652,6 +2674,7 @@ class GraphValidator:
             _check_sandbox_read_only(node, nid, result)
             _check_sandbox_git_credentials(node, nid, result)
             _check_sandbox_wallclock_budget(node, nid, result)
+            _check_sandbox_managed_inputs(node, nid, result)
 
     # ------------------------------------------------------------------
     # Node idempotency
