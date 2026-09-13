@@ -971,6 +971,31 @@ def test_create_schema_with_valid_initial_definition_seeds_latest_version(client
     assert placeholder_versions[0].definition_json == initial
 
 
+def test_create_schema_with_explicit_empty_definition_is_preserved(client: TestClient) -> None:
+    """An explicitly-supplied empty dict ``{}`` (valid per Draft 2020-12) must be
+    seeded verbatim, not silently replaced by the default placeholder. The
+    ``or``-based fallback previously discarded it because ``{}`` is falsy."""
+    schema = _make_schema()
+
+    placeholder_versions: list[MagicMock] = []
+
+    def _fake_schema_version_model(**kwargs: object) -> MagicMock:
+        placeholder = MagicMock()
+        placeholder.definition_json = kwargs.get("definition_json")
+        placeholder.version = kwargs.get("version")
+        placeholder_versions.append(placeholder)
+        return placeholder
+
+    with (
+        patch("modulo.api.routes.schemas.create_schema", return_value=schema),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
+    ):
+        resp = client.post("/api/v1/schemas", json={"name": "Empty Schema", "definition_json": {}})
+    assert resp.status_code == 201
+    assert placeholder_versions[0].definition_json == {}
+
+
 def test_schema_version_creation_is_explicit_endpoint(client: TestClient) -> None:
     """A new schema version is only created through the explicit POST /versions action."""
     schema = _make_schema()

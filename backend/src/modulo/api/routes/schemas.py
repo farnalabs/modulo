@@ -314,7 +314,8 @@ async def create_schema_endpoint(
                 version="latest",
                 version_number=0,
                 definition_json=req.definition_json
-                or {"type": "object", "properties": {}, "additionalProperties": True},
+                if req.definition_json is not None
+                else {"type": "object", "properties": {}, "additionalProperties": True},
                 account_id=principal.account_id,
             )
             session.add(sv)
@@ -1630,13 +1631,7 @@ async def import_schema_endpoint(
             detail="JSON Schema must be a JSON object",
         )
 
-    try:
-        Draft202012Validator.check_schema(schema)
-    except (ValidationError, JsSchemaError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Invalid JSON Schema: {exc.message}",
-        ) from exc
+    _validate_definition_json(schema)
 
     name = schema.get("title")
     description = schema.get("description")
