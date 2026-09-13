@@ -326,20 +326,10 @@ def test_seed_examples(client: TestClient, mock_session: AsyncMock) -> None:
 
 
 def test_seed_examples_no_model_backend(client: TestClient, mock_session: AsyncMock) -> None:
-    mock_schema = MagicMock()
-    mock_schema.id = uuid.uuid4()
-
-    mock_pipeline = MagicMock()
-    mock_pipeline.id = uuid.uuid4()
-    mock_pipeline.rate_limit_config = None
-    mock_pipeline.max_duration_seconds = None
-    mock_pipeline.archived_at = None
-    mock_pipeline.snapshot_count = 0
-
     with (
-        patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),
+        patch("modulo.api.routes.onboarding.create_schema") as mock_create_schema,
         patch("modulo.api.routes.onboarding.create_schema_version"),
-        patch("modulo.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
+        patch("modulo.api.routes.onboarding.create_pipeline") as mock_create_pipeline,
         patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
     ):
         progress = _make_progress()
@@ -351,13 +341,11 @@ def test_seed_examples_no_model_backend(client: TestClient, mock_session: AsyncM
 
         resp = client.post("/api/v1/onboarding/seed-examples")
 
-    assert resp.status_code == 201
-    data = resp.json()
-    assert data["agent_id"] is None
-    assert data["schema_id"] == str(mock_schema.id)
-    assert data["pipeline_id"] == str(mock_pipeline.id)
-    assert "create_first_schema" in progress.completed_actions
-    assert "create_first_pipeline" in progress.completed_actions
+    assert resp.status_code == 409
+    assert "model backend" in resp.json()["detail"]
+    mock_create_schema.assert_not_called()
+    mock_create_pipeline.assert_not_called()
+    assert progress.completed_actions == []
 
 
 # ---------------------------------------------------------------------------

@@ -38,8 +38,10 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
 - [x] `POST /dismiss` persists the dismissal so the wizard no longer shows as first-run
 - [x] `POST /seed-examples` creates the {name="Truth Classifier"} schema + v1.0
       published definition, a "Statement Input" schema + version, an executable agent
-      bound to the org's first model backend (agent creation is skipped when no model
-      backend exists), and (if present) an example pipeline
+      bound to the org's first model backend, and an example pipeline interlinked with
+      that agent; when the org has no model backend the seed refuses with a 409 and a
+      message pointing at the "Add an AI Model" step instead of silently seeding a
+      partial, agent-less example (no writes are performed on refusal)
 - [x] `POST /starter-pipeline` creates a starter pipeline for the org
 - [x] All mutations run under org RLS (`set_rls_org` / `set_rls_user_context`); the
       seed path requires `pipeline.create` + `agent.create` + `schema.create` permits
@@ -53,11 +55,28 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
   API is the 6-action checklist above. The feature file is red-herring coverage.
 - **No PRD section reference** — onboarding has no single PRD section mapped in code
   or ADRs.
-- **Seed truncation** — `seed-examples` cannot create the example agent when no model
-  backend is configured, so part of the seed silently degrades on fresh orgs.
 
 ## QA History
 
+- 2026-09-13: **improve-architecture (product-map walk)** — closed the "seed
+  truncation" gap in `POST /seed-examples`: the endpoint previously created the
+  schemas + pipeline and silently skipped the agent + pipeline graph when the org
+  had no model backend (`agent_id: null` in a 201 response, no lint anywhere).
+  It now refuses the seed with a 409 and an actionable detail pointing at the
+  "Add an AI Model" step, before any write, so a fresh org either gets a complete
+  executable example or nothing. Behaviour bullet updated; unit
+  `test_seed_examples_no_model_backend` now asserts the 409 reject-and-refuse
+  semantics.
+- 2026-09-13: **improve-architecture (product-map walk)** — corrected the
+  onboarding action deep links against the manifest (ADR 008 source of truth):
+  `add_ai_model` pointed at `/settings/model-backends`, `create_first_agent` at
+  `/agents/create`, `create_first_schema` at `/schemas/create` and
+  `create_first_pipeline` at `/pipelines/create` — none of which exist in
+  `frontend/src/manifest.yaml`. The onboarding banner's click-to-navigate
+  silently swallowed them via the router `/:pathMatch(.*)*` redirect, landing
+  users back on the dashboard. Each now targets a shipped route in the registry:
+  `/admin/model-backends`, `/pipelines` (agent authoring surface), `/schemas/infer`
+  (create/infer first schema) and `/library` (the "new pipeline" affordance).
 - 2026-09-11: **improve-architecture (product-map walk)** — extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/onboarding`: the whole-page view(s) `OnboardingWizard.vue` render static `data-testid`s that the
