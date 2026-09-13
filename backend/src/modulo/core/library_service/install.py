@@ -158,33 +158,40 @@ async def _stamp_install_id(
     """
     entities: list[dict[str, str]] = []
 
-    # Stamp schemas
-    schema_id_map = result.get("schemas", {})
-    for local_id_str in schema_id_map.values():
-        local_id = uuid.UUID(local_id_str)
-        schema = await session.get(Schema, local_id)
-        if schema is not None and schema.organisation_id == org_id:
-            schema.collection_install_id = install_id
-            entities.append({"entity_type": "schema", "entity_id": local_id_str})
+    # Defer the autoflush triggered by the ``session.get`` lookups below until
+    # the ``CollectionInstall`` provenance row has been added to the session
+    # (install_collection step 10). Flushing the stamped ``collection_install_id``
+    # values before that row exists would violate ``fk_agents_collection_install_id``
+    # / ``fk_schemas_collection_install_id`` / ``fk_pipelines_collection_install_id``
+    # (added in migration 0223), since the FK target is not yet present.
+    with session.no_autoflush:
+        # Stamp schemas
+        schema_id_map = result.get("schemas", {})
+        for local_id_str in schema_id_map.values():
+            local_id = uuid.UUID(local_id_str)
+            schema = await session.get(Schema, local_id)
+            if schema is not None and schema.organisation_id == org_id:
+                schema.collection_install_id = install_id
+                entities.append({"entity_type": "schema", "entity_id": local_id_str})
 
-    # Stamp agents
-    agent_id_map = result.get("agents", {})
-    for local_id_str in agent_id_map.values():
-        local_id = uuid.UUID(local_id_str)
-        agent = await session.get(Agent, local_id)
-        if agent is not None and agent.organisation_id == org_id:
-            agent.collection_install_id = install_id
-            entities.append({"entity_type": "agent", "entity_id": local_id_str})
+        # Stamp agents
+        agent_id_map = result.get("agents", {})
+        for local_id_str in agent_id_map.values():
+            local_id = uuid.UUID(local_id_str)
+            agent = await session.get(Agent, local_id)
+            if agent is not None and agent.organisation_id == org_id:
+                agent.collection_install_id = install_id
+                entities.append({"entity_type": "agent", "entity_id": local_id_str})
 
-    # Stamp pipeline (created by materialize_import)
-    pipeline_id_str = result.get("pipeline_id")
-    if pipeline_id_str:
-        from modulo.db.models.pipeline import Pipeline
+        # Stamp pipeline (created by materialize_import)
+        pipeline_id_str = result.get("pipeline_id")
+        if pipeline_id_str:
+            from modulo.db.models.pipeline import Pipeline
 
-        pipeline = await session.get(Pipeline, uuid.UUID(pipeline_id_str))
-        if pipeline is not None and pipeline.organisation_id == org_id:
-            pipeline.collection_install_id = install_id
-            entities.append({"entity_type": "pipeline", "entity_id": pipeline_id_str})
+            pipeline = await session.get(Pipeline, uuid.UUID(pipeline_id_str))
+            if pipeline is not None and pipeline.organisation_id == org_id:
+                pipeline.collection_install_id = install_id
+                entities.append({"entity_type": "pipeline", "entity_id": pipeline_id_str})
 
     return entities
 
