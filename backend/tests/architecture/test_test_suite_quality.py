@@ -843,6 +843,7 @@ of a bare "assert not violations", mirroring the sibling architecture tests.
 import ast
 import functools
 import operator
+import os
 import re
 from fractions import Fraction
 from pathlib import Path
@@ -899,7 +900,41 @@ def _is_mark_decorator(dec: ast.AST) -> bool:
     return "mark" in parts
 
 
+_MODULO_TEST_STYLE_SCOPE_VAR = "MODULO_TEST_STYLE_SCOPE"
+
+
+@functools.cache
+def _resolve_scope_paths() -> frozenset[Path] | None:
+    """Resolve ``MODULO_TEST_STYLE_SCOPE`` once and cache.
+
+    Returns a frozenset of resolved ``Path`` objects when the variable is set
+    and non-empty, or ``None`` when it is unset / empty (meaning full scan).
+    Invalid or non-existent entries are silently dropped.
+    """
+    raw = os.environ.get(_MODULO_TEST_STYLE_SCOPE_VAR, "")
+    if not raw or not raw.strip():
+        return None
+    resolved: set[Path] = set()
+    for raw_spec in raw.split(os.pathsep):
+        cleaned = raw_spec.strip()
+        if not cleaned:
+            continue
+        p = Path(cleaned).resolve()
+        if p.exists() and p.suffix == ".py":
+            resolved.add(p)
+    return frozenset(resolved)
+
+
 def _iter_test_modules():
+    scope = _resolve_scope_paths()
+    if scope is not None:
+        # Scoped mode: yield only files that are in the scope set.
+        for path in sorted(TESTS.rglob("*.py")):
+            if any(part in EXCLUDED_PACKAGES for part in path.parts):
+                continue
+            if path.resolve() in scope:
+                yield path
+        return
     for path in sorted(TESTS.rglob("*.py")):
         if any(part in EXCLUDED_PACKAGES for part in path.parts):
             continue
