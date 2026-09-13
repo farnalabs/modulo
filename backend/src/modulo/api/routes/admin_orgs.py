@@ -539,8 +539,6 @@ async def admin_set_org_license(
     _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.license.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
-    d = _verify_license_key(req)
-
     try:
         # Single locked transaction: read the org FOR UPDATE, verify, then
         # write. Holding the row lock across read→write closes the TOCTOU
@@ -562,6 +560,11 @@ async def admin_set_org_license(
                 _raise_internal_error("Unexpected error in admin_set_org_license (fetch)", exc)
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+
+            # Verify the license key only AFTER the org-existence (404) check,
+            # so a nonexistent org with an invalid key returns 404 (not 422) and
+            # preserves the prior API contract (FAR #1798 regression).
+            d = _verify_license_key(req)
 
             settings_json = _set_org_license_key(org.settings_json or {}, req.license_key)
 
