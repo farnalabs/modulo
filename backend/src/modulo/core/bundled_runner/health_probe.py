@@ -324,7 +324,14 @@ async def run_runner_health_probe(
         started = time.monotonic()
 
         # Phase 1 (read): orgs + pinned refs. Short read, no engine calls.
-        async with session_factory() as read_session:
+        # qa (bundled-runner-probe): an explicit ``begin()`` is REQUIRED here,
+        # not only on the write phase — the system session factory is built
+        # with ``autobegin=False`` (saq_worker._make_system_session_factory),
+        # so ``session.execute()`` without a transaction raises
+        # ``InvalidRequestError`` and the whole tick dies in Phase 1 every
+        # 60s (observed on app.modulo.run: stats error=probe_failed,
+        # orgs_probed=0, zero probe-cache rows despite a live profile).
+        async with session_factory() as read_session, read_session.begin():
             org_ids = await list_orgs_with_runner_profiles(read_session)
             org_refs: dict[Any, list[str]] = {}
             for org_id in org_ids:
