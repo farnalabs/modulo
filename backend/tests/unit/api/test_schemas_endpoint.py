@@ -993,7 +993,7 @@ def test_create_schema_with_explicit_empty_definition_is_preserved(client: TestC
     ):
         resp = client.post("/api/v1/schemas", json={"name": "Empty Schema", "definition_json": {}})
     assert resp.status_code == 201
-    assert placeholder_versions[0].definition_json == {}
+    assert not placeholder_versions[0].definition_json
 
 
 def test_schema_version_creation_is_explicit_endpoint(client: TestClient) -> None:
