@@ -407,6 +407,46 @@ async def resolve_managed_inputs_host_side(
             connector_instance_id = (
                 uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
             )
+            # FAR-801 tenancy: validate the connector instance belongs to
+            # the same org as the run.  An RLS-scoped query against the
+            # ConnectorInstance table enforces this; fail CLOSED on
+            # mismatch (raise ProvisioningError → sandbox.input_credential_failed).
+            try:
+                from sqlalchemy import select as _sa_select
+
+                from modulo.db.models.connector_instance import ConnectorInstance
+
+                async with session_factory() as _tenancy_session, _tenancy_session.begin():
+                    _ci_row = (
+                        await _tenancy_session.execute(
+                            _sa_select(ConnectorInstance.id).where(
+                                ConnectorInstance.id == connector_instance_id,
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if _ci_row is None:
+                        raise ProvisioningError(
+                            f"workspace_input dest={dest!r}: connector instance "
+                            f"{connector_instance_id} not found in current org "
+                            "(tenancy check failed)",
+                            error_code="sandbox.input_credential_failed",
+                            retryable=False,
+                        )
+            except ProvisioningError:
+                raise
+            except Exception as exc:
+                if _is_transient_error(exc):
+                    raise ProvisioningError(
+                        f"workspace_input dest={dest!r}: transient error during tenancy check: {exc}",
+                        error_code="sandbox.input_credential_failed",
+                        retryable=True,
+                    ) from exc
+                raise ProvisioningError(
+                    f"workspace_input dest={dest!r}: unexpected error during tenancy check: {exc}",
+                    error_code="sandbox.input_credential_failed",
+                    retryable=False,
+                ) from exc
+
             try:
                 async with session_factory() as session, session.begin():
                     cred = await resolve_clone_credential(

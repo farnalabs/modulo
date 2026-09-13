@@ -6765,6 +6765,54 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             finally:
                 await _http_client.aclose()
 
+            # FAR-801: persist the resolved inputs audit record (best-effort).
+            if _resolved_workspace_inputs and session_factory is not None and run_id and org_id:
+                try:
+                    import uuid as _uuid
+
+                    from modulo.core.pipeline_engine.workspace_input_audit import (
+                        WorkspaceInputAuditRecord,
+                        record_resolved_inputs,
+                        redact_url,
+                    )
+                    from modulo.core.pipeline_engine.workspace_input_orchestration import (
+                        _extract_host_from_url,
+                    )
+
+                    _audit_records = [
+                        WorkspaceInputAuditRecord(
+                            input_name=inp.dest,
+                            connector_instance_id=getattr(inp, "connector_instance_id", None),
+                            host=_extract_host_from_url(inp.url) if hasattr(inp, "url") else "",
+                            url_redacted=redact_url(inp.url) if hasattr(inp, "url") else "",
+                            requested_ref_kind="",
+                            requested_ref_value="",
+                            resolved_sha=inp.resolved_sha,
+                            final_sha=None,
+                            drift_detected=False,
+                            dest=inp.dest,
+                            status="resolved",
+                        )
+                        for inp in _resolved_workspace_inputs
+                    ]
+                    _run_uuid = _uuid.UUID(run_id)
+                    _org_uuid = _uuid.UUID(org_id)
+                    async with session_factory() as _audit_session, _audit_session.begin():
+                        await record_resolved_inputs(
+                            _audit_session,
+                            run_id=_run_uuid,
+                            organisation_id=_org_uuid,
+                            node_id=node_id,
+                            attempt_key=attempt_key or "",
+                            records=_audit_records,
+                            status="resolved",
+                        )
+                except Exception:
+                    _log.exception(
+                        "workspace_input.audit_record_failed",
+                        extra={"run_id": run_id, "node_id": node_id},
+                    )
+
         # FAR-296 Phase 3/3b-3: egress control + resource limits. deny_all
         # and selected map to allow_internet_access=False; resource_limits
         # and the selected-mode host:port allowlist are carried as sandbox
@@ -7332,6 +7380,33 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     exc_info=True,
                 )
                 _drift_results = []
+
+            # FAR-801: persist the drift audit record (best-effort).
+            if _drift_results and session_factory is not None and run_id and org_id:
+                try:
+                    import uuid as _uuid
+
+                    from modulo.core.pipeline_engine.workspace_input_audit import (
+                        record_drift,
+                    )
+
+                    _final_shas = {d.dest: d.final_sha for d in _drift_results}
+                    _run_uuid = _uuid.UUID(run_id)
+                    _org_uuid = _uuid.UUID(org_id)
+                    async with session_factory() as _audit_session, _audit_session.begin():
+                        await record_drift(
+                            _audit_session,
+                            run_id=_run_uuid,
+                            organisation_id=_org_uuid,
+                            node_id=node_id,
+                            attempt_key=attempt_key or "",
+                            final_shas=_final_shas,
+                        )
+                except Exception:
+                    _log.exception(
+                        "workspace_input.drift_audit_failed",
+                        extra={"run_id": run_id, "node_id": node_id},
+                    )
 
         elapsed = time.monotonic() - start_time
         exit_code: int = getattr(cmd_result, "exit_code", -1)

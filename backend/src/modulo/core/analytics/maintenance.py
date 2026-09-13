@@ -42,6 +42,7 @@ from modulo.core.analytics.metrics import (
     set_retention_lag,
 )
 from modulo.core.cost_controller.breakdown.constants import COST_COLUMN_CAP
+from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -295,6 +296,20 @@ async def backfill_facts(session: Any, day: date) -> int:
     )
     max_node_timeout_seconds_expr = timeout_subq
 
+    # FAR-801: count of managed workspace inputs from the audit row.
+    # The audit row's outputs_json carries {"workspace_inputs": [...]} —
+    # json_array_length gives the count. NULL when no audit row exists.
+    _workspace_inputs_count_subq = (
+        sa.select(sa.func.json_array_length(RunNodeOutput.outputs_json.op("->")("workspace_inputs")))
+        .where(
+            RunNodeOutput.run_id == Run.id,
+            RunNodeOutput.node_id == AUDIT_NODE_ID,
+            RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+        )
+        .scalar_subquery()
+    )
+    workspace_inputs_count_expr = sa.func.coalesce(_workspace_inputs_count_subq, sa.null())
+
     select_stmt = (
         sa.select(
             # The surrogate PK must be unique PER ROW — the ORM's Python-side
@@ -342,6 +357,7 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.started_at.label("started_at"),
             Run.completed_at.label("completed_at"),
             total_queue_wait_ms_expr.label("total_queue_wait_ms"),
+            workspace_inputs_count_expr.label("workspace_inputs_count"),
         )
         .select_from(Run)
         .outerjoin(Team, Team.id == Run.owner_team_id)
@@ -392,6 +408,7 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.started_at,
                 RunDailyFact.completed_at,
                 RunDailyFact.total_queue_wait_ms,
+                RunDailyFact.workspace_inputs_count,
             ],
             select_stmt,
         )

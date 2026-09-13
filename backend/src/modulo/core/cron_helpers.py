@@ -36,6 +36,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import sqlalchemy as sa
 from croniter import croniter
 from redis.asyncio import Redis as AsyncRedis
 from saq.queue.redis import RedisQueue
@@ -5544,6 +5545,68 @@ async def _reconcile_org(
     return enqueue_failed_redispatched
 
 
+async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
+    """FAR-801 compensating sweep: correct terminal runs whose audit row has
+    ``drift_detected=true`` but ``runs.workspace_inputs_drift_detected`` is NULL.
+
+    Uses the partial index ``ix_run_node_outputs_audit`` to find audit rows
+    efficiently.  Reads the audit payload to determine drift, then updates the
+    runs row.  Bounded to 200 rows per tick (the sweep is idempotent —
+    remaining rows are picked up on the next tick).
+
+    Returns ``{"scanned": N, "corrected": M}``.
+    """
+    from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+    from modulo.db.models.run import TERMINAL_STATUSES, Run
+    from modulo.db.models.run_node_outputs import RunNodeOutput
+
+    scanned = 0
+    corrected = 0
+    try:
+        async with factory() as session, session.begin():
+            # Find terminal runs whose drift column is NULL but an audit row
+            # exists with drift_detected=true in the workspace_inputs list.
+            rows = (
+                await session.execute(
+                    sa.select(Run.id, Run.organisation_id)
+                    .where(
+                        Run.status.in_(TERMINAL_STATUSES),
+                        Run.workspace_inputs_drift_detected.is_(None),
+                    )
+                    .limit(200)
+                )
+            ).all()
+            scanned = len(rows)
+            for run_id, _org_id in rows:
+                audit_row = (
+                    await session.execute(
+                        sa.select(RunNodeOutput.outputs_json).where(
+                            RunNodeOutput.run_id == run_id,
+                            RunNodeOutput.node_id == AUDIT_NODE_ID,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if not isinstance(audit_row, dict):
+                    continue
+                audit_list = audit_row.get("workspace_inputs", [])
+                if not audit_list:
+                    continue
+                any_drift = any(entry.get("drift_detected") for entry in audit_list)
+                if any_drift:
+                    await session.execute(
+                        sa.update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=True)
+                    )
+                    corrected += 1
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "workspace_input_drift_sweep.error",
+            extra={"scanned": scanned, "corrected": corrected},
+        )
+    return {"scanned": scanned, "corrected": corrected}
+
+
 async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any]) -> None:
     """FAR-189/FAR-190 compensating sweeps + the healthz stats write (best-effort)."""
     try:
@@ -5563,6 +5626,26 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.classification_sweep_failed", exc_info=True)
+    # FAR-801: workspace-input drift flag compensating sweep — corrects
+    # terminal runs whose audit row has drift_detected=true but the runs
+    # column is NULL (the drift write was missed or the audit row was
+    # written after terminalization).
+    try:
+        drift_result = await _sweep_workspace_input_drift_flags(_open_system_factory())
+        summary["drift_sweep_corrected"] = drift_result.get("corrected", 0)
+        summary["drift_sweep_scanned"] = drift_result.get("scanned", 0)
+        if drift_result.get("corrected"):
+            _log.info(
+                "dispatcher_reconcile.drift_sweep",
+                extra={
+                    "scanned": drift_result.get("scanned", 0),
+                    "corrected": drift_result.get("corrected", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.drift_sweep_failed", exc_info=True)
     try:
         streak = await enforce_no_delivery_streaks(redis_client=redis_client)
         summary["streak_scanned"] = streak.get("scanned", 0)

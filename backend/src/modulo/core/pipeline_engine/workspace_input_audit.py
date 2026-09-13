@@ -31,17 +31,18 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import ParseResult, urlparse, urlunparse
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run_node_outputs import dialect_insert, resolve_dialect
+from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 
 _log = logging.getLogger(__name__)
 
-# Dedicated node id for workspace-input audit rows — distinct from
-# ``__run_meta__`` / ``__unknown__`` / ``__final__`` sentinels.
-AUDIT_NODE_ID = "_mwi_audit"
+# Dedicated node id for workspace-input audit rows — reserved ``__``-prefixed
+# sentinel namespace, matching ``__run_meta__`` / ``__final__``.
+AUDIT_NODE_ID = "__mwi_audit__"
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +218,10 @@ async def record_drift(
     no-op (the drift check ran after resolution, so this is unexpected
     but not fatal).
 
+    Also writes ``runs.workspace_inputs_drift_detected`` in the SAME
+    transaction so the drift flag is visible to terminalization before
+    the run completes (FAR-189 ordering guard).
+
     ``drift_detected`` is recorded as False when there is no drift —
     this distinguishes "no drift" from "drift check never ran".
 
@@ -247,12 +252,15 @@ async def record_drift(
         existing_payload: dict[str, Any] = row.outputs_json
         audit_list: list[dict[str, Any]] = existing_payload.get(_PAYLOAD_KEY, [])
         updated_list: list[dict[str, Any]] = []
+        any_drift = False
         for entry in audit_list:
             entry_name = entry.get("input_name", "")
             if entry_name in final_shas:
                 updated_entry = dict(entry)  # shallow copy — frozen-origin dicts
                 updated_entry["final_sha"] = final_shas[entry_name]
                 updated_entry["drift_detected"] = updated_entry["final_sha"] != entry.get("resolved_sha")
+                if updated_entry["drift_detected"]:
+                    any_drift = True
                 updated_list.append(updated_entry)
             else:
                 updated_list.append(entry)
@@ -276,6 +284,10 @@ async def record_drift(
             set_=set_,
         )
         await session.execute(stmt, [values])
+
+        # Write the first-class drift flag on the runs row in the SAME
+        # transaction so terminalization reads the correct value.
+        await session.execute(update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=any_drift))
     except Exception:
         _log.exception(
             "workspace_input_audit: record_drift failed "

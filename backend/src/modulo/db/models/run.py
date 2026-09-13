@@ -351,8 +351,14 @@ class Run(OrgScoped):
     # skipped, expected_skips, unexpected_skips}. Generic JSON for
     # SQLite/MariaDB parity (the run_classification precedent).
     guardrail_summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-801: workspace-input drift detection flag — written by the audit
+    # layer (record_drift) in the SAME transaction as the audit row so
+    # terminalization sees the flag before it classifies the run.  NULL =
+    # unknown / most-recently-no-inputs (no workspace inputs configured or
+    # drift detection never ran).
+    workspace_inputs_drift_detected: Mapped[bool | None] = mapped_column(Boolean)
     # Journey / work-item tracking (FAR-142, migration 0083) — additive,
-    # nullable, never backfilled. ``work_item_id`` is the chain anchor written
+    # nullable, never backfilled.  ``work_item_id`` is the chain anchor written
     # ONCE at create (floor id or adopted from the parent run) and NEVER
     # mutated; ``work_item_refs`` is a JSON array of {kind, ref, source,
     # status?} entries (JSONB in the migration for the partial GIN index;
