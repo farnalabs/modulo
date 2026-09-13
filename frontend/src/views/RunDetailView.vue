@@ -566,7 +566,7 @@
                         :data-testid="`run-detail-artifact-${art.stream}`"
                         :aria-label="artifactAriaLabel(art)"
                       >
-                        <svg class="h-3 w-3 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        <Download class="h-3 w-3 shrink-0" aria-hidden="true" />
                         {{ art.stream }}
                         <span v-if="nodeArtifactMap[node.name] && nodeArtifactMap[node.name].length > 1" class="text-muted-foreground">({{ art.attempt_key.split(':').pop() }})</span>
                       </a>
@@ -575,12 +575,21 @@
                 </div>
                 <div
                   v-if="nodeArtifactError[node.name]"
-                  class="text-center text-sm text-destructive py-2"
+                  class="flex items-center justify-center gap-2 text-center text-sm text-destructive py-2"
                   role="alert"
                   aria-live="assertive"
                   data-testid="run-detail-artifact-error"
                 >
-                  {{ $t('views.RunDetailView.artifact_load_error') }}
+                  <span>{{ $t('views.RunDetailView.artifact_load_error') }}</span>
+                  <button
+                    type="button"
+                    class="rounded-md border border-border bg-background px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+                    :aria-label="$t('views.RunDetailView.artifact_load_retry_aria')"
+                    data-testid="run-detail-artifact-retry"
+                    @click="retryNodeArtifacts(node.name)"
+                  >
+                    {{ $t('views.RunDetailView.artifact_load_retry') }}
+                  </button>
                 </div>
                 <div
                   v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr') && !liveOutput[node.name] && !nodeArtifactMap[node.name]?.length"
@@ -759,7 +768,7 @@ import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbea
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
-import { Check, X, AlertTriangle, RotateCcw } from '@lucide/vue'
+import { Check, X, AlertTriangle, RotateCcw, Download } from '@lucide/vue'
 
 type RunResponse = components['schemas']['RunResponse'] & {
   created_at?: string | null
@@ -1041,18 +1050,28 @@ const nodeArtifactFetched = ref(new Set<string>())
 async function fetchNodeArtifacts(nodeName: string) {
   if (!run.value?.run_id) return
   nodeArtifactFetched.value.add(nodeName)
+  nodeArtifactError.value[nodeName] = false
   try {
     const { data, error: err } = await api.GET('/api/v1/runs/{run_id}/nodes/{node_id}/artifacts', {
       params: { path: { run_id: run.value.run_id, node_id: nodeName } },
     })
-    if (err || !data) {
+    // A 404 means the (run, node) pair has no artifact rows (e.g. runs that
+    // predate the run_node_outputs table) — render empty, NOT an error.
+    // Reserve the error state for 5xx / network failures (STATE-2).
+    if (err && (err as { status?: number }).status !== 404) {
       nodeArtifactError.value[nodeName] = true
       return
     }
-    nodeArtifactMap.value[nodeName] = data.artifacts ?? []
+    nodeArtifactMap.value[nodeName] = data?.artifacts ?? []
   } catch {
     nodeArtifactError.value[nodeName] = true
   }
+}
+
+function retryNodeArtifacts(nodeName: string) {
+  nodeArtifactError.value[nodeName] = false
+  nodeArtifactFetched.value.delete(nodeName)
+  fetchNodeArtifacts(nodeName)
 }
 
 function artifactDownloadUrl(

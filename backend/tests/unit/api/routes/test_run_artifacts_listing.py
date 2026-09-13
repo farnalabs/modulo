@@ -214,6 +214,34 @@ class TestArtifactListingHappy:
         for art in body["artifacts"]:
             assert "rel_path" not in art
 
+    def test_list_sorts_attempts_numerically_not_lexically(self) -> None:
+        """10+ attempts must sort newest-first by parsed integer suffix.
+
+        A plain lexicographic sort would put '9' after '10', breaking the
+        documented newest-first ordering — regression test for the FAR-582
+        reviewer finding.
+        """
+        rows = [
+            _make_artifact_row(
+                attempt_key=f"run:abc:node:sandbox_1:{n}",
+                artifacts=[{"stream": "stdout", "size_bytes": 1, "sha256": "x", "compression": "none"}],
+            )
+            for n in [*range(11), "__final__"]
+        ]
+        session = _make_session()
+        _queue_execute(session, [_result(rows=rows)])
+        _override_deps(session)
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get(
+            f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/artifacts",
+        )
+        assert resp.status_code == 200
+        keys = [a["attempt_key"].rsplit(":", 1)[-1] for a in resp.json()["artifacts"]]
+        # Newest numeric attempt first, descending; non-numeric '__final__'
+        # falls back to a stable trailing position.
+        assert keys[0] == "10"
+        assert keys == ["10", "9", "8", "7", "6", "5", "4", "3", "2", "1", "0", "__final__"]
+
     def test_list_empty_when_no_artifacts(self) -> None:
         """Node has output rows but no artifacts -> empty list."""
         row = _make_artifact_row(

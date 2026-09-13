@@ -2187,4 +2187,77 @@ describe('RunDetailView FAR-582 artifact listing', () => {
     expect(href).toContain('/artifacts/stdout')
     wrapper.unmount()
   })
+
+  it('renders no error state when the endpoint returns 404 (no artifacts)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: baseDetail(), error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io')
+        return Promise.resolve({ data: { outputs_json: { 'node-a': { input: {}, output: {} } }, node_telemetry: { 'node-a': { agent_stdout: 'hello' } } }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/workspace-lease') return Promise.resolve({ data: null, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/nodes/{node_id}/artifacts')
+        return Promise.resolve({ data: null, error: { status: 404, detail: 'Not Found' } })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // 404 means "no artifacts" — empty, not an error (STATE-2).
+    expect(wrapper.find('[data-testid="run-detail-artifact-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-node-artifacts"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('offers a retry affordance on load error and recovers on retry', async () => {
+    let calls = 0
+    mockArtifactArtifacts = [
+      { attempt_key: 'run:test-run-id:node:node-a:0', stream: 'stdout', size_bytes: 1024, sha256: 'aa', compression: 'zstd' },
+    ]
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') return Promise.resolve({ data: baseDetail(), error: undefined })
+      if (url === '/api/v1/runs/{run_id}/io')
+        return Promise.resolve({ data: { outputs_json: { 'node-a': { input: {}, output: {} } }, node_telemetry: { 'node-a': { agent_stdout: 'hello' } } }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/hitl/pending') return Promise.resolve({ data: { gates: [] }, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/workspace-lease') return Promise.resolve({ data: null, error: undefined })
+      if (url === '/api/v1/runs/{run_id}/nodes/{node_id}/artifacts') {
+        calls += 1
+        if (calls === 1) return Promise.resolve({ data: null, error: { status: 500, detail: 'boom' } })
+        return Promise.resolve({ data: { artifacts: mockArtifactArtifacts }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const errorEl = wrapper.find('[data-testid="run-detail-artifact-error"]')
+    expect(errorEl.exists()).toBe(true)
+    const retryBtn = wrapper.find('[data-testid="run-detail-artifact-retry"]')
+    expect(retryBtn.exists()).toBe(true)
+
+    await retryBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="run-detail-artifact-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-node-artifacts"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
 })

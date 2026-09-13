@@ -76,6 +76,9 @@ PERMISSIONS: dict[str, str] = {
     # FAR-582: artifact side-car download — reading run-produced artifact content,
     # scoped like run.output (runner).
     "runs.get_run_artifact": "runner",
+    # FAR-582: the per-node artifact *listing* is a distinct read from the
+    # single-artifact download — separate audit code keeps trails readable.
+    "runs.list_run_artifacts": "runner",
     # connectors
     "connector.create": "operator",
     "connector.update": "operator",

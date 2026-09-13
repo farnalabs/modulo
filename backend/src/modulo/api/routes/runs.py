@@ -3040,6 +3040,7 @@ async def diff_node_output(
 # ---------------------------------------------------------------------------
 
 _CODE_RUN_ARTIFACT = "runs.get_run_artifact"
+_CODE_RUN_ARTIFACT_LIST = "runs.list_run_artifacts"
 
 _MSG_ARTIFACT_STREAM_NOT_FOUND = "Artifact stream not found"
 _MSG_ARTIFACT_NOT_CONFIGURED = "Artifact storage is not enabled"
@@ -3069,7 +3070,7 @@ async def list_run_artifacts(
     run_id: uuid.UUID,
     node_id: str,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_RUN_ARTIFACT),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_ARTIFACT_LIST),
 ) -> ArtifactListResponse:
     """List all artifact pointers for a node across all attempts.
 
@@ -3109,8 +3110,22 @@ async def list_run_artifacts(
             detail=_MSG_RUN_NOT_FOUND,
         )
 
-    # Sort rows by attempt_key descending so the listing is newest-first.
-    sorted_rows = sorted(rows, key=lambda r: r.attempt_key, reverse=True)
+    # Sort rows by the trailing attempt suffix descending so the listing is
+    # newest-first. Attempt keys end in a numeric suffix (e.g.
+    # ``run:...:node:node-a:11``); a plain lexicographic sort would put ``9``
+    # after ``10``, so we parse the integer. Non-numeric suffixes (e.g.
+    # ``__final__``) fall back to the raw string so they still sort
+    # deterministically instead of raising.
+    def _attempt_sort_key(row: "RunNodeOutput") -> "tuple[int, str]":
+        suffix = row.attempt_key.rsplit(":", 1)[-1]
+        try:
+            return (1, f"{int(suffix):020d}")
+        except ValueError:
+            # Non-numeric suffixes (e.g. ``__final__``) are an edge category
+            # that trails all numeric attempts rather than shadowing them.
+            return (0, suffix)
+
+    sorted_rows = sorted(rows, key=_attempt_sort_key, reverse=True)
 
     artifacts: list[ArtifactPointerResponse] = []
     for row in sorted_rows:
