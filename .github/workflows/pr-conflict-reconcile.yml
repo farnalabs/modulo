@@ -1,0 +1,231 @@
+# PR Conflict Reconciler (FAR-805)
+#
+# WHY: When a PR becomes mergeable=CONFLICTING against a fast-moving main,
+# GitHub cannot build a merge commit, so NO pull_request workflows fire.
+# Consequences:
+#   - The required sonarcloud-scan job never runs → quality gate freezes on stale analysis.
+#   - ci.yml's notify-pr-failure never fires → Branch Fixer is never dispatched → nothing resolves the conflict.
+# The PR deadlocks permanently and looks like a "stuck quality gate" (cost a whole session on PR #404).
+#
+# This cron reconciler detects conflicted open PRs and dispatches the existing
+# Branch Fixer to resolve them. It also surfaces manual-delivery conflicts
+# (human-driven PRs) without auto-dispatching.
+#
+# Pattern: mirrors ci.yml notify-pr-failure job's webhook invocation for the Branch Fixer,
+# and merge-queue.yml's cron/gh/jq conventions.
+
+name: "Fix: PR Conflict Reconciler"
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  pull-requests: write
+  contents: read
+
+concurrency:
+  group: pr-conflict-reconcile
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    name: Detect and reconcile conflicted PRs
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Find conflicted open PRs
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Fetch open PRs with the fields we need. NOTE: --limit caps at 200;
+          # if the repo ever exceeds 200 open PRs this silently truncates and
+          # conflicted PRs beyond the cap would go undetected for a cycle. Raise
+          # the limit (or page) if modulo's open-PR count approaches this bound.
+          gh pr list --state open --limit 200 \
+            --json number,headRefName,mergeable,isDraft,labels \
+            > /tmp/open_prs.json 2>/dev/null
+
+          # Validate the API call succeeded (fail open loudly, FAR-528)
+          if [ ! -s /tmp/open_prs.json ]; then
+            echo "::warning::Failed to fetch open PRs from GitHub API (empty response). Reconciler cannot run this cycle."
+            echo "api_failed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Split into: conflicting+not-draft+not-cannot-fix, then split by manual-delivery
+          # PRs WITHOUT manual-delivery → dispatch (cap 5, newest first)
+          # PRs WITH manual-delivery → notify (post comment + warning)
+          # PRs with modulo-cannot-fix → skip entirely
+
+          DISPATCH=$(jq '[.[] |
+            select(.mergeable == "CONFLICTING") |
+            select(.isDraft == false) |
+            select([.labels[].name] | index("modulo-cannot-fix") | not) |
+            select([.labels[].name] | index("manual-delivery") | not)
+          ] | sort_by(-.number) | .[:5]' /tmp/open_prs.json)
+
+          NOTIFY=$(jq '[.[] |
+            select(.mergeable == "CONFLICTING") |
+            select(.isDraft == false) |
+            select([.labels[].name] | index("modulo-cannot-fix") | not) |
+            select([.labels[].name] | index("manual-delivery"))
+          ] | sort_by(-.number)' /tmp/open_prs.json)
+
+          DISPATCH_COUNT=$(echo "$DISPATCH" | jq 'length')
+          NOTIFY_COUNT=$(echo "$NOTIFY" | jq 'length')
+
+          echo "dispatch=$DISPATCH_COUNT"
+          echo "notify=$NOTIFY_COUNT"
+          echo "api_failed=false" >> "$GITHUB_OUTPUT"
+
+          # Write to temp files for downstream steps
+          echo "$DISPATCH" > /tmp/dispatch_prs.json
+          echo "$NOTIFY" > /tmp/notify_prs.json
+
+          echo "## PR Conflict Reconciler" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Category | Count |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Conflicted PRs (dispatch) | $DISPATCH_COUNT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Conflicted PRs (manual-delivery, notify only) | $NOTIFY_COUNT |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$DISPATCH_COUNT" -gt 0 ]; then
+            echo "### Dispatching Branch Fixer for:" >> "$GITHUB_STEP_SUMMARY"
+            echo "$DISPATCH" | jq -r '.[] | "- PR #" + (.number | tostring) + " (`" + .headRefName + "`)"' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$NOTIFY_COUNT" -gt 0 ]; then
+            echo "### Manual-delivery PRs (notify only):" >> "$GITHUB_STEP_SUMMARY"
+            echo "$NOTIFY" | jq -r '.[] | "- PR #" + (.number | tostring) + " (`" + .headRefName + "`)"' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$DISPATCH_COUNT" -eq 0 ] && [ "$NOTIFY_COUNT" -eq 0 ]; then
+            echo "No conflicted PRs found." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Dispatch the Branch Fixer
+        if: steps.detect.outputs.api_failed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DISPATCH_COUNT=$(jq 'length' /tmp/dispatch_prs.json)
+          if [ "$DISPATCH_COUNT" -eq 0 ]; then
+            echo "No PRs to dispatch."
+            exit 0
+          fi
+
+          DISPATCHED=0
+          SKIPPED=0
+
+          for i in $(seq 0 $((DISPATCH_COUNT - 1))); do
+            PR_NUM=$(jq -r ".[$i].number" /tmp/dispatch_prs.json)
+            BRANCH=$(jq -r ".[$i].headRefName" /tmp/dispatch_prs.json)
+
+            # Skip if a Branch Fixer run is already queued/in-progress for this PR
+            # (check recent workflow runs on the branch)
+            RECENT_RUN=$(gh run list --branch "$BRANCH" --workflow "Fix: Modulo Branch Fixer" \
+              --limit 1 --json status,conclusion --jq '.[0].status // "none"' 2>/dev/null || echo "none")
+            if [ "$RECENT_RUN" = "in_progress" ] || [ "$RECENT_RUN" = "queued" ] || [ "$RECENT_RUN" = "pending" ]; then
+              echo "Skipping PR #$PR_NUM (Branch Fixer already queued/in-progress on branch '$BRANCH')"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            # Dispatch via webhook (mirrors ci.yml notify-pr-failure pattern)
+            TIMESTAMP=$(date +%s)
+            BODY=$(jq -n \
+              --arg branchName "$BRANCH" \
+              --argjson prNumber "$PR_NUM" \
+              --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Re-run the stages/tests for touched modules. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
+              --arg repo "farnalabs/modulo" \
+              '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}')
+            HMAC=$(echo -n "${TIMESTAMP}.${BODY}" | openssl dgst -sha256 -hmac "${HMAC_SECRET}" | sed 's/^.* //')
+
+            # Retry with exponential backoff on 429/5xx (max 5 attempts)
+            DISPATCH_OK=false
+            for attempt in 1 2 3 4 5; do
+              RESPONSE=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "${WEBHOOK_URL}" \
+                -H "Content-Type: application/json" \
+                -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+                -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+                -d "${BODY}")
+              HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+              BODY_RESP=$(echo "$RESPONSE" | sed '$d')
+              if [ "$HTTP_CODE" = "202" ]; then
+                echo "Branch Fixer accepted for PR #$PR_NUM (run: $(echo $BODY_RESP | jq -r '.run_id // "unknown"'))"
+                DISPATCH_OK=true
+                DISPATCHED=$((DISPATCHED + 1))
+                break
+              elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" -ge 500 ]; then
+                DELAY=$((2 ** (attempt - 1) * 5))
+                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM (attempt $attempt/5) — retrying in ${DELAY}s"
+                sleep "$DELAY"
+              else
+                echo "::warning::Branch Fixer returned HTTP $HTTP_CODE for PR #$PR_NUM: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
+                break
+              fi
+            done
+
+            if [ "$DISPATCH_OK" = "false" ]; then
+              echo "::warning::Failed to dispatch Branch Fixer for PR #$PR_NUM after retries."
+            fi
+          done
+
+          echo "dispatched=$DISPATCHED" >> "$GITHUB_OUTPUT"
+          echo "skipped=$SKIPPED" >> "$GITHUB_OUTPUT"
+
+      - name: Surface manual-delivery conflicts
+        if: steps.detect.outputs.api_failed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NOTIFY_COUNT=$(jq 'length' /tmp/notify_prs.json)
+          if [ "$NOTIFY_COUNT" -eq 0 ]; then
+            echo "No manual-delivery PRs to notify."
+            exit 0
+          fi
+
+          MARKER="<!-- pr-conflict-reconciler:manual-delivery-note -->"
+
+          for i in $(seq 0 $((NOTIFY_COUNT - 1))); do
+            PR_NUM=$(jq -r ".[$i].number" /tmp/notify_prs.json)
+            BRANCH=$(jq -r ".[$i].headRefName" /tmp/notify_prs.json)
+
+            # Check for existing marker comment (idempotent)
+            EXISTING=$(gh pr view "$PR_NUM" --json comments --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | length" 2>/dev/null || echo "0")
+            if [ "$EXISTING" != "0" ]; then
+              echo "PR #$PR_NUM already has a manual-delivery conflict note — skipping."
+              continue
+            fi
+
+            # Post comment
+            COMMENT_BODY="${MARKER}
+            ## PR Conflict Detected (manual-delivery)
+
+            This PR has a merge conflict with \`origin/main\` (\`mergeable=CONFLICTING\`).
+
+            The **Branch Fixer was NOT dispatched** because this PR carries the \`manual-delivery\` label.
+
+            **Action required:** merge \`origin/main\` into the branch (a MERGE commit — do NOT rebase
+            or force-push a shared/reviewed branch), resolve conflicts, and push. This re-arms the
+            \`pull_request\` pipeline (CI + sonarcloud-scan)."
+
+            gh pr comment "$PR_NUM" --body "$COMMENT_BODY" 2>/dev/null || {
+              echo "::warning::Failed to post manual-delivery conflict comment on PR #$PR_NUM"
+            }
+
+            echo "::warning::PR #$PR_NUM (${BRANCH}) has mergeable=CONFLICTING and carries manual-delivery label — requires human intervention."
+          done
