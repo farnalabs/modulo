@@ -50,8 +50,12 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # and 0219_eval_cluster_check_constraints chains off 0218,
 # and 0220_run_node_artifacts chains off 0219,
 # and FAR-802's 0221_workspace_inputs_env_profiles chains off 0220,
-# and FAR-794's 0222_journey_provenance chains off 0221 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0222_journey_provenance"
+# and FAR-794's 0222_journey_provenance chains off 0221,
+# and 0223_agents_add_foreign_keys chains off 0222,
+# and 0224_agents_add_indexes chains off 0223,
+# and 0225_agents_constraints_rls chains off 0224,
+# and 0226_agents_json_to_jsonb chains off 0225 as the chain head.
+_CHAIN_HEAD_MIGRATION = "0226_agents_json_to_jsonb"
 
 
 def _source(name: str) -> str:

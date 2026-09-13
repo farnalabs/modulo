@@ -83,8 +83,12 @@ _MIGRATION_PATH = (
 # and 0219_eval_cluster_check_constraints chained onto 0218,
 # and 0220_run_node_artifacts chained onto 0219,
 # and FAR-802's 0221_workspace_inputs_env_profiles chained onto 0220,
-# and FAR-794's 0222_journey_provenance chained onto 0221 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0222_journey_provenance"
+# and FAR-794's 0222_journey_provenance chained onto 0221,
+# and 0223_agents_add_foreign_keys chained onto 0222,
+# and 0224_agents_add_indexes chained onto 0223,
+# and 0225_agents_constraints_rls chained onto 0224,
+# and 0226_agents_json_to_jsonb chained onto 0225 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0226_agents_json_to_jsonb"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
