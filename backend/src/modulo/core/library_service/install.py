@@ -343,7 +343,6 @@ async def install_collection(
 
     await session.flush()
 
-    # Re-fetch to return the complete record
-    install = await session.get(CollectionInstall, install_id)
-    assert install is not None
+    # ``install`` is the ORM instance already added to the session identity map;
+    # the field mutations above were applied in place, so return it directly.
     return install
