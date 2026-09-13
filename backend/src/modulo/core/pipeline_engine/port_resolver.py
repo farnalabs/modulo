@@ -103,7 +103,7 @@ def port_to_state_key(port_name: str) -> str:
     return port_name
 
 
-def resolve_port_state_key(node: dict[str, Any], port_name: str) -> str:
+def resolve_port_state_key(_node: dict[str, Any], port_name: str) -> str:
     """Resolve the flat-state key a given output/input port maps to."""
     return port_to_state_key(port_name)
 

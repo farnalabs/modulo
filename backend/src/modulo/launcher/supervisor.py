@@ -1823,7 +1823,7 @@ def collect_status(data_dir: Path) -> dict[str, Any]:
     return status
 
 
-def _component_state(pid: int | None, port: int | None) -> str:
+def _component_state(pid: int | None, _port: int | None) -> str:
     """One-word per-component state (``modulo status --json`` enrichment)."""
     if pid is not None and _pid_alive(pid):
         return "healthy"
