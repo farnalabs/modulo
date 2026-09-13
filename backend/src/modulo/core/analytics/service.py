@@ -98,7 +98,6 @@ _FRESHNESS_STALE_HOURS = 36
 
 # Export pagination bounds (FAR-102, Part D).
 _EXPORT_DEFAULT_LIMIT = 500
-_EXPORT_MAX_LIMIT = 5000
 
 # Per-org app-level limiter (simple in-memory): 60 requests/minute. Best-effort
 # and bounded: idle orgs are pruned and the number of tracked orgs is capped, so
