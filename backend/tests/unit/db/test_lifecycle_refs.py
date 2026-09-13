@@ -38,8 +38,13 @@ _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 class TestReservedInputPayloadKeys:
     def test_reserved_keys_are_exactly_the_system_injected_set(self) -> None:
+        # ``_work_item_refs`` (FAR-794 slice 2a) is reserved but EXEMPT from
+        # the strip — it is the system-managed refs carrier, re-stamped (not
+        # trusted) at the create_run chokepoint.
         assert (
-            frozenset({"_work_item_id", "_modulo.work_item", "_feedback_correction", "_coalesce_key"})
+            frozenset(
+                {"_work_item_id", "_modulo.work_item", "_feedback_correction", "_coalesce_key", "_work_item_refs"}
+            )
             == _RESERVED_INPUT_PAYLOAD_KEYS
         )
 

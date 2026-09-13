@@ -49,8 +49,13 @@ module, mirroring ``cost_controller.breakdown.metrics`` and
 path), ``self_report_refs_capped``, ``unmatched_self_report_refs``,
 ``journey_advance_total`` and ``journey_reconcile_drift``. The finalise hook
 (``cost_controller.finalize``) imports the ``record_*`` functions from here.
-All handles are lazy-initialised so a missing meter provider never breaks the
-journey path.
+The FAR-794 work-item-refs counters also live here
+(``modulo_work_item_refs_by_source_total``, ``..._unknown_source_total``,
+``..._shadow_strip_hits_total``, ``..._malformed_total``): the db layer cannot
+import core, so ``db.crud.run`` / ``pipeline_engine.decorator`` emit events
+through the ``lifecycle_refs`` hook, which this module registers at import
+time. All handles are lazy-initialised so a missing meter provider never
+breaks the journey path.
 """
 
 from __future__ import annotations
@@ -65,7 +70,14 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.lifecycle_map.advancement import advance_journeys
-from modulo.db.lifecycle_refs import validate_ref_entry
+from modulo.db.lifecycle_refs import (
+    REFS_EVENT_ASSIGNED_SOURCE,
+    REFS_EVENT_MALFORMED,
+    REFS_EVENT_SHADOW_STRIP_HIT,
+    REFS_EVENT_UNKNOWN_SOURCE,
+    set_refs_counter_hook,
+    validate_ref_entry,
+)
 from modulo.db.models.journey import Journey
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 
@@ -77,6 +89,11 @@ __all__ = [
     "record_journey_finalise_attempt",
     "record_journey_parse_failure",
     "record_journey_reconcile_drift",
+    "record_refs_by_source",
+    "record_refs_cap_dropped",
+    "record_refs_malformed",
+    "record_refs_shadow_strip_hit",
+    "record_refs_unknown_source",
     "record_self_report_refs_capped",
     "record_unmatched_self_report_refs",
 ]
@@ -104,6 +121,17 @@ _journey_finalise_attempt_total: Any = None
 _self_report_refs_capped_total: Any = None
 _unmatched_self_report_refs_total: Any = None
 _journey_reconcile_drift_total: Any = None
+_refs_by_source_total: Any = None
+_refs_unknown_source_total: Any = None
+_refs_shadow_strip_hits_total: Any = None
+_refs_malformed_total: Any = None
+_refs_cap_dropped_total: Any = None
+
+# The cap-drop event name emitted by the finalize merge and the node-input
+# injection paths (both report it verbatim through ``notify_refs_event``).
+# Declared locally — the db-layer event vocabulary in ``lifecycle_refs``
+# predates this counter and does not carry it.
+_REFS_EVENT_CAP_DROPPED = "refs_cap_dropped"
 
 
 def _get_meter() -> Any:
@@ -126,7 +154,12 @@ def _ensure() -> None:
         _journey_finalise_attempt_total, \
         _self_report_refs_capped_total, \
         _unmatched_self_report_refs_total, \
-        _journey_reconcile_drift_total
+        _journey_reconcile_drift_total, \
+        _refs_by_source_total, \
+        _refs_unknown_source_total, \
+        _refs_shadow_strip_hits_total, \
+        _refs_malformed_total, \
+        _refs_cap_dropped_total
     if _journey_advance_total is not None:
         return
     meter = _get_meter()
@@ -160,6 +193,31 @@ def _ensure() -> None:
     _journey_reconcile_drift_total = meter.create_counter(
         name="modulo_journey_reconcile_drift_total",
         description="Missing/stale journey rows found by the reconciliation sweep, by drift kind",
+        unit="1",
+    )
+    _refs_by_source_total = meter.create_counter(
+        name="modulo_work_item_refs_by_source_total",
+        description="Work-item refs stored on runs, by engine-assigned provenance source (FAR-794)",
+        unit="1",
+    )
+    _refs_unknown_source_total = meter.create_counter(
+        name="modulo_work_item_refs_unknown_source_total",
+        description="Ref submissions whose wire 'source' disagreed with the engine-assigned value (FAR-794)",
+        unit="1",
+    )
+    _refs_shadow_strip_hits_total = meter.create_counter(
+        name="modulo_work_item_refs_shadow_strip_hits_total",
+        description="Collisions on the system-managed _work_item_refs key at strip boundaries (FAR-794 shadow mode)",
+        unit="1",
+    )
+    _refs_malformed_total = meter.create_counter(
+        name="modulo_work_item_refs_malformed_total",
+        description="Work-item ref entries dropped as malformed at the intake boundary (FAR-794)",
+        unit="1",
+    )
+    _refs_cap_dropped_total = meter.create_counter(
+        name="modulo_work_item_refs_cap_dropped_total",
+        description="Work-item refs dropped by the unified work_item_refs cap (finalise merge + node-input injection)",
         unit="1",
     )
 
@@ -210,6 +268,90 @@ def record_journey_reconcile_drift(count: int = 1, kind: str = "missing") -> Non
         _ensure()
     if _journey_reconcile_drift_total is not None:
         _journey_reconcile_drift_total.add(count, attributes={"kind": kind})
+
+
+# ---------------------------------------------------------------------------
+# FAR-794 work-item-refs counters
+# ---------------------------------------------------------------------------
+
+
+def record_refs_by_source(source: str, count: int = 1) -> None:
+    """Record refs stored on runs by their ENGINE-ASSIGNED provenance source."""
+    if _refs_by_source_total is None:
+        _ensure()
+    if _refs_by_source_total is not None:
+        _refs_by_source_total.add(count, attributes={"source": source})
+
+
+def record_refs_unknown_source(count: int = 1) -> None:
+    """Record submissions whose wire ``source`` disagreed with the engine's."""
+    if _refs_unknown_source_total is None:
+        _ensure()
+    if _refs_unknown_source_total is not None:
+        _refs_unknown_source_total.add(count)
+
+
+def record_refs_shadow_strip_hit(surface: str = "unknown") -> None:
+    """Record a collision on the system-managed ``_work_item_refs`` key."""
+    if _refs_shadow_strip_hits_total is None:
+        _ensure()
+    if _refs_shadow_strip_hits_total is not None:
+        _refs_shadow_strip_hits_total.add(1, attributes={"surface": surface})
+
+
+def record_refs_malformed(count: int = 1) -> None:
+    """Record ref entries dropped as malformed at the intake boundary."""
+    if _refs_malformed_total is None:
+        _ensure()
+    if _refs_malformed_total is not None:
+        _refs_malformed_total.add(count)
+
+
+def record_refs_cap_dropped(count: int = 1) -> None:
+    """Record refs dropped by the unified ``work_item_refs`` cap."""
+    if _refs_cap_dropped_total is None:
+        _ensure()
+    if _refs_cap_dropped_total is not None:
+        _refs_cap_dropped_total.add(count)
+
+
+def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
+    """Dispatch db-layer ref events onto the FAR-794 counters.
+
+    Registered as the ``lifecycle_refs`` counter hook at import time (below):
+    the db layer cannot import core, so create-run / decorator emissions arrive
+    here through the hook. Unknown events are ignored (forward compatibility).
+    """
+    surface = attrs.get("surface")
+    source = attrs.get("source")
+    count = attrs.get("count")
+    if event == REFS_EVENT_SHADOW_STRIP_HIT:
+        record_refs_shadow_strip_hit(str(surface) if surface is not None else "unknown")
+    elif event == REFS_EVENT_ASSIGNED_SOURCE:
+        record_refs_by_source(
+            str(source) if source is not None else "unknown",
+            int(count) if count is not None else 1,
+        )
+    elif event == REFS_EVENT_UNKNOWN_SOURCE:
+        record_refs_unknown_source(int(count) if count is not None else 1)
+    elif event == REFS_EVENT_MALFORMED:
+        record_refs_malformed(int(count) if count is not None else 1)
+    elif event == _REFS_EVENT_CAP_DROPPED:
+        record_refs_cap_dropped(int(count) if count is not None else 1)
+
+
+def _init_once_register_refs_counter_hook() -> None:
+    """Register the ``lifecycle_refs`` counter hook (idempotent, safe at import).
+
+    The db layer cannot import core, so create-run / decorator ref emissions
+    arrive here through this hook. Registered once at import time; the
+    ``_init_once`` prefix keeps it a no-op if already registered and satisfies
+    the no-module-level-side-effects architecture gate.
+    """
+    set_refs_counter_hook(_refs_event_sink)
+
+
+_init_once_register_refs_counter_hook()
 
 
 # ---------------------------------------------------------------------------

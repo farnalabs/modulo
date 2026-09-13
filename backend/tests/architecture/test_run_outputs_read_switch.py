@@ -48,6 +48,11 @@ _WHOLE_FILE_ALLOWLIST: dict[str, str] = {
         "dual-write's legacy leg"
     ),
     "db/models/run_node_outputs.py": "the new-table model + its portable CHECK constraints",
+    "core/pipeline_engine/workspace_input_audit.py": (
+        "sanctioned read/write surface for the new run_node_outputs table "
+        "(the legit blob chokepoint, FAR-801) — references RunNodeOutput.outputs_json "
+        "(the new-table column), NOT the legacy runs blob column that B1 cut"
+    ),
     "core/analytics/maintenance.py": (
         "SQL-side facts formula — new-table column reads + the legacy coalesce"
         " fallback through the raw Core legacy table (documented parity, dropped at B2b)"

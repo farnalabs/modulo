@@ -438,6 +438,7 @@ class TestCoalescePendingRun:
             input_payload={"_coalesce_key": "github:o/r:pr:1", "old": True},
             input_hash="oldhash",
             created_at=datetime.now(UTC) - timedelta(minutes=10),
+            work_item_refs=None,
         )
         session = self._session("postgresql", run=pending)
         monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
@@ -501,6 +502,7 @@ class TestCoalescePendingRun:
             input_payload={},
             input_hash="h",
             created_at=datetime.now(UTC),
+            work_item_refs=None,
         )
         session = self._session("postgresql", run=pending)
         monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
@@ -522,6 +524,7 @@ class TestCoalescePendingRun:
             status="pending",
             input_payload={"_coalesce_key": "github:o/r:pr:1"},
             created_at=datetime.now(UTC) - timedelta(minutes=5),
+            work_item_refs=None,
         )
         session = self._session("sqlite", candidates=[stale])
         monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))

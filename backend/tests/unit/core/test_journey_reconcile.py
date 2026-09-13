@@ -682,6 +682,7 @@ _RECONCILE_HANDLE_NAMES = (
     "_self_report_refs_capped_total",
     "_unmatched_self_report_refs_total",
     "_journey_reconcile_drift_total",
+    "_refs_cap_dropped_total",
 )
 
 
@@ -735,14 +736,24 @@ class TestReconcileMetrics:
             {"value": 2, "attributes": {"kind": "stale"}}
         ]
 
+        reconcile_mod.record_refs_cap_dropped(3)
+        assert fake_meter.counter("modulo_work_item_refs_cap_dropped_total").calls == [{"value": 3, "attributes": None}]
+
     def test_ensure_early_return_when_handles_initialised(
         self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
     ) -> None:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
         reconcile_mod._ensure()
         reconcile_mod._ensure()
-        # Only the first call builds the six handles; the second returns early.
-        assert len(fake_meter.counters) == 6
+        # Only the first call builds the handles; the second returns early.
+        # Six journey handles + the five FAR-794 work-item-refs counters.
+        assert len(fake_meter.counters) == 11
+
+    def test_refs_cap_dropped_event_is_counted(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+        """The finalize / node-input cap-drop emissions land on the counter."""
+        monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
+        reconcile_mod._refs_event_sink("refs_cap_dropped", {})
+        assert fake_meter.counter("modulo_work_item_refs_cap_dropped_total").calls == [{"value": 1, "attributes": None}]
 
     def test_record_functions_noop_without_meter(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: None)
@@ -752,5 +763,6 @@ class TestReconcileMetrics:
         reconcile_mod.record_self_report_refs_capped(1)
         reconcile_mod.record_unmatched_self_report_refs(1)
         reconcile_mod.record_journey_reconcile_drift(1, kind="missing")
+        reconcile_mod.record_refs_cap_dropped(1)
         for name in _RECONCILE_HANDLE_NAMES:
             assert getattr(reconcile_mod, name) is None

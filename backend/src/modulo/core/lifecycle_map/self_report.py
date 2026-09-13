@@ -30,12 +30,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from modulo.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
+from modulo.db.lifecycle_refs import (
+    _VALID_STATUSES,
+    canonicalise_kind,
+    canonicalise_ref,
+)
+from modulo.db.lifecycle_refs import (
+    REPORTED_SOURCE as _REPORTED_SOURCE,
+)
+from modulo.settings import work_item_refs_cap
 
 _REF_KEYS: frozenset[str] = frozenset({"work_item_refs", "modulo.work_item_refs", "touched_work_items"})
-
-_REPORTED_SOURCE = "reported"
-_VALID_STATUSES: frozenset[str] = frozenset({"done", "attempted"})
 
 
 def parse_self_report_refs(merged_outputs: dict[str, Any]) -> list[dict[str, Any]]:
@@ -102,7 +107,7 @@ def _walk_node(node: Any, collected: list[Any], seen_ids: set[int]) -> None:
 
 
 def validate_and_normalise_reported_refs(
-    entries: list[dict[str, Any]], max_refs: int = 100
+    entries: list[dict[str, Any]], max_refs: int | None = None
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Validate + normalise raw reported refs into canonical reported entries.
 
@@ -115,15 +120,17 @@ def validate_and_normalise_reported_refs(
       "attempted"}``, otherwise dropped;
     * duplicates of an already-seen ``(kind, ref, source)`` triple are
       collapsed (first occurrence wins);
-    * the result is capped at ``max_refs`` unique entries — overflow entries
-      are counted as ``capped``. Dedup runs BEFORE the cap, so a duplicate of
-      an already-seen entry never consumes the cap, and a capped entry's
-      duplicates are not double-counted.
+    * the result is capped at ``max_refs`` unique entries (FAR-794 slice 2b:
+      ``None`` resolves to the unified ``modulo_work_item_refs_cap`` setting)
+      — overflow entries are counted as ``capped``. Dedup runs BEFORE the cap,
+      so a duplicate of an already-seen entry never consumes the cap, and a
+      capped entry's duplicates are not double-counted.
 
     Returns ``(valid_entries, counters)`` where ``counters`` carries the
     ``malformed`` / ``capped`` / ``valid`` counts. Deterministic: the same
     input always yields the same output.
     """
+    cap = work_item_refs_cap() if max_refs is None else max_refs
     counters = {"malformed": 0, "capped": 0, "valid": 0}
     valid: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -149,7 +156,7 @@ def validate_and_normalise_reported_refs(
             continue
         seen.add(key)
 
-        if len(valid) >= max_refs:
+        if len(valid) >= cap:
             counters["capped"] += 1
             continue
 

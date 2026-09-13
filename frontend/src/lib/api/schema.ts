@@ -17376,6 +17376,10 @@ export interface components {
             input_payload?: {
                 [key: string]: unknown;
             };
+            /** Work Item Refs */
+            work_item_refs?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** TriggerUpdate */
         TriggerUpdate: {
