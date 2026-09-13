@@ -241,7 +241,7 @@ class TestCheckoutAndPartialProvisioning:
         assert not any("/home/user/repo-c" in s for s in calls)
         assert any(_DEST_A in s for s in calls)
 
-    async def test_resolved_inputs_are_frozen_checkouts(self) -> None:
+    def test_resolved_inputs_are_frozen_checkouts(self) -> None:
         """Between resolve and clone, the persisted resolved SHA cannot be
         mutated (a crash or force-push between the two steps cannot drift
         the checkout — the artefact is frozen data, not a live session)."""
@@ -339,25 +339,25 @@ class TestAdversarialDestContainment:
     @pytest.mark.parametrize(
         "dest",
         [
-            None,
-            "",
-            "   ",
-            ".",
-            "..",
-            "../etc",
-            "/tmp/evil",
-            "/home/user/../../tmp",
-            "/home/user/../other",
-            "/home/user",
-            "/home/user/.git",
-            "/home/user/repo/.git",
-            "repo/.git/config",
-            "/home/user/agent.log",
-            "/home/user/output.json",
-            "/home/user/.gitconfig",
-            "/home/user/.ssh",
-            "/home/user/repo/.git-policy",
-            "/home/user/" + "/".join(f"d{i}" for i in range(9)),
+            pytest.param(None, id="null"),
+            pytest.param("", id="empty"),
+            pytest.param("   ", id="blank"),
+            pytest.param(".", id="dot"),
+            pytest.param("..", id="parent"),
+            pytest.param("../etc", id="relative-parent"),
+            pytest.param("/tmp/evil", id="outside-home"),
+            pytest.param("/home/user/../../tmp", id="traversal-up"),
+            pytest.param("/home/user/../other", id="traversal-sibling"),
+            pytest.param("/home/user", id="home-itself"),
+            pytest.param("/home/user/.git", id="home-dotgit"),
+            pytest.param("/home/user/repo/.git", id="repo-dotgit"),
+            pytest.param("repo/.git/config", id="relative-repo-dotgit-config"),
+            pytest.param("/home/user/agent.log", id="agent-log"),
+            pytest.param("/home/user/output.json", id="output-json"),
+            pytest.param("/home/user/.gitconfig", id="gitconfig"),
+            pytest.param("/home/user/.ssh", id="ssh"),
+            pytest.param("/home/user/repo/.git-policy", id="denylist-component"),
+            pytest.param("/home/user/" + "/".join(f"d{i}" for i in range(9)), id="depth-abuse"),
         ],
     )
     def test_adversarial_dests_rejected(self, dest: Any) -> None:
@@ -369,12 +369,12 @@ class TestAdversarialDestContainment:
         ["repo", "/home/user/repo", "/home/user/deep/nested/repo", "  /home/user/repo  "],
     )
     def test_benign_dests_accepted(self, dest: str) -> None:
-        _validate_sandbox_managed_inputs_config(_node_with_dest(dest))  # must not raise
+        assert _validate_sandbox_managed_inputs_config(_node_with_dest(dest)) is None
 
     def test_opt_in_absent_config_is_valid(self) -> None:
         """Workspace inputs are OPT-IN: a node without them validates cleanly."""
-        _validate_sandbox_managed_inputs_config({"id": "n1"})  # no workspace_inputs key
-        _validate_sandbox_managed_inputs_config({"id": "n1", "workspace_inputs": []})
+        assert _validate_sandbox_managed_inputs_config({"id": "n1"}) is None
+        assert _validate_sandbox_managed_inputs_config({"id": "n1", "workspace_inputs": []}) is None
 
 
 # ---------------------------------------------------------------------------
