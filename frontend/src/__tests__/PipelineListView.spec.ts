@@ -77,6 +77,36 @@ describe('PipelineListView', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
+  it('opens a pipeline via keyboard (Enter and Space) for a11y', async () => {
+    await router.push('/pipelines')
+    await router.isReady()
+    mockResponses['/api/v1/pipelines?page_size=100'] = {
+      items: [{ id: 'pipe-1', name: 'Demo Pipeline', archived_at: null }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    }
+    const wrapper = mount(PipelineListView, {
+      global: {
+        plugins: [router],
+        stubs: { ErrorAlert: true, FolderTree: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const row = wrapper.find('[data-testid="pipeline-tree-row-pipe-1"]')
+    expect(row.exists()).toBe(true)
+
+    await row.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(router.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor' }))
+
+    await row.trigger('keydown', { key: ' ' })
+    await flushPromises()
+    expect(vi.mocked(router.push).mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
   it('sizes the page to the viewport minus the AppLayout chrome (sibling calc convention, never bare h-screen)', async () => {
     // PipelineEditorView/SchemaEditorView/CompositeEditorView all use
     // h-[calc(100vh-3.5rem)] because /pipelines renders below AppLayout's

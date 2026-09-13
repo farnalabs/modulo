@@ -189,6 +189,26 @@ describe('AdminAuditView — row expansion', () => {
     await nextTick()
     expect(wrapper.text()).toContain('#evt-2')
   })
+
+  it('toggles row expansion via keyboard (Enter and Space) for a11y', async () => {
+    const wrapper = await mountLoaded()
+    const row = wrapper.find('[data-testid="admin-audit-event-row-evt-1"]')
+
+    // Enter opens expansion.
+    await row.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(true)
+
+    // Enter again collapses it.
+    await row.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(false)
+
+    // Space re-opens expansion (keyboard-only equivalent of the click).
+    await row.trigger('keydown', { key: ' ' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(true)
+  })
 })
 
 describe('AdminAuditView — pagination', () => {

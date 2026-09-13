@@ -1,8 +1,14 @@
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import CommandPalette from '../components/CommandPalette.vue'
+
+// Track mounted wrappers so each test tears down cleanly. CommandPalette
+// registers a document-level keydown listener in onMounted; clearing
+// document.body alone leaves the listener attached to a detached instance,
+// which would throw when a later test dispatches a document keydown.
+const mounted: VueWrapper[] = []
 
 beforeEach(() => {
   // CommandPalette uses useNavVisibilityContext, which depends on the plan
@@ -21,6 +27,7 @@ const mountedPalettes: Array<ReturnType<typeof mount>> = []
 
 async function openPalette() {
   const wrapper = mount(CommandPalette, { attachTo: document.body })
+  mounted.push(wrapper)
   ;(wrapper.vm as unknown as { open: () => void }).open()
   await nextTick()
   await nextTick()
@@ -52,15 +59,7 @@ async function typeQuery(value: string) {
 
 describe('CommandPalette', () => {
   afterEach(() => {
-    mountedPalettes.forEach((w) => {
-      try {
-        w.unmount()
-      } catch (err) {
-        // already detached
-        console.warn(err)
-      }
-    })
-    mountedPalettes.length = 0
+    while (mounted.length) mounted.pop()?.unmount()
     document.body.innerHTML = ''
   })
 
@@ -106,37 +105,28 @@ describe('CommandPalette', () => {
     expect(resultButtons().indexOf(highlighted!)).toBe(0)
   })
 
-  it('closes on Escape via the document-level keydown listener (FAR-821 a11y)', async () => {
-    setActivePinia(createPinia())
-    const wrapper = mount(CommandPalette)
-    ;(wrapper.vm as unknown as { open: () => void }).open()
-    await nextTick()
-    await nextTick()
+  it('closes on Escape via the document-level keydown handler', async () => {
+    await openPalette()
     expect(paletteInput()).not.toBeNull()
 
+    // The new Escape branch in handleKeydown must close the palette.
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await nextTick()
-    await nextTick()
 
-    // The dialog (and its search input) must be gone after Escape.
+    // With isOpen cleared the dialog (and its search input) is unmounted.
     expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
-    wrapper.unmount()
   })
 
-  it('closes on Escape fired on the backdrop element (FAR-821 a11y)', async () => {
-    setActivePinia(createPinia())
-    const wrapper = mount(CommandPalette)
-    ;(wrapper.vm as unknown as { open: () => void }).open()
-    await nextTick()
-    await nextTick()
-    const backdrop = document.querySelector<HTMLElement>('[aria-hidden="true"]')
-    expect(backdrop).not.toBeNull()
+  it('closes on Escape via the overlay backdrop keydown handler', async () => {
+    await openPalette()
+    expect(paletteInput()).not.toBeNull()
 
+    // The template @keydown.escape="close" binding on the backdrop overlay.
+    const backdrop = document.querySelector('.fixed.inset-0.bg-black\\/50') as HTMLElement | null
+    expect(backdrop).not.toBeNull()
     backdrop!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await nextTick()
     await nextTick()
 
     expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
-    wrapper.unmount()
   })
 })

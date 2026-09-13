@@ -76,55 +76,50 @@ describe('AdminNotificationDeliveryLogView', () => {
     expect(wrapper.find('[data-testid="admin-notification-log-next"]').exists()).toBe(true)
   })
 
-  it('expands a delivery row via keyboard Enter for a11y (FAR-821)', async () => {
-    const entry = {
-      id: 'd-1',
-      status: 'failed',
-      last_error: 'boom-details',
-      response_code: 500,
-      response_body: null,
-      endpoint_url: 'https://example.com/hook',
-      endpoint_id: 'ep-1',
-      created_at: '2025-06-30T12:00:00Z',
-    }
-    ;(api.GET as never as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue({
-      data: { items: [entry], total: 1, next_cursor: null },
+  it('expands a delivery row via keyboard (Enter and Space) for a11y', async () => {
+    const { api } = await import('../lib/api/client')
+    const mockGet = (api as any).GET as ReturnType<typeof vi.fn>
+    mockGet.mockResolvedValue({
+      data: {
+        items: [
+          {
+            id: '1',
+            event_type: 'run_failed',
+            status: 'failed',
+            attempt_count: 3,
+            response_code: 500,
+            last_error: 'Internal server error',
+            response_body: null,
+            endpoint_url: 'https://example.com/hook',
+            endpoint_id: 'ep-1',
+            created_at: '2025-06-30T12:00:00Z',
+          },
+        ],
+        total: 1,
+        next_cursor: null,
+      },
       error: undefined,
     })
     const wrapper = mount(AdminNotificationDeliveryLogView)
     await flushPromises()
     await nextTick()
-    const row = wrapper.find('tbody tr')
+
+    const row = wrapper.find('tr[tabindex="0"]')
     expect(row.exists()).toBe(true)
 
+    // Enter toggles the row expansion open (detail row with colspan=8).
     await row.trigger('keydown', { key: 'Enter' })
     await nextTick()
-    expect(wrapper.text()).toContain('boom-details')
-  })
+    expect(wrapper.find('td[colspan="8"]').exists()).toBe(true)
 
-  it('expands a delivery row via keyboard Space for a11y (FAR-821)', async () => {
-    const entry = {
-      id: 'd-2',
-      status: 'failed',
-      last_error: 'space-details',
-      response_code: 500,
-      response_body: null,
-      endpoint_url: 'https://example.com/hook',
-      endpoint_id: 'ep-2',
-      created_at: '2025-06-30T12:00:00Z',
-    }
-    ;(api.GET as never as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue({
-      data: { items: [entry], total: 1, next_cursor: null },
-      error: undefined,
-    })
-    const wrapper = mount(AdminNotificationDeliveryLogView)
-    await flushPromises()
+    // Enter again collapses it.
+    await row.trigger('keydown', { key: 'Enter' })
     await nextTick()
-    const row = wrapper.find('tbody tr')
-    expect(row.exists()).toBe(true)
+    expect(wrapper.find('td[colspan="8"]').exists()).toBe(false)
 
-    await row.trigger('keydown', { key: ' ', code: 'Space' })
+    // Space re-opens the expansion (keyboard-only equivalent of the click).
+    await row.trigger('keydown', { key: ' ' })
     await nextTick()
-    expect(wrapper.text()).toContain('space-details')
+    expect(wrapper.find('td[colspan="8"]').exists()).toBe(true)
   })
 })
