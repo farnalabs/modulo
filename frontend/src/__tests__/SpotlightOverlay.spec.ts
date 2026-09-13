@@ -112,4 +112,42 @@ describe('SpotlightOverlay', () => {
     expect(removeSpy).toHaveBeenCalledWith('keydown', expect.any(Function))
     removeSpy.mockRestore()
   })
+
+  it('does not dismiss on Escape after unmount (listener removed)', async () => {
+    targetEl('spot-target')
+    spotlight.highlight('spot-target', 'focus the target')
+    const wrapper = mount(SpotlightOverlay, mountOpts)
+    expect(overlayEl()).not.toBeNull()
+
+    wrapper.unmount()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await Promise.resolve()
+
+    // The document keydown listener was removed on unmount, so the spotlight
+    // stays active (Escape no longer reaches it).
+    expect(spotlight.active.value).toBe(true)
+  })
+
+  it('stops Enter/Space propagation on the cutout so they do not bubble to the overlay', async () => {
+    targetEl('spot-target')
+    spotlight.highlight('spot-target', 'focus the target')
+    const wrapper = mount(SpotlightOverlay, mountOpts)
+    const cutout = document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement | null
+    expect(cutout).not.toBeNull()
+
+    let bubbled = false
+    const overlay = overlayEl()!
+    overlay.addEventListener('keydown', () => {
+      bubbled = true
+    })
+
+    cutout!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(bubbled).toBe(false)
+
+    cutout!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+    expect(bubbled).toBe(false)
+
+    wrapper.unmount()
+  })
 })
