@@ -26,10 +26,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette import status as http_status
 
-from modulo.api.constants import MSG_UNEXPECTED_ERROR
+from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.dependencies import get_or_create_engine, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.analytics.builder import (
@@ -51,6 +53,8 @@ from modulo.core.analytics.service import (
     run_analytics_query,
     run_concurrency_query,
 )
+from modulo.db.models.team_membership import TeamMembership
+from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_ANALYTICS_QUERY = "analytics.query"
@@ -350,6 +354,44 @@ def _require_org(principal: TenantPrincipal) -> uuid.UUID:
     return org_id
 
 
+async def _resolve_scoped_team_ids(
+    factory: async_sessionmaker[Any],
+    *,
+    org_id: uuid.UUID,
+    principal: TenantPrincipal,
+) -> tuple[uuid.UUID, ...] | None:
+    """Resolve the caller's team boundary for analytics reads (#1795).
+
+    An org admin is NOT team-scoped (returns ``None`` = unconstrained).
+    Every other caller gets the tuple of their OWN team-membership ids,
+    resolved inside a session pinned to the caller's org (the membership read
+    needs the org RLS context). ``fail closed``: a DB failure is a 503, never
+    an unconstrained boundary — a missing boundary would silently broaden the
+    query past the team ring the membership should enforce.
+    """
+    if principal.org_role == "admin":
+        return None
+    account_id = principal.account_id
+    if account_id is None:
+        return ()
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            rows = await session.execute(
+                select(TeamMembership.team_id).where(
+                    TeamMembership.account_id == account_id,
+                    TeamMembership.organisation_id == org_id,
+                )
+            )
+            return tuple(rows.scalars().all())
+    except (ProgrammingError, SQLAlchemyError):
+        _log.exception("analytics.route.team_boundary_db_error", extra={"org_id": str(org_id)})
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+
 def _map_service_error(exc: Exception) -> HTTPException:
     """Map a typed service error to the REST HTTP response."""
     if isinstance(exc, AnalyticsRateLimitedError):
@@ -399,6 +441,9 @@ async def analytics_query(
     """
     org_id = _require_org(principal)
     try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
         result = await run_analytics_query(
             org_id=org_id,
             params=params,
@@ -406,6 +451,7 @@ async def analytics_query(
             settings=settings,
             account_id=principal.account_id,
             org_role=principal.org_role,
+            team_ids=team_ids,
         )
     except Exception as exc:
         if isinstance(exc, HTTPException):
@@ -456,6 +502,9 @@ async def analytics_concurrency(
         limit=limit,
     )
     try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
         result = await run_concurrency_query(
             org_id=org_id,
             params=params,
@@ -463,6 +512,7 @@ async def analytics_concurrency(
             settings=settings,
             account_id=principal.account_id,
             org_role=principal.org_role,
+            team_ids=team_ids,
         )
     except Exception as exc:
         if isinstance(exc, HTTPException):
@@ -492,6 +542,9 @@ async def analytics_guardrails(
     """
     org_id = _require_org(principal)
     try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
         result = await run_guardrail_scorecard(
             org_id=org_id,
             factory=_analytics_session_factory(settings),
@@ -500,6 +553,7 @@ async def analytics_guardrails(
             org_role=principal.org_role,
             date_from=date_from,
             date_to=date_to,
+            team_ids=team_ids,
         )
     except Exception as exc:
         if isinstance(exc, HTTPException):
@@ -527,6 +581,9 @@ async def analytics_export(
     """
     org_id = _require_org(principal)
     try:
+        team_ids = await _resolve_scoped_team_ids(
+            _analytics_session_factory(settings), org_id=org_id, principal=principal
+        )
         result = await export_facts(
             org_id=org_id,
             params=params,
@@ -536,6 +593,7 @@ async def analytics_export(
             org_role=principal.org_role,
             offset=offset,
             limit=params.limit,
+            team_ids=team_ids,
         )
     except Exception as exc:
         if isinstance(exc, HTTPException):

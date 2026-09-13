@@ -32,6 +32,7 @@ from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import sqlalchemy as sa_
 from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
 
 import modulo.core.analytics.service as svc
@@ -378,7 +379,7 @@ class TestExportFilters:
 
     def test_org_and_date_bounds_always_present(self) -> None:
         from_, to_ = self._bounds()
-        _conditions, bind = _export_filters(
+        _conditions, bind, _needs_join = _export_filters(
             org_id=_ORG, params=svc.AnalyticsParams(), effective_from=from_, effective_to=to_
         )
         assert bind["org_id"] == _ORG
@@ -395,13 +396,46 @@ class TestExportFilters:
             error_code="node_timeout",
             folder_id=uuid.uuid4(),
         )
-        conditions, bind = _export_filters(org_id=_ORG, params=params, effective_from=from_, effective_to=to_)
+        conditions, bind, needs_join = _export_filters(
+            org_id=_ORG, params=params, effective_from=from_, effective_to=to_
+        )
         assert bind["trigger_type"] == "cron"
         assert bind["status"] == "failed"
         assert bind["pipeline_ids"] == [pid]
         assert set(bind["error_codes"]) == {"node_timeout", "node.timeout", "TimeoutError"}
         assert bind["folder_id"] is not None
         assert len(conditions) == 8  # org, date_from, date_to + 5 optional filters
+        assert needs_join is False  # no team boundary → no Pipeline join needed
+
+    def test_team_boundary_flags_pipeline_join_and_binds_scoped_ids(self) -> None:
+        # #1795: a team-scoped export coalesces the effective owner and binds
+        # the caller's memberships — plus any explicit team_id filter merged in.
+        from_, to_ = self._bounds()
+        membership = uuid.uuid4()
+        explicit = uuid.uuid4()
+        conditions, bind, needs_join = _export_filters(
+            org_id=_ORG, params=svc.AnalyticsParams(team_ids=(membership,)), effective_from=from_, effective_to=to_
+        )
+        assert needs_join is True
+        assert bind["scoped_team_ids"] == [membership]
+        compiled = str(sa_.select(sa_.text("1")).where(*conditions).compile())
+        assert "COALESCE" in compiled.upper()
+
+        _merged_conditions, merged_bind, merged_join = _export_filters(
+            org_id=_ORG, params=svc.AnalyticsParams(team_id=explicit), effective_from=from_, effective_to=to_
+        )
+        assert merged_join is True
+        assert merged_bind["scoped_team_ids"] == [explicit]
+
+    def test_team_boundary_empty_memberships_fail_closed(self) -> None:
+        from_, to_ = self._bounds()
+        conditions, bind, needs_join = _export_filters(
+            org_id=_ORG, params=svc.AnalyticsParams(team_ids=()), effective_from=from_, effective_to=to_
+        )
+        assert "scoped_team_ids" not in bind
+        compiled = str(sa_.select(sa_.text("1")).where(*conditions).compile())
+        assert "IS NULL" in compiled.upper()
+        assert needs_join is True  # coalesce still resolves the effective owner
 
     def test_error_code_aggregate_unknown_filter_matches_complement_of_known_codes(self) -> None:
         # The export surface must apply the SAME aggregate special-case as the
@@ -413,7 +447,9 @@ class TestExportFilters:
 
         from_, to_ = self._bounds()
         params = svc.AnalyticsParams(error_code="harness.unknown")
-        conditions, bind = _export_filters(org_id=_ORG, params=params, effective_from=from_, effective_to=to_)
+        conditions, bind, _needs_join = _export_filters(
+            org_id=_ORG, params=params, effective_from=from_, effective_to=to_
+        )
         assert bind["error_codes"] == sorted(known_error_codes() - {"harness.unknown"})
         assert "harness.unknown" not in bind["error_codes"]
         assert "task_failure" in bind["error_codes"]
@@ -426,7 +462,9 @@ class TestExportFilters:
         # behaviour on the export surface too — it matches only its own literal.
         from_, to_ = self._bounds()
         params = svc.AnalyticsParams(error_code="SomeMysteryError")
-        conditions, bind = _export_filters(org_id=_ORG, params=params, effective_from=from_, effective_to=to_)
+        conditions, bind, _needs_join = _export_filters(
+            org_id=_ORG, params=params, effective_from=from_, effective_to=to_
+        )
         assert set(bind["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
         cond = conditions[-1]
         compiled = str(cond.compile())

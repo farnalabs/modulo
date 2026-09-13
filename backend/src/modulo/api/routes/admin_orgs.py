@@ -540,24 +540,35 @@ async def admin_set_org_license(
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
     try:
-        org = await get_organisation(session, org_id)
-    except ProgrammingError as exc:
-        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
-    except SQLAlchemyError as exc:
-        _raise_db_unavailable(_CODE_ADMIN_ORGS_ADMIN_SET, "Database error while fetching org for set-license.", exc)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _raise_internal_error("Unexpected error in admin_set_org_license (fetch)", exc)
-    if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+        # Single locked transaction: read the org FOR UPDATE, verify, then
+        # write. Holding the row lock across read→write closes the TOCTOU
+        # window where a concurrent license rotate/clear could interleave
+        # between the read and the re-read inside update_organisation and
+        # resurrect a license key that was concurrently cleared (#1798).
+        async with session.begin():
+            try:
+                org = await get_organisation(session, org_id, for_update=True)
+            except ProgrammingError as exc:
+                _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
+            except SQLAlchemyError as exc:
+                _raise_db_unavailable(
+                    _CODE_ADMIN_ORGS_ADMIN_SET, "Database error while fetching org for set-license.", exc
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                _raise_internal_error("Unexpected error in admin_set_org_license (fetch)", exc)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
-    d = _verify_license_key(req)
+            # Verify the license key only AFTER the org-existence (404) check,
+            # so a nonexistent org with an invalid key returns 404 (not 422) and
+            # preserves the prior API contract (FAR #1798 regression).
+            d = _verify_license_key(req)
 
-    settings_json = _set_org_license_key(org.settings_json or {}, req.license_key)
+            settings_json = _set_org_license_key(org.settings_json or {}, req.license_key)
 
-    try:
-        await update_organisation(session, org_id, {"settings_json": settings_json})
+            await update_organisation(session, org_id, {"settings_json": settings_json})
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_SET, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:
@@ -578,24 +589,28 @@ async def admin_remove_org_license(
     session: AsyncSession = Depends(get_db_session),
 ) -> OrgLicenseResponse:
     try:
-        org = await get_organisation(session, org_id)
-    except ProgrammingError as exc:
-        _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
-    except SQLAlchemyError as exc:
-        _raise_db_unavailable(
-            _CODE_ADMIN_ORGS_ADMIN_REMOVE, "Database error while fetching org for remove-license.", exc
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _raise_internal_error("Unexpected error in admin_remove_org_license (fetch)", exc)
-    if org is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+        # Same locked read-modify-write transaction as admin_set_org_license —
+        # a concurrent rotate must not be clobbered by a delete committed from
+        # a stale pre-write read (#1798).
+        async with session.begin():
+            try:
+                org = await get_organisation(session, org_id, for_update=True)
+            except ProgrammingError as exc:
+                _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
+            except SQLAlchemyError as exc:
+                _raise_db_unavailable(
+                    _CODE_ADMIN_ORGS_ADMIN_REMOVE, "Database error while fetching org for remove-license.", exc
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                _raise_internal_error("Unexpected error in admin_remove_org_license (fetch)", exc)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
 
-    settings_json = _clear_org_license_key(org.settings_json or {})
+            settings_json = _clear_org_license_key(org.settings_json or {})
 
-    try:
-        await update_organisation(session, org_id, {"settings_json": settings_json})
+            await update_organisation(session, org_id, {"settings_json": settings_json})
     except ProgrammingError as exc:
         _raise_programming_error(_CODE_ADMIN_ORGS_ADMIN_REMOVE, MSG_FEATURE_NOT_AVAILABLE, exc)
     except SQLAlchemyError as exc:

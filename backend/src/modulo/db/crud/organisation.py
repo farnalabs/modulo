@@ -17,8 +17,17 @@ _log = logging.getLogger(__name__)
 async def get_organisation(
     session: AsyncSession,
     org_id: uuid.UUID,
+    *,
+    for_update: bool = False,
 ) -> Organisation | None:
-    result = await session.execute(select(Organisation).where(Organisation.id == org_id))
+    stmt = select(Organisation).where(Organisation.id == org_id)
+    if for_update:
+        # Caller is about to read-modify-write this row (e.g. license rotation).
+        # Lock it for the remainder of the transaction so a concurrent writer
+        # cannot interleave between the read and the write (TOCTOU). No-op on
+        # dialects without SELECT ... FOR UPDATE (SQLite).
+        stmt = stmt.with_for_update()
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 

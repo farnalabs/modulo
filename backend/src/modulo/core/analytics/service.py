@@ -24,7 +24,7 @@ import asyncio
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -49,6 +49,7 @@ from modulo.core.analytics.builder import (
     build_facts_query,
     hour_groupby_span_exceeds,
     resolve_group_by,
+    team_scope_condition,
     to_utc_aware,
 )
 from modulo.db.crud.run import get_org_run_concurrency_limit
@@ -149,6 +150,11 @@ class AnalyticsParams:
     status: AnalyticsStatus | None = None
     pipeline_ids: tuple[uuid.UUID, ...] = ()
     team_id: uuid.UUID | None = None
+    # Caller's own team boundary for non-admin REST callers (#1795) — resolved
+    # by the route under the principal's RLS org context. ``None`` = unscoped
+    # (org admin); empty tuple = member of no teams (fail closed to org-level
+    # rows only). Never derived from untrusted user input.
+    team_ids: tuple[uuid.UUID, ...] | None = None
     error_code: str | None = None
     folder_id: uuid.UUID | None = None
     date_from: datetime | None = None
@@ -376,15 +382,18 @@ async def run_analytics_query(
     settings: Settings,
     account_id: uuid.UUID | None = None,
     org_role: str | None = None,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """Execute the bucketed analytics query and return the response shape.
 
-    Returns a dict in the ``AnalyticsResponse`` shape (``group_by``,
-    ``dimension``, ``date_from``, ``date_to``, ``buckets``). Raises the typed
+    ``team_ids`` is the caller's own team boundary resolved by the route
+    (#1795): ``None`` for an unscoped/org-admin caller, otherwise the tuple of
+    membership team ids the query must stay inside. Raises the typed
     ``AnalyticsError`` subclasses for rate-limit / validation / DB failures.
     """
     if _rate_limited(str(org_id)):
         raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    params = replace(params, team_ids=team_ids)
 
     effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
     effective_group_by = (
@@ -400,6 +409,7 @@ async def run_analytics_query(
         status=params.status,
         pipeline_ids=params.pipeline_ids,
         team_id=params.team_id,
+        team_ids=params.team_ids,
         error_code=params.error_code,
         folder_id=params.folder_id,
         date_from=effective_from,
@@ -558,6 +568,7 @@ async def run_concurrency_query(
     settings: Settings,
     account_id: uuid.UUID | None = None,
     org_role: str | None = None,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """Slot-utilization series: per-bucket max/avg active + queued runs.
 
@@ -575,6 +586,7 @@ async def run_concurrency_query(
     """
     if _rate_limited(str(org_id)):
         raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    params = replace(params, team_ids=team_ids)
 
     effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
     effective_group_by = (
@@ -590,6 +602,7 @@ async def run_concurrency_query(
         status=params.status,
         pipeline_ids=params.pipeline_ids,
         team_id=params.team_id,
+        team_ids=params.team_ids,
         error_code=params.error_code,
         folder_id=params.folder_id,
         date_from=effective_from,
@@ -683,8 +696,15 @@ def _export_filters(
     params: AnalyticsParams,
     effective_from: datetime,
     effective_to: datetime,
-) -> tuple[list[Any], dict[str, Any]]:
-    """Parameterised WHERE clauses + bound params shared by count and page queries."""
+) -> tuple[list[Any], dict[str, Any], bool]:
+    """Parameterised WHERE clauses + bound params shared by count and page queries.
+
+    The third element is a ``needs_pipeline_join`` flag: when a team boundary
+    is applied the effective owner coalesces the stamped fact team with the
+    pipeline owner, so every statement these conditions attach to must first
+    outerjoin ``Pipeline`` on ``RunDailyFact.pipeline_id``.
+    """
+    team_scoped = False
     conditions: list[Any] = [RunDailyFact.organisation_id == sa.bindparam("org_id", type_=sa.Uuid)]
     bind: dict[str, Any] = {"org_id": org_id}
     conditions.append(RunDailyFact.run_date >= sa.bindparam("date_from", type_=sa.Date))
@@ -711,7 +731,25 @@ def _export_filters(
     if params.folder_id is not None:
         conditions.append(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
         bind["folder_id"] = params.folder_id
-    return conditions, bind
+    if params.team_id is not None or params.team_ids is not None:
+        # Team boundary (#1795) — the same effective-owner coalesce as
+        # build_facts_query: the stamped fact team falls back to the pipeline
+        # owner for NULL-stamped facts, and a scoped caller never widens past
+        # their own teams plus org-level rows. The caller adds the SAME
+        # Pipeline outerjoin to each statement these conditions attach to
+        # (signalled via the needs_pipeline_join flag).
+        merged: list[uuid.UUID] = list(params.team_ids or ())
+        if params.team_id is not None and params.team_id not in merged:
+            merged.append(params.team_id)
+        condition = team_scope_condition(
+            sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id),
+            tuple(merged),
+            bind,
+        )
+        if condition is not None:
+            conditions.append(condition)
+            team_scoped = True
+    return conditions, bind, team_scoped
 
 
 def _serialize_fact_row(row: Any) -> dict[str, Any]:
@@ -740,8 +778,9 @@ async def export_facts(
     settings: Settings,
     account_id: uuid.UUID | None = None,
     org_role: str | None = None,
-    offset: int = 0,
+    offset: int = _EXPORT_DEFAULT_LIMIT,
     limit: int = _EXPORT_DEFAULT_LIMIT,
+    team_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> dict[str, Any]:
     """Return raw fact rows (no bucketing) filtered by the same typed params.
 
@@ -751,19 +790,26 @@ async def export_facts(
     """
     if _rate_limited(str(org_id)):
         raise AnalyticsRateLimitedError(_ERR_RATE_LIMIT_EXCEEDED)
+    params = replace(params, team_ids=team_ids)
 
     effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
-    conditions, bind = _export_filters(
+    conditions, bind, needs_pipeline_join = _export_filters(
         org_id=org_id,
         params=params,
         effective_from=effective_from,
         effective_to=effective_to,
     )
 
-    count_stmt = sa.select(sa.func.count(RunDailyFact.id)).where(*conditions)
+    count_stmt = sa.select(sa.func.count(RunDailyFact.id))
+    rows_stmt = sa.select(*_EXPORT_COLUMNS)
+    if needs_pipeline_join:
+        # Team boundary coalesce — both statements need the same outerjoin so
+        # the effective owner resolves for NULL-stamped facts (#1795).
+        count_stmt = count_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+        rows_stmt = rows_stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+    count_stmt = count_stmt.where(*conditions)
     rows_stmt = (
-        sa.select(*_EXPORT_COLUMNS)
-        .where(*conditions)
+        rows_stmt.where(*conditions)
         .order_by(RunDailyFact.run_date, RunDailyFact.created_at, RunDailyFact.run_id)
         .offset(offset)
         .limit(limit)
