@@ -154,7 +154,7 @@
           <div
             v-if="store.isLoadingJourneys"
             class="mt-4 flex items-center gap-2 text-sm text-muted-foreground"
-            role="status"
+            aria-live="polite"
           >
             <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             {{ $t('views.LifecycleMapView.journey.loading') }}
@@ -252,7 +252,7 @@
             <div
               v-else
               class="mt-3 flex items-center gap-2 text-sm text-muted-foreground"
-              role="status"
+              aria-live="polite"
             >
               <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               {{ $t('views.LifecycleMapView.journey.loading') }}

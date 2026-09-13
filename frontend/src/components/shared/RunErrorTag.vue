@@ -45,7 +45,7 @@ const ariaLabel = computed(() =>
 <template>
   <span
     v-if="code"
-    role="status"
+    aria-live="polite"
     class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
     :class="pillClass"
     :aria-label="ariaLabel"

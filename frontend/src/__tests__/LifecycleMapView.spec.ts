@@ -563,7 +563,7 @@ describe('LifecycleMapView journeys loading spinner (FAR-818)', () => {
     await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
     await flushPromises()
 
-    const spinner = wrapper.find('[role="status"]')
+    const spinner = wrapper.find('[aria-live="polite"]')
     expect(spinner.exists()).toBe(true)
     expect(spinner.text()).toContain('Loading journey...')
     expect(spinner.find('.animate-spin').exists()).toBe(true)
@@ -592,10 +592,10 @@ describe('LifecycleMapView journeys loading spinner (FAR-818)', () => {
     await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
     await flushPromises()
 
-    expect(wrapper.find('[role="status"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-live="polite"]').exists()).toBe(true)
 
     resolveJourneys(okJson({ items: [] }))
     await flushPromises()
-    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-live="polite"]').exists()).toBe(false)
   })
 })

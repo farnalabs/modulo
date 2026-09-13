@@ -12,7 +12,6 @@
     <div
       v-if="orgTriggersPaused"
       data-testid="settings-triggers-paused-banner"
-      role="status"
       aria-live="polite"
       :aria-label="$t('views.SettingsTriggersView.paused_banner_title')"
       class="mb-4 block rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
@@ -92,7 +91,6 @@
                   <div
                     v-if="isDeactivatedOngoing(t)"
                     data-testid="settings-triggers-deactivated-badge"
-                    role="status"
                     aria-live="polite"
                     :aria-label="$t('views.SettingsTriggersView.deactivated_badge', { reason: deactivatedReasonLabel(t) })"
                     class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
