@@ -1897,7 +1897,7 @@ async def _reapply_team_gate_inside_mutation_txn(
     pipeline_id: uuid.UUID,
     *,
     include_deleted: bool = False,
-) -> None:
+) -> Pipeline:
     """Lock + re-verify the team gate INSIDE the mutation transaction (#1801).
 
     ``require_team_membership_or_admin`` runs its own transaction that COMMITs
