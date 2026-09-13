@@ -89,7 +89,7 @@ def redaction_map_from_data_dir(data_dir: Path) -> dict[str, str]:
     # scrub, which only sees the raw value ``p@ss``.
     from urllib.parse import quote
 
-    for raw in list(mapping):
+    for raw in mapping:
         encoded = quote(raw)
         if encoded and encoded != raw:
             mapping[encoded] = REDACTED

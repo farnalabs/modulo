@@ -792,7 +792,7 @@ class RestConnector(ConnectorBase):
             return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {request.url}")
         except asyncio.CancelledError:
             raise
-        except (RESTError, ValueError) as exc:
+        except ValueError as exc:
             return HealthResult(ok=False, detail=self._redact(str(exc))[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
