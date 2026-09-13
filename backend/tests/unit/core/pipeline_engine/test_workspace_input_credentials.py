@@ -20,15 +20,35 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
 
 from modulo.core.pipeline_engine.workspace_input_credentials import (
     CloneCredential,
     CredentialResolutionError,
+    _decrypt_connector_creds,
     assert_clone_credential_is_read_only,
     build_provisioning_credential_scripts,
     is_forge_allowlisted,
     resolve_clone_credential,
 )
+
+# A valid Fernet key for the ciphertext-fallback decode path.
+_FERNET_KEY = Fernet.generate_key().decode("utf-8")
+
+
+def _encrypt(value: str) -> bytes:
+    """Encrypt *value* with the test Fernet key (bytes, as stored on a connector)."""
+    return Fernet(_FERNET_KEY.encode()).encrypt(value.encode("utf-8"))
+
+
+def _make_connector_instance(*, connector_type_id: str = "github", ciphertext: bytes | None = None) -> MagicMock:
+    """Build a fake ConnectorInstance with an optional credentials_ciphertext fallback."""
+    ci = MagicMock()
+    ci.id = uuid.uuid4()
+    ci.connector_type_id = connector_type_id
+    ci.credentials_ciphertext = ciphertext
+    return ci
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -318,6 +338,247 @@ class TestAssertReadOnly:
 
         with pytest.raises(CredentialResolutionError, match="no X-OAuth-Scopes"):
             await assert_clone_credential_is_read_only(cred, http_client=mock_client)
+
+    @pytest.mark.asyncio
+    async def test_github_probe_network_error_refused(self) -> None:
+        # Any exception during the capability probe must fail closed (not leak
+        # the raw exception), covering the generic except branch.
+        cred = _make_cred(host="github.com")
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = RuntimeError("connection reset")
+
+        with pytest.raises(CredentialResolutionError, match="Failed to probe GitHub token capability"):
+            await assert_clone_credential_is_read_only(cred, http_client=mock_client)
+
+
+# ---------------------------------------------------------------------------
+# _decrypt_connector_creds — secrets-backend + ciphertext fallback
+# ---------------------------------------------------------------------------
+
+
+class TestDecryptConnectorCreds:
+    @pytest.mark.asyncio
+    async def test_secrets_backend_keyerror_falls_back_to_ciphertext(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=_encrypt('{"token": "sk-fallback"}'))
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = KeyError
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+        ):
+            creds = await _decrypt_connector_creds(ci, session=session)
+
+        assert creds == {"token": "sk-fallback"}
+
+    @pytest.mark.asyncio
+    async def test_secrets_backend_generic_error_falls_back_to_ciphertext(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=_encrypt('{"token": "sk-fallback"}'))
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = RuntimeError("backend down")
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+        ):
+            creds = await _decrypt_connector_creds(ci, session=session)
+
+        assert creds == {"token": "sk-fallback"}
+
+    @pytest.mark.asyncio
+    async def test_secrets_backend_returns_non_dict_raises(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance()
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.return_value = "[1, 2, 3]"
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            pytest.raises(CredentialResolutionError, match="not a JSON dict"),
+        ):
+            await _decrypt_connector_creds(ci, session=session)
+
+    @pytest.mark.asyncio
+    async def test_secrets_backend_returns_invalid_json_raises(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance()
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.return_value = "not-json"
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            pytest.raises(CredentialResolutionError, match="not valid JSON"),
+        ):
+            await _decrypt_connector_creds(ci, session=session)
+
+    @pytest.mark.asyncio
+    async def test_secrets_backend_raises_credential_error_reraised(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance()
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = CredentialResolutionError("upstream boom")
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            pytest.raises(CredentialResolutionError, match="upstream boom"),
+        ):
+            await _decrypt_connector_creds(ci, session=session)
+
+    @pytest.mark.asyncio
+    async def test_ciphertext_fallback_missing_raises(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=None)
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = KeyError
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            pytest.raises(CredentialResolutionError, match="has no credentials"),
+        ):
+            await _decrypt_connector_creds(ci, session=session)
+
+    @pytest.mark.asyncio
+    async def test_ciphertext_fallback_empty_bytes_raises(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=b"")
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = KeyError
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            pytest.raises(CredentialResolutionError, match="has no credentials"),
+        ):
+            await _decrypt_connector_creds(ci, session=session)
+
+    @pytest.mark.asyncio
+    async def test_ciphertext_fallback_decrypt_failure_raises(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=b"not-a-valid-fernet-token")
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = KeyError
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            pytest.raises(CredentialResolutionError, match="Failed to decrypt credentials"),
+        ):
+            await _decrypt_connector_creds(ci, session=session)
+
+    @pytest.mark.asyncio
+    async def test_ciphertext_fallback_invalid_json_raises(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=_encrypt("not-json-either"))
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = KeyError
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+            pytest.raises(CredentialResolutionError, match="decrypted credentials are not valid JSON"),
+        ):
+            await _decrypt_connector_creds(ci, session=session)
+
+    @pytest.mark.asyncio
+    async def test_ciphertext_fallback_scalar_wrapped_as_token(self) -> None:
+        session = AsyncMock()
+        ci = _make_connector_instance(ciphertext=_encrypt('"bare-secret-value"'))
+        mock_settings = MagicMock()
+        mock_settings.fernet_key = _FERNET_KEY
+        mock_backend = AsyncMock()
+        mock_backend.get_secret.side_effect = KeyError
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                return_value=mock_backend,
+            ),
+        ):
+            creds = await _decrypt_connector_creds(ci, session=session)
+
+        assert creds == {"token": "bare-secret-value"}
 
 
 # ---------------------------------------------------------------------------
