@@ -207,11 +207,13 @@ async def _derive_url_from_connector(
     """Derive a git clone URL from a connector instance's stored config.
 
     Reads the ``ConnectorInstance`` row and extracts the clone URL from its
-    ``config_json``.  For GitHub connectors, ``html_url`` is the base
-    (``https://github.com/org/repo``) — we append ``.git`` for the clone URL.
+    ``config_json``.  GitHub connectors are repo-scoped: the row stores the
+    repository (``owner/repo``) and an API ``base_url`` in config_json — the
+    git clone host is derived from ``base_url`` (``api.github.com`` maps to
+    ``github.com``; GitHub Enterprise hosts reuse the same host).
 
     Raises :class:`ProvisioningError` when the connector is not found, has
-    no URL in its config, or carries an unsupported connector type.
+    no ``repo`` in its config, or carries an unsupported connector type.
     """
     from sqlalchemy import select
 
@@ -231,9 +233,22 @@ async def _derive_url_from_connector(
 
     # Known connector types and how to derive a git clone URL.
     if ci.connector_type_id == "github":
-        html_url = str(config.get("html_url", ""))
-        if html_url:
-            return html_url.rstrip("/") + ".git"
+        # GitHub connectors are repo-scoped: the connector row stores the
+        # repository (``owner/repo``) and an API base URL in config_json —
+        # never an ``html_url``. Derive the git clone host from the API base
+        # URL (GitHub.com's API host ``api.github.com`` maps to the git host
+        # ``github.com``; GitHub Enterprise hosts use the same host for both).
+        repo = str(config.get("repo") or "").strip().rstrip("/")
+        if not repo or "/" not in repo:
+            raise ProvisioningError(
+                f"connector instance {connector_instance_id} (github) has no "
+                "'repo' (owner/repo) in its config — cannot derive a clone URL",
+                error_code="sandbox.input_resolution_failed",
+                retryable=False,
+            )
+        base_url = str(config.get("base_url") or "https://api.github.com").strip()
+        clone_host = _derive_github_clone_host(base_url)
+        return f"https://{clone_host}/{repo}.git"
 
     raise ProvisioningError(
         f"connector type {ci.connector_type_id!r} does not support URL "
@@ -242,6 +257,21 @@ async def _derive_url_from_connector(
         error_code="sandbox.input_resolution_failed",
         retryable=False,
     )
+
+
+def _derive_github_clone_host(base_url: str) -> str:
+    """Map a GitHub connector API base URL to its git clone host.
+
+    GitHub.com's API host (``api.github.com``) is not the git host, so it is
+    special-cased to ``github.com``. GitHub Enterprise base URLs (e.g.
+    ``https://ghe.example.com/api/v3``) use the same host for both API and
+    git, so the netloc is used directly.
+    """
+    parsed = urlparse(base_url)
+    netloc = (parsed.hostname or "api.github.com").lower()
+    if netloc == "api.github.com":
+        return "github.com"
+    return netloc
 
 
 async def resolve_managed_inputs_host_side(
@@ -299,10 +329,9 @@ async def resolve_managed_inputs_host_side(
                     error_code="sandbox.input_resolution_failed",
                     retryable=False,
                 )
-            import uuid as _uuid
 
             connector_instance_id = (
-                _uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, _uuid.UUID) else connector_id_raw
+                uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
             )
             try:
                 async with session_factory() as session, session.begin():
@@ -367,10 +396,8 @@ async def resolve_managed_inputs_host_side(
         host = _extract_host_from_url(url)
 
         if session_factory is not None and connector_id_raw is not None:
-            import uuid as _uuid
-
             connector_instance_id = (
-                _uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, _uuid.UUID) else connector_id_raw
+                uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
             )
             try:
                 async with session_factory() as session, session.begin():

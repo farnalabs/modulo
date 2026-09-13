@@ -806,9 +806,9 @@ class _FactoryForUrl:
 async def test_connector_backed_input_derives_url_from_github_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A connector-backed input without URL derives the clone URL from
-    the connector's config_json.html_url (FAR-800 follow-up Gap 1)."""
-    fake_ci = _FakeCi("github", {"html_url": "https://github.com/org/repo"})
+    """A connector-backed input without URL derives the clone URL from the
+    GitHub connector's stored config (repo + base_url) — FAR-800 follow-up Gap 1."""
+    fake_ci = _FakeCi("github", {"repo": "org/repo", "base_url": "https://api.github.com"})
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
@@ -834,10 +834,11 @@ async def test_connector_backed_input_derives_url_from_github_config(
     assert resolved[0].url == "https://github.com/org/repo.git"
 
 
-async def test_connector_backed_input_strips_trailing_slash() -> None:
-    """Trailing slash on html_url is stripped before appending .git."""
-    fake_ci = _FakeCi("github", {"html_url": "https://github.com/org/repo/"})
-    monkeypatch = pytest.MonkeyPatch()
+async def test_connector_backed_input_strips_trailing_slash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trailing slash on the repo config key is stripped before appending .git."""
+    fake_ci = _FakeCi("github", {"repo": "org/repo/", "base_url": "https://api.github.com"})
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
@@ -859,7 +860,6 @@ async def test_connector_backed_input_strips_trailing_slash() -> None:
         session_factory=factory,
     )
     assert resolved[0].url == "https://github.com/org/repo.git"
-    monkeypatch.undo()
 
 
 async def test_connector_backed_input_no_connector_raises() -> None:
@@ -904,10 +904,11 @@ async def test_connector_backed_input_connector_not_found_raises() -> None:
         )
 
 
-async def test_connector_backed_input_unsupported_type_raises() -> None:
+async def test_connector_backed_input_unsupported_type_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A connector type without URL derivation raises ProvisioningError."""
     fake_ci = _FakeCi("slack", {"webhook_url": "https://hooks.slack.com/..."})
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(
         "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
         AsyncMock(return_value="a" * 40),
@@ -925,7 +926,58 @@ async def test_connector_backed_input_unsupported_type_raises() -> None:
             org_id="org-1",
             session_factory=factory,
         )
-    monkeypatch.undo()
+
+
+async def test_connector_backed_input_derives_url_ghe_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A GitHub Enterprise base_url reuses the same host for the clone URL."""
+    fake_ci = _FakeCi("github", {"repo": "acme/widgets", "base_url": "https://ghe.acme.com/api/v3"})
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=None),
+    )
+    factory = _FactoryForUrl(fake_ci)
+    resolved = await resolve_managed_inputs_host_side(
+        [
+            {
+                "dest": "/home/user/repo",
+                "connector_instance_id": str(uuid.uuid4()),
+                "ref": {"kind": "branch", "value": "main"},
+            }
+        ],
+        org_id="org-1",
+        session_factory=factory,
+    )
+    assert resolved[0].url == "https://ghe.acme.com/acme/widgets.git"
+
+
+async def test_connector_backed_input_missing_repo_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A github connector without a 'repo' key cannot derive a clone URL."""
+    fake_ci = _FakeCi("github", {"base_url": "https://api.github.com"})
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _FactoryForUrl(fake_ci)
+    with pytest.raises(ProvisioningError, match="no 'repo'"):
+        await resolve_managed_inputs_host_side(
+            [
+                {
+                    "dest": "/home/user/repo",
+                    "connector_instance_id": str(uuid.uuid4()),
+                    "ref": {"kind": "branch", "value": "main"},
+                }
+            ],
+            org_id="org-1",
+            session_factory=factory,
+        )
 
 
 # ---------------------------------------------------------------------------
