@@ -52,11 +52,11 @@
         </div>
         <div v-else class="space-y-2">
           <span class="mb-1 block text-sm font-medium">{{ $t('views.OnboardingWizard.select_connector_instance') }}</span>
-          <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+          <button type="button"
             v-for="c in connectors"
             :key="c.id"
             data-testid="onboarding-wizard-connector-card"
-            class="flex items-center gap-3 rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="flex w-full items-center gap-3 rounded-lg border p-4 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             :class="wizardState.connectorId === c.id ? 'border-primary bg-primary/5' : 'border-input'"
             @click="wizardState.connectorId = c.id; wizardState.connectorName = c.name"
           >
@@ -67,7 +67,7 @@
               <p class="text-sm font-medium">{{ c.name }}</p>
               <p class="text-xs text-muted-foreground">{{ c.connector_type_id }}</p>
             </div>
-          </div>
+          </button>
         </div>
       </div>
 
@@ -227,11 +227,11 @@
 </Select>
           </div>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+            <button type="button"
               v-for="item in filteredLibraryItems"
               :key="item.id"
               data-testid="onboarding-wizard-library-item"
-              class="rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              class="w-full rounded-lg border p-4 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               :class="wizardState.selectedLibraryItemId === item.id ? 'border-primary bg-primary/5' : 'border-input'"
               @click="wizardState.selectedLibraryItemId = wizardState.selectedLibraryItemId === item.id ? null : item.id"
             >
@@ -248,7 +248,7 @@
               <div v-if="item.tags && item.tags.length > 0" class="mt-2 flex flex-wrap gap-1">
                 <span v-for="tag in item.tags.slice(0, 3)" :key="tag" class="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{{ tag }}</span>
               </div>
-            </div>
+            </button>
           </div>
         </div>
       </div>

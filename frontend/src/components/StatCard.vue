@@ -34,7 +34,6 @@
             class="inline-flex items-center gap-0.5 text-xs font-medium"
             :class="deltaAbsClass"
             data-testid="stat-no-baseline"
-            role="img"
             :aria-label="noBaselineLabel"
             :title="noBaselineLabel"
           >

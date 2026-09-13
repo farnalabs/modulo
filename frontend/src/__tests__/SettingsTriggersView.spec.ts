@@ -84,13 +84,12 @@ describe('SettingsTriggersView — org-wide trigger pause', () => {
     expect(wrapper.find('[data-testid="settings-triggers-paused-banner"]').exists()).toBe(true)
   })
 
-  it('A11Y: banner announces status (role=status + aria-live) and toggle exposes aria-pressed', async () => {
+  it('A11Y: banner announces status (aria-live) and toggle exposes aria-pressed', async () => {
     const wrapper = mountView(fakeJwt('admin'), { ...baseListData, triggers_paused: true, paused_at: '2026-08-04T00:00:00Z' })
     await flush()
 
     const banner = wrapper.find('[data-testid="settings-triggers-paused-banner"]')
     expect(banner.exists()).toBe(true)
-    expect(banner.attributes('role')).toBe('status')
     expect(banner.attributes('aria-live')).toBe('polite')
 
     const toggle = wrapper.find('[data-testid="settings-triggers-pause-all"]')
@@ -446,13 +445,12 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(badge.classes()).toContain('text-amber-600')
   })
 
-  it('shows the deactivated badge with reason (a11y: role=status) for a deactivated ongoing trigger', async () => {
+  it('shows the deactivated badge with reason (a11y: aria-live) for a deactivated ongoing trigger', async () => {
     const wrapper = mountView(fakeJwt('admin'), { ...baseListData, items: [deactivated()] })
     await flush()
 
     const badge = wrapper.find('[data-testid="settings-triggers-deactivated-badge"]')
     expect(badge.exists()).toBe(true)
-    expect(badge.attributes('role')).toBe('status')
     expect(badge.attributes('aria-live')).toBe('polite')
     expect(badge.text()).toContain('Deactivated')
   })

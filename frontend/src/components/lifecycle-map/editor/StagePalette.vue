@@ -2,11 +2,11 @@
   <div class="space-y-2">
     <h3 class="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{{ $t('components.lifecycle-map.editor.StagePalette.stage_types') }}</h3>
     <div class="space-y-1.5">
-      <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+      <button type="button"
         v-for="item in paletteItems"
         :key="item.type"
         draggable="true"
-        class="flex cursor-grab items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 transition-colors hover:bg-accent active:cursor-grabbing"
+        class="flex w-full cursor-grab items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent active:cursor-grabbing"
         @dragstart="onDragStart($event, item.type)"
       >
         <component :is="item.icon" class="h-5 w-5" :class="item.iconClass" />
@@ -14,7 +14,7 @@
           <div class="text-sm font-medium">{{ item.label }}</div>
           <div class="text-[11px] text-muted-foreground">{{ item.description }}</div>
         </div>
-      </div>
+      </button>
     </div>
   </div>
 </template>

@@ -66,10 +66,10 @@
       </EmptyState>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+        <button type="button"
           v-for="m in pagedMaps"
           :key="m.id"
-          class="card card-hover p-5"
+          class="card card-hover w-full p-5 text-left"
           @click="openMap(m)"
           data-testid="lifecycle-map-list-card"
         >
@@ -115,7 +115,7 @@
             </span>
             <span>Updated {{ formatDate(m.updated_at) }}</span>
           </div>
-        </div>
+        </button>
       </div>
 
       <div v-if="totalPages > 1 && !store.isLoading" class="flex justify-center items-center gap-2 mt-8">

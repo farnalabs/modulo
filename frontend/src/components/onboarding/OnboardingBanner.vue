@@ -1,13 +1,10 @@
 <template>
   <div v-if="store.isActive" class="onboarding-banner">
-    <div
-      class="flex items-center gap-3 px-6 py-4 border-b border-l-4 border-l-primary bg-gradient-to-r from-primary/5 to-primary/10 bg-card hover:bg-accent/50 transition-colors"
-      role="button"
-      tabindex="0"
+    <button
+      type="button"
+      class="flex w-full items-center gap-3 px-6 py-4 border-b border-l-4 border-l-primary bg-gradient-to-r from-primary/5 to-primary/10 bg-card hover:bg-accent/50 transition-colors"
       :aria-expanded="expanded"
       @click="expanded = !expanded"
-      @keydown.enter.prevent="expanded = !expanded"
-      @keydown.space.prevent="expanded = !expanded"
       data-testid="onboarding-banner-trigger"
     >
       <div class="relative h-10 w-10 shrink-0">
@@ -41,20 +38,17 @@
       >
         <polyline points="6 9 12 15 18 9" />
       </svg>
-    </div>
+    </button>
 
     <div v-if="expanded" class="border-b bg-card px-4 py-3 space-y-1" data-testid="onboarding-banner-checklist">
         <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{{ $t('components.onboarding.OnboardingBanner.recommended_actions') }}</p>
-        <div
+        <button
+          type="button"
           v-for="action in store.actions"
           :key="action.id"
-          class="flex items-center gap-3 rounded-lg px-3 py-2 transition-colors"
+          class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors"
           :class="actionClass(action)"
-          role="button"
-          tabindex="0"
           @click="handleActionClick(action)"
-          @keydown.enter.prevent="handleActionClick(action)"
-          @keydown.space.prevent="handleActionClick(action)"
           :data-testid="`onboarding-action-${action.id}`"
         >
           <div class="flex h-6 w-6 shrink-0 items-center justify-center">
@@ -84,7 +78,7 @@
           >
             Skip
           </button>
-        </div>
+        </button>
 
         <div v-if="store.error" class="text-xs text-destructive px-3 py-1 rounded bg-destructive/10">
           {{ store.error }}

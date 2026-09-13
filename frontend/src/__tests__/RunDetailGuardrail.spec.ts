@@ -224,7 +224,7 @@ describe('RunDetailView guardrail summary + override', () => {
 
     const strip = wrapper.find('[data-testid="run-detail-warnings-strip"]')
     expect(strip.exists()).toBe(true)
-    expect(strip.attributes('role')).toBe('status')
+    expect(strip.attributes('aria-live')).toBe('polite')
     const entry = wrapper.find('[data-testid="run-detail-warnings-strip-guardrail-override"]')
     expect(entry.exists()).toBe(true)
     expect(entry.attributes('aria-label')).toBeTruthy()

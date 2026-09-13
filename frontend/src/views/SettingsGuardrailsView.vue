@@ -11,7 +11,6 @@
       <div
         v-if="killSwitchEnabled"
         data-testid="settings-guardrails-kill-switch-banner"
-        role="status"
         aria-live="polite"
         class="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
       >
@@ -51,7 +50,6 @@
                   <span
                     v-if="isObserveMode(g)"
                     data-testid="settings-guardrails-observe-badge"
-                    role="status"
                     aria-live="polite"
                     class="ml-2 inline-flex items-center rounded-full bg-warning/10 px-2.5 py-0.5 text-xs font-medium text-warning"
                     :title="$t('views.SettingsGuardrailsView.observe_badge_title')"
