@@ -621,6 +621,62 @@ describe('DashboardView', () => {
     expect(sparkline.find('polyline').exists()).toBe(false)
     expect(sparkline.find('.sparkline-no-data').exists()).toBe(true)
   })
+
+  it('Pipelines card renders neutral trend colour (muted) even when delta is positive', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            period: {
+              days: 7,
+              metrics: {
+                active_pipelines: { current: 10, previous: 8, delta_pct: 25.0 },
+                total_runs: { current: 50, previous: 40, delta_pct: 25.0 },
+                run_counts_by_status: {
+                  running: { current: 3, previous: 2, delta_pct: 50.0 },
+                  awaiting_human: { current: 2, previous: 1, delta_pct: 100.0 },
+                  failed: { current: 5, previous: 3, delta_pct: 66.7 },
+                  idle: { current: 12, previous: 10, delta_pct: 20.0 },
+                },
+                eval_pass_rate: { current: 82.5, previous: 80.0, delta_pct: 3.1 },
+                spend: { current: 100.25, previous: 90.0, delta_pct: 11.4 },
+                tokens: { current: 15000, previous: 12000, delta_pct: 25.0 },
+                success_rate: { current: 85.0, previous: 80.0, delta_pct: 6.2 },
+                avg_duration_ms: { current: 1250.5, previous: 1300.0, delta_pct: -3.8 },
+              },
+            },
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    // Find all StatCard components
+    const statCards = wrapper.findAllComponents({ name: 'StatCard' })
+    // The first StatCard is the Pipelines card
+    const pipelinesCard = statCards[0]
+    expect(pipelinesCard.props('label')).toBe('Pipelines')
+    // The delta span inside the Pipelines card must be muted
+    const deltaSpan = pipelinesCard.find('span.inline-flex')
+    expect(deltaSpan.exists()).toBe(true)
+    expect(deltaSpan.classes()).toContain('text-muted-foreground')
+    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-destructive')
+    // Meanwhile, Total Runs (second card) should still get success colour for a positive delta
+    const totalRunsCard = statCards[1]
+    expect(totalRunsCard.props('label')).toBe('Total Runs')
+    const totalRunsDelta = totalRunsCard.find('span.inline-flex')
+    expect(totalRunsDelta.exists()).toBe(true)
+    expect(totalRunsDelta.classes()).toContain('text-success')
+    expect(totalRunsDelta.classes()).not.toContain('text-muted-foreground')
+  })
 })
 
 describe('StatCard delta arrow', () => {
@@ -786,5 +842,67 @@ describe('StatCard delta arrow', () => {
       },
     })
     expect(wrapper.find('[data-testid="stat-no-baseline"]').exists()).toBe(false)
+  })
+
+  it('neutralTrend forces muted trend colour regardless of delta direction', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Pipelines',
+        value: 8,
+        delta: { current: 8, previous: 6, delta_pct: 33.3 },
+        neutralTrend: true,
+      },
+    })
+    expect(wrapper.text()).toContain('▲')
+    expect(wrapper.text()).toContain('33.3%')
+    const deltaSpan = wrapper.find('span.inline-flex')
+    expect(deltaSpan.classes()).toContain('text-muted-foreground')
+    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-destructive')
+  })
+
+  it('neutralTrend forces muted on a negative delta too', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Pipelines',
+        value: 4,
+        delta: { current: 4, previous: 6, delta_pct: -33.3 },
+        neutralTrend: true,
+      },
+    })
+    expect(wrapper.text()).toContain('▼')
+    expect(wrapper.text()).toContain('33.3%')
+    const deltaSpan = wrapper.find('span.inline-flex')
+    expect(deltaSpan.classes()).toContain('text-muted-foreground')
+    expect(deltaSpan.classes()).not.toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-destructive')
+  })
+
+  it('without neutralTrend a positive delta still gets success colour', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Total Runs',
+        value: 10,
+        delta: { current: 10, previous: 8, delta_pct: 25 },
+      },
+    })
+    const deltaSpan = wrapper.find('span.inline-flex')
+    expect(deltaSpan.classes()).toContain('text-success')
+    expect(deltaSpan.classes()).not.toContain('text-muted-foreground')
+  })
+
+  it('neutralTrend on the no-baseline path also renders muted', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Pipelines',
+        value: 8,
+        delta: { current: 8, previous: 0, delta_pct: null },
+        noBaselineLabel: 'No prior period data',
+        neutralTrend: true,
+      },
+    })
+    const fallback = wrapper.find('[data-testid="stat-no-baseline"]')
+    expect(fallback.exists()).toBe(true)
+    expect(fallback.classes()).toContain('text-muted-foreground')
   })
 })

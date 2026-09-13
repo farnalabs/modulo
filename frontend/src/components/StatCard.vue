@@ -63,6 +63,7 @@ const props = defineProps<{
   delta?: StatDelta | null;
   noBaselineLabel?: string;
   inverted?: boolean;
+  neutralTrend?: boolean;
 }>();
 
 const iconBgClass = computed(() => {
@@ -134,12 +135,14 @@ const deltaAbsArrow = computed(() => {
 const deltaClass = computed(() => {
   const d = deltaPct.value;
   if (d == null) return "";
+  if (props.neutralTrend) return "text-muted-foreground";
   return classFor(d, props.inverted ?? false);
 });
 
 const deltaAbsClass = computed(() => {
   const d = deltaAbs.value;
   if (d == null) return "";
+  if (props.neutralTrend) return "text-muted-foreground";
   return classFor(d, props.inverted ?? false);
 });
 
