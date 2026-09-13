@@ -1029,10 +1029,37 @@ class TestSelfReportConfirmAdvance:
         # so the assertions below read the persisted row.
         await session.refresh(journey)
         assert journey.latest_status == "complete"
-        assert journey.latest_provenance == "reported"
+        # FAR-794 persisted-source invariant: the legacy ``reported`` claim
+        # keeps matching but is normalised to ``agent`` at the write — it is
+        # never persisted as ``reported``.
+        assert journey.latest_provenance == "agent"
         assert journey.run_count == 1
         # No backing run -> the prior run id is preserved, never cleared.
         assert journey.latest_terminal_run_id == prior_run
+
+    async def test_advance_normalises_reported_provenance_on_persist(self, session: AsyncSession) -> None:
+        """FAR-794: a legacy ``source="reported"`` ref is accepted as the
+        confirm/match input marker, but the journey row's persisted
+        ``latest_provenance`` is normalised to ``agent`` — never ``reported``."""
+        await _seed_org(session)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5")
+
+        now = datetime.now(UTC)
+        advanced = await advance_journeys(
+            session,
+            _ORG,
+            run_id=None,
+            pipeline_id=None,
+            refs=[{"kind": "github_issue", "ref": "a/b#5", "source": "reported"}],
+            status="complete",
+            completed_at=now,
+            run_created_at=now,
+        )
+
+        assert advanced == 1
+        await session.flush()
+        await session.refresh(journey)
+        assert journey.latest_provenance == "agent"
 
     async def test_advance_with_no_run_never_mints(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -1305,7 +1332,9 @@ class TestSelfReportRouteReal:
             async with maker() as s, s.begin():
                 journey = (await s.execute(select(Journey))).scalar_one()
             assert journey.latest_status == "complete"
-            assert journey.latest_provenance == "reported"
+            # FAR-794: the self-report confirm path persists ``agent`` — the
+            # legacy ``reported`` marker is normalised at the journey write.
+            assert journey.latest_provenance == "agent"
             assert journey.run_count == 1
             assert journey.latest_terminal_run_id is None  # no backing run
         finally:

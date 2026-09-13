@@ -81,8 +81,10 @@ _MIGRATION_PATH = (
 # 0215_drop_runs_blob_columns chained onto 0213, FAR-748's 0216_audit_events_sweep_detection_index
 # chained onto 0215, 0217_hitl_claims_decided_by chained onto 0216,
 # and 0219_eval_cluster_check_constraints chained onto 0218,
-# and 0221_workspace_inputs_env_profiles chained onto 0220 as the chain head.
-_CHAIN_HEAD_MIGRATION_NAME = "0221_workspace_inputs_env_profiles"
+# and 0220_run_node_artifacts chained onto 0219,
+# and FAR-802's 0221_workspace_inputs_env_profiles chained onto 0220,
+# and FAR-794's 0222_journey_provenance chained onto 0221 as the chain head.
+_CHAIN_HEAD_MIGRATION_NAME = "0222_journey_provenance"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

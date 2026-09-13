@@ -18,7 +18,8 @@ six invariants:
    This prevents agents from overwriting each other's run context.
 
 4. Reserved-key protection: context-setter agents may not write to internal reserved
-   keys (cancelled, input, _pipeline_default_autonomy, _run_context_write_log).
+   keys (cancelled, input, _pipeline_default_autonomy, _run_context_write_log,
+   _work_item_refs).
    Attempts are silently stripped and logged as warnings.
 
 5. Run-context write log: every context-setter write to run_context is recorded in
@@ -38,6 +39,8 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
+
+from modulo.db.lifecycle_refs import notify_refs_shadow_strip_hit
 
 _log = logging.getLogger(__name__)
 
@@ -86,12 +89,19 @@ def set_connector_hub(hub: Any | None) -> None:
 _RUN_CONTEXT_WRITE_LOG_KEY = "_run_context_write_log"
 
 # Keys in run_context that context-setter agents may NOT modify.
+# ``_work_item_refs`` (FAR-794 slice 2a) is the system-managed carrier for the
+# run's canonical work-item refs: engine-assigned provenance flows in at
+# create-run time, so a context-setter node may never overwrite it. SHADOW
+# MODE: a collision is logged + counted (``refs_shadow_strip_hits``) but the
+# strip still happens exactly as for the other reserved keys — the shadow
+# counter is observability, not a behaviour change.
 _RESERVED_RUN_CONTEXT_KEYS = frozenset(
     {
         "cancelled",
         "input",
         "_pipeline_default_autonomy",
         "_run_context_write_log",
+        "_work_item_refs",
     }
 )
 
@@ -230,6 +240,11 @@ def _strip_reserved_keys(fn_name: str, result_rc: dict[str, Any]) -> list[str]:
                 "reserved_keys": attempted_reserved,
             },
         )
+    if "_work_item_refs" in attempted_reserved:
+        # FAR-794 slice 2a shadow mode: a context-setter attempted to write the
+        # system-managed work-item refs key. Strip already happened (above);
+        # this records the collision for the shadow-mode counter.
+        notify_refs_shadow_strip_hit("run_context")
     return attempted_reserved
 
 

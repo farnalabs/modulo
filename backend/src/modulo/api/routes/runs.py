@@ -71,6 +71,7 @@ from modulo.db.crud.observability import get_otel_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import (
+    WorkItemRefsRequiredError,
     count_active_runs_for_org,
     create_run,
     get_child_run_rollup,
@@ -658,6 +659,11 @@ def _serialize_node_token_usage(ntu: dict[str, Any] | None) -> dict[str, Any] | 
 class TriggerRunRequest(BaseModel):
     pipeline_id: uuid.UUID
     input_payload: dict[str, Any] = Field(default_factory=dict)
+    # FAR-794 slice 2a — caller-supplied work-item refs. Provenance is
+    # ENGINE-ASSIGNED at create time (``caller`` for this channel); any wire
+    # ``source`` value is ignored, and each entry is shape-validated +
+    # canonicalised server-side (malformed entries are dropped, not rejected).
+    work_item_refs: list[dict[str, Any]] | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1033,6 +1039,9 @@ async def _create_manual_run(
         trigger_type="manual",
         input_payload=req.input_payload,
         rate_limit_key=rate_limit_key,
+        # FAR-794 slice 2a: caller-supplied refs; provenance is engine-assigned
+        # (caller) inside create_run — the wire source is never trusted.
+        work_item_refs=req.work_item_refs,
         # FAR-620 run attribution: the CALLER's account (the account of the
         # authenticating credential, NOT the human operator behind it). This
         # enables the reject→correction guardrail dispatch for manually
@@ -1123,6 +1132,16 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
+        ) from None
+
+    except WorkItemRefsRequiredError as exc:
+        # FAR-794 slice 2a: the pipeline declares work_item_refs_required and
+        # the delivery carried none. 422 (not 500): a client-fixable input
+        # validation failure.
+        _log.info("runs.trigger_run work_item_refs_required pipeline=%s", exc.pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="This pipeline requires work_item_refs but none were supplied",
         ) from None
 
     except StorageExhaustedError:
@@ -1293,6 +1312,17 @@ async def trigger_rerun(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
+        ) from None
+
+    except WorkItemRefsRequiredError as exc:
+        # FAR-794 slice 2a: the rerun copied the source payload server-side and
+        # the merged ref set is empty while the pipeline requires refs. 422:
+        # the operator must supply refs via a fresh trigger (a rerun carries no
+        # request body to fix them with).
+        _log.info("runs.trigger_rerun work_item_refs_required pipeline=%s", exc.pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="This pipeline requires work_item_refs but the source run carried none",
         ) from None
 
     except StorageExhaustedError:

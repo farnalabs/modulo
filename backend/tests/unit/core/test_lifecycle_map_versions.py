@@ -2428,7 +2428,9 @@ class TestAdvanceJourneysExplicitStage:
     async def test_explicit_stage_advances_when_pipeline_none(self) -> None:
         """A workflow self-report with stage_id (and no pipeline_id) must write
         the journey's map_id/stage_id/position — the external-stage path that
-        was dead on main (pipeline resolution was skipped for pipeline_id=None)."""
+        was dead on main (pipeline resolution was skipped for pipeline_id=None).
+        The legacy ``reported`` claim keeps matching but persists as ``agent``
+        (FAR-794 normalised provenance)."""
         engine = create_async_engine(
             "sqlite+aiosqlite://",
             connect_args={"check_same_thread": False},
@@ -2467,7 +2469,9 @@ class TestAdvanceJourneysExplicitStage:
             assert journey.map_id == _MAP_ID
             assert journey.map_version == 1
             assert journey.latest_status == "complete"
-            assert journey.latest_provenance == "reported"
+            # FAR-794: the legacy ``reported`` marker keeps matching but is
+            # normalised to ``agent`` at the journey write — never persisted.
+            assert journey.latest_provenance == "agent"
         finally:
             await engine.dispose()
 
@@ -2597,7 +2601,8 @@ class TestSelfReportRouteStageId:
             assert journey.position == 7
             assert journey.map_id == _MAP_ID
             assert journey.latest_status == "complete"
-            assert journey.latest_provenance == "reported"
+            # FAR-794: self-report persists ``agent``, never legacy ``reported``.
+            assert journey.latest_provenance == "agent"
         finally:
             await engine.dispose()
 
@@ -2644,6 +2649,7 @@ class TestSelfReportRouteStageId:
             journey = await _fetch_seeded_journey(engine)
             assert journey.stage_id is None
             assert journey.latest_status == "complete"
-            assert journey.latest_provenance == "reported"
+            # FAR-794: self-report persists ``agent``, never legacy ``reported``.
+            assert journey.latest_provenance == "agent"
         finally:
             await engine.dispose()
