@@ -3723,7 +3723,8 @@ export default {
     },
     "DashboardNotificationsPanel": {
       "failed_to_dismiss_notification": "Failed to dismiss notification",
-      "notifications": "Notifications"
+      "notifications": "Notifications",
+      "view_all": "View all notifications"
     },
     "PipelineSnapshotTimeline": {
       "version_timeline": "Version timeline",

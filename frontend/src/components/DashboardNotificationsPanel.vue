@@ -42,15 +42,15 @@
             @review-later="onReviewLater"
           />
         </div>
-        <div v-if="hasMore" class="mt-3 text-center">
-          <router-link
-            to="/notifications"
-            class="text-xs font-medium text-primary hover:underline"
-          >
-            View all notifications →
-          </router-link>
-        </div>
       </template>
+      <div v-if="!loading && !error" class="mt-3 text-center">
+        <router-link
+          to="/notifications"
+          class="text-xs font-medium text-primary hover:underline"
+        >
+          {{ $t('components.DashboardNotificationsPanel.view_all') }} →
+        </router-link>
+      </div>
     </div>
   </div>
 </template>
