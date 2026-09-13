@@ -33,7 +33,6 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from modulo.core.analytics.metrics import record_facts_write_failed
-from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
 from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -205,6 +204,7 @@ async def _fact_workspace_inputs_count(session: AsyncSession, run: Run) -> int |
     Returns None when no audit record exists (run had no workspace inputs).
     Best-effort: a read failure degrades to None — never raises.
     """
+    from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
     from modulo.db.models.run_node_outputs import RunNodeOutput
 
     try:
