@@ -374,15 +374,15 @@ def test_has_guardrail_work_false_when_all_empty() -> None:
 
 
 def test_has_guardrail_work_true_for_guardrail_rows() -> None:
-    assert _has_guardrail_work([MagicMock()], [], [], False)
+    assert _has_guardrail_work([1], [], [], False)
 
 
 def test_has_guardrail_work_true_for_pinned_defs() -> None:
-    assert _has_guardrail_work([], [MagicMock()], [], False)
+    assert _has_guardrail_work([], [1], [], False)
 
 
 def test_has_guardrail_work_true_for_skipped() -> None:
-    assert _has_guardrail_work([], [], [MagicMock()], False)
+    assert _has_guardrail_work([], [], [1], False)
 
 
 def test_has_guardrail_work_true_for_blocked() -> None:
