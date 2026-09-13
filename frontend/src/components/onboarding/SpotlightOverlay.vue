@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { spotlight } from '../../composables/useSpotlight'
 
 const elementRect = ref<DOMRect | null>(null)
@@ -79,7 +79,18 @@ function handleDismiss() {
   spotlight.dismiss()
 }
 
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && spotlight.active.value) {
+    handleDismiss()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+})
+
 onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
   if (resizeObserver) resizeObserver.disconnect()
 })
 </script>

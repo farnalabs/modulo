@@ -179,6 +179,10 @@ function goTo(path: string) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && isOpen.value) {
+    close()
+    return
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
     e.preventDefault()
     if (isOpen.value) {

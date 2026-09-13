@@ -363,6 +363,7 @@
           </div>
         </div>
         <!-- Run dialog modal -->
+        <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions --><!-- modal backdrop: needs keyboard Escape handler for accessible dismissal -->
         <div
           v-if="showRunDialog"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
