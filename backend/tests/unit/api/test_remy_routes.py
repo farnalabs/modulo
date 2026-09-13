@@ -447,6 +447,50 @@ def test_stream_emits_done_event_with_message_id(client: TestClient) -> None:
     assert "msg-123" in resp.text
 
 
+def test_stream_session_constructed_with_expire_on_commit_false(client: TestClient) -> None:
+    """FAR-825 regression: the stream's dedicated session must not expire on commit.
+
+    The generator constructs ``AsyncSession(session.bind, autobegin=False)``.
+    Without an explicit ``expire_on_commit=False``, the SQLAlchemy default
+    (``expire_on_commit=True``) expires every ORM attribute at each
+    ``session.begin()`` commit inside the generator. Any later attribute read
+    then triggers a lazy refresh — which raises
+    ``InvalidRequestError: Autobegin is disabled on this Session`` on an
+    ``autobegin=False`` session (the FAR-808/FAR-820 defect class, currently
+    swallowed by the generator's broad ``except`` as a silent stream failure).
+    This test asserts the constructor kwargs pin ``expire_on_commit=False`` so
+    the footgun cannot silently reappear.
+    """
+    chat_session = _owned_chat_session()
+    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
+    fake_db = AsyncMock()
+    init = remy_routes._StreamInit(backend=MagicMock(), parent_msg_id=uuid.uuid4(), messages=[])
+
+    async def fake_loop(ctx: Any, request: Any, backend: Any, messages: Any, parent: Any, state: Any) -> Any:
+        state["msg_id"] = "msg-456"
+        yield 'event: token\ndata: {"token": "hi"}\n\n'
+
+    with (
+        patch("modulo.api.routes.remy.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.remy.AsyncSession", return_value=fake_db) as session_factory,
+        patch("modulo.api.routes.remy._initialise_stream", new_callable=AsyncMock, return_value=init),
+        patch("modulo.api.routes.remy._run_stream_loop", fake_loop),
+    ):
+        resp = client.post(
+            f"/api/v1/remy/sessions/{chat_session.id}/stream",
+            json={"content": "hi", "provider": "openai", "model": "gpt-4o"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert "event: done" in resp.text
+    constructor_kwargs = session_factory.call_args.kwargs
+    assert constructor_kwargs.get("expire_on_commit") is False, (
+        "The stream's dedicated AsyncSession must pass expire_on_commit=False: with the "
+        "True default, a post-commit attribute read on this autobegin=False session raises "
+        "InvalidRequestError (FAR-808/FAR-820 defect class)"
+    )
+    assert constructor_kwargs.get("autobegin") is False
+
+
 # ---------------------------------------------------------------------------
 # POST /sessions/{id}/permission-response
 # ---------------------------------------------------------------------------
