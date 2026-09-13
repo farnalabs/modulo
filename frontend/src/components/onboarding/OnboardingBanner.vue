@@ -42,33 +42,37 @@
 
     <div v-if="expanded" class="border-b bg-card px-4 py-3 space-y-1" data-testid="onboarding-banner-checklist">
         <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{{ $t('components.onboarding.OnboardingBanner.recommended_actions') }}</p>
-        <button
-          type="button"
+        <div
           v-for="action in store.actions"
           :key="action.id"
-          class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors"
+          class="flex w-full items-center gap-3 rounded-lg px-3 py-2 transition-colors"
           :class="actionClass(action)"
-          @click="handleActionClick(action)"
-          :data-testid="`onboarding-action-${action.id}`"
         >
-          <div class="flex h-6 w-6 shrink-0 items-center justify-center">
-            <svg v-if="action.completed" class="h-5 w-5 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <circle cx="12" cy="12" r="10" />
-              <path d="m9 12 2 2 4-4" />
-            </svg>
-            <svg v-else-if="action.skipped" class="h-5 w-5 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="8" y1="12" x2="16" y2="12" />
-            </svg>
-            <div v-else class="h-5 w-5 rounded-full border-2 border-muted-foreground/40 flex items-center justify-center">
-              <span class="text-[10px] font-medium text-muted-foreground">{{ action.order }}</span>
+          <button
+            type="button"
+            class="flex min-w-0 w-full items-center gap-3 text-left"
+            @click="handleActionClick(action)"
+            :data-testid="`onboarding-action-${action.id}`"
+          >
+            <div class="flex h-6 w-6 shrink-0 items-center justify-center">
+              <svg v-if="action.completed" class="h-5 w-5 text-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <circle cx="12" cy="12" r="10" />
+                <path d="m9 12 2 2 4-4" />
+              </svg>
+              <svg v-else-if="action.skipped" class="h-5 w-5 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="8" y1="12" x2="16" y2="12" />
+              </svg>
+              <div v-else class="h-5 w-5 rounded-full border-2 border-muted-foreground/40 flex items-center justify-center">
+                <span class="text-[10px] font-medium text-muted-foreground">{{ action.order }}</span>
+              </div>
             </div>
-          </div>
 
-          <div class="min-w-0 flex-1">
-            <p class="text-sm font-medium">{{ action.title }}</p>
-            <p class="text-xs text-muted-foreground">{{ action.description }}</p>
-          </div>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-medium">{{ action.title }}</p>
+              <p class="text-xs text-muted-foreground">{{ action.description }}</p>
+            </div>
+          </button>
 
           <button type="button"
             v-if="!action.completed && !action.skipped"
@@ -78,7 +82,7 @@
           >
             Skip
           </button>
-        </button>
+        </div>
 
         <div v-if="store.error" class="text-xs text-destructive px-3 py-1 rounded bg-destructive/10">
           {{ store.error }}

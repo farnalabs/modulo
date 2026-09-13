@@ -66,11 +66,15 @@
       </EmptyState>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <button type="button"
+        <div
           v-for="m in pagedMaps"
           :key="m.id"
-          class="card card-hover w-full p-5 text-left"
+          class="card card-hover w-full p-5 text-left cursor-pointer"
+          role="button"
+          tabindex="0"
           @click="openMap(m)"
+          @keydown.enter="openMap(m)"
+          @keydown.space.prevent="openMap(m)"
           data-testid="lifecycle-map-list-card"
         >
           <div class="flex items-start justify-between gap-2 mb-2">
@@ -115,7 +119,7 @@
             </span>
             <span>Updated {{ formatDate(m.updated_at) }}</span>
           </div>
-        </button>
+        </div>
       </div>
 
       <div v-if="totalPages > 1 && !store.isLoading" class="flex justify-center items-center gap-2 mt-8">
