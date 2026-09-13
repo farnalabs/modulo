@@ -648,6 +648,8 @@ def _check_sandbox_heredoc_list_item(node: dict[str, Any], nid: str, result: Val
     commands = node.get("agent_commands")
     if not isinstance(commands, list):
         return
+    if len(commands) < 2:
+        return
     for i, item in enumerate(commands):
         if not isinstance(item, str):
             continue

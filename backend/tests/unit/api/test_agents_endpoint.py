@@ -367,7 +367,7 @@ def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) 
         prompt_always_visible=False,
         required_environment_capabilities=[],
         template_id=None,
-        agent_commands=[None],
+        agent_commands=None,
         created_at=_NOW,
         updated_at=_NOW,
     )

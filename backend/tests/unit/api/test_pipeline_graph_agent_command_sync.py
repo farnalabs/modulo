@@ -36,8 +36,11 @@ _PIPELINE_ID = uuid.uuid4()
 def _node(node_id: uuid.UUID, *, agent_id: uuid.UUID | None, agent_commands: list[str] | None = None) -> dict[str, Any]:
     node: dict[str, Any] = {
         "id": str(node_id),
+        "node_type": "sandbox_agent",
         "position": {"x": 0, "y": 0},
         "connector_binding": None,
+        "template_id": "opencode",
+        "agent_prompt": "do the thing",
     }
     if agent_id is not None:
         node["agent_id"] = str(agent_id)

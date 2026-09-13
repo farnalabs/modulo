@@ -662,21 +662,15 @@ def test_pipeline_graph_node_agent_commands_round_trip() -> None:
 
 
 def test_pipeline_graph_node_agent_commands_defaults() -> None:
-    """Legacy nodes without the agent_commands field read as "no list, default joiner", and an
-    explicitly null/empty joiner is normalised to the runtime default instead of
+    """Sandbox nodes without an explicit commands_concatenation_string default to " && ",
+    and an explicitly null/empty joiner is normalised to the runtime default instead of
     persisting a value that would crash sandbox_mode's join."""
-    # A node without agent_commands at all
-    legacy_node = {**_sandbox_node_json()}
-    del legacy_node["agent_commands"]
-    legacy = PipelineGraphNode.model_validate(legacy_node)
-    assert legacy.agent_commands is None
-    assert legacy.commands_concatenation_string == " && "
+    # A sandbox_agent node with agent_commands but no explicit joiner defaults to " && "
+    node = PipelineGraphNode.model_validate({**_sandbox_node_json(), "commands_concatenation_string": None})
+    assert node.commands_concatenation_string == " && "
 
-    for raw_joiner in (None, ""):
-        node_with_joiner = {**_sandbox_node_json(), "commands_concatenation_string": raw_joiner}
-        del node_with_joiner["agent_commands"]
-        normalised = PipelineGraphNode.model_validate(node_with_joiner)
-        assert normalised.commands_concatenation_string == " && "
+    node_empty = PipelineGraphNode.model_validate({**_sandbox_node_json(), "commands_concatenation_string": ""})
+    assert node_empty.commands_concatenation_string == " && "
 
     # Legacy non-sandbox nodes never carried the key either.
     agent_node = PipelineGraphNode.model_validate(_minimal_node())

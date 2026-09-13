@@ -580,6 +580,18 @@ def test_sandbox_heredoc_indented_terminator_detected():
     assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" in _codes(result)
 
 
+def test_sandbox_heredoc_scalar_command_is_not_flagged():
+    """A list item WITHOUT a heredoc terminator is not flagged — the scalar
+    concept is gone, but the invariant holds: only bare-terminator-final lines
+    are rejected."""
+    node = _sandbox_node(agent_commands=["echo hello world"])
+    graph = {"nodes": [node], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM" not in _codes(result)
+    assert result.is_valid
+
+
 # ---------------------------------------------------------------------------
 # validate() end-to-end: sandbox errors block saves
 # ---------------------------------------------------------------------------
