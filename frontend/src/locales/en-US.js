@@ -114,6 +114,9 @@ export default {
       "page_of": "Page {page} of {total}",
     },
     "CollectionDetail": {
+      "install": "Install",
+      "installing": "Installing...",
+      "install_failed": "Failed to install this collection",
       "installs_title": "Installs",
       "install_status": "Status: {status}",
       "community_sourced": "Community",
