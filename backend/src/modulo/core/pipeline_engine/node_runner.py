@@ -5704,6 +5704,10 @@ class _SandboxNodeConfig:
     loop_intercept_config: LoopInterceptConfig | None
     session_factory: Callable[..., Any] | None
     single_sandbox_node: bool
+    # FAR-800: managed workspace inputs.  List of input dicts from the node
+    # definition (url, dest, ref, connector_instance_id).  Resolved host-side
+    # before sandbox creation, provisioned inside the sandbox.
+    workspace_inputs: list[dict[str, Any]]
 
 
 def _check_wallclock_budget_pre_run(
@@ -5787,6 +5791,12 @@ class _SandboxNodeOutput(NamedTuple):
     error_message: Any = _UNSET
     sandbox_id: Any = _UNSET
     sandbox_log_tail: Any = _UNSET
+    # FAR-800: workspace input drift detection results.  List of per-input
+    # drift dicts (dest, expected_sha, final_sha, drift_detected).  Default
+    # empty list; populated only when workspace inputs are configured.
+    workspace_drift: Any = _UNSET
+    # FAR-800: first-class run flag — True when ANY workspace input drifted.
+    workspace_drift_detected: Any = _UNSET
     # FAR-510: True ONLY on the runner's synthetic failure envelopes (the
     # executor's downgrade predicate keys on this marker, never on summary
     # text). Default False so honest envelopes carry no marker key at all.
@@ -6121,6 +6131,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     loop_intercept_config = config.loop_intercept_config
     session_factory = config.session_factory
     single_sandbox_node = config.single_sandbox_node
+    workspace_inputs = config.workspace_inputs
 
     # FAR-582: the sandbox watchdog + artifact writer are created during
     # provisioning (after the sandbox is created). Bind them up-front so the
@@ -6561,6 +6572,40 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     f"Runner binding resolution failed for node '{node_id}': {str(exc)[:_MAX_ERROR_MSG]}"
                 ) from exc
 
+        # FAR-800: resolve managed workspace input refs → SHA HOST-SIDE
+        # BEFORE any sandbox is created.  A resolution failure (ref not
+        # found, transient network error) must NEVER create a sandbox.
+        _resolved_workspace_inputs: list[Any] = []
+        if workspace_inputs:
+            from modulo.core.pipeline_engine.workspace_input_orchestration import (
+                ProvisioningError as WorkspaceProvisioningError,
+            )
+            from modulo.core.pipeline_engine.workspace_input_orchestration import (
+                resolve_managed_inputs_host_side,
+            )
+
+            try:
+                _resolved_workspace_inputs = await resolve_managed_inputs_host_side(
+                    workspace_inputs,
+                    org_id=org_id,
+                    session_factory=session_factory,
+                )
+            except WorkspaceProvisioningError as exc:
+                _log.warning(
+                    "workspace_input.resolution_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "error_code": exc.error_code,
+                        "retryable": exc.retryable,
+                        "message": str(exc)[:_MAX_ERROR_MSG],
+                    },
+                )
+                raise SandboxNodeFailedError(
+                    f"Workspace input resolution failed: {str(exc)[:_MAX_ERROR_MSG]}",
+                    node_id=node_id,
+                ) from exc
+
         # FAR-296 Phase 3/3b-3: egress control + resource limits. deny_all
         # and selected map to allow_internet_access=False; resource_limits
         # and the selected-mode host:port allowlist are carried as sandbox
@@ -6698,6 +6743,40 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 sandbox.files.write("/home/user/prompt.md", rendered_prompt),
                 timeout=_SANDBOX_IO_TIMEOUT,
             )
+
+        # FAR-800: provision managed workspace inputs INSIDE the sandbox.
+        # Runs AFTER context files and prompt are written but BEFORE the
+        # sandbox policy (credential helper, egress) and the agent command.
+        # A provisioning failure must KILL the sandbox — the agent command
+        # must never run on partial provision.
+        _drift_results: list[Any] = []
+        if _resolved_workspace_inputs:
+            from modulo.core.pipeline_engine.workspace_input_orchestration import (
+                ProvisioningError as WorkspaceProvisioningError,
+            )
+            from modulo.core.pipeline_engine.workspace_input_orchestration import (
+                provision_workspace_inputs_in_sandbox,
+            )
+
+            try:
+                await provision_workspace_inputs_in_sandbox(
+                    sandbox,
+                    _resolved_workspace_inputs,
+                )
+            except WorkspaceProvisioningError as exc:
+                _log.warning(
+                    "workspace_input.provisioning_failed",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "error_code": exc.error_code,
+                        "message": str(exc)[:_MAX_ERROR_MSG],
+                    },
+                )
+                raise SandboxNodeFailedError(
+                    f"Workspace input provisioning failed: {str(exc)[:_MAX_ERROR_MSG]}",
+                    node_id=node_id,
+                ) from exc
 
         env_vars_extra: dict[str, str] = await resolve_env_var_refs(
             node_def.get("env_vars") or {},
@@ -7070,6 +7149,30 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # process exit) is captured before we read output.json. The probe is
         # fully guarded — on a dead sandbox it returns immediately.
         await watchdog.drain_sandbox_log()
+
+        # FAR-800: detect workspace input drift AFTER the agent command.
+        # This MUST happen even if drift detection itself fails (wrap in
+        # try/except — the audit write must still occur).  Drift results
+        # are attached to the envelope as first-class run flags.
+        if _resolved_workspace_inputs:
+            from modulo.core.pipeline_engine.workspace_input_orchestration import (
+                detect_workspace_input_drift,
+            )
+
+            try:
+                _drift_results = await detect_workspace_input_drift(
+                    sandbox,
+                    _resolved_workspace_inputs,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning(
+                    "workspace_input.drift_detection_error",
+                    extra={"run_id": run_id, "node_id": node_id},
+                    exc_info=True,
+                )
+                _drift_results = []
 
         elapsed = time.monotonic() - start_time
         exit_code: int = getattr(cmd_result, "exit_code", -1)
@@ -7516,6 +7619,18 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 agent_outcome=agent_outcome,
                 stall_reason=stall_reason,
                 sandbox_session_lost=sandbox_session_lost,
+                workspace_drift=[
+                    {
+                        "dest": d.dest,
+                        "expected_sha": d.expected_sha,
+                        "final_sha": d.final_sha,
+                        "drift_detected": d.drift_detected,
+                    }
+                    for d in _drift_results
+                ]
+                if _drift_results
+                else _UNSET,
+                workspace_drift_detected=(any(d.drift_detected for d in _drift_results) if _drift_results else _UNSET),
             ),
             exclude_from_output=frozenset({"changed_files", "pr_url"}),
         )
@@ -7944,6 +8059,7 @@ def _build_sandbox_node_config(
         loop_intercept_config=loop_intercept_config,
         session_factory=session_factory,
         single_sandbox_node=single_sandbox_node,
+        workspace_inputs=node_def.get("workspace_inputs") or [],
     )
 
 
