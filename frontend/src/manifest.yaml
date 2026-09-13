@@ -3426,6 +3426,9 @@ elements:
       - testid: run-detail-artifact-error
         type: element
         dynamic_testid: false
+      - testid: run-detail-artifact-retry
+        type: button
+        dynamic_testid: false
       - testid: run-detail-cost-clamped
         type: element
         dynamic_testid: false
