@@ -37,7 +37,10 @@
                 v-for="schema in schemas"
                 :key="schema.id"
                 class="hover:bg-muted/30 transition-colors cursor-pointer"
+                tabindex="0"
                 @click="editSchema(schema)"
+                @keydown.enter="editSchema(schema)"
+                @keydown.space.prevent="editSchema(schema)"
               >
                 <td class="px-4 py-3 font-medium">{{ schema.name }}</td>
                 <td class="px-4 py-3 text-muted-foreground">{{ schema.description || '—' }}</td>

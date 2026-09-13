@@ -193,7 +193,10 @@
               :key="event.id"
               class="cursor-pointer transition-colors hover:bg-muted/30"
               :data-testid="'admin-audit-event-row-' + event.id"
+              tabindex="0"
               @click="toggleExpand(event.id)"
+              @keydown.enter="toggleExpand(event.id)"
+              @keydown.space.prevent="toggleExpand(event.id)"
             >
               <td class="table-cell whitespace-nowrap">
                 {{ formatTimestamp(event.created_at) }}

@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="isOpen" class="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
-      <div class="fixed inset-0 bg-black/50" @click="close" aria-hidden="true" />
+      <div class="fixed inset-0 bg-black/50" @click="close" @keydown.escape="close" aria-hidden="true" />
       <div
         class="relative z-10 w-full max-w-lg rounded-lg border bg-background shadow-xl"
         role="dialog"
@@ -179,6 +179,10 @@ function goTo(path: string) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && isOpen.value) {
+    close()
+    return
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
     e.preventDefault()
     if (isOpen.value) {

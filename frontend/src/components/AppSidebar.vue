@@ -61,6 +61,7 @@
       v-if="mobileExpanded"
       class="fixed inset-0 z-30 bg-black/50 md:hidden"
       @click="mobileExpanded = false"
+      @keydown.escape="mobileExpanded = false"
       aria-hidden="true"
     />
 
@@ -146,6 +147,7 @@
       v-if="mobileOpen"
       class="md:hidden fixed inset-0 z-30 bg-black/50"
       @click="mobileOpen = false"
+      @keydown.escape="mobileOpen = false"
       aria-hidden="true"
     />
 

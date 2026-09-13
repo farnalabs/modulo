@@ -3,6 +3,7 @@
     v-if="spotlight.active.value"
     class="fixed inset-0 z-[60] bg-black/50"
     @click="handleDismiss"
+    @keydown.escape="handleDismiss"
     aria-hidden="true"
     data-testid="spotlight-overlay"
   >
@@ -11,6 +12,8 @@
       class="absolute rounded-lg border-2 border-primary shadow-[0_0_0_4px_rgba(59,130,246,0.3)] pointer-events-auto"
       :style="cutoutStyle"
       @click.stop
+      @keydown.enter.stop
+      @keydown.space.prevent.stop
     >
       <div
         v-if="spotlight.message.value"
@@ -35,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { spotlight } from '../../composables/useSpotlight'
 
 const elementRect = ref<DOMRect | null>(null)
@@ -76,7 +79,18 @@ function handleDismiss() {
   spotlight.dismiss()
 }
 
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && spotlight.active.value) {
+    handleDismiss()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+})
+
 onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
   if (resizeObserver) resizeObserver.disconnect()
 })
 </script>

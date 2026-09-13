@@ -98,7 +98,11 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
               col.sortable && 'cursor-pointer select-none hover:text-foreground',
               sortColumn === col.key ? 'text-foreground' : 'text-muted-foreground',
             )"
+            :tabindex="col.sortable ? 0 : undefined"
+            :aria-sort="sortColumn === col.key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : undefined"
             @click="col.sortable && toggleSort(col.key)"
+            @keydown.enter="col.sortable && toggleSort(col.key)"
+            @keydown.space.prevent="col.sortable && toggleSort(col.key)"
           >
             {{ col.label }}<span v-if="col.sortable" class="text-xs ml-0.5">{{ getSortIndicator(col.key) }}</span>
           </th>
