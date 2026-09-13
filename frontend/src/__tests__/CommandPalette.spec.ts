@@ -13,11 +13,18 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
 })
 
+// Track every mounted palette so afterEach can unmount them. The component
+// registers a document-level keydown listener in onMounted; without an explicit
+// unmount that listener leaks across tests and fires on unrelated Escape
+// dispatches, crashing the suite.
+const mountedPalettes: Array<ReturnType<typeof mount>> = []
+
 async function openPalette() {
   const wrapper = mount(CommandPalette, { attachTo: document.body })
   ;(wrapper.vm as unknown as { open: () => void }).open()
   await nextTick()
   await nextTick()
+  mountedPalettes.push(wrapper)
   return wrapper
 }
 
@@ -45,6 +52,14 @@ async function typeQuery(value: string) {
 
 describe('CommandPalette', () => {
   afterEach(() => {
+    mountedPalettes.forEach((w) => {
+      try {
+        w.unmount()
+      } catch {
+        // already detached
+      }
+    })
+    mountedPalettes.length = 0
     document.body.innerHTML = ''
   })
 
@@ -88,5 +103,39 @@ describe('CommandPalette', () => {
     const highlighted = highlightedButton()
     expect(highlighted).not.toBeNull()
     expect(resultButtons().indexOf(highlighted!)).toBe(0)
+  })
+
+  it('closes on Escape via the document-level keydown listener (FAR-821 a11y)', async () => {
+    setActivePinia(createPinia())
+    const wrapper = mount(CommandPalette)
+    ;(wrapper.vm as unknown as { open: () => void }).open()
+    await nextTick()
+    await nextTick()
+    expect(paletteInput()).not.toBeNull()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    await nextTick()
+
+    // The dialog (and its search input) must be gone after Escape.
+    expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('closes on Escape fired on the backdrop element (FAR-821 a11y)', async () => {
+    setActivePinia(createPinia())
+    const wrapper = mount(CommandPalette)
+    ;(wrapper.vm as unknown as { open: () => void }).open()
+    await nextTick()
+    await nextTick()
+    const backdrop = document.querySelector<HTMLElement>('[aria-hidden="true"]')
+    expect(backdrop).not.toBeNull()
+
+    backdrop!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    await nextTick()
+
+    expect(document.querySelector('input[placeholder="Search pages..."]')).toBeNull()
+    wrapper.unmount()
   })
 })

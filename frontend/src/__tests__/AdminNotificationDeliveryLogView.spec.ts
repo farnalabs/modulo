@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
+import { api } from '../lib/api/client'
 
 vi.mock('../lib/api/client', () => ({
   api: {
@@ -73,5 +74,57 @@ describe('AdminNotificationDeliveryLogView', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="admin-notification-log-previous"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-notification-log-next"]').exists()).toBe(true)
+  })
+
+  it('expands a delivery row via keyboard Enter for a11y (FAR-821)', async () => {
+    const entry = {
+      id: 'd-1',
+      status: 'failed',
+      last_error: 'boom-details',
+      response_code: 500,
+      response_body: null,
+      endpoint_url: 'https://example.com/hook',
+      endpoint_id: 'ep-1',
+      created_at: '2025-06-30T12:00:00Z',
+    }
+    ;(api.GET as never as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue({
+      data: { items: [entry], total: 1, next_cursor: null },
+      error: undefined,
+    })
+    const wrapper = mount(AdminNotificationDeliveryLogView)
+    await flushPromises()
+    await nextTick()
+    const row = wrapper.find('tbody tr')
+    expect(row.exists()).toBe(true)
+
+    await row.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(wrapper.text()).toContain('boom-details')
+  })
+
+  it('expands a delivery row via keyboard Space for a11y (FAR-821)', async () => {
+    const entry = {
+      id: 'd-2',
+      status: 'failed',
+      last_error: 'space-details',
+      response_code: 500,
+      response_body: null,
+      endpoint_url: 'https://example.com/hook',
+      endpoint_id: 'ep-2',
+      created_at: '2025-06-30T12:00:00Z',
+    }
+    ;(api.GET as never as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue({
+      data: { items: [entry], total: 1, next_cursor: null },
+      error: undefined,
+    })
+    const wrapper = mount(AdminNotificationDeliveryLogView)
+    await flushPromises()
+    await nextTick()
+    const row = wrapper.find('tbody tr')
+    expect(row.exists()).toBe(true)
+
+    await row.trigger('keydown', { key: ' ', code: 'Space' })
+    await nextTick()
+    expect(wrapper.text()).toContain('space-details')
   })
 })
