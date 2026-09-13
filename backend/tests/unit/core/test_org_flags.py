@@ -67,6 +67,13 @@ class TestReadOrgFlag:
         assert await read_org_flag(session, ORG_ID, "not_a_flag") is False
 
     @pytest.mark.anyio
+    async def test_read_org_not_found_returns_default(self):
+        """A missing org row resolves to the fail-closed default OFF."""
+        session = _session_for_settings({})
+        session.execute.return_value.scalar_one_or_none.return_value = None
+        assert await read_org_flag(session, ORG_ID, FLAG_WORK_ITEM_AGENT_MINTING_ENABLED) is False
+
+    @pytest.mark.anyio
     async def test_cache_hit_skips_db_read(self):
         session = _session_for_settings({FLAG_WORK_ITEM_AGENT_MINTING_ENABLED: True})
         assert await read_org_flag(session, ORG_ID, FLAG_WORK_ITEM_AGENT_MINTING_ENABLED) is True
