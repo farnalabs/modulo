@@ -6598,7 +6598,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         "node_id": node_id,
                         "error_code": exc.error_code,
                         "retryable": exc.retryable,
-                        "message": str(exc)[:_MAX_ERROR_MSG],
+                        "detail": str(exc)[:_MAX_ERROR_MSG],
                     },
                 )
                 raise SandboxNodeFailedError(
@@ -6770,7 +6770,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         "run_id": run_id,
                         "node_id": node_id,
                         "error_code": exc.error_code,
-                        "message": str(exc)[:_MAX_ERROR_MSG],
+                        "detail": str(exc)[:_MAX_ERROR_MSG],
                     },
                 )
                 raise SandboxNodeFailedError(

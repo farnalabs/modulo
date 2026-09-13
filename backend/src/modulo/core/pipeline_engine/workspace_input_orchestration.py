@@ -121,6 +121,8 @@ def _extract_host_from_url(url: str) -> str:
 def _is_sha(value: str) -> bool:
     """Return True when *value* looks like a hex SHA (40 or 64 chars)."""
     stripped = value.strip()
+    if not stripped:
+        return False
     if len(stripped) not in (40, 64):
         return False
     return all(c in "0123456789abcdefABCDEF" for c in stripped)
