@@ -162,7 +162,6 @@ async def _stamp_install_id(
     # the ``CollectionInstall`` provenance row has been added to the session
     # (install_collection step 10). Flushing the stamped ``collection_install_id``
     # values before that row exists would violate ``fk_agents_collection_install_id``
-    # / ``fk_schemas_collection_install_id`` / ``fk_pipelines_collection_install_id``
     # (added in migration 0223), since the FK target is not yet present.
     with session.no_autoflush:
         # Stamp schemas
