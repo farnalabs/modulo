@@ -4,8 +4,9 @@ Option B: a single command is just a one-item agent_commands list. This
 migration migrates existing scalar ``agent_command`` values into the
 ``agent_commands`` JSONB array and then drops the column from ``agents``.
 
-Graph JSON node objects in ``pipelines.graph_nodes_json`` (JSONB array of
-node dicts), ``pipeline_snapshots.graph_json`` (JSONB object with a
+Graph JSON node objects in ``pipelines.graph_nodes_json`` (JSON array of
+node dicts — this column stays plain ``json`` after the 0147 standardization),
+``pipeline_snapshots.graph_json`` (JSONB object with a
 ``nodes`` array), and ``composite_templates.sub_pipeline_graph_json``
 (JSONB object with a ``nodes`` array) are also updated: each node that
 has a non-blank scalar ``agent_command`` and no (or empty) ``agent_commands``
@@ -35,7 +36,11 @@ def upgrade() -> None:
     )
     op.drop_column("agents", "agent_command")
 
-    # --- 2. pipelines.graph_nodes_json (JSONB array of node objects) ---
+    # --- 2. pipelines.graph_nodes_json (JSON array of node objects) ---
+    # NOTE: ``graph_nodes_json`` is still typed plain ``json`` in Postgres (it is
+    # deliberately *not* in the 0147 json->jsonb standardization list), so the
+    # jsonb helpers below must read it via ``::jsonb`` and the result is cast
+    # back to ``json`` on write.
     op.execute(
         """
         UPDATE public.pipelines
@@ -55,13 +60,13 @@ def upgrade() -> None:
                     THEN elem - 'agent_command'
                     ELSE elem
                 END
-            )
-            FROM jsonb_array_elements(graph_nodes_json) AS elem
+            )::json
+            FROM jsonb_array_elements(graph_nodes_json::jsonb) AS elem
         )
         WHERE graph_nodes_json IS NOT NULL
-          AND jsonb_array_length(graph_nodes_json) > 0
+          AND jsonb_array_length(graph_nodes_json::jsonb) > 0
           AND EXISTS (
-              SELECT 1 FROM jsonb_array_elements(graph_nodes_json) AS e
+              SELECT 1 FROM jsonb_array_elements(graph_nodes_json::jsonb) AS e
               WHERE e ? 'agent_command'
           )
         """
