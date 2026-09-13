@@ -55,8 +55,9 @@ describe('CommandPalette', () => {
     mountedPalettes.forEach((w) => {
       try {
         w.unmount()
-      } catch {
+      } catch (err) {
         // already detached
+        console.warn(err)
       }
     })
     mountedPalettes.length = 0
