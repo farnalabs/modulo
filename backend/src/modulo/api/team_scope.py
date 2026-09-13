@@ -41,6 +41,7 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 
 
@@ -131,3 +132,112 @@ TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "library_primitives": resolve_library_primitive_team_scope,
     "lifecycle_maps": resolve_lifecycle_map_team_scope,
 }
+
+_CREATE_DENIAL_DETAIL = "Cannot assign a resource to a team you are not a member of"
+_FOREIGN_ORG_DETAIL = "Team {team_id} not found in this organisation."
+
+
+async def validate_owner_team_for_create(
+    session: AsyncSession,
+    principal: Any,
+    owner_team_id: uuid.UUID | None,
+) -> None:
+    """Validate a client-supplied ``owner_team_id``/``target_team_id`` on a CREATE path.
+
+    The PATCH/import paths enforce the team gate
+    (``require_team_membership_or_admin`` / ``_validate_owner_team``), but CREATE
+    and copy endpoints persisted the raw client value (issue #1793): an operator
+    could mint team-private resources owned by a foreign-org or non-existent
+    team, or hand a resource to a team they don't belong to. Fail CLOSED:
+
+    1. the team must exist in the caller's organisation (404 otherwise — even
+       for admins, so a typo/probe is never silently persisted);
+    2. non-admin callers must hold a membership row in that team (403),
+       mirroring the PATCH ownership-reassignment rule.
+    """
+    if owner_team_id is None:
+        return
+    result = await session.execute(
+        select(Team.id).where(
+            Team.id == owner_team_id,
+            Team.organisation_id == principal.organisation_id,
+            Team.deleted_at.is_(None),
+        )
+    )
+    if result.first() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_FOREIGN_ORG_DETAIL.format(team_id=owner_team_id),
+        )
+    org_role = getattr(principal, "org_role", None)
+    if org_role == "admin":
+        return
+    is_member = await team_membership_exists(
+        session,
+        account_id=principal.account_id,
+        team_id=owner_team_id,
+    )
+    if not is_member:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_CREATE_DENIAL_DETAIL)
+
+
+async def validate_team_transition_for_update(
+    session: AsyncSession,
+    principal: Any,
+    *,
+    current_owner_team_id: uuid.UUID | None,
+    current_visibility: str | None,
+    new_owner_team_id: uuid.UUID | None,
+    new_visibility: str | None,
+    requires_owner_team_for_team_visibility: bool = True,
+) -> None:
+    """Mirror the PATCH team gate (``_assert_team_transition_allowed``) generically.
+
+    Guards an UPDATE that changes ``visibility`` and/or ``owner_team_id``:
+    org-admins bypass membership checks; non-admins must be members of the
+    CURRENT team (when the resource is team-private) and of any NEW owner team
+    they reassign the resource to. A ``visibility='team'`` assignment without an
+    owner team is rejected (422). The NEW owner team must exist in the caller's
+    organisation (404, fail closed — zero create/edit bypass parity with
+    :func:`validate_owner_team_for_create`).
+    """
+    if new_visibility == "team" and requires_owner_team_for_team_visibility and new_owner_team_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="owner_team_id is required when visibility is 'team'",
+        )
+    if getattr(principal, "org_role", None) == "admin":
+        return
+
+    # Current-team gate when the resource is team-private (mirrors pipelines'
+    # `_assert_team_transition_allowed`).
+    is_team_private = current_visibility not in ("org", None) and current_owner_team_id is not None
+    if current_owner_team_id is not None and is_team_private:
+        is_member = await team_membership_exists(
+            session, account_id=principal.account_id, team_id=current_owner_team_id
+        )
+        if not is_member:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not a member of the team that owns this resource",
+            )
+
+    if new_owner_team_id is not None and new_owner_team_id != current_owner_team_id:
+        exists = await session.execute(
+            select(Team.id).where(
+                Team.id == new_owner_team_id,
+                Team.organisation_id == principal.organisation_id,
+                Team.deleted_at.is_(None),
+            )
+        )
+        if exists.first() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=_FOREIGN_ORG_DETAIL.format(team_id=new_owner_team_id),
+            )
+        is_member = await team_membership_exists(session, account_id=principal.account_id, team_id=new_owner_team_id)
+        if not is_member:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot reassign a resource to a team you are not a member of",
+            )

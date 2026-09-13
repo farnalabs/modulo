@@ -40,7 +40,11 @@ from modulo.api.dependencies import (
     require_team_membership_or_admin_any_credential,
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
-from modulo.api.team_scope import resolve_pipeline_team_scope, team_membership_exists
+from modulo.api.team_scope import (
+    resolve_pipeline_team_scope,
+    team_membership_exists,
+    validate_owner_team_for_create,
+)
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import org_role_level
@@ -1588,6 +1592,7 @@ async def create_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
             pipeline = await create_pipeline(
                 session,
                 org_id=principal.organisation_id,
