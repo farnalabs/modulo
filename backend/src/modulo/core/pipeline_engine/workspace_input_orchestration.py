@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shlex
+import uuid
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -199,20 +200,67 @@ async def _resolve_ref_with_retry(
     raise last_exc  # type: ignore[misc]
 
 
+async def _derive_url_from_connector(
+    session: Any,
+    connector_instance_id: uuid.UUID,
+) -> str:
+    """Derive a git clone URL from a connector instance's stored config.
+
+    Reads the ``ConnectorInstance`` row and extracts the clone URL from its
+    ``config_json``.  For GitHub connectors, ``html_url`` is the base
+    (``https://github.com/org/repo``) — we append ``.git`` for the clone URL.
+
+    Raises :class:`ProvisioningError` when the connector is not found, has
+    no URL in its config, or carries an unsupported connector type.
+    """
+    from sqlalchemy import select
+
+    from modulo.db.models.connector_instance import ConnectorInstance
+
+    result = await session.execute(select(ConnectorInstance).where(ConnectorInstance.id == connector_instance_id))
+    ci = result.scalar_one_or_none()
+    if ci is None:
+        raise ProvisioningError(
+            f"connector instance {connector_instance_id} not found — "
+            "cannot derive clone URL for connector-backed workspace input",
+            error_code="sandbox.input_credential_failed",
+            retryable=False,
+        )
+
+    config: dict[str, Any] = getattr(ci, "config_json", None) or {}
+
+    # Known connector types and how to derive a git clone URL.
+    if ci.connector_type_id == "github":
+        html_url = str(config.get("html_url", ""))
+        if html_url:
+            return html_url.rstrip("/") + ".git"
+
+    raise ProvisioningError(
+        f"connector type {ci.connector_type_id!r} does not support URL "
+        "derivation for workspace inputs — provide an explicit url or "
+        "use a connector type with a known clone URL derivation",
+        error_code="sandbox.input_resolution_failed",
+        retryable=False,
+    )
+
+
 async def resolve_managed_inputs_host_side(
     workspace_inputs: list[dict[str, Any]],
     *,
     org_id: str,
     session_factory: Any | None = None,
     max_retries: int = 2,
+    http_client: Any | None = None,
 ) -> list[ResolvedInput]:
     """Resolve all managed workspace inputs HOST-SIDE before sandbox creation.
 
     For each input:
 
-    1. If ``ref.kind`` is ``"sha"``, use the value directly (no ls-remote).
-    2. Otherwise, run ``git ls-remote <url>`` and resolve the ref to a SHA.
-    3. If a ``connector_instance_id`` is present, resolve the clone credential
+    1. If the input has no ``url`` but has a ``connector_instance_id``, derive
+       the clone URL from the connector's stored config (host-side DB read).
+    2. If ``ref.kind`` is ``"sha"``, use the value directly (no ls-remote).
+    3. Otherwise, run ``git ls-remote <url>`` and resolve the ref to a SHA.
+    4. If a ``connector_instance_id`` is present, resolve the clone credential
        from the connector store (host-side DB read).
 
     Raises :class:`ProvisioningError` on any failure.  The error carries a
@@ -236,13 +284,49 @@ async def resolve_managed_inputs_host_side(
         ref: dict[str, Any] | None = inp.get("ref")
         connector_id_raw: Any = inp.get("connector_instance_id")
 
+        # --- (0) Derive URL from connector when no explicit URL ---
         if not url:
-            raise ProvisioningError(
-                f"workspace_input dest={dest!r} has no url — "
-                "connector-backed inputs without a URL are not yet supported",
-                error_code="sandbox.input_resolution_failed",
-                retryable=False,
+            if connector_id_raw is None:
+                raise ProvisioningError(
+                    f"workspace_input dest={dest!r} has no url and no connector_instance_id",
+                    error_code="sandbox.input_resolution_failed",
+                    retryable=False,
+                )
+            if session_factory is None:
+                raise ProvisioningError(
+                    f"workspace_input dest={dest!r} has no url but a connector_instance_id "
+                    "requires a session_factory to derive the clone URL",
+                    error_code="sandbox.input_resolution_failed",
+                    retryable=False,
+                )
+            import uuid as _uuid
+
+            connector_instance_id = (
+                _uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, _uuid.UUID) else connector_id_raw
             )
+            try:
+                async with session_factory() as session, session.begin():
+                    url = await _derive_url_from_connector(session, connector_instance_id)
+            except ProvisioningError:
+                raise
+            except Exception as exc:
+                if _is_transient_error(exc):
+                    raise ProvisioningError(
+                        f"workspace_input dest={dest!r}: transient error deriving URL from connector: {exc}",
+                        error_code="sandbox.input_resolution_failed",
+                        retryable=True,
+                    ) from exc
+                raise ProvisioningError(
+                    f"workspace_input dest={dest!r}: unexpected error deriving URL from connector: {exc}",
+                    error_code="sandbox.input_resolution_failed",
+                    retryable=False,
+                ) from exc
+            if not url:
+                raise ProvisioningError(
+                    f"workspace_input dest={dest!r}: connector {connector_id_raw} did not provide a clone URL",
+                    error_code="sandbox.input_resolution_failed",
+                    retryable=False,
+                )
 
         # --- (1) Resolve ref → SHA ---
         ref_kind: str = (ref or {}).get("kind", "branch")
@@ -315,9 +399,29 @@ async def resolve_managed_inputs_host_side(
                 ) from exc
 
             if cred is not None:
+                # --- (2a) Assert credential is read-only (least privilege) ---
+                # The assertion requires an http_client to probe GitHub token
+                # scope.  When no client is provided (e.g. the legacy E2B path),
+                # we skip the assertion — callers that provide an http_client
+                # enforce the check.  SSH credentials are always accepted by the
+                # assertion without a probe.
                 from modulo.core.pipeline_engine.workspace_input_credentials import (
+                    assert_clone_credential_is_read_only,
                     build_provisioning_credential_scripts,
                 )
+
+                if http_client is not None:
+                    try:
+                        await assert_clone_credential_is_read_only(
+                            cred,
+                            http_client=http_client,
+                        )
+                    except CredentialResolutionError as exc:
+                        raise ProvisioningError(
+                            f"workspace_input dest={dest!r}: credential is not read-only: {exc}",
+                            error_code="sandbox.input_credential_failed",
+                            retryable=False,
+                        ) from exc
 
                 cred_setup, cred_teardown = build_provisioning_credential_scripts(
                     cred=cred,
