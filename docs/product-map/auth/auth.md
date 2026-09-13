@@ -69,6 +69,15 @@ clients.
   tests and the `change_password.feature` BDD.
 
 ## QA History
+- 2026-09-13: **improve-architecture (product-map walk)** — removed the phantom
+  `force-change-password-sign-out` element from the `/admin/my-profile` manifest
+  `elements:` inventory: its only render site is the app-level forced-password-gate
+  (`frontend/src/views/ForceChangePasswordView.vue`, mounted by `App.vue`), never the
+  profile page, so the product map was advertising a surface the route does not ship.
+  Added a new architecture guard (`test_registered_elements_render_on_their_route`) that
+  requires every registered element's testid to render within its route's owning-view
+  closure, closing the mis-attribution drift direction none of the existing guards covered.
+
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/my-profile`
