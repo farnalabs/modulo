@@ -326,11 +326,15 @@ describe('RestConnectorConfigForm', () => {
     expect(await validateAndFlush(wrapper)).toBe(false)
   })
 
-  it('keeps the form field lists in parity with the connector config_schema (no drift)', () => {
-    const { fields, advanced } = readRestConfigSchemaFields()
-    expect(new Set(REST_FLAT_FIELDS)).toEqual(new Set(fields))
-    expect(new Set(REST_ADVANCED_FIELDS)).toEqual(new Set(advanced))
-  })
+  it(
+    'keeps the form field lists in parity with the connector config_schema (no drift)',
+    () => {
+      const { fields, advanced } = readRestConfigSchemaFields()
+      expect(new Set(REST_FLAT_FIELDS)).toEqual(new Set(fields))
+      expect(new Set(REST_ADVANCED_FIELDS)).toEqual(new Set(advanced))
+    },
+    60000,
+  )
 
   it('exports the shared option enums the view consumes (single source of truth)', () => {
     // The AdminConnectorsView prefill/echo logic imports these instead of

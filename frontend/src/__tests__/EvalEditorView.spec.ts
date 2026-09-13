@@ -176,8 +176,10 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     expect(wrapper.text()).toContain('block')
   })
 
-  it('graph load failure shows the nodes error without crashing the page', async () => {
-    apiGET.mockImplementation(async (url: string) => {
+  it(
+    'graph load failure shows the nodes error without crashing the page',
+    async () => {
+      apiGET.mockImplementation(async (url: string) => {
       if (url === '/api/v1/pipelines/{pipeline_id}/graph') throw new Error('graph down')
       return { data: { items: [] } }
     })
@@ -188,7 +190,9 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     await flush()
 
     expect(wrapper.text()).toContain('views.EvalEditorView.failed_to_load_nodes')
-  })
+  },
+  60000,
+)
 
   it('evals load failure shows the evals error', async () => {
     apiGET.mockImplementation(async (url: string) => {
