@@ -388,6 +388,22 @@ async def test_apply_sandbox_policy_scoped_without_allowed_hosts_is_single_host(
     assert "MODULO_GIT_CRED" not in sandbox.commands.runs[0]
 
 
+@pytest.mark.asyncio
+async def test_apply_sandbox_policy_multi_host_invalid_host_raises() -> None:
+    """FAR-798 (review finding #3): a host containing shell-case metacharacters
+    must fail-closed (raise) rather than emit an injectable helper."""
+    sandbox = _FakeSandbox()
+    with pytest.raises(ValueError, match="invalid git-credential host"):
+        await apply_sandbox_policy(
+            sandbox,
+            read_only=False,
+            git_credentials="scoped",
+            egress_policy="default",
+            egress_allowlist=None,
+            allowed_hosts={"bad|host": "MODULO_GIT_CRED_0"},
+        )
+
+
 # ---------------------------------------------------------------------------
 # PipelineGraphNode field validation helpers
 # ---------------------------------------------------------------------------

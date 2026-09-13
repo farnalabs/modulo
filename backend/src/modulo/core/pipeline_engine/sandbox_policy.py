@@ -48,11 +48,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST as _GIT_ALLOWED_HOST
 
 _log = logging.getLogger(__name__)
+
+# FAR-798 (PR #430 review finding #3): host names are interpolated raw into a
+# shell ``case`` pattern position, so shell metacharacters (``| * ? [ ]``) could
+# corrupt the generated case statement / inject. Reject anything that is not a
+# strict hostname label, and reject env-var names that are not valid POSIX
+# identifiers, BEFORE the script is built — fail-closed (ValueError) rather than
+# emitting a malformed or injectable helper.
+_HOSTNAME_RE = re.compile(r"[A-Za-z0-9.\-]+")
+_ENV_VAR_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # The E2B sandbox runs the agent as the DEFAULT NON-ROOT user (node_runner
 # starts the agent command without a ``user`` override — see
@@ -181,6 +191,12 @@ def _multi_host_credential_helper_script(hosts: dict[str, str]) -> str:
     """
     cases = []
     for host, env_var in hosts.items():
+        if not isinstance(host, str) or not _HOSTNAME_RE.fullmatch(host):
+            raise ValueError(f"invalid git-credential host {host!r}: must be a hostname containing only [A-Za-z0-9.-]")
+        if not isinstance(env_var, str) or not _ENV_VAR_RE.fullmatch(env_var):
+            raise ValueError(
+                f"invalid git-credential env var {env_var!r} for host {host!r}: must be a valid POSIX identifier"
+            )
         cases.append(
             f'  "{host}")\n'
             f'    if [ -n "${{{env_var}}}" ]; then\n'
