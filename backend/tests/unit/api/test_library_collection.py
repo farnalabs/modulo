@@ -1089,8 +1089,8 @@ class TestInstallCollectionService:
             "pipeline_id": None,
             "warnings": [],
         }
-        assert install.connector_checklist == []
-        assert install.installed_entities == []
+        assert not install.connector_checklist
+        assert not install.installed_entities
 
 
 class TestUninstallCollectionService:
