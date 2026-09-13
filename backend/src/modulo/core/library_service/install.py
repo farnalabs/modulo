@@ -283,6 +283,21 @@ async def install_collection(
         raise CollectionInstallError(f"Collection '{collection.name}' is already installed in this organisation")
     install_id = uuid.uuid4()
 
+    # Create the provenance row up front and flush it so the
+    # ``collection_install_id`` FK (migration 0223) is satisfied when
+    # ``_stamp_install_id`` autoflushes the agent/pipeline UPDATEs below. The
+    # transaction rolls back the whole install on any later failure.
+    install = CollectionInstall(
+        install_id=install_id,
+        collection_id=collection_id,
+        collection_version=collection.version,
+        organisation_id=org_id,
+        status="installed",
+        community_sourced=collection.source in ("community", "registry"),
+    )
+    session.add(install)
+    await session.flush()
+
     # 5. Call materialize_import (all-or-nothing transaction)
     warnings: list[str] = []
     try:
@@ -314,26 +329,17 @@ async def install_collection(
     # Community-sourced or registry-sourced collections restrict agent tool/
     # connector access until an operator explicitly grants access.
     community_sourced = collection.source in ("community", "registry")
+    install.community_sourced = community_sourced
 
-    # 10. Create the CollectionInstall provenance record
-    session.add(
-        CollectionInstall(
-            install_id=install_id,
-            collection_id=collection_id,
-            collection_version=collection.version,
-            organisation_id=org_id,
-            status="installed",
-            community_sourced=community_sourced,
-            resolved_manifest={
-                "schemas": result.get("schemas", {}),
-                "agents": result.get("agents", {}),
-                "pipeline_id": result.get("pipeline_id"),
-                "warnings": warnings,
-            },
-            connector_checklist=connector_checklist,
-            installed_entities=entities,
-        )
-    )
+    # 10. Populate the provenance record (row already created + flushed above).
+    install.resolved_manifest = {
+        "schemas": result.get("schemas", {}),
+        "agents": result.get("agents", {}),
+        "pipeline_id": result.get("pipeline_id"),
+        "warnings": warnings,
+    }
+    install.connector_checklist = connector_checklist
+    install.installed_entities = entities
 
     await session.flush()
 
