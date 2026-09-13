@@ -137,10 +137,10 @@ def create_schema_simple(name: str, client, request):
 
 @when(parsers.parse('I POST /api/schemas with name "{name}" and invalid JSON Schema'))
 def create_invalid_schema(name: str, client, request):
-    # The current create endpoint does not accept a JSON definition in the body;
-    # an unknown "schema" field is ignored and no JSON-Schema validation runs.
-    # The rejection path lives in version creation (definition_json is a
-    # required dict). Keep the step aligned with the current contract.
+    # The create endpoint accepts an optional initial definition_json and
+    # rejects a structurally-invalid JSON Schema with 422 before any write
+    # (closed product-map gap "invalid JSON Schema rejected at create").
+    invalid_definition = {"type": 123, "properties": []}
     with (
         patch(
             "modulo.api.routes.schemas.create_schema",
@@ -148,7 +148,10 @@ def create_invalid_schema(name: str, client, request):
         ),
         patch("modulo.api.routes.schemas.set_rls_org"),
     ):
-        resp = client.post("/api/v1/schemas", json={"name": name})
+        resp = client.post(
+            "/api/v1/schemas",
+            json={"name": name, "definition_json": invalid_definition},
+        )
     request.node._resp = resp
 
 

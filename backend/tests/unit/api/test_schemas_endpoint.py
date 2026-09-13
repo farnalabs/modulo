@@ -925,6 +925,52 @@ def test_create_schema_auto_creates_latest_placeholder_version(client: TestClien
     assert placeholder_versions[0].schema_id == schema.id
 
 
+def test_create_schema_rejects_invalid_initial_definition(client: TestClient) -> None:
+    """A structurally-invalid JSON Schema supplied as the initial definition is
+    rejected with 422 before any write (closed feat-schemas gap)."""
+    with (
+        patch("modulo.api.routes.schemas.create_schema") as mock_create,
+        patch("modulo.api.routes.schemas.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas",
+            json={"name": "Invalid Schema", "definition_json": {"type": 123, "properties": []}},
+        )
+    assert resp.status_code == 422
+    assert "Invalid JSON Schema" in resp.json()["detail"]
+    mock_create.assert_not_awaited()
+
+
+def test_create_schema_with_valid_initial_definition_seeds_latest_version(client: TestClient) -> None:
+    """Providing a valid definition_json at create seeds the 'latest' placeholder
+    version with it so agents have something to pin before an explicit version."""
+    schema = _make_schema()
+    initial = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+    async def _fake_create_schema(session, *, org_id, name, account_id, description=None, abstract_name=None):
+        return schema
+
+    placeholder_versions: list[MagicMock] = []
+
+    def _fake_schema_version_model(**kwargs: object) -> MagicMock:
+        placeholder = MagicMock()
+        placeholder.definition_json = kwargs.get("definition_json")
+        placeholder.version = kwargs.get("version")
+        placeholder_versions.append(placeholder)
+        return placeholder
+
+    with (
+        patch("modulo.api.routes.schemas.create_schema", side_effect=_fake_create_schema),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.SchemaVersionModel", side_effect=_fake_schema_version_model),
+    ):
+        resp = client.post("/api/v1/schemas", json={"name": "Initialized Schema", "definition_json": initial})
+    assert resp.status_code == 201
+    assert len(placeholder_versions) == 1
+    assert placeholder_versions[0].version == "latest"
+    assert placeholder_versions[0].definition_json == initial
+
+
 def test_schema_version_creation_is_explicit_endpoint(client: TestClient) -> None:
     """A new schema version is only created through the explicit POST /versions action."""
     schema = _make_schema()
