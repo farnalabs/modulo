@@ -587,7 +587,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         so a hung Docker daemon cannot stall teardown forever; on timeout the
         workspace reference is force-dropped and teardown continues.
         """
-        for provider_ref in self._workspaces:
+        for provider_ref in tuple(self._workspaces):
             try:
                 await asyncio.wait_for(
                     self.destroy_workspace(provider_ref),
