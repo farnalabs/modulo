@@ -734,17 +734,26 @@ class FeatureFlagRegistry:
             load_row = load_row_factory()
             engine = get_or_create_engine(get_settings())
             async with AsyncSession(engine, autobegin=False) as session:
-                # The session is freshly constructed with ``autobegin=False``,
-                # so it is never in a transaction here — open one explicitly.
-                # The settings column MUST be read inside the open transaction:
-                # after ``begin()`` commits, ORM attributes are expired and
-                # reading them triggers a refresh that requires a new
+                # When the caller already owns an active transaction (the common
+                # request path where DI provides the session), run the read inside
+                # it — a nested ``session.begin()`` would raise. Otherwise open an
+                # explicit transaction: the settings column MUST be read inside the
+                # open transaction, because after ``begin()`` commits ORM attributes
+                # are expired and reading them triggers a refresh requiring a new
                 # transaction, which raises ``InvalidRequestError`` on an
-                # ``autobegin=False`` session (FAR-820) — silently nullifying
-                # every org/team/user override.
-                async with session.begin():
+                # ``autobegin=False`` session (FAR-820) — silently nullifying every
+                # org/team/user override.
+                in_transaction = session.in_transaction()
+                if asyncio.iscoroutine(in_transaction):
+                    # Test doubles may expose an async ``in_transaction``; await it.
+                    in_transaction = await in_transaction
+                if in_transaction:
                     entity = await load_row(session)
                     settings = getattr(entity, settings_attr, None) if entity is not None else None
+                else:
+                    async with session.begin():
+                        entity = await load_row(session)
+                        settings = getattr(entity, settings_attr, None) if entity is not None else None
                 if entity and settings:
                     overrides = settings.get("feature_overrides", {})
                     if flag_name in overrides:
