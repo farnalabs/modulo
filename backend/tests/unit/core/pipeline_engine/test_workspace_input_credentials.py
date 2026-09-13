@@ -11,8 +11,12 @@ Covers:
 
 from __future__ import annotations
 
+import os
 import shlex
+import subprocess
+import tempfile
 import uuid
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -300,6 +304,21 @@ class TestAssertReadOnly:
         with pytest.raises(CredentialResolutionError, match="http_client is required"):
             await assert_clone_credential_is_read_only(cred, http_client=None)
 
+    @pytest.mark.asyncio
+    async def test_github_empty_scopes_refused(self) -> None:
+        # GitHub fine-grained PATs return an EMPTY X-OAuth-Scopes header, which
+        # is indistinguishable from "read-only".  We fail closed rather than
+        # let a write-capable fine-grained PAT pass the probe.
+        cred = _make_cred(host="github.com")
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"x-oauth-scopes": ""}
+        mock_client.get.return_value = mock_response
+
+        with pytest.raises(CredentialResolutionError, match="no X-OAuth-Scopes"):
+            await assert_clone_credential_is_read_only(cred, http_client=mock_client)
+
 
 # ---------------------------------------------------------------------------
 # build_provisioning_credential_scripts
@@ -348,13 +367,15 @@ class TestBuildProvisioningScripts:
 
     def test_teardown_removes_files(self) -> None:
         _, teardown = build_provisioning_credential_scripts(cred=_make_cred(), host="github.com")
-        assert 'rm -f "$_modulo_cred_file"' in teardown
-        assert 'rm -f "$_modulo_askpass"' in teardown
+        # Teardown recovers the ephemeral paths from the state file and
+        # removes each (the original code referenced vanished shell vars).
+        assert "_modulo_state_file" in teardown
+        assert "while IFS= read -r _modulo_path" in teardown
+        assert 'rm -f "$_modulo_path"' in teardown
 
     def test_teardown_asserts_absence(self) -> None:
         _, teardown = build_provisioning_credential_scripts(cred=_make_cred(), host="github.com")
-        assert 'test ! -e "$_modulo_cred_file"' in teardown
-        assert 'test ! -e "$_modulo_askpass"' in teardown
+        assert 'test ! -e "$_modulo_path"' in teardown
 
     def test_scripts_are_set_e(self) -> None:
         cred = _make_cred()
@@ -362,20 +383,27 @@ class TestBuildProvisioningScripts:
         assert "set -e" in setup
         assert "set -e" in teardown
 
-    def test_adversarial_host_is_shlex_quoted(self) -> None:
+    def test_adversarial_host_is_not_injected(self) -> None:
+        # The host is no longer interpolated into the generated script (the
+        # askpass-only flow is host-agnostic), so an adversarial host must
+        # never appear in a form that could inject shell commands.
         adversarial_host = "github.com; rm -rf /"
         cred = _make_cred()
         setup, _ = build_provisioning_credential_scripts(cred=cred, host=adversarial_host)
-        quoted = shlex.quote(adversarial_host)
-        # The shlex-quoted version should appear in the script.
+        assert adversarial_host not in setup
+
+    def test_adversarial_username_is_shlex_quoted(self) -> None:
+        # The only user-controlled value still interpolated into the script
+        # is the git username; it must be shlex-quoted so it cannot inject.
+        adversarial_username = "x-access-token; rm -rf /"
+        cred = _make_cred(username=adversarial_username)
+        setup, _ = build_provisioning_credential_scripts(cred=cred, host="github.com")
+        quoted = shlex.quote(adversarial_username)
         assert quoted in setup
-        # Verify the echo line uses single-quoted host (shlex.quote wraps
-        # in single quotes) so the semicolons are literal, not interpreted.
-        echo_lines = [ln for ln in setup.splitlines() if "echo" in ln and "host=" in ln]
-        assert len(echo_lines) > 0
-        for line in echo_lines:
-            # The quoted form protects the semicolons — verify it's there.
-            assert quoted in line
+        # The raw (unquoted) form must never appear outside the quotes — if it
+        # did, the semicolons would be interpreted as separate commands.
+        stripped = setup.replace(quoted, "")
+        assert adversarial_username not in stripped
 
     def test_username_in_setup(self) -> None:
         cred = _make_cred(username="x-access-token")
@@ -395,3 +423,96 @@ class TestBuildProvisioningScripts:
     def test_teardown_has_shebang(self) -> None:
         _, teardown = build_provisioning_credential_scripts(cred=_make_cred(), host="github.com")
         assert teardown.startswith("#!/bin/sh\n")
+
+    def _write_tmp_script(self, text: str) -> Path:
+        path = Path(tempfile.gettempdir()) / f"modulo-cred-test-{uuid.uuid4().hex}.sh"
+        path.write_text(text)
+        path.chmod(0o700)
+        return path
+
+    def test_scripts_are_valid_posix(self) -> None:
+        """The generated scripts must parse as POSIX sh (catches the original
+        unterminated-quote / broken-pipe regressions)."""
+        cred = _make_cred()
+        setup, teardown = build_provisioning_credential_scripts(cred=cred, host="github.com")
+        setup_path = self._write_tmp_script(setup)
+        teardown_path = self._write_tmp_script(teardown)
+        try:
+            assert (
+                subprocess.run(["sh", "-n", str(setup_path)], capture_output=True, check=False).returncode == 0  # noqa: S603,S607
+            )
+            assert (
+                subprocess.run(["sh", "-n", str(teardown_path)], capture_output=True, check=False).returncode == 0  # noqa: S603,S607
+            )
+        finally:
+            setup_path.unlink(missing_ok=True)
+            teardown_path.unlink(missing_ok=True)
+
+    def test_setup_executes_and_askpass_returns_secret(self) -> None:
+        """End-to-end: run the setup script, confirm the askpass helper yields
+        the username and password (via the exported credential-file path), then
+        run teardown and confirm the ephemeral files are gone.
+        """
+        secret = _ADVERSARIAL_SECRET
+        cred = _make_cred(secret=secret)
+        setup, teardown = build_provisioning_credential_scripts(cred=cred, host="github.com")
+        setup_path = self._write_tmp_script(setup)
+        teardown_path = self._write_tmp_script(teardown)
+        env = dict(os.environ)
+        env["HOME"] = tempfile.mkdtemp(prefix="modulo-home-")
+        try:
+            run = subprocess.run(  # noqa: S603
+                ["sh", str(setup_path)],  # noqa: S607
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            assert run.returncode == 0, run.stderr
+
+            # Locate the recorded state file to find the askpass + cred paths.
+            state_files = [p for p in Path(tempfile.gettempdir()).iterdir() if p.name.startswith(".modulo-cred-state-")]
+            assert state_files, "setup did not record a state file"
+            cred_file, askpass_file = [ln.strip() for ln in state_files[0].read_text().splitlines() if ln.strip()]
+
+            assert Path(cred_file).exists()
+            # The quoted heredoc writes the secret followed by a single
+            # trailing newline (the delimiter is on its own line).
+            assert Path(cred_file).read_text() == secret + "\n"
+
+            # In production git invokes GIT_ASKPASS as a child of the setup
+            # shell, which exported _modulo_cred_file into its environment.
+            # Simulate that by passing the credential-file path to the helper.
+            env["_modulo_cred_file"] = cred_file
+
+            # GIT_ASKPASS helper: Username then Password.
+            username_out = subprocess.run(  # noqa: S603
+                [str(askpass_file), "Username"], capture_output=True, text=True, env=env, check=False
+            )
+            assert username_out.stdout.strip() == "x-access-token"
+            password_out = subprocess.run(  # noqa: S603
+                [str(askpass_file), "Password"], capture_output=True, text=True, env=env, check=False
+            )
+            # GIT_ASKPASS emits the credential-file contents; git strips the
+            # trailing newline, so the effective password is the bare secret.
+            assert password_out.stdout.rstrip("\n") == secret
+
+            # Teardown must remove the cred file and askpass helper.
+            tear = subprocess.run(  # noqa: S603
+                ["sh", str(teardown_path)],  # noqa: S607
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            assert tear.returncode == 0, tear.stderr
+            assert not Path(cred_file).exists()
+            assert not Path(askpass_file).exists()
+            assert not state_files[0].exists()
+        finally:
+            setup_path.unlink(missing_ok=True)
+            teardown_path.unlink(missing_ok=True)
+            # Best-effort cleanup of any leftover state files from this run.
+            for f in Path(tempfile.gettempdir()).iterdir():
+                if f.name.startswith(".modulo-cred-state-"):
+                    f.unlink(missing_ok=True)

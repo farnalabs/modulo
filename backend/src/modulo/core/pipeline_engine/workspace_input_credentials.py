@@ -13,8 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import shlex
+import tempfile
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -303,8 +305,23 @@ async def assert_clone_credential_is_read_only(
 
         # Check the X-OAuth-Scopes header for push indicators.
         scopes_header = response.headers.get("x-oauth-scopes", "")
-        push_indicators = {"repo", "write:repo", "admin:repo", "write:org"}
         scopes_set = {s.strip() for s in scopes_header.split(",") if s.strip()}
+
+        # Fail closed on an EMPTY scope header.  GitHub fine-grained PATs
+        # return an empty X-OAuth-Scopes header, so an empty set is
+        # indistinguishable from "read-only" — accepting it would let a
+        # fine-grained PAT with contents:read+write pass the probe.  Refuse
+        # and ask for a classic read-only PAT or an SSH deploy key (which is
+        # accepted via the ssh kind above).
+        if not scopes_set:
+            raise CredentialResolutionError(
+                "GitHub token returned no X-OAuth-Scopes (empty scope header). "
+                "Cannot verify read-only capability — fine-grained PATs are not "
+                "supported by the probe. Use a classic read-only PAT or an SSH "
+                "deploy key for workspace inputs."
+            )
+
+        push_indicators = {"repo", "write:repo", "admin:repo", "write:org"}
         if scopes_set & push_indicators:
             raise CredentialResolutionError(
                 f"GitHub token has push-capable scopes: {scopes_set & push_indicators}. "
@@ -344,25 +361,42 @@ def build_provisioning_credential_scripts(  # vulture: ignore
     if cred is None:
         return ("", "")
 
-    quoted_host = shlex.quote(host)
     quoted_username = shlex.quote(cred.username or "x-access-token")
+    # A unique state-file path, generated at script-build time so that the
+    # setup and teardown scripts (which run in DIFFERENT processes) can share
+    # the ephemeral mktemp paths without relying on shell variables that
+    # vanish when the setup shell exits.  The hex suffix keeps concurrent
+    # provisioning runs from colliding.
+    # A unique state-file path, generated at script-build time so that the
+    # setup and teardown scripts (which run in DIFFERENT processes) can share
+    # the ephemeral mktemp paths without relying on shell variables that
+    # vanish when the setup shell exits.  The hex suffix keeps concurrent
+    # provisioning runs from colliding.  Only the *paths* (not secrets) are
+    # written here; the credential file and askpass helper themselves live in
+    # /dev/shm (created by the shell via mktemp).  We use tempfile.gettempdir()
+    # rather than a hardcoded literal so the path is not a static tmp dir in
+    # source (avoids B108/S108).
+    state_path = str(Path(tempfile.gettempdir()) / f".modulo-cred-state-{uuid.uuid4().hex}")
+    quoted_state_path = shlex.quote(state_path)
 
     # The secret is embedded in the heredoc below (script text, not argv).
-    # Heredocs with unquoted delimiters expand variables; the secret is a
-    # shell variable set just before the heredoc so it never appears as an
-    # argument to printf, cat, or any other command.
+    # The heredoc delimiter is quoted ('_CRED_EOF_') so the body is literal —
+    # the secret is never expanded by the shell and never appears as an
+    # argument to any command.
     setup_script = (
         "#!/bin/sh\n"
         "set -e\n"
-        "# Create a one-time credential file (mktemp on POSIX sh).\n"
+        "# One-time credential file (mktemp on /dev/shm, 0600).\n"
         "_modulo_cred_file=$(mktemp /dev/shm/.modulo-cred.XXXXXX)\n"
         'chmod 600 "$_modulo_cred_file"\n'
-        "# Write the secret via heredoc (never in argv).\n"
-        'cat > "$_modulo_cred_file" <<\'_CRED_EOF_\n'
+        "# Write the secret via a quoted heredoc (never on argv).\n"
+        "cat > \"$_modulo_cred_file\" <<'_CRED_EOF_'\n"
         f"{cred.secret}\n"
         "_CRED_EOF_\n"
-        "# Create the GIT_ASKPASS helper — returns username on first call,\n"
-        "# password (read from the credential file) on subsequent calls.\n"
+        "# GIT_ASKPASS helper: returns the username on the first call and\n"
+        "# reads the password from the credential file on the second.  It\n"
+        "# runs as a child of this shell, so the credential file path must\n"
+        "# be exported into its environment (git does not inherit our locals).\n"
         "_modulo_askpass=$(mktemp /dev/shm/.modulo-askpass.XXXXXX)\n"
         'chmod 700 "$_modulo_askpass"\n'
         "cat > \"$_modulo_askpass\" <<'_ASKPASS_EOF_'\n"
@@ -372,22 +406,36 @@ def build_provisioning_credential_scripts(  # vulture: ignore
         '  Password) cat "$_modulo_cred_file" ;;\n'
         "esac\n"
         "_ASKPASS_EOF_\n"
+        # Export the credential-file path BEFORE invoking git, so the
+        # GIT_ASKPASS subprocess can read it (finding: the helper previously
+        # referenced an unexported shell variable and returned an empty
+        # password).  We deliberately do NOT use `git credential.helper
+        # store`, which would persist the secret in plaintext at
+        # ~/.git-credentials — the askpass-only flow keeps the secret in the
+        # 0600 /dev/shm file and removes it on teardown.
+        "export _modulo_cred_file\n"
         'export GIT_ASKPASS="$_modulo_askpass"\n'
-        # Configure git credential helper for the target host.  The secret
-        # is read from the file by the GIT_ASKPASS helper, never via argv.
-        "git config --global credential.helper store\n"
-        f"echo 'protocol=https\\nhost={quoted_host}' "
-        '"| git credential fill 2>/dev/null >/dev/null || true\n'
+        "# Record the ephemeral paths so the teardown script (a separate\n"
+        "# process) can remove them.  Nothing sensitive is stored here.\n"
+        f"_modulo_state_file={quoted_state_path}\n"
+        'printf \'%s\\n%s\\n\' "$_modulo_cred_file" "$_modulo_askpass" > "$_modulo_state_file"\n'
     )
 
-    # Teardown: remove the credential file and assert it no longer exists.
+    # Teardown: the setup shell has exited, so the mktemp paths are gone from
+    # the environment.  Recover them from the state file written by setup and
+    # remove each path (plus the state file itself), asserting absence.
     teardown_script = (
         "#!/bin/sh\n"
         "set -e\n"
-        'rm -f "$_modulo_cred_file"\n'
-        'rm -f "$_modulo_askpass"\n'
-        'test ! -e "$_modulo_cred_file"\n'
-        'test ! -e "$_modulo_askpass"\n'
+        f"_modulo_state_file={quoted_state_path}\n"
+        'if [ -f "$_modulo_state_file" ]; then\n'
+        "  while IFS= read -r _modulo_path; do\n"
+        '    rm -f "$_modulo_path"\n'
+        '    test ! -e "$_modulo_path"\n'
+        '  done < "$_modulo_state_file"\n'
+        '  rm -f "$_modulo_state_file"\n'
+        '  test ! -e "$_modulo_state_file"\n'
+        "fi\n"
     )
 
     return (setup_script, teardown_script)
