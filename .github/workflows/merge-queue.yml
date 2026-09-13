@@ -274,11 +274,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          echo "Cleaning up stale merge-queue/failed branches (older than 7 days)..."
+          echo "Cleaning up stale merge-queue branches (older than 7 days)..."
           CUTOFF=$(date -d '7 days ago' +%s)
-          gh api repos/farnalabs/modulo/branches --paginate --jq '.[].name' | grep '^merge-queue/failed-' | while IFS= read -r branch; do
-            # Extract timestamp from branch name: merge-queue/failed-<timestamp>
-            BRANCH_TS=$(echo "$branch" | sed 's/^merge-queue\/failed-//')
+          gh api repos/farnalabs/modulo/branches --paginate --jq '.[].name' | { grep -E '^merge-queue/(failed|active)-' || true; } | while IFS= read -r branch; do
+            # Extract timestamp from branch name: merge-queue/<failed|active>-<timestamp>
+            BRANCH_TS=$(echo "$branch" | sed -E 's/^merge-queue\/(failed|active)-//')
             if [ "$BRANCH_TS" -lt "$CUTOFF" ] 2>/dev/null; then
               echo "  Deleting stale branch: $branch"
               git push origin --delete "refs/heads/$branch" 2>/dev/null || true

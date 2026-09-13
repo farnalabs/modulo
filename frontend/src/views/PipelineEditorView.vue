@@ -787,7 +787,6 @@
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>
               <dd class="mt-1">
                 <SandboxCommandsEditor
-                  v-model:scalar-command="selectedNodeData.agent_command"
                   v-model:commands="selectedNodeData.agent_commands"
                   v-model:joiner="selectedNodeData.commands_concatenation_string"
                 />
@@ -832,17 +831,11 @@
             </div>
           </template>
           <!-- Non-sandbox nodes: commands are read-only. The authoring editor is
-               sandbox-only — a scalar typed on an agent node would flow into the
-               graph save and FAR-488a would then overwrite the bound Agent's row
-               command. What the graph already carries is displayed, never edited. -->
+               sandbox-only — what the graph already carries is displayed, never edited. -->
           <div
-            v-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_command"
+            v-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_commands && selectedNodeData.agent_commands.length > 0"
             data-testid="pipeline-editor-node-commands-readonly"
           >
-            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.command') }}</dt>
-            <dd class="font-mono text-xs break-all">{{ selectedNodeData.agent_command }}</dd>
-          </div>
-          <template v-else-if="selectedNodeData.node_type !== 'sandbox_agent' && selectedNodeData.agent_commands && selectedNodeData.agent_commands.length > 0">
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.commands') }}</dt>
             <dd>
               <ul class="list-inside list-decimal text-xs font-mono text-muted-foreground">
@@ -852,7 +845,7 @@
                 {{ $t('views.PipelineEditorView.commands_concatenated_with') }} <code class="font-mono">{{ selectedNodeData.commands_concatenation_string }}</code>
               </div>
             </dd>
-          </template>
+          </div>
           <!-- Lifecycle maps -->
           <div v-if="linkedLifecycleMaps.length > 0">
             <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.lifecycle_maps') }}</dt>
@@ -2526,15 +2519,12 @@ onBeforeUnmount(() => {
 
 // Sandbox command authoring → graph-save payload. The graph save REPLACES
 // graph_nodes_json wholesale, so every command field must be serialised here
-// or it is wiped. Mirrors the backend contract (routes/pipelines.py +
-// sandbox_mode): agent_command XOR agent_commands on sandbox_agent nodes
-// (the save clears the scalar when a non-empty list is present; empty list ==
-// no commands), and the joiner is persisted as a non-empty string — a null
-// joiner would crash the runtime join (None.join), so an unset joiner saves
-// the " && " default. Non-sandbox nodes never gain command mutations here:
-// the commands editor is sandbox-gated and the spread round-trips whatever
-// the graph already carried (FAR-488a syncs a bound Agent's row from a
-// node-level command — the editor must not fabricate one).
+// or it is wiped. Commands are always an array (FAR-827): a single command is
+// a one-item list. Empty list == no commands. The joiner is persisted as a
+// non-empty string — a null joiner would crash the runtime join (None.join),
+// so an unset joiner saves the " && " default. Non-sandbox nodes never gain
+// command mutations here: the spread round-trips whatever the graph already
+// carried.
 function nodeCommandFields(n: any): {
   agent_command?: string | null
   agent_commands?: string[] | null
@@ -2543,12 +2533,11 @@ function nodeCommandFields(n: any): {
   if (n.node_type !== 'sandbox_agent') {
     return {}
   }
-  const scalar = typeof n.agent_command === 'string' && n.agent_command.trim() !== '' ? n.agent_command : null
   const rows = (Array.isArray(n.agent_commands) ? n.agent_commands : [])
     .map((c: unknown) => (typeof c === 'string' ? c : String(c ?? '')))
     .filter((c: string) => c.trim() !== '')
   if (rows.length === 0) {
-    return { agent_command: scalar, agent_commands: null, commands_concatenation_string: null }
+    return { agent_command: null, agent_commands: null, commands_concatenation_string: null }
   }
   const joiner = typeof n.commands_concatenation_string === 'string' && n.commands_concatenation_string.length > 0
     ? n.commands_concatenation_string

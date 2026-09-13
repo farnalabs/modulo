@@ -333,7 +333,7 @@ async def _seed_resolution_scene(
     stmts: list[tuple[Any, dict[str, Any]]] = [
         (
             _INSERT_AGENT_SQL,
-            {"id": str(agent_id), "oid": str(org_id), "n": "ResolveAgent", "uid": str(user_id)},
+            {"id": str(agent_id), "oid": str(org_id), "n": f"ResolveAgent-{agent_id.hex[:8]}", "uid": str(user_id)},
         ),
         (
             _INSERT_MODEL_BACKEND_SQL,

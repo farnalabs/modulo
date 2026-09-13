@@ -1866,7 +1866,11 @@ async def _stream_event_generator(
     """SSE event generator — agentic loop with multi-turn LLM + UI commands."""
     msg_id: str | None = None
     try:
-        async with AsyncSession(session.bind, autobegin=False) as db_session:
+        # expire_on_commit=False matches the DI session factory: this is an
+        # autobegin=False session, so a post-commit attribute read that
+        # triggers a refresh would raise InvalidRequestError (the defect class
+        # behind FAR-808/FAR-820) and be swallowed as a silent stream failure.
+        async with AsyncSession(session.bind, expire_on_commit=False, autobegin=False) as db_session:
             ctx = _StreamContext(db_session, principal, session_id, req, settings, chat_session)
 
             # 1-7. Resolve API key → build backend → system prompt →

@@ -758,4 +758,32 @@ describe('PipelineListView', () => {
     // The move error banner is not shown on success.
     expect(wrapper.find('[data-testid="pipeline-list-move-error"]').exists()).toBe(false)
   })
+
+  it('opens the pipeline editor via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Keyboard Pipeline', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // Prevent real navigation so the row (and its handlers) stay mounted for
+    // both key dispatches.
+    const pushSpy = vi.spyOn(router, 'push').mockImplementation(() => Promise.resolve() as never)
+    const row = wrapper.find('[data-testid="pipeline-tree-row-p1"]')
+    expect(row.exists()).toBe(true)
+
+    await row.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor', params: { id: 'p1' } }))
+
+    pushSpy.mockClear()
+    await row.trigger('keydown', { key: ' ', code: 'Space' })
+    await nextTick()
+    expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'pipeline-editor', params: { id: 'p1' } }))
+    pushSpy.mockRestore()
+  })
 })

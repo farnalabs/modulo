@@ -3,7 +3,7 @@
 The dispatcher_reconcile system cron runs in the SYSTEM WORKER process; the
 /healthz/ready check runs in the WEB process. The check must read the shared
 Redis key the cron persists every tick (the cron_helpers in-process dict is
-worker-local and invisible to the health check) — these tests lock that in.
+worker-local and invisible to the health check) â€” these tests lock that in.
 """
 
 from __future__ import annotations
@@ -15,7 +15,12 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.api.routes.health import _check_dispatcher_reconcile, _check_slot_reconciliation, _check_stale_run_recovery
+from modulo.api.routes.health import (
+    _check_dispatcher_reconcile,
+    _check_runner_health_probe,
+    _check_slot_reconciliation,
+    _check_stale_run_recovery,
+)
 from modulo.core import cron_helpers as ch
 from modulo.settings import Settings
 
@@ -68,7 +73,7 @@ class TestCheckDispatcherReconcile:
     @pytest.mark.asyncio
     async def test_never_run_unavailable(self) -> None:
         """FAR-199: a reconcile that has never run (Redis reachable, key
-        missing) is unavailable — the system-worker cron is dead or its stats
+        missing) is unavailable â€” the system-worker cron is dead or its stats
         persistence failed, so readiness must gate rather than cut over."""
         fake = _FakeStatsRedis(blob=None)
         with (
@@ -77,6 +82,7 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "unavailable"
+        assert result.detail is not None
         assert "has never run" in result.detail
 
     @pytest.mark.asyncio
@@ -88,12 +94,13 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
+        assert result.detail is not None
         assert "scanned=3" in result.detail
 
     @pytest.mark.asyncio
     async def test_stale_run_degraded(self) -> None:
         """One-missed-tick staleness (120s, below the 300s unavailable tier) is
-        degraded, not unavailable — short staleness stays advisory (FAR-199)."""
+        degraded, not unavailable â€” short staleness stays advisory (FAR-199)."""
         stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat())
         fake = _FakeStatsRedis(blob=stale.encode())
         with (
@@ -102,7 +109,9 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "stale" in result.detail
+        assert result.detail is not None
         assert "last_run_at=" in result.detail
 
     @pytest.mark.asyncio
@@ -122,9 +131,13 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "unavailable"
+        assert result.detail is not None
         assert "stale" in result.detail
+        assert result.detail is not None
         assert "last_run_at=" in result.detail
+        assert result.detail is not None
         assert "scanned=7" in result.detail
+        assert result.detail is not None
         assert "repaired=3" in result.detail
 
     @pytest.mark.asyncio
@@ -136,6 +149,7 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "unparsable" in result.detail
 
     @pytest.mark.asyncio
@@ -147,21 +161,23 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
+        assert result.detail is not None
         assert "unavailable" in result.detail
 
     @pytest.mark.asyncio
     async def test_cron_written_stats_reported_ok(self) -> None:
         """End-to-end fix exercise: the system worker persists its outcome via
         write_dispatcher_reconcile_stats, then the health check reads the SAME
-        key and reports ok — not 'has never run'."""
+        key and reports ok â€” not 'has never run'."""
         fake = _FakeStatsRedis(blob=None)
         with (
             patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
             patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
-            await ch.write_dispatcher_reconcile_stats(fake, {"scanned": 2, "repaired": 0, "skipped": 2})
+            await ch.write_dispatcher_reconcile_stats(fake, {"scanned": 2, "repaired": 0, "skipped": 2})  # type: ignore[arg-type]
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
+        assert result.detail is not None
         assert "scanned=2" in result.detail
 
     @pytest.mark.asyncio
@@ -184,16 +200,21 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
+        assert result.detail is not None
         assert "claim_cap_terminalized=1" in result.detail
+        assert result.detail is not None
         assert "nodeless_failed=2" in result.detail
+        assert result.detail is not None
         assert "enqueue_failed_redispatched=3" in result.detail
+        assert result.detail is not None
         assert "age_terminalized=4" in result.detail
+        assert result.detail is not None
         assert "claimed_but_never_dispatched=5" in result.detail
 
     @pytest.mark.asyncio
     async def test_fresh_timeout_status_degraded(self) -> None:
         """FAR-746: a fresh stats blob with status='timeout' (inner deadline
-        fired) must return 'degraded' (non-gating) — a partially-working
+        fired) must return 'degraded' (non-gating) â€” a partially-working
         background sweep degrades the health report, not prod routing."""
         fake = _FakeStatsRedis(blob=_fresh_payload(status="timeout", last_error="TimeoutError: ...").encode())
         with (
@@ -202,6 +223,7 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "status=timeout" in result.detail
 
     @pytest.mark.asyncio
@@ -215,11 +237,12 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "status=failed" in result.detail
 
     @pytest.mark.asyncio
     async def test_stale_timeout_still_unavailable(self) -> None:
-        """FAR-746: staleness >300s wins even when status='timeout' — the
+        """FAR-746: staleness >300s wins even when status='timeout' â€” the
         system worker's cron is dead, not just partially failing."""
         stale = _fresh_payload(
             last_run_at=(datetime.now(UTC) - timedelta(minutes=6)).isoformat(),
@@ -233,12 +256,13 @@ class TestCheckDispatcherReconcile:
         ):
             result = await _check_dispatcher_reconcile()
         assert result.status == "unavailable"
+        assert result.detail is not None
         assert "stale" in result.detail
 
     @pytest.mark.asyncio
     async def test_fresh_ok_status_ok(self) -> None:
         """FAR-746: a fresh stats blob with status='ok' (or absent, default)
-        returns 'ok' — the normal path."""
+        returns 'ok' â€” the normal path."""
         fake = _FakeStatsRedis(blob=_fresh_payload().encode())
         with (
             patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
@@ -279,8 +303,95 @@ def _srr_payload(**overrides: Any) -> str:
     return json.dumps(payload)
 
 
+def _rhp_payload(**overrides: Any) -> str:
+    payload: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "orgs_probed": 1,
+        "orgs_failed": 0,
+        "transitions": 0,
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+class TestSweepStatsAdvisoryError:
+    """FAR-824: a stats payload that carries a non-null ``error`` must degrade
+    the advisory â€” a cron that runs but FAILS must not read like a healthy
+    one (FAR-808: runner_health_probe reported ok for hours while its stats
+    carried ``error: probe_failed, orgs_probed: 0``)."""
+
+    @pytest.mark.asyncio
+    async def test_fresh_payload_with_error_reported_ok_before_fix(self) -> None:
+        """The bug: a FRESH last_run_at masks the payload error â€” this is the
+        exact regime the FAR-808 incident hit (fresh last_run_at, error set)."""
+        fake = _FakeStatsRedis(blob=_rhp_payload(error="probe_failed", orgs_probed=0).encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_runner_health_probe()
+        assert result.status != "ok"
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "probe_failed" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_error_payload_degrades_via_sweep_wrapper(self) -> None:
+        """The general fix applies through the shared reader to every system
+        cron reported on this path (here via the stale_run_recovery wrapper)."""
+        fake = _FakeStatsRedis(blob=_srr_payload(error="sweep_exploded").encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_stale_run_recovery()
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "sweep_exploded" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_clean_fresh_payload_still_ok(self) -> None:
+        fake = _FakeStatsRedis(blob=_rhp_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_runner_health_probe()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "orgs_probed=1" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_stale_payload_still_non_ok(self) -> None:
+        stale_at = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+        fake = _FakeStatsRedis(blob=_rhp_payload(last_run_at=stale_at).encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_runner_health_probe()
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "stale" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_error_wins_even_when_stale(self) -> None:
+        """A payload with an error AND a stale last_run_at still degrades and
+        surfaces the error text, not just the staleness."""
+        stale_at = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+        fake = _FakeStatsRedis(blob=_rhp_payload(last_run_at=stale_at, error="probe_failed", orgs_probed=0).encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_runner_health_probe()
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "probe_failed" in result.detail
+
+
 class TestCheckStaleRunRecovery:
-    """D1 advisory check — the stale-run sweep (every 5 min) persists its
+    """D1 advisory check â€” the stale-run sweep (every 5 min) persists its
     outcome to a shared Redis key; a missing or >15min-stale key warns without
     gating readiness."""
 
@@ -293,6 +404,7 @@ class TestCheckStaleRunRecovery:
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "has never run" in result.detail
 
     @pytest.mark.asyncio
@@ -304,6 +416,7 @@ class TestCheckStaleRunRecovery:
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "ok"
+        assert result.detail is not None
         assert "recovered=2" in result.detail
 
     @pytest.mark.asyncio
@@ -316,6 +429,7 @@ class TestCheckStaleRunRecovery:
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "stale" in result.detail
 
     @pytest.mark.asyncio
@@ -327,6 +441,7 @@ class TestCheckStaleRunRecovery:
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "unparsable" in result.detail
 
     @pytest.mark.asyncio
@@ -338,6 +453,7 @@ class TestCheckStaleRunRecovery:
         ):
             result = await _check_stale_run_recovery()
         assert result.status == "ok"
+        assert result.detail is not None
         assert "unavailable" in result.detail
 
 
@@ -352,7 +468,7 @@ def _sr_payload(**overrides: Any) -> str:
 
 
 class TestCheckSlotReconciliation:
-    """FAR-604 F6 advisory check — the slot-reconciliation sweep (every 5
+    """FAR-604 F6 advisory check â€” the slot-reconciliation sweep (every 5
     min) persists its outcome to a shared Redis key; a missing or
     >15min-stale key means a silently dead sweep that would re-open the
     FAR-604 admission wedge invisibly, so it warns without gating readiness."""
@@ -366,6 +482,7 @@ class TestCheckSlotReconciliation:
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "has never run" in result.detail
 
     @pytest.mark.asyncio
@@ -377,6 +494,7 @@ class TestCheckSlotReconciliation:
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "ok"
+        assert result.detail is not None
         assert "released=2" in result.detail
 
     @pytest.mark.asyncio
@@ -389,6 +507,7 @@ class TestCheckSlotReconciliation:
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "stale" in result.detail
 
     @pytest.mark.asyncio
@@ -400,6 +519,7 @@ class TestCheckSlotReconciliation:
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "degraded"
+        assert result.detail is not None
         assert "unparsable" in result.detail
 
     @pytest.mark.asyncio
@@ -411,4 +531,5 @@ class TestCheckSlotReconciliation:
         ):
             result = await _check_slot_reconciliation()
         assert result.status == "ok"
+        assert result.detail is not None
         assert "unavailable" in result.detail

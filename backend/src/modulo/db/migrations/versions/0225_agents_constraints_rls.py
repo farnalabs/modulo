@@ -1,12 +1,10 @@
-"""Add UNIQUE, CHECK constraints, FORCE RLS, and tenant trigger on agents.
+"""Add CHECK constraints, FORCE RLS, and tenant trigger on agents.
 
 Revision ID: 0225_agents_constraints_rls
 Revises: 0224_agents_add_indexes
 Create Date: 2026-09-13
 
 Constraints added:
-  - ``uq_agents_organisation_name`` — agent names must be unique within
-    an organisation.
   - ``ck_agents_token_budget`` — token_budget must be NULL or positive.
   - ``ck_agents_max_input_length`` — max_input_length must be NULL or
     positive.
@@ -28,11 +26,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_unique_constraint(
-        "uq_agents_organisation_name",
-        "agents",
-        ["organisation_id", "name"],
-    )
     op.create_check_constraint(
         "ck_agents_token_budget",
         "agents",
@@ -58,4 +51,3 @@ def downgrade() -> None:
     op.execute("ALTER TABLE public.agents NO FORCE ROW LEVEL SECURITY;")
     op.drop_constraint("ck_agents_max_input_length", "agents", type_="check")
     op.drop_constraint("ck_agents_token_budget", "agents", type_="check")
-    op.drop_constraint("uq_agents_organisation_name", "agents", type_="unique")

@@ -203,7 +203,7 @@ class BrokerRegistry:
         now = time.monotonic()
         stale = [
             run_id
-            for run_id, broker in list(self._brokers.items())
+            for run_id, broker in self._brokers.items()
             if not broker.is_closed and now - broker._created_at > max_age_seconds
         ]
         for run_id in stale:

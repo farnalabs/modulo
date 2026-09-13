@@ -675,3 +675,699 @@ def test_parameter_set_references_missing_table_returns_501(client: TestClient) 
     with patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=err):
         resp = client.get(f"/api/v1/parameter-sets/{uuid.uuid4()}/references")
     assert resp.status_code == 501
+
+
+# ---------------------------------------------------------------------------
+# Additional error-branch coverage
+# ---------------------------------------------------------------------------
+
+
+def test_list_schemas_integrity_error_returns_409(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.set_rls_org",
+        new_callable=AsyncMock,
+        side_effect=IntegrityError("INSERT", {}, Exception("unique")),
+    ):
+        resp = client.get("/api/v1/parameter-schemas")
+    assert resp.status_code == 409
+
+
+def test_create_schema_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.create_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.post("/api/v1/parameter-schemas", json={"name": "X"})
+    assert resp.status_code == 501
+
+
+def test_create_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.create_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.post("/api/v1/parameter-schemas", json={"name": "X"})
+    assert resp.status_code == 503
+
+
+def test_create_schema_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.create_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.post("/api/v1/parameter-schemas", json={"name": "X"})
+    assert resp.status_code == 500
+
+
+def test_get_schema_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}")
+    assert resp.status_code == 501
+
+
+def test_get_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}")
+    assert resp.status_code == 503
+
+
+def test_get_schema_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}")
+    assert resp.status_code == 500
+
+
+def test_get_schema_wrong_org_returns_404(client: TestClient) -> None:
+    other_org = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    schema = _make_schema(organisation_id=other_org)
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{schema.id}")
+    assert resp.status_code == 404
+
+
+def test_update_schema_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.put(f"/api/v1/parameter-schemas/{uuid.uuid4()}", json={"version": 1})
+    assert resp.status_code == 501
+
+
+def test_update_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.put(f"/api/v1/parameter-schemas/{uuid.uuid4()}", json={"version": 1})
+    assert resp.status_code == 503
+
+
+def test_update_schema_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.put(f"/api/v1/parameter-schemas/{uuid.uuid4()}", json={"version": 1})
+    assert resp.status_code == 500
+
+
+def test_update_schema_integrity_error_returns_409(client: TestClient) -> None:
+    schema = _make_schema()
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch(
+            "modulo.api.routes.parameter_schemas.update_schema",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("INSERT", {}, Exception("unique")),
+        ),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.put(f"/api/v1/parameter-schemas/{schema.id}", json={"version": 2, "name": "Dup"})
+    assert resp.status_code == 409
+
+
+def test_delete_schema_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{uuid.uuid4()}")
+    assert resp.status_code == 501
+
+
+def test_delete_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{uuid.uuid4()}")
+    assert resp.status_code == 503
+
+
+def test_delete_schema_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{uuid.uuid4()}")
+    assert resp.status_code == 500
+
+
+def test_delete_schema_integrity_error_returns_409(client: TestClient) -> None:
+    schema = _make_schema()
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch(
+            "modulo.api.routes.parameter_schemas.soft_delete_schema",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("INSERT", {}, Exception("unique")),
+        ),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}")
+    assert resp.status_code == 409
+
+
+def test_restore_schema_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/restore")
+    assert resp.status_code == 501
+
+
+def test_restore_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/restore")
+    assert resp.status_code == 503
+
+
+def test_restore_schema_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/restore")
+    assert resp.status_code == 500
+
+
+def test_diff_schema_not_found_returns_404(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/diff",
+            params={"from_version": 1, "to_version": 2},
+        )
+    assert resp.status_code == 404
+
+
+def test_diff_wrong_org_returns_404(client: TestClient) -> None:
+    other_org = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    schema = _make_schema(organisation_id=other_org)
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(
+            f"/api/v1/parameter-schemas/{schema.id}/diff",
+            params={"from_version": 1, "to_version": 2},
+        )
+    assert resp.status_code == 404
+
+
+def test_diff_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.get(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/diff",
+            params={"from_version": 1, "to_version": 2},
+        )
+    assert resp.status_code == 503
+
+
+def test_diff_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.get(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/diff",
+            params={"from_version": 1, "to_version": 2},
+        )
+    assert resp.status_code == 500
+
+
+def test_references_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/references")
+    assert resp.status_code == 501
+
+
+def test_references_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/references")
+    assert resp.status_code == 503
+
+
+def test_references_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/references")
+    assert resp.status_code == 500
+
+
+def test_validate_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.post(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/validate",
+            json={"values": {}},
+        )
+    assert resp.status_code == 501
+
+
+def test_validate_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.post(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/validate",
+            json={"values": {}},
+        )
+    assert resp.status_code == 503
+
+
+def test_validate_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.post(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/validate",
+            json={"values": {}},
+        )
+    assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Set CRUD error branches
+# ---------------------------------------------------------------------------
+
+
+def test_list_sets_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets")
+    assert resp.status_code == 501
+
+
+def test_list_sets_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets")
+    assert resp.status_code == 503
+
+
+def test_list_sets_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets")
+    assert resp.status_code == 500
+
+
+def test_list_sets_integrity_error_returns_409(client: TestClient) -> None:
+    schema = _make_schema()
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch(
+            "modulo.api.routes.parameter_schemas.list_sets",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("SELECT", {}, Exception("unique")),
+        ),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{schema.id}/sets")
+    assert resp.status_code == 409
+
+
+def test_create_set_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets", json={"name": "X"})
+    assert resp.status_code == 501
+
+
+def test_create_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets", json={"name": "X"})
+    assert resp.status_code == 503
+
+
+def test_create_set_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets", json={"name": "X"})
+    assert resp.status_code == 500
+
+
+def test_get_set_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_set",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}")
+    assert resp.status_code == 501
+
+
+def test_get_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_set",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}")
+    assert resp.status_code == 503
+
+
+def test_get_set_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_set",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}")
+    assert resp.status_code == 500
+
+
+def test_get_set_not_found_returns_404(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}")
+    assert resp.status_code == 404
+
+
+def test_get_set_wrong_org_returns_404(client: TestClient) -> None:
+    schema = _make_schema()
+    other_org = uuid.UUID("00000000-0000-0000-0000-000000000099")
+    ps = _make_set(schema.id, organisation_id=other_org)
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
+    assert resp.status_code == 404
+
+
+def test_update_set_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.put(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}",
+            json={"version": 1},
+        )
+    assert resp.status_code == 501
+
+
+def test_update_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.put(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}",
+            json={"version": 1},
+        )
+    assert resp.status_code == 503
+
+
+def test_update_set_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.put(
+            f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}",
+            json={"version": 1},
+        )
+    assert resp.status_code == 500
+
+
+def test_update_set_integrity_error_returns_409(client: TestClient) -> None:
+    schema = _make_schema()
+    ps = _make_set(schema.id)
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch(
+            "modulo.api.routes.parameter_schemas.update_set",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("INSERT", {}, Exception("unique")),
+        ),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.put(
+            f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}",
+            json={"version": 1, "name": "Dup"},
+        )
+    assert resp.status_code == 409
+
+
+def test_delete_set_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}")
+    assert resp.status_code == 501
+
+
+def test_delete_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}")
+    assert resp.status_code == 503
+
+
+def test_delete_set_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}")
+    assert resp.status_code == 500
+
+
+def test_delete_set_integrity_error_returns_409(client: TestClient) -> None:
+    schema = _make_schema()
+    ps = _make_set(schema.id)
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch(
+            "modulo.api.routes.parameter_schemas.soft_delete_set",
+            new_callable=AsyncMock,
+            side_effect=IntegrityError("INSERT", {}, Exception("unique")),
+        ),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
+    assert resp.status_code == 409
+
+
+def test_delete_set_wrong_schema_returns_404(client: TestClient) -> None:
+    schema = _make_schema()
+    other_schema = uuid.uuid4()
+    ps = _make_set(other_schema)
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("modulo.api.routes.parameter_schemas.soft_delete_set", new_callable=AsyncMock, return_value=ps),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
+    assert resp.status_code == 404
+
+
+def test_delete_set_missing_after_delete_returns_404(client: TestClient) -> None:
+    schema = _make_schema()
+    ps = _make_set(schema.id)
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("modulo.api.routes.parameter_schemas.soft_delete_set", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
+    assert resp.status_code == 404
+
+
+def test_restore_set_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}/restore")
+    assert resp.status_code == 501
+
+
+def test_restore_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}/restore")
+    assert resp.status_code == 503
+
+
+def test_restore_set_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_schema",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}/restore")
+    assert resp.status_code == 500
+
+
+def test_restore_set_missing_returns_404(client: TestClient) -> None:
+    schema = _make_schema()
+    ps = _make_set(schema.id)
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("modulo.api.routes.parameter_schemas.restore_set", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}/restore")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Global set references error branches
+# ---------------------------------------------------------------------------
+
+
+def test_parameter_set_references_programming_error_returns_501(client: TestClient) -> None:
+    err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_set",
+        new_callable=AsyncMock,
+        side_effect=err,
+    ):
+        resp = client.get(f"/api/v1/parameter-sets/{uuid.uuid4()}/references")
+    assert resp.status_code == 501
+
+
+def test_parameter_set_references_sqlalchemy_error_returns_503(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_set",
+        new_callable=AsyncMock,
+        side_effect=SQLAlchemyError(),
+    ):
+        resp = client.get(f"/api/v1/parameter-sets/{uuid.uuid4()}/references")
+    assert resp.status_code == 503
+
+
+def test_parameter_set_references_unexpected_error_returns_500(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.parameter_schemas.get_set",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        resp = client.get(f"/api/v1/parameter-sets/{uuid.uuid4()}/references")
+    assert resp.status_code == 500

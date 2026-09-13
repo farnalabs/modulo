@@ -143,6 +143,20 @@ describe('AppSidebar', () => {
       expect(wrapper.find('div[aria-hidden="true"].fixed.inset-0').exists()).toBe(false)
     })
 
+    it('closes the mobile drawer when Escape is fired on the backdrop (FAR-821 a11y)', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-controls="mobile-sidebar"]').trigger('click')
+      await flushPromises()
+      const backdrop = wrapper.find('div[aria-hidden="true"].fixed.inset-0')
+      expect(backdrop.exists()).toBe(true)
+
+      await backdrop.trigger('keydown', { key: 'Escape' })
+      await flushPromises()
+      expect(wrapper.find('#mobile-sidebar').classes()).toContain('-translate-x-full')
+      expect(wrapper.find('div[aria-hidden="true"].fixed.inset-0').exists()).toBe(false)
+    })
+
     it('closes the mobile drawer on Escape and returns focus to the hamburger button', async () => {
       const wrapper = mountSidebar({}, { attachTo: document.body })
       await flushPromises()
@@ -291,6 +305,19 @@ describe('AppSidebar', () => {
       await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
       await flushPromises()
       await wrapper.find('div[aria-hidden="true"].fixed.inset-0').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    })
+
+    it('closes the mobile panel when Escape is fired on the backdrop (FAR-821 a11y)', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      const backdrop = wrapper.find('div[aria-hidden="true"].fixed.inset-0')
+      expect(backdrop.exists()).toBe(true)
+
+      await backdrop.trigger('keydown', { key: 'Escape' })
       await flushPromises()
       expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     })

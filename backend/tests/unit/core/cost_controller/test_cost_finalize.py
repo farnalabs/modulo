@@ -24,11 +24,17 @@ from modulo.core.cost_controller.finalize import (
     _REPORTED_TOKEN_FIELD_MAP,
     _derive_total_tokens,
     _enrich_union,
+    _fold_model_cost,
+    _fold_stored_clamped,
     _fold_token_usage,
     _legacy_sandbox_cost,
     _merge,
+    _node_output_dict,
+    _record_node_schema_drift,
+    _seed_union,
     _split_merge_outputs,
     _token_cost,
+    _wall_clock_ms,
     _write_back_node_cost,
     derive_node_type_map,
     finalize_cancelled_run,
@@ -749,3 +755,803 @@ async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> N
     assert kwargs["segment_node_token_usage"] == stored_usage
     assert kwargs["segment_completed_node_outputs"] == stored_outputs
     assert kwargs["is_terminal"] is True
+
+
+# ---------------------------------------------------------------------------
+# _is_exact_zero — FAR-653 zero detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_exact_zero_true_for_zero() -> None:
+    from modulo.core.cost_controller.finalize import _is_exact_zero
+
+    assert _is_exact_zero(0)
+    assert _is_exact_zero(0.0)
+    assert _is_exact_zero(Decimal(0))
+    assert _is_exact_zero("-0.0")
+
+
+def test_is_exact_zero_false_for_nonzero() -> None:
+    from modulo.core.cost_controller.finalize import _is_exact_zero
+
+    assert not _is_exact_zero(1)
+    assert not _is_exact_zero(-0.01)
+    assert not _is_exact_zero(True)
+    assert not _is_exact_zero(False)
+    assert not _is_exact_zero("abc")
+    assert not _is_exact_zero(None)
+    assert not _is_exact_zero(float("nan"))
+    assert not _is_exact_zero(float("inf"))
+    assert not _is_exact_zero(float("-inf"))
+
+
+# ---------------------------------------------------------------------------
+# _is_abort_error — whole-tx abort detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_abort_error_false_for_non_dbapi() -> None:
+    from modulo.core.cost_controller.finalize import _is_abort_error
+
+    assert not _is_abort_error(RuntimeError("boom"))
+    assert not _is_abort_error(ValueError("no"))
+
+
+def test_is_abort_error_false_for_dbapi_none_orig() -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from modulo.core.cost_controller.finalize import _is_abort_error
+
+    exc = DBAPIError("stmt", {}, Exception("orig"))
+    # Override orig to None
+    exc.orig = None
+    assert not _is_abort_error(exc)
+
+
+def test_is_abort_error_false_for_unnamed_orig() -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from modulo.core.cost_controller.finalize import _is_abort_error
+
+    class CustomError(Exception):
+        pass
+
+    exc = DBAPIError("stmt", {}, CustomError("boom"))
+    assert not _is_abort_error(exc)
+
+
+# ---------------------------------------------------------------------------
+# _is_limit_refused — daily-limit refusal detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_limit_refused_true() -> None:
+    from modulo.core.cost_controller.finalize import _is_limit_refused
+
+    assert _is_limit_refused(False, "daily_limit_exceeded_team_x")
+
+
+def test_is_limit_refused_false_ok() -> None:
+    from modulo.core.cost_controller.finalize import _is_limit_refused
+
+    assert not _is_limit_refused(True, "daily_limit_exceeded")
+
+
+def test_is_limit_refused_false_other_reason() -> None:
+    from modulo.core.cost_controller.finalize import _is_limit_refused
+
+    assert not _is_limit_refused(False, "write_failure")
+
+
+def test_is_limit_refused_false_none_reason() -> None:
+    from modulo.core.cost_controller.finalize import _is_limit_refused
+
+    assert not _is_limit_refused(False, None)
+
+
+# ---------------------------------------------------------------------------
+# _e2b_rate — E2B hourly rate fallback
+# ---------------------------------------------------------------------------
+
+
+def test_e2b_rate_returns_settings_value() -> None:
+    from modulo.core.cost_controller.finalize import _e2b_rate
+
+    mock_settings = MagicMock()
+    mock_settings.e2b_sandbox_usd_per_hour = 0.5
+    with patch("modulo.settings.get_settings", return_value=mock_settings):
+        assert _e2b_rate() == Decimal("0.5")
+
+
+def test_e2b_rate_fallback_on_exception() -> None:
+    from modulo.core.cost_controller.finalize import _LEGACY_E2B_RATE_DEFAULT, _e2b_rate
+
+    with patch(
+        "modulo.settings.get_settings",
+        side_effect=RuntimeError("settings broken"),
+    ):
+        assert _e2b_rate() == _LEGACY_E2B_RATE_DEFAULT
+
+
+# ---------------------------------------------------------------------------
+# derive_node_agent_map
+# ---------------------------------------------------------------------------
+
+
+def test_derive_node_agent_map_reads_agent_ids() -> None:
+    from modulo.core.cost_controller.finalize import derive_node_agent_map
+
+    graph = {
+        "nodes": [
+            {"id": "a", "agent_id": "agent-1"},
+            {"id": "b", "agent_id": "agent-2"},
+            {"id": "c"},  # no agent_id
+        ]
+    }
+    result = derive_node_agent_map(graph)
+    assert result == {"a": "agent-1", "b": "agent-2"}
+    assert "c" not in result
+
+
+def test_derive_node_agent_map_not_dict() -> None:
+    from modulo.core.cost_controller.finalize import derive_node_agent_map
+
+    assert not derive_node_agent_map(None)
+    assert not derive_node_agent_map("bad")
+    assert not derive_node_agent_map({"nodes": "not-list"})
+
+
+def test_derive_node_agent_map_empty_nodes() -> None:
+    from modulo.core.cost_controller.finalize import derive_node_agent_map
+
+    assert not derive_node_agent_map({"nodes": []})
+
+
+# ---------------------------------------------------------------------------
+# _accumulate_agent_tokens
+# ---------------------------------------------------------------------------
+
+
+def test_accumulate_agent_tokens_basic() -> None:
+    from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
+
+    usage = {
+        "node-a": {"total_tokens": 100},
+        "node-b": {"total_tokens": 200},
+    }
+    agent_map = {"node-a": "agent-1", "node-b": "agent-1", "node-c": "agent-2"}
+    result = _accumulate_agent_tokens(usage, agent_map)
+    assert result["agent-1"] == 300
+    assert "agent-2" not in result
+
+
+def test_accumulate_agent_tokens_fallback_to_input_plus_output() -> None:
+    from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
+
+    usage = {"node-a": {"input_tokens": 10, "output_tokens": 5}}
+    agent_map = {"node-a": "agent-1"}
+    result = _accumulate_agent_tokens(usage, agent_map)
+    assert result["agent-1"] == 15
+
+
+def test_accumulate_agent_tokens_skips_non_dict_entries() -> None:
+    from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
+
+    usage = {"node-a": "not-a-dict"}
+    agent_map = {"node-a": "agent-1"}
+    result = _accumulate_agent_tokens(usage, agent_map)
+    assert not result
+
+
+def test_accumulate_agent_tokens_empty_usage() -> None:
+    from modulo.core.cost_controller.finalize import _accumulate_agent_tokens
+
+    assert not _accumulate_agent_tokens(None, {})
+
+
+# ---------------------------------------------------------------------------
+# _trim_duplicate_events — event pruning
+# ---------------------------------------------------------------------------
+
+
+def test_trim_duplicate_events_empty() -> None:
+    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+
+    assert not _trim_duplicate_events([])
+
+
+def test_trim_duplicate_events_keeps_recent() -> None:
+    from datetime import timedelta
+
+    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+
+    now = datetime.now(UTC)
+    events = [{"run_id": str(uuid.uuid4()), "ts": (now - timedelta(seconds=30)).isoformat()}]
+    kept = _trim_duplicate_events(events)
+    assert len(kept) == 1
+
+
+def test_trim_duplicate_events_drops_stale() -> None:
+    from datetime import timedelta
+
+    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+
+    now = datetime.now(UTC)
+    stale = {"run_id": "old", "ts": (now - timedelta(minutes=30)).isoformat()}
+    recent = {"run_id": "new", "ts": (now - timedelta(seconds=10)).isoformat()}
+    kept = _trim_duplicate_events([stale, recent])
+    assert len(kept) == 1
+    assert kept[0]["run_id"] == "new"
+
+
+def test_trim_duplicate_events_keeps_unparseable_timestamp() -> None:
+    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+
+    events = [{"run_id": "x", "ts": "not-a-date"}]
+    kept = _trim_duplicate_events(events)
+    assert len(kept) == 1
+
+
+def test_trim_duplicate_events_limits_to_100() -> None:
+
+    from modulo.core.cost_controller.finalize import _trim_duplicate_events
+
+    now = datetime.now(UTC)
+    events = [{"run_id": str(i), "ts": now.isoformat()} for i in range(150)]
+    kept = _trim_duplicate_events(events)
+    assert len(kept) == 100
+
+
+# ---------------------------------------------------------------------------
+# _apply_cancel_wins — B6 CANCEL-WINS
+# ---------------------------------------------------------------------------
+
+
+def test_apply_cancel_wins_overrides_awaiting_human() -> None:
+    from modulo.core.cost_controller.finalize import _apply_cancel_wins
+
+    run = MagicMock()
+    run.cancellation_requested = True
+    run.id = uuid.uuid4()
+    assert _apply_cancel_wins(run, "awaiting_human") == "cancelled"
+
+
+def test_apply_cancel_wins_overrides_complete() -> None:
+    from modulo.core.cost_controller.finalize import _apply_cancel_wins
+
+    run = MagicMock()
+    run.cancellation_requested = True
+    run.id = uuid.uuid4()
+    assert _apply_cancel_wins(run, "complete") == "cancelled"
+
+
+def test_apply_cancel_wins_preserves_running() -> None:
+    from modulo.core.cost_controller.finalize import _apply_cancel_wins
+
+    run = MagicMock()
+    run.cancellation_requested = True
+    run.id = uuid.uuid4()
+    assert _apply_cancel_wins(run, "running") == "running"
+
+
+def test_apply_cancel_wins_no_cancel_flag() -> None:
+    from modulo.core.cost_controller.finalize import _apply_cancel_wins
+
+    run = MagicMock()
+    run.cancellation_requested = False
+    run.id = uuid.uuid4()
+    assert _apply_cancel_wins(run, "awaiting_human") == "awaiting_human"
+
+
+# ---------------------------------------------------------------------------
+# _is_empty_finalize_segment
+# ---------------------------------------------------------------------------
+
+
+def test_is_empty_finalize_segment_true() -> None:
+    from modulo.core.cost_controller.finalize import _is_empty_finalize_segment
+
+    assert _is_empty_finalize_segment({}, {}, {})
+
+
+def test_is_empty_finalize_segment_false_with_usage() -> None:
+    from modulo.core.cost_controller.finalize import _is_empty_finalize_segment
+
+    assert not _is_empty_finalize_segment({"a": {"input_tokens": 1}}, {}, {})
+
+
+def test_is_empty_finalize_segment_false_with_outputs() -> None:
+    from modulo.core.cost_controller.finalize import _is_empty_finalize_segment
+
+    assert not _is_empty_finalize_segment({}, {"a": {}}, {})
+
+
+# ---------------------------------------------------------------------------
+# _ledger_run_date
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_run_date_terminal_positive_total() -> None:
+    from modulo.core.cost_controller.finalize import _ledger_run_date
+
+    run = MagicMock()
+    run.started_at = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
+    result = _ledger_run_date(True, Decimal("0.13"), run)
+    assert result is not None
+    assert result.year == 2026
+    assert result.month == 1
+    assert result.day == 15
+
+
+def test_ledger_run_date_not_terminal() -> None:
+    from modulo.core.cost_controller.finalize import _ledger_run_date
+
+    run = MagicMock()
+    run.started_at = datetime(2026, 1, 15, tzinfo=UTC)
+    assert _ledger_run_date(False, Decimal("0.13"), run) is None
+
+
+def test_ledger_run_date_zero_total() -> None:
+    from modulo.core.cost_controller.finalize import _ledger_run_date
+
+    run = MagicMock()
+    run.started_at = datetime(2026, 1, 15, tzinfo=UTC)
+    assert _ledger_run_date(True, Decimal(0), run) is None
+
+
+def test_ledger_run_date_no_started_at() -> None:
+    from modulo.core.cost_controller.finalize import _ledger_run_date
+
+    run = MagicMock()
+    run.started_at = None
+    assert _ledger_run_date(True, Decimal("0.13"), run) is None
+
+
+# ---------------------------------------------------------------------------
+# _log_union_size_guardrail
+# ---------------------------------------------------------------------------
+
+
+def test_log_union_size_guardrail_small_does_not_log() -> None:
+    from modulo.core.cost_controller.finalize import _log_union_size_guardrail
+
+    enriched = {"a": {"input_tokens": 10}}
+    with patch("modulo.core.cost_controller.finalize._log") as mock_log:
+        _log_union_size_guardrail(enriched, uuid.uuid4())
+    mock_log.warning.assert_not_called()
+
+
+def test_log_union_size_guardrail_large_logs_warning() -> None:
+    from modulo.core.cost_controller.finalize import _UNION_SIZE_GUARDRAIL_BYTES, _log_union_size_guardrail
+
+    big_dict = {f"x{i:04d}": {"data": "y" * 10000} for i in range(1000)}
+    # Verify it's large enough
+    size_bytes = len(str(big_dict).encode("utf-8"))
+    if size_bytes > _UNION_SIZE_GUARDRAIL_BYTES:
+        with patch("modulo.core.cost_controller.finalize._log") as mock_log:
+            _log_union_size_guardrail(big_dict, uuid.uuid4())
+        mock_log.warning.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _entry_amount
+# ---------------------------------------------------------------------------
+
+
+def test_entry_amount_basic() -> None:
+    from modulo.core.cost_controller.finalize import _entry_amount
+
+    result = _entry_amount(Decimal("0.123456789"))
+    assert isinstance(result, str)
+    # 6dp format
+    assert "." in result
+
+
+# ---------------------------------------------------------------------------
+# _usage_token_sum
+# ---------------------------------------------------------------------------
+
+
+def test_usage_token_sum_basic() -> None:
+    from modulo.core.cost_controller.finalize import _usage_token_sum
+
+    usage = {
+        "a": {"input_tokens": 10, "output_tokens": 5},
+        "b": {"input_tokens": 20},
+    }
+    assert _usage_token_sum(usage, "input_tokens") == 30
+    assert _usage_token_sum(usage, "output_tokens") == 5
+
+
+def test_usage_token_sum_empty() -> None:
+    from modulo.core.cost_controller.finalize import _usage_token_sum
+
+    assert _usage_token_sum({}, "input_tokens") == 0
+    assert _usage_token_sum(None, "input_tokens") == 0  # type: ignore[arg-type]
+
+
+def test_usage_token_sum_skips_non_dict() -> None:
+    from modulo.core.cost_controller.finalize import _usage_token_sum
+
+    usage = {"a": "not-a-dict", "b": {"input_tokens": 10}}
+    assert _usage_token_sum(usage, "input_tokens") == 10
+
+
+# ---------------------------------------------------------------------------
+# _fallback_wall_hours
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_wall_hours_basic() -> None:
+    from modulo.core.cost_controller.finalize import _fallback_wall_hours
+
+    outputs = {"node-a": {}}
+    telemetry = {"node-a": {"wall_clock_time_ms": 3_600_000}}
+    assert _fallback_wall_hours(outputs, telemetry) == pytest.approx(1.0)
+
+
+def test_fallback_wall_hours_empty() -> None:
+    from modulo.core.cost_controller.finalize import _fallback_wall_hours
+
+    assert _fallback_wall_hours({}, {}) == 0.0
+    assert _fallback_wall_hours(None, None) == 0.0
+
+
+def test_fallback_wall_hours_skips_non_dict_entry() -> None:
+    from modulo.core.cost_controller.finalize import _fallback_wall_hours
+
+    outputs = {"node-a": "not-a-dict"}
+    assert _fallback_wall_hours(outputs, None) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _collect_node_emission_sources
+# ---------------------------------------------------------------------------
+
+
+def test_collect_node_emission_sources_basic() -> None:
+    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+
+    outputs = {
+        "node-a": {
+            "output": {
+                "work_item_refs": [
+                    {"kind": "issue", "ref": "FAR-100"},
+                ]
+            }
+        }
+    }
+    result = _collect_node_emission_sources(outputs)
+    assert len(result) == 1
+    assert result[0][2] == "node-a"
+
+
+def test_collect_node_emission_sources_skips_non_dict_nodes() -> None:
+    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+
+    outputs = {"node-a": "not-a-dict", "node-b": 42}
+    assert not _collect_node_emission_sources(outputs)
+
+
+def test_collect_node_emission_sources_skips_non_dict_output() -> None:
+    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+
+    outputs = {"node-a": {"output": "not-a-dict"}}
+    assert not _collect_node_emission_sources(outputs)
+
+
+def test_collect_node_emission_sources_skips_non_list_refs() -> None:
+    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+
+    outputs = {"node-a": {"output": {"work_item_refs": "not-a-list"}}}
+    assert not _collect_node_emission_sources(outputs)
+
+
+def test_collect_node_emission_sources_skips_malformed_ref() -> None:
+    from modulo.core.cost_controller.finalize import _collect_node_emission_sources
+
+    outputs = {"node-a": {"output": {"work_item_refs": ["garbage", 42, {"kind": "x", "ref": "y"}]}}}
+    result = _collect_node_emission_sources(outputs)
+    assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# _fold_stored_clamped branches
+# ---------------------------------------------------------------------------
+
+
+def test_fold_stored_clamped_none_stored() -> None:
+
+    node_dict: dict[str, Any] = {}
+    _fold_stored_clamped(node_dict)
+    assert "model_cost_usd" not in node_dict
+
+
+def test_fold_stored_clamped_valid_fold() -> None:
+
+    node_dict: dict[str, Any] = {"model_cost_usd": 0.05}
+    with patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
+        _fold_stored_clamped(node_dict)
+    assert node_dict["model_cost_usd"] == pytest.approx(0.05)
+
+
+def test_fold_stored_clamped_rejects_invalid_fold() -> None:
+
+    node_dict: dict[str, Any] = {
+        "model_cost_usd": -5.0,
+        "model_cost_clamped": True,
+        "model_cost_out_of_band_high": True,
+    }
+    with (
+        patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=None),
+        patch("modulo.core.cost_controller.finalize._is_exact_zero", return_value=False),
+    ):
+        _fold_stored_clamped(node_dict)
+    assert "model_cost_usd" not in node_dict
+
+
+def test_fold_stored_clamped_keeps_exact_zero() -> None:
+
+    node_dict: dict[str, Any] = {
+        "model_cost_usd": 0.0,
+        "model_cost_clamped": False,
+        "model_cost_out_of_band_high": False,
+    }
+    with (
+        patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=None),
+        patch("modulo.core.cost_controller.finalize._is_exact_zero", return_value=True),
+    ):
+        _fold_stored_clamped(node_dict)
+    assert node_dict["model_cost_usd"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _record_node_schema_drift
+# ---------------------------------------------------------------------------
+
+
+def test_record_node_schema_drift_increments_when_sandbox_and_drift() -> None:
+
+    output_obj = {"schema_drift": True, "pin_failed": False}
+    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_rec:
+        _record_node_schema_drift(output_obj, "sandbox_agent")
+    mock_rec.assert_called_once()
+
+
+def test_record_node_schema_drift_no_increment_when_pin_failed() -> None:
+
+    output_obj = {"schema_drift": True, "pin_failed": True}
+    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_rec:
+        _record_node_schema_drift(output_obj, "sandbox_agent")
+    mock_rec.assert_not_called()
+
+
+def test_record_node_schema_drift_no_increment_when_not_sandbox() -> None:
+
+    output_obj = {"schema_drift": True}
+    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_rec:
+        _record_node_schema_drift(output_obj, "agent")
+    mock_rec.assert_not_called()
+
+
+def test_record_node_schema_drift_no_increment_when_no_drift() -> None:
+
+    output_obj = {}
+    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_rec:
+        _record_node_schema_drift(output_obj, "sandbox_agent")
+    mock_rec.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _wall_clock_ms
+# ---------------------------------------------------------------------------
+
+
+def test_wall_clock_ms_valid() -> None:
+
+    assert _wall_clock_ms({"wall_clock_time_ms": 1234}) == 1234
+
+
+def test_wall_clock_ms_none_for_non_dict() -> None:
+
+    assert _wall_clock_ms(None) is None
+    assert _wall_clock_ms("bad") is None
+
+
+def test_wall_clock_ms_none_for_missing_key() -> None:
+
+    assert _wall_clock_ms({"other": True}) is None
+
+
+def test_wall_clock_ms_none_for_non_numeric() -> None:
+
+    assert _wall_clock_ms({"wall_clock_time_ms": "fast"}) is None
+
+
+# ---------------------------------------------------------------------------
+# _node_output_dict
+# ---------------------------------------------------------------------------
+
+
+def test_node_output_dict_returns_telemetry_entry() -> None:
+
+    telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 100}}
+    outputs = {"node-a": {"summary": "done"}}
+    result = _node_output_dict(outputs, "node-a", telemetry)
+    assert result == {"status": "completed", "wall_clock_time_ms": 100}
+
+
+def test_node_output_dict_none_when_no_match() -> None:
+
+    assert _node_output_dict({}, "node-a", {}) is None
+
+
+# ---------------------------------------------------------------------------
+# _seed_union
+# ---------------------------------------------------------------------------
+
+
+def test_seed_union_with_usage_dict() -> None:
+
+    usage = {"a": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}
+    outputs = {"b": {"summary": "done"}}
+    union = _seed_union(usage, outputs)
+    assert union["a"]["input_tokens"] == 10
+    assert union["b"]["input_tokens"] == 0
+
+
+def test_seed_union_non_dict_usage_value() -> None:
+
+    usage = {"a": "not-a-dict"}
+    union = _seed_union(usage, {})
+    assert union["a"]["input_tokens"] == 0
+
+
+def test_seed_union_empty() -> None:
+
+    union = _seed_union({}, {})
+    assert not union
+
+
+# ---------------------------------------------------------------------------
+# _fold_model_cost branches
+# ---------------------------------------------------------------------------
+
+
+def test_fold_model_cost_output_none_falls_stored() -> None:
+
+    node_dict: dict[str, Any] = {"model_cost_usd": 0.05}
+    with patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
+        _fold_model_cost(node_dict, None)
+    assert node_dict["model_cost_usd"] == pytest.approx(0.05)
+
+
+def test_fold_model_cost_output_without_model_cost_pops() -> None:
+
+    node_dict: dict[str, Any] = {"model_cost_usd": 0.05, "model_cost_raw_usd": 0.06}
+    _fold_model_cost(node_dict, {"wall_clock_time_ms": 100})
+    assert "model_cost_usd" not in node_dict
+    assert "model_cost_raw_usd" not in node_dict
+
+
+def test_fold_model_cost_output_with_raw_usd_folded() -> None:
+
+    node_dict: dict[str, Any] = {}
+    output_obj = {"model_cost_usd": 0.05, "model_cost_raw_usd": 0.06}
+    with patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.06"), False, False)):
+        _fold_model_cost(node_dict, output_obj)
+    assert node_dict["model_cost_usd"] == pytest.approx(0.06)
+    assert node_dict["model_cost_raw_usd"] == pytest.approx(0.06)
+
+
+def test_fold_model_cost_output_without_raw_pops_raw() -> None:
+
+    node_dict: dict[str, Any] = {"model_cost_raw_usd": 0.06}
+    output_obj = {"model_cost_usd": 0.05}
+    with patch("modulo.core.cost_controller.finalize.clamp_reported", return_value=(Decimal("0.05"), False, False)):
+        _fold_model_cost(node_dict, output_obj)
+    assert node_dict["model_cost_usd"] == pytest.approx(0.05)
+    assert "model_cost_raw_usd" not in node_dict
+
+
+# ---------------------------------------------------------------------------
+# _derive_total_tokens edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_derive_total_tokens_falls_back_to_input_plus_output() -> None:
+    enriched = {
+        "node-a": {"input_tokens": 10, "output_tokens": 5},  # no total_tokens
+    }
+    assert _derive_total_tokens(enriched) == 15
+
+
+def test_derive_total_tokens_skips_bool_total() -> None:
+    enriched = {"node-a": {"total_tokens": True}}
+    assert _derive_total_tokens(enriched) == 0
+
+
+def test_derive_total_tokens_empty() -> None:
+    assert _derive_total_tokens({}) == 0
+    assert _derive_total_tokens(None) == 0
+
+
+def test_derive_total_tokens_skips_non_dict_entry() -> None:
+    enriched = {"node-a": "not-a-dict"}
+    assert _derive_total_tokens(enriched) == 0
+
+
+# ---------------------------------------------------------------------------
+# _derive_total_tokens
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# _token_cost edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_token_cost_empty() -> None:
+    assert _token_cost({}) == Decimal(0)
+
+
+def test_token_cost_non_dict_entry_skipped() -> None:
+    usage = {"a": "not-a-dict"}
+    assert _token_cost(usage) == Decimal(0)
+
+
+# ---------------------------------------------------------------------------
+# _legacy_sandbox_cost edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_sandbox_cost_non_dict_outputs() -> None:
+    assert _legacy_sandbox_cost(None) == Decimal(0)  # type: ignore[arg-type]
+    assert _legacy_sandbox_cost("bad") == Decimal(0)  # type: ignore[arg-type]
+
+
+def test_legacy_sandbox_cost_skips_non_dict_entry() -> None:
+    from modulo.core.cost_controller.finalize import _legacy_sandbox_cost
+
+    with patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
+        result = _legacy_sandbox_cost({"a": "not-a-dict"})
+    assert result == Decimal(0)
+
+
+def test_legacy_sandbox_cost_skips_zero_wall_clock() -> None:
+    from modulo.core.cost_controller.finalize import _legacy_sandbox_cost
+
+    outputs = {"node-a": {}}
+    telemetry = {"node-a": {"wall_clock_time_ms": 0}}
+    with patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
+        result = _legacy_sandbox_cost(outputs, telemetry)
+    assert result == Decimal(0)
+
+
+def test_legacy_sandbox_cost_skips_nan_wall_clock() -> None:
+    from modulo.core.cost_controller.finalize import _legacy_sandbox_cost
+
+    outputs = {"node-a": {}}
+    telemetry = {"node-a": {"wall_clock_time_ms": float("nan")}}
+    with patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.13")):
+        result = _legacy_sandbox_cost(outputs, telemetry)
+    assert result == Decimal(0)
+
+
+async def test_finalize_cost_run_not_found() -> None:
+    """finalize_cost returns early when the run row is missing."""
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+    with patch("modulo.core.cost_controller.finalize._log") as mock_log:
+        await finalize_cost(
+            session,
+            run_id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            status="complete",
+            segment_node_token_usage=None,
+            segment_completed_node_outputs=None,
+            node_type_map={},
+            is_terminal=True,
+        )
+    # Should log a warning and return without calling update_run_status
+    assert any("run_not_found" in str(c) for c in mock_log.warning.call_args_list)

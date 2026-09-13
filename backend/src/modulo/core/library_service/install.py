@@ -158,33 +158,39 @@ async def _stamp_install_id(
     """
     entities: list[dict[str, str]] = []
 
-    # Stamp schemas
-    schema_id_map = result.get("schemas", {})
-    for local_id_str in schema_id_map.values():
-        local_id = uuid.UUID(local_id_str)
-        schema = await session.get(Schema, local_id)
-        if schema is not None and schema.organisation_id == org_id:
-            schema.collection_install_id = install_id
-            entities.append({"entity_type": "schema", "entity_id": local_id_str})
+    # Defer the autoflush triggered by the ``session.get`` lookups below until
+    # the ``CollectionInstall`` provenance row has been added to the session
+    # (install_collection step 10). Flushing the stamped ``collection_install_id``
+    # values before that row exists would violate ``fk_agents_collection_install_id``
+    # (added in migration 0223), since the FK target is not yet present.
+    with session.no_autoflush:
+        # Stamp schemas
+        schema_id_map = result.get("schemas", {})
+        for local_id_str in schema_id_map.values():
+            local_id = uuid.UUID(local_id_str)
+            schema = await session.get(Schema, local_id)
+            if schema is not None and schema.organisation_id == org_id:
+                schema.collection_install_id = install_id
+                entities.append({"entity_type": "schema", "entity_id": local_id_str})
 
-    # Stamp agents
-    agent_id_map = result.get("agents", {})
-    for local_id_str in agent_id_map.values():
-        local_id = uuid.UUID(local_id_str)
-        agent = await session.get(Agent, local_id)
-        if agent is not None and agent.organisation_id == org_id:
-            agent.collection_install_id = install_id
-            entities.append({"entity_type": "agent", "entity_id": local_id_str})
+        # Stamp agents
+        agent_id_map = result.get("agents", {})
+        for local_id_str in agent_id_map.values():
+            local_id = uuid.UUID(local_id_str)
+            agent = await session.get(Agent, local_id)
+            if agent is not None and agent.organisation_id == org_id:
+                agent.collection_install_id = install_id
+                entities.append({"entity_type": "agent", "entity_id": local_id_str})
 
-    # Stamp pipeline (created by materialize_import)
-    pipeline_id_str = result.get("pipeline_id")
-    if pipeline_id_str:
-        from modulo.db.models.pipeline import Pipeline
+        # Stamp pipeline (created by materialize_import)
+        pipeline_id_str = result.get("pipeline_id")
+        if pipeline_id_str:
+            from modulo.db.models.pipeline import Pipeline
 
-        pipeline = await session.get(Pipeline, uuid.UUID(pipeline_id_str))
-        if pipeline is not None and pipeline.organisation_id == org_id:
-            pipeline.collection_install_id = install_id
-            entities.append({"entity_type": "pipeline", "entity_id": pipeline_id_str})
+            pipeline = await session.get(Pipeline, uuid.UUID(pipeline_id_str))
+            if pipeline is not None and pipeline.organisation_id == org_id:
+                pipeline.collection_install_id = install_id
+                entities.append({"entity_type": "pipeline", "entity_id": pipeline_id_str})
 
     return entities
 
@@ -283,6 +289,21 @@ async def install_collection(
         raise CollectionInstallError(f"Collection '{collection.name}' is already installed in this organisation")
     install_id = uuid.uuid4()
 
+    # Create the provenance row up front and flush it so the
+    # ``collection_install_id`` FK (migration 0223) is satisfied when
+    # ``_stamp_install_id`` autoflushes the agent/pipeline UPDATEs below. The
+    # transaction rolls back the whole install on any later failure.
+    install = CollectionInstall(
+        install_id=install_id,
+        collection_id=collection_id,
+        collection_version=collection.version,
+        organisation_id=org_id,
+        status="installed",
+        community_sourced=collection.source in ("community", "registry"),
+    )
+    session.add(install)
+    await session.flush()
+
     # 5. Call materialize_import (all-or-nothing transaction)
     warnings: list[str] = []
     try:
@@ -314,30 +335,20 @@ async def install_collection(
     # Community-sourced or registry-sourced collections restrict agent tool/
     # connector access until an operator explicitly grants access.
     community_sourced = collection.source in ("community", "registry")
+    install.community_sourced = community_sourced
 
-    # 10. Create the CollectionInstall provenance record
-    session.add(
-        CollectionInstall(
-            install_id=install_id,
-            collection_id=collection_id,
-            collection_version=collection.version,
-            organisation_id=org_id,
-            status="installed",
-            community_sourced=community_sourced,
-            resolved_manifest={
-                "schemas": result.get("schemas", {}),
-                "agents": result.get("agents", {}),
-                "pipeline_id": result.get("pipeline_id"),
-                "warnings": warnings,
-            },
-            connector_checklist=connector_checklist,
-            installed_entities=entities,
-        )
-    )
+    # 10. Populate the provenance record (row already created + flushed above).
+    install.resolved_manifest = {
+        "schemas": result.get("schemas", {}),
+        "agents": result.get("agents", {}),
+        "pipeline_id": result.get("pipeline_id"),
+        "warnings": warnings,
+    }
+    install.connector_checklist = connector_checklist
+    install.installed_entities = entities
 
     await session.flush()
 
-    # Re-fetch to return the complete record
-    install = await session.get(CollectionInstall, install_id)
-    assert install is not None
+    # ``install`` is the ORM instance already added to the session identity map;
+    # the field mutations above were applied in place, so return it directly.
     return install

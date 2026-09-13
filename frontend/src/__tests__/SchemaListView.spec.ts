@@ -310,4 +310,21 @@ describe('SchemaListView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Failed to load folders')
   })
+
+  it('opens the schema editor via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
+    mockPush.mockClear()
+    const wrapper = mountView()
+    await flushPromises()
+    const row = wrapper.find('[data-testid="schema-row-1"]')
+    expect(row.exists()).toBe(true)
+
+    await row.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
+
+    mockPush.mockClear()
+    await row.trigger('keydown', { key: ' ', code: 'Space' })
+    await flushPromises()
+    expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
+  })
 })

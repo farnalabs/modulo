@@ -669,6 +669,23 @@ describe('ParameterSchemasView — validate tab', () => {
     expect(wrapper.text()).toContain('Validation failed:')
     expect(wrapper.text()).toContain('validator offline')
   })
+
+  it('opens the editor for a schema row via keyboard (Enter / Space) for a11y (FAR-821)', async () => {
+    const wrapper = await mountWithSchemas()
+    const row = wrapper.find('tbody tr')
+    expect(row.exists()).toBe(true)
+
+    await row.trigger('keydown', { key: 'Enter' })
+    await flush()
+    expect(wrapper.find('[data-testid="paramschema-name-input"]').exists()).toBe(true)
+
+    // Close and reopen with Space to cover both keydown handlers.
+    await wrapper.find('[data-testid="paramschema-back"]').trigger('click')
+    await flush()
+    await wrapper.find('tbody tr').trigger('keydown', { key: ' ', code: 'Space' })
+    await flush()
+    expect(wrapper.find('[data-testid="paramschema-name-input"]').exists()).toBe(true)
+  })
 })
 
 describe('ParameterSchemasView — picker preload', () => {

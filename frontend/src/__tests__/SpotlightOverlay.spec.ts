@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import SpotlightOverlay from '../components/onboarding/SpotlightOverlay.vue'
 import { spotlight } from '../composables/useSpotlight'
@@ -39,12 +40,27 @@ function overlayEl(): HTMLElement | null {
 
 const mountOpts = { global: { plugins: [i18n] }, attachTo: document.body }
 
+// Track every mounted wrapper so we can tear them all down between tests.
+// Earlier tests that mounted without keeping a reference left their
+// document-level keydown listeners attached, which made the
+// "does not dismiss on Escape after unmount" check flaky (a later Escape
+// would still reach those stale listeners and dismiss the spotlight).
+const wrappers: VueWrapper[] = []
+
+function mountOverlay(): VueWrapper {
+  const wrapper = mount(SpotlightOverlay, mountOpts)
+  wrappers.push(wrapper)
+  return wrapper
+}
+
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverMock)
   spotlight.dismiss()
 })
 
 afterEach(() => {
+  wrappers.forEach((w) => w.unmount())
+  wrappers.length = 0
   spotlight.dismiss()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
@@ -54,7 +70,7 @@ describe('SpotlightOverlay', () => {
   it('renders the overlay when the spotlight is active', () => {
     targetEl('spot-target')
     spotlight.highlight('spot-target', 'do the thing')
-    const wrapper = mount(SpotlightOverlay, mountOpts)
+    const wrapper = mountOverlay()
     expect(overlayEl()).not.toBeNull()
     expect(wrapper.text()).toContain('do the thing')
   })
@@ -62,7 +78,7 @@ describe('SpotlightOverlay', () => {
   it('dismisses when Escape is pressed on the overlay backdrop', async () => {
     targetEl('spot-target')
     spotlight.highlight('spot-target')
-    mount(SpotlightOverlay, mountOpts)
+    mountOverlay()
     expect(overlayEl()).not.toBeNull()
 
     overlayEl()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -74,7 +90,7 @@ describe('SpotlightOverlay', () => {
   it('dismisses when Escape is pressed at the document level', async () => {
     targetEl('spot-target')
     spotlight.highlight('spot-target')
-    mount(SpotlightOverlay, mountOpts)
+    mountOverlay()
     expect(overlayEl()).not.toBeNull()
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -85,8 +101,12 @@ describe('SpotlightOverlay', () => {
 
   it('exposes keyboard handlers (enter/space) on the cutout without dismissing', async () => {
     targetEl('spot-target')
+    const wrapper = mountOverlay()
+    // Highlight after mount so the rect watcher runs and the cutout branch
+    // (the div that actually carries the enter/space handlers) is rendered
+    // instead of the fallback branch.
     spotlight.highlight('spot-target')
-    mount(SpotlightOverlay, mountOpts)
+    await nextTick()
     const cutout = document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement | null
     expect(cutout).not.toBeNull()
 
@@ -97,13 +117,14 @@ describe('SpotlightOverlay', () => {
 
     // Enter/Space on the cutout are not dismiss actions, so the overlay stays.
     expect(overlayEl()).not.toBeNull()
+    wrapper.unmount()
   })
 
   it('removes the document keydown listener on unmount', () => {
     const removeSpy = vi.spyOn(document, 'removeEventListener')
     targetEl('spot-target')
     spotlight.highlight('spot-target')
-    const wrapper = mount(SpotlightOverlay, mountOpts)
+    const wrapper = mountOverlay()
     expect(overlayEl()).not.toBeNull()
 
     wrapper.unmount()
@@ -111,5 +132,47 @@ describe('SpotlightOverlay', () => {
     // Escape press cannot dismiss a spotlight that is no longer mounted.
     expect(removeSpy).toHaveBeenCalledWith('keydown', expect.any(Function))
     removeSpy.mockRestore()
+  })
+
+  it('does not dismiss on Escape after unmount (listener removed)', async () => {
+    targetEl('spot-target')
+    spotlight.highlight('spot-target', 'focus the target')
+    const wrapper = mountOverlay()
+    expect(overlayEl()).not.toBeNull()
+
+    wrapper.unmount()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await Promise.resolve()
+
+    // The document keydown listener was removed on unmount, so the spotlight
+    // stays active (Escape no longer reaches it).
+    expect(spotlight.active.value).toBe(true)
+  })
+
+  it('stops Enter/Space propagation on the cutout so they do not bubble to the overlay', async () => {
+    targetEl('spot-target')
+    const wrapper = mountOverlay()
+    // Highlight after mount so the rect watcher runs and the cutout branch
+    // (which carries the .stop modifiers) renders instead of the fallback
+    // branch that has no propagation guards.
+    spotlight.highlight('spot-target', 'focus the target')
+    await nextTick()
+    const cutout = document.querySelector('[data-testid="spotlight-overlay"] > div') as HTMLElement | null
+    expect(cutout).not.toBeNull()
+
+    let bubbled = false
+    const overlay = overlayEl()!
+    overlay.addEventListener('keydown', () => {
+      bubbled = true
+    })
+
+    cutout!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(bubbled).toBe(false)
+
+    cutout!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+    expect(bubbled).toBe(false)
+
+    wrapper.unmount()
   })
 })
