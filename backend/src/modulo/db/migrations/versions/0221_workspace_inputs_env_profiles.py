@@ -7,13 +7,16 @@ column — a nullable JSON list — to ``environment_profiles``.
 Nullable: existing profiles have no inputs.  The server default ``'[]'``
 ensures that raw-SQL inserts that omit the column get an empty list rather
 than NULL, consistent with the ORM-level ``default=list``.
+
+Renumbered from 0218_add_workspace_inputs_to_env_profiles after rebase onto
+main (which already had 0218/0219/0220).
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0218_add_workspace_inputs_to_env_profiles"
-down_revision: str | None = "0217_hitl_claims_decided_by"
+revision: str = "0221_workspace_inputs_env_profiles"
+down_revision: str | None = "0220_run_node_artifacts"
 branch_labels: str | None = None
 depends_on: str | None = None
 
