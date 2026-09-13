@@ -12,6 +12,7 @@ guard, and get_settings cache via the autouse fixture.
 
 import ast
 import os
+import signal
 import sys
 import threading
 from collections.abc import Iterator
@@ -993,3 +994,660 @@ def test_upgrade_context_provider_attaches_fields_inside_the_window(
 
     marker_path.write_text('{"no_timestamp": true}', encoding="utf-8")
     assert not provider()
+
+
+# ---------------------------------------------------------------------------
+# _await_health paths
+# ---------------------------------------------------------------------------
+
+
+def test_await_health_shutdown_requested(tmp_path: Path) -> None:
+    from modulo.launcher.entry import BootError, _await_health
+
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(BootError, match="shutdown requested"):
+        _await_health(
+            {"pg": lambda: True},
+            timeout=10.0,
+            interval=0.1,
+            stop=stop,
+        )
+
+
+def test_await_health_probe_error(tmp_path: Path) -> None:
+    from modulo.launcher.entry import _await_health
+
+    stop = threading.Event()
+    calls = {"n": 0}
+
+    def broken_probe():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("probe exploded")
+        return True
+
+    _await_health(
+        {"pg": broken_probe},
+        timeout=10.0,
+        interval=0.01,
+        stop=stop,
+        clock=lambda: 0.0,
+        sleep=lambda _: None,
+    )
+
+
+def test_await_health_timeout(tmp_path: Path) -> None:
+    from modulo.launcher.entry import BootError, _await_health
+
+    stop = threading.Event()
+    tick = {"t": 0.0}
+
+    def advancing_clock():
+        tick["t"] += 100.0
+        return tick["t"]
+
+    with pytest.raises(BootError, match="failed to become healthy"):
+        _await_health(
+            {"pg": lambda: False},
+            timeout=10.0,
+            interval=0.01,
+            stop=stop,
+            clock=advancing_clock,
+            sleep=lambda _: None,
+        )
+
+
+def test_await_health_propagates_probe_outcome_healthy(tmp_path: Path) -> None:
+    from modulo.launcher.entry import _await_health
+    from modulo.launcher.supervisor import ProbeOutcome
+
+    stop = threading.Event()
+
+    def probe():
+        return ProbeOutcome.HEALTHY
+
+    _await_health(
+        {"pg": probe},
+        timeout=10.0,
+        interval=0.01,
+        stop=stop,
+        clock=lambda: 0.0,
+        sleep=lambda _: None,
+    )
+    # Should complete without error
+
+
+# ---------------------------------------------------------------------------
+# _run_probe_command paths
+# ---------------------------------------------------------------------------
+
+
+def test_run_probe_command_oserror_returns_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import subprocess
+
+    from modulo.launcher.supervisor import ProbeOutcome
+
+    def raise_oserror(argv, **kwargs):
+        raise OSError("no such device")
+
+    monkeypatch.setattr(subprocess, "run", raise_oserror)
+    assert entry_module._run_probe_command(["/probe"]) is ProbeOutcome.UNAVAILABLE
+
+
+def test_run_probe_command_nonzero_return_is_unhealthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def failing_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, b"", b"error")
+
+    monkeypatch.setattr(subprocess, "run", failing_run)
+    assert entry_module._run_probe_command(["/probe"]) is False
+
+
+def test_run_probe_command_zero_without_expect_is_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def ok_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, b"ok\n", b"")
+
+    monkeypatch.setattr(subprocess, "run", ok_run)
+    assert entry_module._run_probe_command(["/probe"]) is True
+
+
+def test_run_probe_command_expect_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def ok_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, b"PONG\n", b"")
+
+    monkeypatch.setattr(subprocess, "run", ok_run)
+    assert entry_module._run_probe_command(["/probe"], expect="PONG") is True
+
+
+def test_run_probe_command_expect_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def ok_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, b"HELLO\n", b"")
+
+    monkeypatch.setattr(subprocess, "run", ok_run)
+    result = entry_module._run_probe_command(["/probe"], expect="PONG")
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# _boot_failure_message FileNotFoundError
+# ---------------------------------------------------------------------------
+
+
+def test_boot_failure_message_file_not_found() -> None:
+    msg = entry_module._boot_failure_message(FileNotFoundError("No such file or directory"), Path("/bundled/bin"))
+    assert "--bin-dir" in msg
+    assert "bundled binaries" in msg
+
+
+def test_boot_failure_message_generic() -> None:
+    msg = entry_module._boot_failure_message(RuntimeError("connection refused"), Path("/bin"))
+    assert msg == "connection refused"
+
+
+def test_boot_failure_message_empty_str() -> None:
+    msg = entry_module._boot_failure_message(RuntimeError(""), Path("/bin"))
+    # Should fall back to repr
+    assert "RuntimeError" in msg
+
+
+# ---------------------------------------------------------------------------
+# _post_upgrade_guidance paths
+# ---------------------------------------------------------------------------
+
+
+def test_post_upgrade_guidance_no_snapshot() -> None:
+    record = {"post_upgrade": True}
+    guidance = entry_module._post_upgrade_guidance(record)
+    assert "No pre-upgrade snapshot" in guidance
+
+
+def test_post_upgrade_guidance_not_dict() -> None:
+    assert entry_module._post_upgrade_guidance(None) == ""
+    assert entry_module._post_upgrade_guidance("string") == ""
+
+
+def test_post_upgrade_guidance_no_post_upgrade() -> None:
+    assert entry_module._post_upgrade_guidance({"reason": "x"}) == ""
+
+
+# ---------------------------------------------------------------------------
+# _prepare_database_env paths
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_database_env_with_admin_url() -> None:
+    entry_module._prepare_database_env({"DATABASE_ADMIN_URL": "postgresql://admin/db"})
+    assert os.environ.get("DATABASE_ADMIN_URL") == "postgresql://admin/db"
+
+
+def test_prepare_database_env_with_system_url() -> None:
+    entry_module._prepare_database_env({"MODULO_SYSTEM_DATABASE_URL": "postgresql://sys/db"})
+    assert os.environ.get("MODULO_SYSTEM_DATABASE_URL") == "postgresql://sys/db"
+
+
+def test_prepare_database_env_missing_keys() -> None:
+    entry_module._prepare_database_env({})
+    # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# _upgrade_context_provider: no marker, expired, and non-numeric upgraded_at
+# ---------------------------------------------------------------------------
+
+
+def test_upgrade_context_provider_no_marker(tmp_path: Path) -> None:
+    provider = entry_module._upgrade_context_provider(tmp_path / "upgrade.json", lambda: 1000.0, window_seconds=600.0)
+    assert provider() == {}
+
+
+def test_upgrade_context_provider_expired(tmp_path: Path) -> None:
+    path = tmp_path / "upgrade.json"
+    path.write_text('{"upgraded_at": 100.0}', encoding="utf-8")
+    provider = entry_module._upgrade_context_provider(path, lambda: 10000.0, window_seconds=600.0)
+    assert provider() == {}
+
+
+def test_upgrade_context_provider_non_numeric_timestamp(tmp_path: Path) -> None:
+    path = tmp_path / "upgrade.json"
+    path.write_text('{"upgraded_at": "not-a-number"}', encoding="utf-8")
+    provider = entry_module._upgrade_context_provider(path, lambda: 1000.0, window_seconds=600.0)
+    assert provider() == {}
+
+
+def test_upgrade_context_provider_bool_timestamp(tmp_path: Path) -> None:
+    path = tmp_path / "upgrade.json"
+    path.write_text('{"upgraded_at": true}', encoding="utf-8")
+    provider = entry_module._upgrade_context_provider(path, lambda: 1000.0, window_seconds=600.0)
+    assert provider() == {}
+
+
+def test_upgrade_context_provider_no_snapshot_string(tmp_path: Path) -> None:
+    path = tmp_path / "upgrade.json"
+    path.write_text('{"upgraded_at": 9500.0, "pre_upgrade_snapshot": 123}', encoding="utf-8")
+    provider = entry_module._upgrade_context_provider(path, lambda: 10000.0, window_seconds=600.0)
+    result = provider()
+    assert result.get("post_upgrade") is True
+    assert "pre_upgrade_snapshot" not in result
+
+
+# ---------------------------------------------------------------------------
+# _serve_watch paths
+# ---------------------------------------------------------------------------
+
+
+def test_serve_watch_already_exiting() -> None:
+    class FakeServer:
+        def __init__(self):
+            self.should_exit = True
+
+    stop = threading.Event()
+    force = threading.Event()
+    stop.set()
+    entry_module._serve_watch(FakeServer(), stop, force)
+    # Should return immediately since server.should_exit is already True
+
+
+def test_serve_watch_force_exit() -> None:
+    class FakeServer:
+        def __init__(self):
+            self.should_exit = False
+            self.force_exit = False
+
+    server = FakeServer()
+    stop = threading.Event()
+    force = threading.Event()
+    stop.set()
+    force.set()
+    entry_module._serve_watch(server, stop, force)
+    assert server.force_exit is True
+
+
+# ---------------------------------------------------------------------------
+# _bundled_service_env with empty base
+# ---------------------------------------------------------------------------
+
+
+def test_bundled_service_env_empty_base() -> None:
+    assert entry_module._bundled_service_env({}) == {}
+
+
+# ---------------------------------------------------------------------------
+# default_data_dir XDG path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX default_data_dir")
+def test_default_data_dir_xdg(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", "/custom/xdg")
+    assert entry_module.default_data_dir() == Path("/custom/xdg/modulo/data")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX default_data_dir")
+def test_default_data_dir_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    expected = Path.home() / ".local" / "share" / "modulo" / "data"
+    assert entry_module.default_data_dir() == expected
+
+
+# ---------------------------------------------------------------------------
+# _load_or_init_state: fresh state (no existing state.json)
+# ---------------------------------------------------------------------------
+
+
+def test_load_or_init_state_fresh(tmp_path: Path) -> None:
+    """When state.json doesn't exist, creates a fresh state."""
+    import modulo.launcher.state as state_mod
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    secrets = type("S", (), {"state_hmac_key": bytes(range(32))})()
+    state = entry_module._load_or_init_state(data_dir, secrets, state_mod)
+    assert state.postgres_port > 0
+    assert (data_dir / "state.json").exists()
+
+
+def test_load_or_init_state_existing(tmp_path: Path) -> None:
+    """When state.json exists, loads it."""
+    import modulo.launcher.state as state_mod
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    secrets = type("S", (), {"state_hmac_key": bytes(range(32))})()
+    # Create an initial state
+    fresh = state_mod.initial_state()
+    state_mod.save_state(fresh, data_dir / "state.json", secrets.state_hmac_key)
+    loaded = entry_module._load_or_init_state(data_dir, secrets, state_mod)
+    assert loaded.postgres_port == fresh.postgres_port
+
+
+# ---------------------------------------------------------------------------
+# _await_health: all healthy from the start
+# ---------------------------------------------------------------------------
+
+
+def test_await_health_all_healthy_immediately() -> None:
+    from modulo.launcher.entry import _await_health
+
+    stop = threading.Event()
+    _await_health(
+        {"pg": lambda: True, "redis": lambda: True},
+        timeout=10.0,
+        interval=0.1,
+        stop=stop,
+        clock=lambda: 0.0,
+        sleep=lambda _: None,
+    )
+
+
+def test_await_health_one_at_a_time() -> None:
+    from modulo.launcher.entry import _await_health
+
+    stop = threading.Event()
+    calls = {"n": 0}
+
+    def probe():
+        calls["n"] += 1
+        return calls["n"] >= 2
+
+    _await_health(
+        {"pg": probe},
+        timeout=10.0,
+        interval=0.01,
+        stop=stop,
+        clock=lambda: float(calls["n"]) * 0.01,
+        sleep=lambda _: None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# _await_health: probe returns UNAVAILABLE (not a failure)
+# ---------------------------------------------------------------------------
+
+
+def test_await_health_probe_unavailable_does_not_fail_boot() -> None:
+    from modulo.launcher.entry import _await_health
+    from modulo.launcher.supervisor import ProbeOutcome
+
+    stop = threading.Event()
+    calls = {"n": 0}
+
+    def probe():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return ProbeOutcome.UNAVAILABLE
+        return True
+
+    _await_health(
+        {"pg": probe},
+        timeout=10.0,
+        interval=0.01,
+        stop=stop,
+        clock=lambda: float(calls["n"]) * 0.01,
+        sleep=lambda _: None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# _await_health: probe returns False (unhealthy, not exception)
+# ---------------------------------------------------------------------------
+
+
+def test_await_health_unhealthy_keeps_waiting() -> None:
+    from modulo.launcher.entry import _await_health
+
+    stop = threading.Event()
+    calls = {"n": 0}
+
+    def probe():
+        calls["n"] += 1
+        return calls["n"] >= 3
+
+    _await_health(
+        {"pg": probe},
+        timeout=10.0,
+        interval=0.01,
+        stop=stop,
+        clock=lambda: float(calls["n"]) * 0.01,
+        sleep=lambda _: None,
+    )
+    assert calls["n"] >= 3
+
+
+# ---------------------------------------------------------------------------
+# _degraded_callback
+# ---------------------------------------------------------------------------
+
+
+def test_degraded_callback_sets_events() -> None:
+    from modulo.launcher.entry import _degraded_callback, _RunState
+
+    run_state = _RunState()
+    callback = _degraded_callback(run_state)
+    callback("test reason")
+    assert run_state.degraded.is_set()
+    assert run_state.serve_stop.is_set()
+
+
+# ---------------------------------------------------------------------------
+# _degraded_exit_message
+# ---------------------------------------------------------------------------
+
+
+def test_degraded_exit_message_without_post_upgrade(tmp_path: Path) -> None:
+    from modulo.launcher.supervisor import write_degraded_record
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    degraded_path = data_dir / "degraded.json"
+    write_degraded_record(degraded_path, {"reason": "crash cap", "crashes": []})
+    msg = entry_module._degraded_exit_message("crash cap", degraded_path, data_dir)
+    assert "launcher degraded" in msg
+    assert "--clear-degraded" in msg
+
+
+def test_degraded_exit_message_with_post_upgrade(tmp_path: Path) -> None:
+    from modulo.launcher.supervisor import write_degraded_record
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    degraded_path = data_dir / "degraded.json"
+    write_degraded_record(
+        degraded_path,
+        {"reason": "crash", "crashes": [], "post_upgrade": True, "pre_upgrade_snapshot": "/snap"},
+    )
+    msg = entry_module._degraded_exit_message("crash", degraded_path, data_dir)
+    assert "upgrade watch window" in msg
+
+
+# ---------------------------------------------------------------------------
+# _degraded_refusal_message
+# ---------------------------------------------------------------------------
+
+
+def test_degraded_refusal_message_with_timestamp(tmp_path: Path) -> None:
+    record = {
+        "reason": "cap",
+        "degraded_at": 1720000000.0,
+        "crashes": [],
+    }
+    msg = entry_module._degraded_refusal_message(record, tmp_path / "degraded.json", tmp_path / "data")
+    assert "TERMINAL DEGRADED" in msg
+    assert "2024" in msg  # The timestamp should be formatted
+
+
+def test_degraded_refusal_message_without_timestamp(tmp_path: Path) -> None:
+    record = {"reason": "cap", "crashes": []}
+    msg = entry_module._degraded_refusal_message(record, tmp_path / "degraded.json", tmp_path / "data")
+    assert "TERMINAL DEGRADED" in msg
+
+
+# ---------------------------------------------------------------------------
+# _post_upgrade_guidance: with snapshot
+# ---------------------------------------------------------------------------
+
+
+def test_post_upgrade_guidance_with_snapshot() -> None:
+    record = {"post_upgrade": True, "pre_upgrade_snapshot": "/backups/snap"}
+    guidance = entry_module._post_upgrade_guidance(record)
+    assert "pre-upgrade snapshot" in guidance
+    assert "/backups/snap" in guidance
+
+
+# ---------------------------------------------------------------------------
+# _RunState.install_signal_handlers
+# ---------------------------------------------------------------------------
+
+
+def test_run_state_install_signal_handlers_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    state = entry_module._RunState()
+    state.install_signal_handlers()
+    # On Windows, it should return without installing handlers
+    assert state.signal_count == 0
+
+
+# ---------------------------------------------------------------------------
+# _RunState.stop_monitor
+# ---------------------------------------------------------------------------
+
+
+def test_run_state_stop_monitor_with_no_stopper() -> None:
+    state = entry_module._RunState()
+    state.stop_monitor()  # Should not raise
+
+
+def test_run_state_stop_monitor_with_stopper() -> None:
+    called: list[bool] = []
+    state = entry_module._RunState()
+    state.monitor_stopper = lambda: called.append(True)
+    state.stop_monitor()
+    assert called == [True]
+
+
+# ---------------------------------------------------------------------------
+# _RunState.bind_supervisor
+# ---------------------------------------------------------------------------
+
+
+def test_run_state_bind_supervisor() -> None:
+    state = entry_module._RunState()
+
+    class FakeSupervisor:
+        def request_stop(self):
+            pass
+
+    state.bind_supervisor(FakeSupervisor())
+    assert state.monitor_stopper is not None
+
+
+# ---------------------------------------------------------------------------
+# _RunState.signal handling: double Ctrl-C sets force_exit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="signal handlers not installed on Windows")
+def test_run_state_double_signal_sets_force_exit() -> None:
+    state = entry_module._RunState()
+    state.install_signal_handlers()
+    # First signal
+    os.kill(os.getpid(), signal.SIGTERM)
+    assert state.shutdown_requested.is_set()
+    assert not state.force_exit.is_set()
+    # Second signal
+    os.kill(os.getpid(), signal.SIGTERM)
+    assert state.force_exit.is_set()
+
+
+# ---------------------------------------------------------------------------
+# _run_foreground: exception handling paths
+# ---------------------------------------------------------------------------
+
+
+def test_run_foreground_generic_exception_wraps_in_boot_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.supervisor as supervisor_mod
+
+    class FailLock:
+        def __init__(self, data_dir, mode="serve"):
+            pass
+
+        def acquire(self):
+            pass
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(supervisor_mod, "DataDirLock", FailLock)
+    monkeypatch.setattr(entry_module, "_verify_bundled_binaries", lambda bin_dir: None)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    # Make secrets_file.load_or_create raise a non-BootError
+    import modulo.launcher.secrets_file as sf_mod
+
+    def exploding_load(path):
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setattr(sf_mod, "load_or_create", exploding_load)
+    with pytest.raises(BootError, match="unexpected failure"):
+        entry_module._run_foreground(tmp_path / "data", bin_dir=tmp_path, serve=None)
+
+
+def test_run_foreground_boot_error_propagates_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.supervisor as supervisor_mod
+
+    class FailLock:
+        def __init__(self, data_dir, mode="serve"):
+            pass
+
+        def acquire(self):
+            raise BootError("lock refused")
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(supervisor_mod, "DataDirLock", FailLock)
+    with pytest.raises(BootError, match="lock refused"):
+        entry_module._run_foreground(tmp_path / "data", bin_dir=tmp_path, serve=None)
+
+
+# ---------------------------------------------------------------------------
+# _run_foreground: supervisor shutdown fails during error handling
+# ---------------------------------------------------------------------------
+
+
+def test_run_foreground_shutdown_failure_during_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.supervisor as supervisor_mod
+
+    class FailLock:
+        def __init__(self, data_dir, mode="serve"):
+            pass
+
+        def acquire(self):
+            pass
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(supervisor_mod, "DataDirLock", FailLock)
+    monkeypatch.setattr(entry_module, "_verify_bundled_binaries", lambda bin_dir: None)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    # Make secrets load fail AFTER lock is acquired
+    import modulo.launcher.secrets_file as sf_mod
+
+    def exploding_load(path):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(sf_mod, "load_or_create", exploding_load)
+    # Should still raise BootError (the original error, not a shutdown error)
+    with pytest.raises(BootError, match="boom"):
+        entry_module._run_foreground(tmp_path / "data", bin_dir=tmp_path, serve=None)
