@@ -323,7 +323,7 @@ def test_drift_clean_pin_stays_clean(admin_client: TestClient) -> None:
     assert body["current_hash"]
 
 
-def test_drift_transition_clean_to_drift_persists_pin(admin_client: TestClient) -> None:
+def test_drift_get_is_read_only_no_writes(admin_client: TestClient) -> None:
     with (
         _patched(pin=_clean_pin()) as mocks,
         patch("modulo.api.routes.guardrail_config.check_guardrail_drift", return_value=True),
@@ -332,18 +332,40 @@ def test_drift_transition_clean_to_drift_persists_pin(admin_client: TestClient) 
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "drift"
+    # GET /drift must be side-effect free: no pin writes, no audit rows.
+    mocks["set_guardrail_pin"].assert_not_awaited()
+    mocks["append_audit_event"].assert_not_awaited()
+
+
+def test_drift_check_transition_clean_to_drift_persists_pin(admin_client: TestClient) -> None:
+    with (
+        _patched(pin=_clean_pin()) as mocks,
+        patch("modulo.api.routes.guardrail_config.check_guardrail_drift", return_value=True),
+    ):
+        resp = admin_client.post(f"{_BASE}/drift/check")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "drift"
     mocks["set_guardrail_pin"].assert_awaited_once()
     mocks["append_audit_event"].assert_awaited_once()
 
 
-def test_drift_transition_drift_to_clean_restores_pin(admin_client: TestClient) -> None:
+def test_drift_check_transition_drift_to_clean_restores_pin(admin_client: TestClient) -> None:
     drifted_pin = _clean_pin()
     drifted_pin.status = "drift"
     with _patched(pin=drifted_pin):
-        resp = admin_client.get(f"{_BASE}/drift")
+        resp = admin_client.post(f"{_BASE}/drift/check")
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "clean"
+
+
+def test_drift_check_denied_for_operator(operator_client: TestClient) -> None:
+    with _patched(pin=_clean_pin()):
+        resp = operator_client.post(f"{_BASE}/drift/check")
+
+    assert resp.status_code == 403
+    assert "Only admins" in resp.json()["detail"]
 
 
 def test_drift_proposed_pin_stays_proposed(admin_client: TestClient) -> None:

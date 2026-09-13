@@ -26,6 +26,7 @@ from modulo.api.middleware.sensitive_mask import (
     merge_masked_config_json,
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
+from modulo.api.team_scope import validate_owner_team_for_create, validate_team_transition_for_update
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ON_UNKNOWN_MODES, ConnectorType
 from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
@@ -512,6 +513,7 @@ async def _create_connector_tx(
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
+        await validate_owner_team_for_create(session, principal, req.owner_team_id)
         return await create_connector_instance(
             session,
             org_id=principal.organisation_id,
@@ -770,6 +772,18 @@ async def update_connector_endpoint(
                         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail=_github_missing_scope_detail(new_credentials, missing),
                     )
+            # #1793: guard team-boundary changes on the update path too — the
+            # PATCH endpoint had no team gate at all, so a member could hand the
+            # connector to a team they don't belong to (or a foreign-org team).
+            if "visibility" in updates or "owner_team_id" in updates:
+                await validate_team_transition_for_update(
+                    session,
+                    principal,
+                    current_owner_team_id=existing.owner_team_id,
+                    current_visibility=existing.visibility,
+                    new_owner_team_id=updates.get("owner_team_id", existing.owner_team_id),
+                    new_visibility=updates.get("visibility", existing.visibility),
+                )
             ci = await update_connector_instance(session, connector_id, updates)
     except IntegrityError:
         logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)

@@ -19,6 +19,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.routes.lifecycle_maps import LifecycleMapResponse
+from modulo.api.team_scope import validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.feature_flags import get_registry
@@ -723,6 +724,7 @@ async def create_library_primitive_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
             existing = await get_primitive_by_slug(session, principal.organisation_id, req.primitive_type, req.slug)
             if existing is not None:
                 raise HTTPException(
@@ -872,6 +874,10 @@ async def copy_to_adapt_endpoint(
     principal: TenantPrincipal = require_permission("library.copy"),
 ) -> LibraryPrimitiveResponse:
     try:
+        # #1793: validate target_team_id (org existence + membership) in its own
+        # short transaction BEFORE copy_to_adapt opens its own org txn.
+        async with session.begin():
+            await validate_owner_team_for_create(session, principal, req.target_team_id)
         result = await copy_to_adapt(
             session,
             principal.organisation_id,
@@ -1328,6 +1334,7 @@ async def confirm_import_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
             result = await materialize_import(
                 session,
                 org_id=principal.organisation_id,
@@ -1953,6 +1960,7 @@ async def create_collection_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
             existing = await get_primitive_by_slug(session, org_id, "library_collection", req.slug)
             if existing is not None:
                 raise HTTPException(

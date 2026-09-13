@@ -7875,6 +7875,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/guardrails/config/drift/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Guardrail Drift Check
+         * @description Recompute drift AND persist the transition + audit (admin only).
+         *
+         *     Status-transition writes were removed from GET /drift so that read
+         *     endpoints stay side-effect free and viewer-scoped users cannot mutate the
+         *     pin or generate audit rows by polling. Only an admin (gated the same way
+         *     as /apply and /reject) can now record the "clean" <-> "drift" transition;
+         *     a pending proposal ("proposed") is preserved so apply/reject still work.
+         */
+        post: operations["post_guardrail_drift_check_api_v1_guardrails_config_drift_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plugins": {
         parameters: {
             query?: never;
@@ -36410,6 +36436,37 @@ export interface operations {
         };
     };
     get_guardrail_drift_api_v1_guardrails_config_drift_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuardrailDriftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_guardrail_drift_check_api_v1_guardrails_config_drift_check_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;

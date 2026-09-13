@@ -668,10 +668,46 @@ async def get_guardrail_drift(
         # /config agree.
         current_status = _current_status(pin, drifted)
 
-        # Persist status transitions on the pin and audit the drift entry so
-        # the audit trail records WHEN drift began, not every poll. Only the
-        # "clean" <-> "drift" transition is owned by drift polling — a pending
-        # proposal ("proposed") is preserved so apply/reject still work.
+    return GuardrailDriftResponse(status=current_status, current_hash=current_hash, applied_hash=applied_hash)
+
+
+@router.post("/drift/check", dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("guardrail_config.drift_check")
+async def post_guardrail_drift_check(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
+) -> GuardrailDriftResponse:
+    """Recompute drift AND persist the transition + audit (admin only).
+
+    Status-transition writes were removed from GET /drift so that read
+    endpoints stay side-effect free and viewer-scoped users cannot mutate the
+    pin or generate audit rows by polling. Only an admin (gated the same way
+    as /apply and /reject) can now record the "clean" <-> "drift" transition;
+    a pending proposal ("proposed") is preserved so apply/reject still work.
+    """
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can record a guardrail drift check",
+        )
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        pin = await _load_pin(session, principal.organisation_id)
+        definitions = await _load_guardrail_definitions(session, principal.organisation_id)
+        try:
+            drifted = check_guardrail_drift(definitions, pin)
+            current_hash = hash_config_set(build_config_set_from_definitions(definitions))
+        except GuardrailConfigError as exc:
+            # Same fail-closed guarantee as GET /config: a legacy org-level
+            # name the config id pattern rejects must surface a clear 422, not
+            # a generic validation error and never a 500.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from None
+        applied_hash = pin.applied_hash if pin else None
+        current_status = _current_status(pin, drifted)
+
         if pin is not None:
             if drifted and pin.status == "clean":
                 pin.status = "drift"

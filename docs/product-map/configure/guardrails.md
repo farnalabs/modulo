@@ -76,9 +76,13 @@ compensation, and single-node self-correction. Built on the eval engine
       detection
 - [x] REST surface (`/api/v1/guardrails/config`): `GET` config export as YAML,
       `POST propose` (validate + hash + diff), `POST apply` (approve/merge),
-      `POST reject` (discard), `GET drift` (recompute vs applied pin) — every
-      state-changing step is admin-gated and emits an audit event with summary
-      payloads only (never raw config content)
+      `POST reject` (discard), `GET drift` (recompute vs applied pin,
+      read-only), `POST drift/check` (persist the clean<->drift transition +
+      audit, admin-gated) — every state-changing step is admin-gated and emits
+      an audit event with summary
+      payloads only (never raw config content); GET /drift is side-effect
+      free so viewer-scoped callers cannot mutate the pin or generate audit
+      rows by polling
 - [x] Kill switch: an org-level guardrail kill switch disables enforcement and
       is surfaced as a banner in the `/settings/guardrails` view
 - [x] Agent-loop interior interception (FAR-211 T3): a Modulo-hosted bridge

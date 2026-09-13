@@ -89,6 +89,7 @@ EXPECTED_MINT_MARKED: dict[str, set[str]] = {
         "propose_guardrail_config",
         "apply_guardrail_config",
         "reject_guardrail_config",
+        "post_guardrail_drift_check",
     },
     # org guardrail kill-switch (FAR-309 PR B org-global invariant): a
     # break-glass account must never disable (or read) the safety control.

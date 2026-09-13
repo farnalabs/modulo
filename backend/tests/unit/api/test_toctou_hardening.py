@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from sqlalchemy import Table, text
+from fastapi import HTTPException
+from sqlalchemy import Table, select, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -25,6 +27,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from modulo.api.routes.pipelines import _reapply_team_gate_inside_mutation_txn
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.error_tracking import DEFAULT_ALERT_RULES, seed_default_alert_rules_for_org
 from modulo.core.exceptions import RateLimitConflictError
 from modulo.db.crud.run import _is_unique_violation, create_run
@@ -41,6 +45,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
+from modulo.db.models.team_membership import TeamMembership
 
 _MIGRATION_FILE = (
     Path(__file__).parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / "0117_toctou_hardening.py"
@@ -229,6 +234,7 @@ async def sqlite_engine() -> AsyncEngine:
             EnvironmentProfile.__table__,
             ErrorNotificationRule.__table__,
             DeletedDefault.__table__,
+            TeamMembership.__table__,
         ],
     )
     async with eng.begin() as conn:
@@ -440,5 +446,113 @@ class TestRateLimitConflictPath:
                 input_payload={},
                 rate_limit_key="rl:b",
             )
-            assert r1.rate_limit_key == "rl:a"
-            assert r2.rate_limit_key == "rl:b"
+        assert r1.rate_limit_key == "rl:a"
+        assert r2.rate_limit_key == "rl:b"
+
+
+# ---------------------------------------------------------------------------
+# Pipeline mutation team-gate TOCTOU (#1801)
+# ---------------------------------------------------------------------------
+
+
+class TestTeamGateInsideMutationTxn:
+    """``_reapply_team_gate_inside_mutation_txn`` re-checks the CURRENT team
+    gate on the FOR UPDATE-locked row, atomically with the mutation."""
+
+    @staticmethod
+    def _principal(org_role: str = "operator") -> TenantPrincipal:
+        return TenantPrincipal(
+            username="testuser",
+            organisation_id=_ORG,
+            account_id=_ACCOUNT,
+            org_role=org_role,
+        )
+
+    @staticmethod
+    def _seed_team_private_pipeline(session: AsyncSession, *, pipeline_id: uuid.UUID, team_id: uuid.UUID) -> None:
+        session.add(Team(id=team_id, organisation_id=_ORG, name="Team A", account_id=_ACCOUNT))
+        session.add(
+            Pipeline(
+                id=pipeline_id,
+                organisation_id=_ORG,
+                name="team-private",
+                account_id=_ACCOUNT,
+                visibility="team",
+                owner_team_id=team_id,
+            )
+        )
+
+    async def test_non_member_locked_team_private_pipeline_raises_403(self, sqlite_session: AsyncSession) -> None:
+        """Ownership flipped to Team B (where the caller has no membership)
+        between the gate's txn and the mutation txn: the re-check inside the
+        mutation txn must raise 403, not proceed."""
+        other_team = uuid.uuid4()
+        self._seed_team_private_pipeline(sqlite_session, pipeline_id=_PIPELINE, team_id=other_team)
+        await sqlite_session.commit()
+
+        async with sqlite_session.begin():
+            with pytest.raises(HTTPException) as exc_info:
+                await _reapply_team_gate_inside_mutation_txn(sqlite_session, self._principal(), _PIPELINE)
+        assert exc_info.value.status_code == 403
+
+    async def test_member_locked_team_private_pipeline_passes(self, sqlite_session: AsyncSession) -> None:
+        member_team = uuid.uuid4()
+        self._seed_team_private_pipeline(sqlite_session, pipeline_id=_PIPELINE, team_id=member_team)
+        sqlite_session.add(
+            TeamMembership(team_id=member_team, account_id=_ACCOUNT, organisation_id=_ORG, role="viewer")
+        )
+        await sqlite_session.commit()
+
+        async with sqlite_session.begin():
+            locked = await _reapply_team_gate_inside_mutation_txn(sqlite_session, self._principal(), _PIPELINE)
+        assert locked is not None
+        assert locked.owner_team_id == member_team
+
+    async def test_admin_passes_without_membership(self, sqlite_session: AsyncSession) -> None:
+        other_team = uuid.uuid4()
+        self._seed_team_private_pipeline(sqlite_session, pipeline_id=_PIPELINE, team_id=other_team)
+        await sqlite_session.commit()
+
+        async with sqlite_session.begin():
+            locked = await _reapply_team_gate_inside_mutation_txn(sqlite_session, self._principal("admin"), _PIPELINE)
+        assert locked is not None
+        assert locked.visibility == "team"
+
+    async def test_missing_row_raises_404_fail_closed(self, sqlite_session: AsyncSession) -> None:
+        sqlite_session.add(Organisation(id=_ORG, name="org", slug="org"))
+        await sqlite_session.commit()
+
+        async with sqlite_session.begin():
+            with pytest.raises(HTTPException) as exc_info:
+                await _reapply_team_gate_inside_mutation_txn(sqlite_session, self._principal(), _PIPELINE)
+        assert exc_info.value.status_code == 404
+
+    async def test_org_visible_row_not_team_gated(self, sqlite_session: AsyncSession) -> None:
+        sqlite_session.add(Organisation(id=_ORG, name="org", slug="org"))
+        sqlite_session.add(Account(id=_ACCOUNT, email="a@b.c", display_name="a"))
+        sqlite_session.add(
+            Pipeline(id=_PIPELINE, organisation_id=_ORG, name="org-wide", account_id=_ACCOUNT, visibility="org")
+        )
+        await sqlite_session.commit()
+
+        async with sqlite_session.begin():
+            locked = await _reapply_team_gate_inside_mutation_txn(sqlite_session, self._principal(), _PIPELINE)
+        assert locked is not None
+        assert locked.name == "org-wide"
+
+    async def test_hard_delete_gate_locked_row_query_carries_for_update(self, sqlite_engine: AsyncEngine) -> None:
+        """The gate's own verification query must lock the row (FOR UPDATE) so a
+        concurrent ownership flip serialises with the mutation, not races past it."""
+        maker = async_sessionmaker(sqlite_engine, expire_on_commit=False)
+        async with maker() as s:
+            self._seed_team_private_pipeline(s, pipeline_id=_PIPELINE, team_id=uuid.uuid4())
+            await s.commit()
+
+        stmt = (
+            select(Pipeline)
+            .where(Pipeline.id == _PIPELINE, Pipeline.organisation_id == _ORG)
+            .where(Pipeline.deleted_at.is_(None))
+            .with_for_update()
+        )
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        assert "FOR UPDATE" in compiled.string.upper()

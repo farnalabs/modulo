@@ -628,6 +628,10 @@ class TestGraphSaveGateParity:
                 patch("modulo.api.routes.pipelines.set_rls_org"),
                 patch("modulo.api.routes.pipelines.set_rls_user_context"),
                 patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+                patch(
+                    "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+                    new=AsyncMock(return_value=pipeline),
+                ),
                 patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
                 patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
                 patch(

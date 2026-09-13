@@ -15,6 +15,7 @@ from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_FEATU
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.api.models.team_visibility import TeamVisibilityMixin
+from modulo.api.team_scope import validate_owner_team_for_create
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
@@ -527,6 +528,7 @@ async def create_lifecycle_map_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
             lifecycle_map = await create_lifecycle_map(
                 session,
                 org_id=principal.organisation_id,
