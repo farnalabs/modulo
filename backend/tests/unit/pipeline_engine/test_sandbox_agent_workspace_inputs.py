@@ -36,6 +36,13 @@ _AGENT_ID = str(uuid.uuid4())
 def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Script mode requires a remote E2B provider (same seam as the bindings tests)."""
     monkeypatch.setenv("MODULO_E2B_API_KEY", "test-e2b-key")
+    # FAR-802: these tests exercise the managed-workspace-inputs path, which is
+    # gated behind the MODULO_WORKSPACE_INPUTS_ENABLED kill-switch (OFF by
+    # default). Enable it so the happy/failure paths actually run.
+    monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "true")
+    from modulo.settings import get_settings
+
+    get_settings.cache_clear()
 
 
 def _read_router(output_json: str) -> Callable[..., str]:
