@@ -955,6 +955,7 @@ class RestConnector(ConnectorBase):
         requests_per_second: float,
         deadline: float | None,
         deadline_seconds: float | None,
+        is_first: bool = False,
     ) -> tuple[float, bool]:
         """One bounded consume attempt; returns ``(refill_hop_seconds, acquired)``.
 
@@ -962,8 +963,16 @@ class RestConnector(ConnectorBase):
         (via ``asyncio.wait_for``), not just between hops, so a slow Redis
         round-trip cannot overshoot it; an exhausted deadline raises
         :class:`RESTRateLimitTimeoutError`.
+
+        The FIRST hop is attempted unconditionally: the deadline bounds the
+        refill *wait*, not the initial request. Enforcing it up front would let
+        a deadline that is already tight (e.g. the per-item timeout, which also
+        covers connector setup work before the first ``consume``) expire before
+        a single token is ever charged, spuriously failing closed. The deadline
+        only starts cutting in on the retry waits, where a bounded hop is the
+        whole point.
         """
-        if deadline is None:
+        if deadline is None or is_first:
             ok = await limiter.consume(destination)
             return min(1.0 / requests_per_second, 1.0), ok
         remaining = deadline - time.monotonic()
@@ -992,12 +1001,20 @@ class RestConnector(ConnectorBase):
         ``consume()`` returns False when the budget is exhausted (consuming
         nothing); wait out a bounded refill hop and retry. The deadline bounds
         EACH Redis hop via wait_for (see :meth:`_consume_one_hop`), so a Redis
-        socket timeout cannot overshoot the deadline.
+        socket timeout cannot overshoot the deadline. The initial request is
+        always attempted (see ``is_first``); the deadline only gates the waits.
         """
+        first = True
         while True:
             hop, acquired = await self._consume_one_hop(
-                limiter, destination, requests_per_second, deadline, deadline_seconds
+                limiter,
+                destination,
+                requests_per_second,
+                deadline,
+                deadline_seconds,
+                is_first=first,
             )
+            first = False
             if acquired:
                 return
             await asyncio.sleep(hop)
