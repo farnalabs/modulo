@@ -1030,6 +1030,68 @@ class TestInstallCollectionService:
         with pytest.raises(CollectionInstallError, match="already installed"):
             asyncio.run(run())
 
+    def test_install_collection_success_builds_provenance(self) -> None:
+        from modulo.core.library_service.install import install_collection
+        from modulo.db.models.collection_install import CollectionInstall
+
+        async def run() -> CollectionInstall:
+            mock_session = AsyncMock()
+            mock_collection = MagicMock()
+            mock_collection.organisation_id = _ORG_ID
+            mock_collection.primitive_type = "library_collection"
+            mock_collection.status = "published"
+            mock_collection.name = "My Collection"
+            mock_collection.version = "1.0"
+            mock_collection.source = "local"
+            mock_collection.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
+            mock_session.get = AsyncMock(return_value=mock_collection)
+            mock_session.add = MagicMock()
+
+            pin = MagicMock()
+            pin.primitive_type = "schema"
+            pin.content_json = {}
+
+            no_existing = MagicMock()
+            no_existing.scalar_one_or_none = MagicMock(return_value=None)
+            mock_session.execute = AsyncMock(return_value=no_existing)
+
+            with (
+                patch(
+                    "modulo.core.library_service.install._resolve_pin",
+                    new_callable=AsyncMock,
+                    return_value=pin,
+                ),
+                patch(
+                    "modulo.core.library_service.install.materialize_import",
+                    new_callable=AsyncMock,
+                    return_value={"schemas": {}, "agents": {}, "pipeline_id": None},
+                ),
+                patch(
+                    "modulo.core.library_service.install._stamp_install_id",
+                    new_callable=AsyncMock,
+                    return_value=[],
+                ),
+                patch(
+                    "modulo.core.library_service.install._record_entities",
+                    new_callable=AsyncMock,
+                ),
+            ):
+                return await install_collection(mock_session, _ORG_ID, _USER_ID, uuid.uuid4())
+
+        install = asyncio.run(run())
+        assert install is not None
+        assert install.status == "installed"
+        assert install.organisation_id == _ORG_ID
+        assert install.community_sourced is False
+        assert install.resolved_manifest == {
+            "schemas": {},
+            "agents": {},
+            "pipeline_id": None,
+            "warnings": [],
+        }
+        assert not install.connector_checklist
+        assert not install.installed_entities
+
 
 class TestUninstallCollectionService:
     def test_uninstall_collection_id_mismatch_raises(self) -> None:
