@@ -2757,6 +2757,9 @@ elements:
       - testid: page-header-right
         type: element
         dynamic_testid: false
+      - testid: lifecycle-map-save-status
+        type: element
+        dynamic_testid: false
     /notifications:
       - testid: notifications-apply-filters
         type: button
