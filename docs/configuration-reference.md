@@ -186,10 +186,11 @@ Client sync for the hosted community library of pipeline primitives.
 | `RUN_HEARTBEAT_SECONDS` | No | `30` | DB heartbeat cadence (keep below the 300s SAQ sweep threshold) |
 | `SAQ_TEST_PAUSE` | TEST-ONLY | `false` | Test-only pause flag; refused outside test/staging (`DEBUG=true`) |
 | `SAQ_NODE_DEFAULT_TIMEOUT_SECONDS` | No | `1200` | Default node execution timeout when graph node has no explicit timeout |
-| `SAQ_NODELESS_REDISPATCH_BUDGET` | No | `2` | Max re-dispatch cycles for claimed-but-nodeless SAQ zombies |
+| `SAQ_NODELESS_REDISPATCH_BUDGET` | No | `4` | Max re-dispatch cycles for claimed-but-nodeless SAQ zombies (raised 2 → 4 by FAR-812 so a zero-node run survives a transient dispatch wobble) |
 | `SAQ_CAPACITY_RETRY_BUDGET` | No | `3` | Per-run capacity-retry budget: a claimed run past this many total claims is terminal-failed regardless of TTL (min 0, max 20) |
 | `HITL_GATE_CANCEL_GRACE_SECONDS` | No | `3600` | Seconds after an open HITL gate expires unanswered before the gate is auto-cancelled (min 60, max 604800) |
 | `SLOT_RECONCILE_STALE_SECONDS` | No | `1800` | Stale heartbeat window for slot reconciliation sweep (force-releases leaked slots) |
+| `HEARTBEAT_STALE_RETRY_BUDGET` | No | `3` | Heartbeat-stale auto-retry budget for the slot-reconcile sweep: a `running` run swept as heartbeat-stale is reset to `pending` for re-dispatch while its `claim_count` is ≤ this budget; only a claim beyond it terminal-fails (raised 1 → 3 by FAR-812 to absorb a transient dispatch wobble in a zero-node run) |
 | `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` | No | `3600` | Max age (seconds) for pending runs before trigger backpressure kicks in |
 | `DISPATCHER_RECONCILE_BUDGET_SECONDS` | No | `95` | Per-tick time budget (seconds) for the dispatcher reconcile loop (min 10, max 119) |
 | `DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile terminalizer SQL (min 1, max 1000) |

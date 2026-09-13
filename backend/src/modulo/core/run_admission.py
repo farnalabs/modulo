@@ -53,14 +53,17 @@ _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
 # can never be miscounted as a hang.
 _SLOT_RELEASE_DETAIL = "Slot reconciliation: heartbeat stale past threshold; pipeline slot force-released (FAR-604)."
 
-# FAR-779: maximum number of times a heartbeat-stale run is auto-retried
-# (reset to pending for re-dispatch) before being terminal-failed.  The
-# budget is checked against ``runs.claim_count`` — each SAQ dequeue+claim
-# increments it, so a run that has been claimed multiple times and still
-# goes heartbeat-stale is genuinely stuck.  The sweep resets the run to
-# ``pending`` (clearing ``dispatched_at``/``dispatcher``/``heartbeat_at``)
-# so ``dispatcher_reconcile`` re-dispatches it on its next 60s tick.
-HEARTBEAT_STALE_RETRY_BUDGET = 1
+# FAR-779 / FAR-812: heartbeat-stale auto-retry budget for this sweep lives in
+# settings as HEARTBEAT_STALE_RETRY_BUDGET (default 3 since FAR-812, was 1).
+# A ``running`` run swept as heartbeat-stale is RESET to ``pending`` for
+# re-dispatch (clearing ``dispatched_at``/``dispatcher``/``heartbeat_at``) so
+# ``dispatcher_reconcile`` re-dispatches it on its next 60s tick — while its
+# claim_count is within budget. The budget is checked against
+# ``runs.claim_count``: each SAQ dequeue+claim increments it, so a run claimed
+# N times that still goes heartbeat-stale is genuinely stuck and is
+# terminal-failed once claim_count EXCEEDS the budget. A zero-node run is
+# always safe to re-dispatch (nothing can double-execute); the budget absorbs a
+# transient dispatch wobble so a task that never started is not lost.
 
 
 async def _advance_released_run(async_engine: AsyncEngine, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -284,6 +287,7 @@ async def reconcile_pipeline_slots(
     """
     settings = get_settings()
     window = stale_seconds if stale_seconds is not None else settings.slot_reconcile_stale_seconds
+    retry_budget = settings.heartbeat_stale_retry_budget
     released: list[Any] = []
     retried: list[Any] = []
     per_pipeline: Counter[str] = Counter()
@@ -296,14 +300,14 @@ async def reconcile_pipeline_slots(
         for org_id in org_ids:
             async with async_engine.connect() as conn, conn.begin():
                 await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
-                # FAR-779: auto-retry heartbeat-stale runs instead of
+                # FAR-779 / FAR-812: auto-retry heartbeat-stale runs instead of
                 # terminal-failing them immediately.  When claim_count <=
-                # HEARTBEAT_STALE_RETRY_BUDGET, the run is reset to pending
-                # (clearing dispatched_at/dispatcher/heartbeat_at) so
-                # dispatcher_reconcile re-dispatches it on its next 60s tick.
-                # When claim_count > budget, the run is terminal-failed — it
-                # has been claimed multiple times and still goes heartbeat-stale,
-                # meaning it is genuinely stuck.
+                # retry_budget (settings.heartbeat_stale_retry_budget), the run
+                # is reset to pending (clearing dispatched_at/dispatcher/
+                # heartbeat_at) so dispatcher_reconcile re-dispatches it on its
+                # next 60s tick. When claim_count > budget, the run is
+                # terminal-failed — it has been claimed multiple times and
+                # still goes heartbeat-stale, meaning it is genuinely stuck.
                 result = await conn.execute(
                     text(
                         "UPDATE runs SET "
@@ -331,11 +335,11 @@ async def reconcile_pipeline_slots(
                         "oid": str(org_id),
                         "stale_seconds": window,
                         "detail": _SLOT_RELEASE_DETAIL,
-                        "retry_budget": HEARTBEAT_STALE_RETRY_BUDGET,
+                        "retry_budget": retry_budget,
                     },
                 )
                 for row in result.all():
-                    if getattr(row, "claim_count", 0) <= HEARTBEAT_STALE_RETRY_BUDGET:
+                    if getattr(row, "claim_count", 0) <= retry_budget:
                         retried.append(row)
                     else:
                         released.append(row)
@@ -359,7 +363,7 @@ async def reconcile_pipeline_slots(
                 row.organisation_id,
                 window,
                 getattr(row, "claim_count", 0),
-                HEARTBEAT_STALE_RETRY_BUDGET,
+                retry_budget,
             )
             await _advance_released_run(async_engine, row.id, row.organisation_id)
         for row in retried:
@@ -373,7 +377,7 @@ async def reconcile_pipeline_slots(
                 row.organisation_id,
                 window,
                 getattr(row, "claim_count", 0),
-                HEARTBEAT_STALE_RETRY_BUDGET,
+                retry_budget,
             )
         total_swept = len(released) + len(retried)
         if total_swept:

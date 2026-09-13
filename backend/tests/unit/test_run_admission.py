@@ -62,7 +62,7 @@ def _released_row() -> Any:
         id=RUN_ID,
         organisation_id=ORG_ID,
         pipeline_id=PIPELINE_ID,
-        claim_count=2,  # FAR-779: > HEARTBEAT_STALE_RETRY_BUDGET (1) -> terminal-fail
+        claim_count=4,  # FAR-812: > HEARTBEAT_STALE_RETRY_BUDGET (3) -> terminal-fail
     )
 
 
@@ -120,7 +120,10 @@ class _SweepEngine:
 
 class TestReconcilePipelineSlots:
     def _settings(self, stale_seconds: int = 1800) -> MagicMock:
-        return MagicMock(slot_reconcile_stale_seconds=stale_seconds)
+        return MagicMock(
+            slot_reconcile_stale_seconds=stale_seconds,
+            heartbeat_stale_retry_budget=3,  # FAR-812 raised default (was 1)
+        )
 
     async def test_releases_stale_running_slot_with_heartbeat_stale_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
         statements: list[str] = []

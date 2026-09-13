@@ -317,6 +317,18 @@ class Settings(BaseSettings):
     # terminalising the run with ``worker_lost``. Default 30 min — far above
     # the 30s DB heartbeat cadence, so a live executor is never swept.
     slot_reconcile_stale_seconds: int = Field(default=1800, alias="SLOT_RECONCILE_STALE_SECONDS", ge=60, le=86400)
+    # FAR-779 + FAR-812: heartbeat-stale auto-retry budget for the slot
+    # reconciliation sweep (run_admission.reconcile_pipeline_slots). A
+    # ``running`` run swept as heartbeat-stale is RESET to ``pending`` for
+    # re-dispatch (never terminal-failed) while its ``runs.claim_count`` is
+    # within this budget — each SAQ dequeue+claim increments claim_count, so
+    # a run claimed N times that still goes heartbeat-stale is genuinely
+    # stuck and terminal-fails only once claim_count EXCEEDS the budget. A
+    # zero-node run is always safe to re-dispatch (nothing can double-execute);
+    # a transient dispatch wobble must not lose a task that never started.
+    # Raised 1 -> 3 by FAR-812 so a single stale heartbeat mid-dispatch is
+    # absorbed instead of terminal-failing a task.
+    heartbeat_stale_retry_budget: int = Field(default=3, alias="HEARTBEAT_STALE_RETRY_BUDGET", ge=1, le=10)
     # FAR-590 D4 Bundled Runner orphan reconciler: LOG-ONLY soak by default —
     # orphans are logged loudly (`runner.reconciler.orphan_detected`) until
     # the operator flips this flag; the destroy path re-checks run status
@@ -456,7 +468,10 @@ class Settings(BaseSettings):
     # per SAQ_CLAIMED_NODELESS_MINUTES window per run (dispatched_at is
     # refreshed by every dispatch). A zombie that can never be re-claimed is
     # ultimately bounded by the mid-graph-wedge age backstop.
-    saq_nodeless_redispatch_budget: int = Field(default=2, alias="SAQ_NODELESS_REDISPATCH_BUDGET", ge=1, le=10)
+    # Default raised 2 -> 4 by FAR-812 (mirrors the slot-reconcile heartbeat
+    # budget raise): a claimed-but-nodeless run is re-dispatched for a few
+    # claim cycles while transient dispatch wobble resolves, not lost.
+    saq_nodeless_redispatch_budget: int = Field(default=4, alias="SAQ_NODELESS_REDISPATCH_BUDGET", ge=1, le=10)
     # FAR-746 (2026-09-09 prod outage): the dispatcher_reconcile sweep manages
     # its OWN time budget INSIDE the SAQ job. The SAQ cron registration caps
     # the job at 120s (saq_worker._system_cron_jobs); a sweep that overruns

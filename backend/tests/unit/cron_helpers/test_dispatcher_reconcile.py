@@ -153,7 +153,8 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_reenqueue_window": 600,
         "saq_job_heartbeat": 300,
         "saq_claimed_nodeless_minutes": 35,
-        "saq_nodeless_redispatch_budget": 2,
+        # FAR-812 raised the default 2 -> 4 (mirrors HEARTBEAT_STALE_RETRY_BUDGET).
+        "saq_nodeless_redispatch_budget": 4,
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
         "saq_run_claim_cap": 20,
@@ -443,7 +444,7 @@ class TestReconcilePredicateMatrix:
         output after the nodeless window) is now RE-DISPATCHED (not terminal-failed):
         a nodeless zombie executed ZERO nodes, so re-dispatch is safe and recovers
         the run instead of permanently losing it. With no retry_policy, the
-        configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2) applies
+        configurable budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 4) applies
         and claim_count == 1 is within it. dispatched_at is NULL (never
         dispatched) so the re-dispatch throttle does not suppress it."""
         summary, reenqueue, ingest, _, _, session = await _run_reconcile(
@@ -462,14 +463,15 @@ class TestReconcilePredicateMatrix:
 
     async def test_running_nodeless_budget_exhausted_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without a retry_policy, re-dispatch is bounded by the configurable
-        nodeless budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 2). Once
+        nodeless budget (SAQ_NODELESS_REDISPATCH_BUDGET, default 4 since
+        FAR-812). Once
         claim_count has advanced past the budget (already re-dispatched), the
         run is terminal-failed so it is never left dangling in a re-dispatch loop.
         FAR-714: the terminal-fail now also ingests the
         claimed-but-never-dispatched error event (alert surface)."""
         summary, reenqueue, ingest, _, _, session = await _run_reconcile(
             monkeypatch,
-            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True, claim_count=3)],
+            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True, claim_count=5)],
         )
         assert summary["nodeless_failed"] == 1
         assert summary["nodeless_redispatched"] == 0
@@ -848,8 +850,8 @@ class TestNodelessZombiePredicateCompiled:
 
 
 class TestNodelessRedispatchBudget:
-    """FAR-509 + FAR-733: the policy-less nodeless re-dispatch budget is
-    configurable via SAQ_NODELESS_REDISPATCH_BUDGET (default 2). Direct unit
+    """FAR-509 + FAR-733 + FAR-812: the policy-less nodeless re-dispatch budget is
+    configurable via SAQ_NODELESS_REDISPATCH_BUDGET (default 4 since FAR-812). Direct unit
     checks of ``_should_redispatch_nodeless`` — the retry-policy taxonomy.
     FAR-525 qa gate: the decision keys on the POLICY's EVENT CONTENT (its
     ``on`` list), NEVER on dict non-emptiness — the FAR-525 GUI's no-op panel
@@ -884,16 +886,34 @@ class TestNodelessRedispatchBudget:
         assert ch._should_redispatch_nodeless(self._row(1)) is True
 
     def test_policy_less_second_claim_within_default_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default budget 2: claim_count=2 is still re-dispatched (one
+        """Default budget 4: claim_count=2 is still re-dispatched (one
         re-dispatch after the original claim)."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(2)) is True
 
     def test_policy_less_budget_exhausted_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Default budget 2: claim_count=3 has exhausted the budget — the
+        """Default budget 4: claim_count=5 has exhausted the budget — the
         backstop terminal-fail applies."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
-        assert ch._should_redispatch_nodeless(self._row(3)) is False
+        assert ch._should_redispatch_nodeless(self._row(5)) is False
+
+    def test_policy_less_raised_default_keeps_third_and_fourth_claim_alive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-812 regression: under the raised default budget (4, was 2), a
+        nodeless zombie on its THIRD claim (claim_count=3) and FOURTH claim
+        (claim_count=4) is re-dispatched — the pre-FAR-812 default of 2 would
+        have terminal-failed the third claim, losing a task that executed zero
+        nodes during a transient dispatch wobble."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._should_redispatch_nodeless(self._row(3)) is True
+        assert ch._should_redispatch_nodeless(self._row(4)) is True
+
+    def test_policy_less_claim_at_raised_budget_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Boundary: claim_count == budget (4) is still within the raised
+        default — the budget is an INCLUSIVE upper bound on re-dispatch."""
+        monkeypatch.setattr(ch, "get_settings", lambda: _settings())
+        assert ch._should_redispatch_nodeless(self._row(4)) is True
 
     def test_policy_less_custom_budget_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """With SAQ_NODELESS_REDISPATCH_BUDGET=1, claim_count=2 is already past
@@ -921,10 +941,14 @@ class TestNodelessRedispatchBudget:
 
     def test_empty_policy_treated_as_policy_less(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An empty dict policy (the column default) is treated as policy-less:
-        the configurable budget applies."""
+        the configurable budget applies. The raised FAR-812 default keeps the
+        list (row 2), field (row 3) and release (row 4) claims alive; only a
+        claim past the budget (row 5) terminal-fails."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(2, retry_policy={})) is True
-        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={})) is False
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy={})) is True
+        assert ch._should_redispatch_nodeless(self._row(4, retry_policy={})) is True
+        assert ch._should_redispatch_nodeless(self._row(5, retry_policy={})) is False
 
     def test_noop_panel_save_policy_gets_budget_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-525 qa gate — the no-op panel save always stores a NON-EMPTY
@@ -934,7 +958,9 @@ class TestNodelessRedispatchBudget:
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         noop_save = {"on": [], "max_retries": 0, "backoff_schedule": {"delay_seconds": 45, "multiplier": 2.0}}
         assert ch._should_redispatch_nodeless(self._row(2, retry_policy=noop_save)) is True
-        assert ch._should_redispatch_nodeless(self._row(3, retry_policy=noop_save)) is False
+        assert ch._should_redispatch_nodeless(self._row(3, retry_policy=noop_save)) is True
+        assert ch._should_redispatch_nodeless(self._row(4, retry_policy=noop_save)) is True
+        assert ch._should_redispatch_nodeless(self._row(5, retry_policy=noop_save)) is False
 
     def test_absent_on_policy_with_budget_honors_policy_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-649 + FAR-733 — matrix row 3 (supersedes the FAR-525-era budget-
@@ -1077,7 +1103,7 @@ class TestNodelessRedispatchThrottle:
         its claim budget is terminal-failed even with a fresh dispatched_at —
         waiting cannot help a run that can no longer be re-dispatched."""
         summary, reenqueue, _, _, _, session = await _run_reconcile(
-            monkeypatch, [self._row(dispatched_minutes_ago=10, claim_count=3)]
+            monkeypatch, [self._row(dispatched_minutes_ago=10, claim_count=5)]
         )
         assert summary["nodeless_failed"] == 1
         assert summary["nodeless_redispatched"] == 0
@@ -1163,7 +1189,7 @@ class TestNodelessRedispatchPerTickCap:
             nodeless=True,
             dispatched=False,
             dispatched_minutes_ago=40,
-            claim_count=3,
+            claim_count=5,
         )
         rows = [*self._rows(3), exhausted]
         with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
@@ -1212,7 +1238,7 @@ class TestClaimedButNeverDispatchedCounter:
             nodeless=True,
             dispatched=False,
             dispatched_minutes_ago=40,
-            claim_count=3,
+            claim_count=5,
         )
         summary, reenqueue, ingest, _, _, session = await _run_reconcile(monkeypatch, [exhausted])
         assert summary["nodeless_failed"] == 1
@@ -1299,7 +1325,7 @@ class TestClaimedButNeverDispatchedCounter:
             nodeless=True,
             dispatched=False,
             dispatched_minutes_ago=40,
-            claim_count=3,
+            claim_count=5,
         )
         with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
             summary, _, _, _, _, _ = await _run_reconcile(monkeypatch, [exhausted])
@@ -1333,7 +1359,7 @@ class TestClaimedButNeverDispatchedCounter:
             nodeless=True,
             dispatched=False,
             dispatched_minutes_ago=40,
-            claim_count=3,
+            claim_count=5,
         )
         summary, _, _, redis_client, _, _ = await _run_reconcile(monkeypatch, [exhausted])
         stats_sets = [c for c in redis_client.set.await_args_list if c.args[0] == ch.DISPATCHER_RECONCILE_STATS_KEY]
