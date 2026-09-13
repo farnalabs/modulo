@@ -4,10 +4,9 @@ import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import CommandPalette from '../components/CommandPalette.vue'
 
-// Track mounted wrappers so each test tears down cleanly. CommandPalette
-// registers a document-level keydown listener in onMounted; clearing
-// document.body alone leaves the listener attached to a detached instance,
-// which would throw when a later test dispatches a document keydown.
+// Track mounted wrappers so afterEach can unmount them. CommandPalette is
+// mounted with attachTo: document.body, so each wrapper must be explicitly
+// unmounted to detach its document-level keydown listener between tests.
 const mounted: VueWrapper[] = []
 
 beforeEach(() => {
@@ -19,19 +18,12 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
 })
 
-// Track every mounted palette so afterEach can unmount them. The component
-// registers a document-level keydown listener in onMounted; without an explicit
-// unmount that listener leaks across tests and fires on unrelated Escape
-// dispatches, crashing the suite.
-const mountedPalettes: Array<ReturnType<typeof mount>> = []
-
 async function openPalette() {
   const wrapper = mount(CommandPalette, { attachTo: document.body })
   mounted.push(wrapper)
   ;(wrapper.vm as unknown as { open: () => void }).open()
   await nextTick()
   await nextTick()
-  mountedPalettes.push(wrapper)
   return wrapper
 }
 
