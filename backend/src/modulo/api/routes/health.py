@@ -661,7 +661,11 @@ async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: s
     ``slot_reconciliation``) persist their outcome (``last_run_at`` + released
     counts) to a shared Redis key every 5-min tick; this reader reports
     "degraded" when the key is missing (never run), its ``last_run_at`` is
-    older than *stale_seconds* (stale), or the payload is unparsable, and
+    older than *stale_seconds* (stale), the payload is unparsable, or the
+    payload carries a non-null ``error`` (FAR-824 — a cron that runs but
+    FAILS must not read like a healthy one; see the FAR-808 incident where
+    ``runner_health_probe`` reported ok for hours while its stats carried
+    ``error: probe_failed, orgs_probed: 0`), and
     "ok" otherwise. Fail-open on Redis read errors (never gates readiness).
     """
     settings = get_settings()
@@ -687,6 +691,11 @@ async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: s
         count = data.get(count_key, 0)
     except (ValueError, TypeError):
         return CheckResult(status="degraded", detail="sweep stats unparsable")
+    if error := data.get("error"):
+        return CheckResult(
+            status="degraded",
+            detail=f"sweep reported error: {error}, last {count_key}={count}",
+        )
     if not last_run_at:
         return CheckResult(status="degraded", detail="sweep last_run_at missing")
     try:
