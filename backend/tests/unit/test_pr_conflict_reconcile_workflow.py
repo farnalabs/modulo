@@ -75,6 +75,29 @@ def test_dispatches_branch_fixer_by_name() -> None:
     assert _BRANCH_FIXER_NAME in raw, f"Does not reference Branch Fixer workflow by name '{_BRANCH_FIXER_NAME}'"
 
 
+# --- Dispatch step must carry GH_TOKEN so the in-flight dedup `gh run list` auths ---
+# (raw-string containment checks alone would not catch the dead-dedup runtime bug
+#  flagged in review: a dispatch step without GH_TOKEN makes the dedup dead code)
+
+
+def test_dispatch_step_sets_github_token() -> None:
+    wf = _workflow()
+    jobs = wf.get("jobs", {})
+    dispatch_step = None
+    for job in jobs.values():
+        for step in job.get("steps", []):
+            if step.get("name") == "Dispatch the Branch Fixer":
+                dispatch_step = step
+                break
+        if dispatch_step is not None:
+            break
+    assert dispatch_step is not None, "Dispatch the Branch Fixer step missing"
+    env = dispatch_step.get("env", {})
+    assert "GH_TOKEN" in env, (
+        "Dispatch step env must set GH_TOKEN so the in-flight dedup `gh run list` can auth (FAR-805 review)"
+    )
+
+
 # --- manual-delivery label honour ---
 
 
