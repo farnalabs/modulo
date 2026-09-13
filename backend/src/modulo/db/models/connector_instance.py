@@ -8,6 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
+# Repeated FK reference (S1192).
+_FK_ACCOUNTS_ID = "accounts.id"
+_ONDELETE_SET_NULL = "SET NULL"
+
 
 class ConnectorInstance(SoftDeleteMixin, OrgScoped):
     __tablename__ = "connector_instances"
@@ -30,7 +34,7 @@ class ConnectorInstance(SoftDeleteMixin, OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     connector_type_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True
     )
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
@@ -51,6 +55,12 @@ class ConnectorInstance(SoftDeleteMixin, OrgScoped):
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
 
     # Audit columns (added by migration 0132)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL)
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL)
+    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL)
+    )
