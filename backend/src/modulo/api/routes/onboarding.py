@@ -49,7 +49,7 @@ _ONBOARDING_ACTIONS: list[dict[str, Any]] = [
         "description": "Configure an AI model backend for your agents.",
         "order": 2,
         "icon": "brain",
-        "route": "/settings/model-backends",
+        "route": "/admin/model-backends",
         "auto_check": False,
         "check_type": "has_model_backend",
     },
@@ -59,7 +59,7 @@ _ONBOARDING_ACTIONS: list[dict[str, Any]] = [
         "description": "Build an agent to process your data.",
         "order": 3,
         "icon": "bot",
-        "route": "/agents/create",
+        "route": "/pipelines",
         "auto_check": False,
         "check_type": "has_agents",
     },
@@ -69,7 +69,7 @@ _ONBOARDING_ACTIONS: list[dict[str, Any]] = [
         "description": "Define structured data for your pipelines.",
         "order": 4,
         "icon": "database",
-        "route": "/schemas/create",
+        "route": "/schemas/infer",
         "auto_check": False,
         "check_type": "has_schemas",
     },
@@ -79,7 +79,7 @@ _ONBOARDING_ACTIONS: list[dict[str, Any]] = [
         "description": "Build a pipeline to automate your workflow.",
         "order": 5,
         "icon": "git-branch",
-        "route": "/pipelines/create",
+        "route": "/library",
         "auto_check": False,
         "check_type": "has_pipelines",
     },
@@ -339,6 +339,19 @@ async def seed_examples(
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
 
+        mb_result = await session.execute(
+            select(ModelBackend).where(ModelBackend.organisation_id == principal.organisation_id).limit(1)
+        )
+        model_backend = mb_result.scalar_one_or_none()
+        if model_backend is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Cannot seed example primitives: no AI model backend is configured for this org. "
+                    "Complete the 'Add an AI Model' step first, then seed the examples again."
+                ),
+            )
+
         truth_schema = await create_schema(
             session,
             org_id=principal.organisation_id,
@@ -392,30 +405,23 @@ async def seed_examples(
             published=True,
         )
 
-        mb_result = await session.execute(
-            select(ModelBackend).where(ModelBackend.organisation_id == principal.organisation_id).limit(1)
+        agent = await create_agent(
+            session,
+            org_id=principal.organisation_id,
+            name=_MSG_TRUTH_CLASSIFIER,
+            account_id=principal.account_id,
+            is_executable=True,
+            input_schema_id=statement_schema.id,
+            input_schema_version="1.0",
+            output_schema_id=truth_schema.id,
+            output_schema_version="1.0",
+            prompt_template=(
+                "Classify the following statement as TRUE, FALSE, or UNDETERMINED. "
+                "Respond with a JSON object containing 'classification' and 'confidence'."
+            ),
+            model_backend_id=model_backend.id,
         )
-        model_backend = mb_result.scalar_one_or_none()
-
-        agent_id: uuid.UUID | None = None
-        if model_backend is not None:
-            agent = await create_agent(
-                session,
-                org_id=principal.organisation_id,
-                name=_MSG_TRUTH_CLASSIFIER,
-                account_id=principal.account_id,
-                is_executable=True,
-                input_schema_id=statement_schema.id,
-                input_schema_version="1.0",
-                output_schema_id=truth_schema.id,
-                output_schema_version="1.0",
-                prompt_template=(
-                    "Classify the following statement as TRUE, FALSE, or UNDETERMINED. "
-                    "Respond with a JSON object containing 'classification' and 'confidence'."
-                ),
-                model_backend_id=model_backend.id,
-            )
-            agent_id = agent.id
+        agent_id = agent.id
 
         pipeline = await create_pipeline(
             session,
@@ -425,40 +431,37 @@ async def seed_examples(
             description="Classifies statements using the Truth Classifier agent.",
         )
 
-        if agent_id is not None:
-            node_id = uuid.uuid4()
-            nodes = [
-                {
-                    "id": str(node_id),
-                    "node_type": "agent",
-                    "position": {"x": 250, "y": 200},
-                    "label": _MSG_TRUTH_CLASSIFIER,
-                    "output_schema_id": str(truth_schema.id),
-                    "agent_id": str(agent_id),
-                    "connector_binding": None,
-                    "role": None,
-                    "autonomy_recommendation": None,
-                    "composite_ref": None,
-                    "composite_parameter_values": None,
-                    "composite_input_mapping": None,
-                    "composite_output_mapping": None,
-                }
-            ]
-            await replace_pipeline_graph(
-                session,
-                pipeline_id=pipeline.id,
-                org_id=principal.organisation_id,
-                nodes=nodes,
-                edges=[],
-                is_privileged=True,
-                caller_type="rest",
-                account_id=principal.account_id,
-            )
+        node_id = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(node_id),
+                "node_type": "agent",
+                "position": {"x": 250, "y": 200},
+                "label": _MSG_TRUTH_CLASSIFIER,
+                "output_schema_id": str(truth_schema.id),
+                "agent_id": str(agent_id),
+                "connector_binding": None,
+                "role": None,
+                "autonomy_recommendation": None,
+                "composite_ref": None,
+                "composite_parameter_values": None,
+                "composite_input_mapping": None,
+                "composite_output_mapping": None,
+            }
+        ]
+        await replace_pipeline_graph(
+            session,
+            pipeline_id=pipeline.id,
+            org_id=principal.organisation_id,
+            nodes=nodes,
+            edges=[],
+            is_privileged=True,
+            caller_type="rest",
+            account_id=principal.account_id,
+        )
 
         progress = await _get_or_create_progress(session, principal.organisation_id)
-        newly_completed = {"create_first_schema", "create_first_pipeline"}
-        if agent_id is not None:
-            newly_completed.add("create_first_agent")
+        newly_completed = {"create_first_schema", "create_first_agent", "create_first_pipeline"}
         progress.completed_actions = list(set(progress.completed_actions) | newly_completed)
 
     return SeedExamplesResponse(
