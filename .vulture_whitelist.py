@@ -327,4 +327,9 @@ __all__ = [
     "parse_ls_remote",
     "resolve_movable_ref",
     "build_input_clone_script",
+    # --- FAR-801 workspace input audit persistence (test-referenced;
+    #     production callers land in FAR-800 provisioning wiring) ---
+    "record_resolved_inputs",
+    "record_drift",
+    "redact_url",
 ]
