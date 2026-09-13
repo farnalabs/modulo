@@ -140,10 +140,33 @@
           <LifecycleMapRenderer
             :map-data="mapData"
             :journeys="journeysVisible ? store.journeys : []"
+            :saved-positions="savedPositions"
             :on-modulo-stage-click="handleModuloStageClick"
             :on-external-stage-click="handleExternalStageClick"
             @journey-open="openJourneyDetail"
+            @positions-changed="handlePositionsChanged"
           />
+        </div>
+
+        <div
+          v-if="saveStatus !== 'idle'"
+          role="status"
+          aria-live="polite"
+          class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+          data-testid="lifecycle-map-save-status"
+        >
+          <template v-if="saveStatus === 'saving'">
+            <div class="h-3 w-3 animate-spin rounded-full border border-primary border-t-transparent" />
+            {{ $t('views.LifecycleMapView.save_status_saving') }}
+          </template>
+          <template v-else-if="saveStatus === 'saved'">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+            {{ $t('views.LifecycleMapView.save_status_saved') }}
+          </template>
+          <template v-else-if="saveStatus === 'error'">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-destructive"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            <span class="text-destructive">{{ $t('views.LifecycleMapView.save_status_failed') }}</span>
+          </template>
         </div>
 
         <!-- FAR-654 gated all journey UI behind the default-OFF
@@ -320,7 +343,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../../components/shared/PageHeader.vue'
@@ -372,6 +395,61 @@ const statusOptions = computed(() => [
 
 const mapId = computed(() => route.params.id as string)
 const selectedVersion = ref<number | null>(null)
+
+// FAR-829: persisted node positions (localStorage fallback — backend version
+// UUID is not available from the detail response, so updateVersion cannot be
+// called from the view.  Positions are keyed by map id + version number so a
+// version switch restores each arrangement independently.)
+const savedPositions = ref<Record<string, { x: number; y: number }>>({})
+const saveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+let statusTimeout: ReturnType<typeof setTimeout> | null = null
+
+function localStorageKey(mapIdVal: string, version: number | null): string {
+  return `lifecycle-map-positions:${mapIdVal}:${version ?? 'latest'}`
+}
+
+function loadSavedPositions(): void {
+  if (!mapId.value) return
+  try {
+    const key = localStorageKey(mapId.value, selectedVersion.value)
+    const raw = localStorage.getItem(key)
+    if (raw) {
+      savedPositions.value = JSON.parse(raw)
+    } else {
+      savedPositions.value = {}
+    }
+  } catch {
+    savedPositions.value = {}
+  }
+}
+
+function persistPositions(positions: Record<string, { x: number; y: number }>): void {
+  if (statusTimeout) { clearTimeout(statusTimeout); statusTimeout = null }
+  if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null }
+  saveTimeout = setTimeout(() => {
+    saveStatus.value = 'saving'
+    try {
+      const key = localStorageKey(mapId.value, selectedVersion.value)
+      localStorage.setItem(key, JSON.stringify(positions))
+      saveStatus.value = 'saved'
+      statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 2000)
+    } catch {
+      saveStatus.value = 'error'
+      statusTimeout = setTimeout(() => { saveStatus.value = 'idle' }, 3000)
+    }
+  }, 500)
+}
+
+function handlePositionsChanged(positions: Record<string, { x: number; y: number }>): void {
+  savedPositions.value = positions
+  persistPositions(positions)
+}
+
+onBeforeUnmount(() => {
+  if (saveTimeout) clearTimeout(saveTimeout)
+  if (statusTimeout) clearTimeout(statusTimeout)
+})
 
 const mapData = computed(() => store.currentMap)
 const isLoadingDetail = computed(() => store.isLoadingDetail)
@@ -568,6 +646,7 @@ onMounted(async () => {
   if (store.currentMap) {
     selectedVersion.value = store.currentMap.current_version
   }
+  loadSavedPositions()
   // Resolve the plan (dedup with any in-flight fetch) so the flag state is
   // known before deciding whether to load journeys at all.
   if (!planStore.loaded) {
@@ -576,6 +655,12 @@ onMounted(async () => {
   if (journeysVisible.value) {
     loadJourneys()
   }
+})
+
+// Reload saved positions when the version changes (each version has its own
+// arrangement stored independently).
+watch(selectedVersion, () => {
+  loadSavedPositions()
 })
 
 // If the flag flips ON while the view is open (e.g. an admin org override
