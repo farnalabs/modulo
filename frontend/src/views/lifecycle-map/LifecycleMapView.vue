@@ -151,6 +151,14 @@
              "Show work items" checkbox (also default OFF) on top of it. The
              clean map (stages/edges) renders normally either way. -->
         <template v-if="journeysVisible">
+          <div
+            v-if="store.isLoadingJourneys"
+            class="mt-4 flex items-center gap-2 text-sm text-muted-foreground"
+            role="status"
+          >
+            <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            {{ $t('views.LifecycleMapView.journey.loading') }}
+          </div>
           <section
             v-if="unattributedJourneys.length"
             class="mt-4 rounded-xl border border-dashed border-border bg-card p-4"
