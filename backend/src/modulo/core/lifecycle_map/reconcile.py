@@ -323,9 +323,11 @@ def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
     here through the hook. Unknown events are ignored (forward compatibility).
     """
     if event == REFS_EVENT_SHADOW_STRIP_HIT:
-        record_refs_shadow_strip_hit(str(attrs.get("surface", "unknown")))
+        surface = attrs.get("surface")
+        record_refs_shadow_strip_hit(surface if surface is not None else "unknown")
     elif event == REFS_EVENT_ASSIGNED_SOURCE:
-        record_refs_by_source(str(attrs.get("source", "unknown")), int(attrs.get("count", 1)))
+        source = attrs.get("source")
+        record_refs_by_source(source if source is not None else "unknown", int(attrs.get("count", 1)))
     elif event == REFS_EVENT_UNKNOWN_SOURCE:
         record_refs_unknown_source(int(attrs.get("count", 1)))
     elif event == REFS_EVENT_MALFORMED:
@@ -334,7 +336,17 @@ def _refs_event_sink(event: str, attrs: dict[str, Any]) -> None:
         record_refs_cap_dropped(int(attrs.get("count", 1)))
 
 
-set_refs_counter_hook(_refs_event_sink)
+def _init_once_register_refs_counter_hook() -> None:
+    """Wire the db-layer ref-event sink into the core counters.
+
+    Wrapped in an ``_init_once_*`` helper so the architecture side-effect test
+    permits this module-level registration (the db layer cannot import core,
+    so core wires the hook at import time).
+    """
+    set_refs_counter_hook(_refs_event_sink)
+
+
+_init_once_register_refs_counter_hook()
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,11 @@ BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
 MIGRATION_REV = "0221_journey_provenance"
 PREV_REV = "0219_eval_cluster_check_constraints"
+# 0221's actual down_revision (FAR-582's merged migration). The idempotency
+# re-run must rewind exactly one revision (to 0220) so only the guarded 0221
+# migration re-executes — rewinding to PREV_REV (0219) would re-run 0220's
+# unconditional `add_column artifacts_json` and raise DuplicateColumn.
+DOWN_REV = "0220_run_node_artifacts"
 
 # Runs seeded with rows whose work_item_refs carry 'reported' so the backfill
 # has real work; runs whose refs are derived-only or NULL must be untouched.
@@ -290,7 +295,7 @@ async def test_0221_upgrade_backfills_and_is_idempotent(isolated_db_url: str) ->
     engine = create_async_engine(isolated_db_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
-            await conn.execute(text("UPDATE alembic_version SET version_num = :prev"), {"prev": PREV_REV})
+            await conn.execute(text("UPDATE alembic_version SET version_num = :prev"), {"prev": DOWN_REV})
     finally:
         await engine.dispose()
     with patch.dict(os.environ, {"DATABASE_URL": isolated_db_url, "DATABASE_ADMIN_URL": isolated_db_url}):
