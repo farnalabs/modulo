@@ -6737,12 +6737,20 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         ):
             from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy
 
+            # FAR-798: thread the node's validated ``allowed_hosts`` (host ->
+            # per-host env-var name) into the sandbox policy so the multi-host
+            # git-credential helper is actually installed when scoped
+            # credentials grant more than one host. Without this, the capability
+            # ``sandbox.git_credentials.multi_host`` certifies a guarantee the
+            # runtime never enforced (capability/enforcement mismatch). Only
+            # relevant for scoped credentials; other scopes ignore it.
             await apply_sandbox_policy(
                 sandbox,
                 read_only=read_only,
                 git_credentials=git_credentials,
                 egress_policy=egress_policy,
                 egress_allowlist=await _resolve_egress_allowlist(egress_allowlist),
+                allowed_hosts=node_def.get("allowed_hosts") if git_credentials == "scoped" else None,
             )
 
         try:
