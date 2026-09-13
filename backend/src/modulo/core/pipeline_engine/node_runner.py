@@ -5887,6 +5887,13 @@ def _build_sandbox_node_envelope(
         inner["sandbox_id"] = output.sandbox_id
     if output.sandbox_log_tail is not _UNSET:
         inner["sandbox_log_tail"] = output.sandbox_log_tail
+    # FAR-800: surface managed workspace-input drift detection on the envelope.
+    # Left at the ``_UNSET`` sentinel when no workspace inputs were configured,
+    # so the key set is unchanged for every other node type.
+    if output.workspace_drift is not _UNSET:
+        inner["workspace_drift"] = output.workspace_drift
+    if output.workspace_drift_detected is not _UNSET:
+        inner["workspace_drift_detected"] = output.workspace_drift_detected
     if output.modulo_synthetic_failure:
         inner[MODULO_SYNTHETIC_FAILURE_MARKER] = True
     inner["attempt_key"] = output.attempt_key

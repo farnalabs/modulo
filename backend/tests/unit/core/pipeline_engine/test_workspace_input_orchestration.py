@@ -10,7 +10,8 @@ Covers:
 
 from __future__ import annotations
 
-from typing import Any
+import uuid
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -561,3 +562,180 @@ class TestDriftResult:
         )
         assert dr.dest == "/home/user/repo"
         assert dr.drift_detected is True
+
+
+# ---------------------------------------------------------------------------
+# Coverage for branches left unexercised by the happy-path tests above:
+# empty-SHA guard, non-transient ref-retry error, the connector credential
+# resolution path inside resolve_managed_inputs_host_side (incl. its error
+# classification branches), and the unexpected-ref-resolution error branch.
+# ---------------------------------------------------------------------------
+
+
+def test_is_sha_empty_returns_false() -> None:
+    """An empty / whitespace-only value is not a SHA (guard before length check)."""
+    assert _is_sha("") is False
+    assert _is_sha("   ") is False
+
+
+async def test_resolve_ref_with_retry_non_transient_raises_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-transient exception (not ConnectionError/Timeout/OSError) during
+    ls-remote must propagate immediately without retry (FAR-800 line 190)."""
+
+    async def _boom(_url: str) -> str:
+        raise ValueError("malformed url")
+
+    monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", _boom)
+    with pytest.raises(ValueError, match="malformed url"):
+        await _resolve_ref_with_retry("https://github.com/o/r.git", "branch", "main")
+
+
+async def test_resolve_managed_inputs_unexpected_ref_error_is_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-RefResolution, non-transient error during ref resolution must raise
+    a permanent (retryable=False) ProvisioningError (FAR-800 line 274)."""
+
+    async def _boom(_url: str, _kind: str, _value: str, *, max_retries: int = 2) -> str:
+        raise RuntimeError("unexpected git failure")
+
+    monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry", _boom)
+    with pytest.raises(ProvisioningError) as exc:
+        await resolve_managed_inputs_host_side(
+            [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "ref": {"kind": "branch", "value": "main"}}],
+            org_id="org-1",
+        )
+    assert exc.value.retryable is False
+
+
+class _FakeBegin:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FakeSession:
+    def begin(self) -> _FakeBegin:
+        return _FakeBegin()
+
+
+class _Factory:
+    def __init__(self, session: _FakeSession) -> None:
+        self.session = session
+
+    async def __aenter__(self) -> _FakeSession:
+        return self.session
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+def _make_factory() -> _Factory:
+    return _Factory(_FakeSession())
+
+
+async def test_resolve_managed_inputs_connector_credential_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When workspace_inputs carry a connector_instance_id and a session_factory
+    is supplied, the host-side credential resolution path runs and the resulting
+    credential scripts are threaded onto the ResolvedInput (FAR-800 lines 286-322)."""
+    fake_cred = MagicMock()
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(return_value=fake_cred),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        MagicMock(return_value=("CRED_SETUP", "CRED_TEARDOWN")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _make_factory
+    resolved = await resolve_managed_inputs_host_side(
+        [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
+        org_id="org-1",
+        session_factory=factory,
+    )
+    assert len(resolved) == 1
+    assert resolved[0].credential_setup_script == "CRED_SETUP"
+    assert resolved[0].credential_teardown_script == "CRED_TEARDOWN"
+
+
+async def test_resolve_managed_inputs_credential_resolution_error_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CredentialResolutionError during credential resolution maps to a
+    permanent (retryable=False) ProvisioningError (FAR-800 lines 298-303)."""
+    from modulo.core.pipeline_engine.workspace_input_credentials import CredentialResolutionError
+
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(side_effect=CredentialResolutionError("no such connector")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        MagicMock(return_value=("", "")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _make_factory
+    with pytest.raises(ProvisioningError) as exc:
+        await resolve_managed_inputs_host_side(
+            [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
+            org_id="org-1",
+            session_factory=factory,
+        )
+    assert exc.value.error_code == "sandbox.input_credential_failed"
+    assert exc.value.retryable is False
+
+
+async def test_resolve_managed_inputs_credential_transient_error_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transient credential-resolution error classifies as retryable (FAR-800 lines 304-310)."""
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(side_effect=ConnectionError("db down")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        MagicMock(return_value=("", "")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _make_factory
+    with pytest.raises(ProvisioningError) as exc:
+        await resolve_managed_inputs_host_side(
+            [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
+            org_id="org-1",
+            session_factory=factory,
+        )
+    assert exc.value.error_code == "sandbox.input_credential_failed"
+    assert exc.value.retryable is True
+
+
+async def test_resolve_managed_inputs_credential_unexpected_error_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-transient, non-CredentialResolution error during credential
+    resolution classifies as permanent (FAR-800 lines 311-315)."""
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+        AsyncMock(side_effect=ValueError("unexpected")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_credentials.build_provisioning_credential_scripts",
+        MagicMock(return_value=("", "")),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+        AsyncMock(return_value="a" * 40),
+    )
+    factory = _make_factory
+    with pytest.raises(ProvisioningError) as exc:
+        await resolve_managed_inputs_host_side(
+            [{"url": "https://github.com/o/r.git", "dest": "/home/user/r", "connector_instance_id": str(uuid.uuid4())}],
+            org_id="org-1",
+            session_factory=factory,
+        )
+    assert exc.value.error_code == "sandbox.input_credential_failed"
+    assert exc.value.retryable is False
