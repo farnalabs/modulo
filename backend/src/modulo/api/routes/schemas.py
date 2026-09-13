@@ -96,6 +96,7 @@ class SchemaCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     abstract_name: str | None = None
+    definition_json: dict[str, Any] | None = None
 
 
 class SchemaUpdate(BaseModel):
@@ -264,6 +265,23 @@ async def schema_counts_endpoint(
     return SchemaCountsResponse(total=total, by_folder=by_folder)
 
 
+def _validate_definition_json(definition: dict[str, Any]) -> None:
+    """Raise 422 when ``definition_json`` is not a structurally valid JSON Schema.
+
+    Mirrors the Draft 2020-12 ``check_schema`` gate the standalone ``/validate``
+    and ``/import`` endpoints already apply (unknown custom keywords pass; only
+    structurally-broken keyword values are rejected), so the create surface and
+    the import surface agree on what "invalid" means.
+    """
+    try:
+        Draft202012Validator.check_schema(definition)
+    except (ValidationError, JsSchemaError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid JSON Schema: {exc.message}",
+        ) from exc
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 @handle_db_errors("schemas.create_schema_endpoint")
 async def create_schema_endpoint(
@@ -272,6 +290,13 @@ async def create_schema_endpoint(
     # any_credential: declarative apply (FAR-681) creates schemas with mk_ keys.
     principal: TenantPrincipal = require_permission_any_credential(_CODE_SCHEMA_CREATE),
 ) -> SchemaResponse:
+    # Product-map gap (feat-schemas): an invalid JSON Schema submitted as the
+    # initial definition is rejected with 422 BEFORE any write, mirroring the
+    # /import surface. A supplied definition seeds the 'latest' placeholder
+    # version so agents have something meaningful to pin; an absent one keeps
+    # the empty placeholder.
+    if req.definition_json is not None:
+        _validate_definition_json(req.definition_json)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -288,7 +313,9 @@ async def create_schema_endpoint(
                 schema_id=schema.id,
                 version="latest",
                 version_number=0,
-                definition_json={"type": "object", "properties": {}, "additionalProperties": True},
+                definition_json=req.definition_json
+                if req.definition_json is not None
+                else {"type": "object", "properties": {}, "additionalProperties": True},
                 account_id=principal.account_id,
             )
             session.add(sv)
@@ -1604,13 +1631,7 @@ async def import_schema_endpoint(
             detail="JSON Schema must be a JSON object",
         )
 
-    try:
-        Draft202012Validator.check_schema(schema)
-    except (ValidationError, JsSchemaError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Invalid JSON Schema: {exc.message}",
-        ) from exc
+    _validate_definition_json(schema)
 
     name = schema.get("title")
     description = schema.get("description")

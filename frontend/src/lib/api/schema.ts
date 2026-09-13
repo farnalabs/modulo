@@ -18231,6 +18231,10 @@ export interface components {
             description?: string | null;
             /** Abstract Name */
             abstract_name?: string | null;
+            /** Definition Json */
+            definition_json?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** SchemaListResponse */
         modulo__api__routes__schemas__SchemaListResponse: {

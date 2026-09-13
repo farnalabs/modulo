@@ -231,11 +231,6 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
             "Different pipelines do not affect each others concurrency",
         }
     ),
-    "tests/bdd/features/schemas/create.feature": frozenset(
-        {
-            "Invalid JSON Schema is rejected",
-        }
-    ),
     "tests/bdd/features/ui/eval_dashboard.feature": frozenset(
         {
             "Compare two runs side-by-side",

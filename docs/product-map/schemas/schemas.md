@@ -45,6 +45,10 @@ applied migration between versions (`core/schema_registry/*`).
 
 - [x] A schema is created with a name that must be unique within the org — duplicate
       name is 409, cross-org read is 404 (`create.feature`)
+- [x] Create accepts an optional initial `definition_json`; a structurally-invalid
+      JSON Schema (Draft 2020-12, the same gate as `/validate` and `/import`) is
+      rejected with 422 before any write, and a valid definition seeds the `latest`
+      placeholder version so agents have something to pin (`create.feature`)
 - [x] Updating a schema creates a new version rather than mutating in place; versions
       list and per-version retrieval are exposed (`version.feature`)
 - [x] A pipeline snapshot pins the schema version; a later schema update does not change
@@ -69,10 +73,6 @@ applied migration between versions (`core/schema_registry/*`).
 
 ## Known Gaps
 
-- **`create.feature` "invalid JSON Schema rejected at create" is `@awaiting-implementation`**
-  — the create endpoint accepts `{name, description, abstract_name}` only; JSON definitions
-  live in schema versions and are not JSON-Schema-validated at create time, so there is no
-  reject-invalid-against-422 behaviour at creation today.
 - **Schema inference requires a configured model backend** — the draft-building pass is
   model-assisted; there is no purely heuristic fallback inference path.
 - **`deletion_protection.feature` naming drift** — the "Schema used only by unpinned
@@ -81,6 +81,15 @@ applied migration between versions (`core/schema_registry/*`).
   is what is asserted and shipped.
 
 ## QA History
+- 2026-09-13: **improve-architecture (product-map walk)** — closed the
+  `create.feature` "invalid JSON Schema rejected at create" gap: the create
+  endpoint now accepts an optional initial `definition_json`, applies the same
+  Draft 2020-12 `check_schema` gate as `/validate` and `/import` (422 before any
+  write), seeds the `latest` placeholder version with a valid supplied
+  definition, and the formerly `@awaiting-implementation` BDD scenario now
+  executes. Unit `test_create_schema_rejects_invalid_initial_definition` /
+  `test_create_schema_with_valid_initial_definition_seeds_latest_version` pin
+  the semantics.
 - 2026-09-12: **improve-architecture (product-map walk)** — registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
