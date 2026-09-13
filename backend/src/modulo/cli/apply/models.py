@@ -304,6 +304,11 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # the same positive-integer gate as the API model.
     stdout_retention_mode: Literal["tail", "full"] | None = None
     stdout_max_bytes: int | None = None
+    # FAR-802 (ADR 033): managed workspace inputs (API PipelineGraphNode twin).
+    # Declared here so the CLI does NOT reject it loudly as an unknown field on a
+    # real saved graph; value rules are enforced by the REAL API node model when the
+    # executor normalises the resolved payload through it.
+    workspace_inputs: list[dict[str, Any]] | None = None
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod
