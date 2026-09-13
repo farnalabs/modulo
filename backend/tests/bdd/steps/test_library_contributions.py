@@ -246,7 +246,7 @@ def _list_contributions(client: Any, ctx: dict[str, Any], request: pytest.Fixtur
     _store_response(request, ctx, resp)
 
 
-@when('the user lists the contributions filtered by status "{status}"')
+@when(parsers.parse('the user lists the contributions filtered by status "{status}"'))
 def _list_contributions_filtered(
     client: Any,
     status: str,
