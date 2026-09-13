@@ -5,6 +5,7 @@ import logging
 import re
 import secrets
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple, NoReturn
 
@@ -14,6 +15,7 @@ from sqlalchemy import Date, case, cast, delete, func, select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import modulo.core.audit_logger as _audit_logger
 import modulo.db.crud.account as account_crud
 from modulo.api.constants import (
     MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE,
@@ -3617,44 +3619,117 @@ class UpdateSandboxConcurrencyRequest(BaseModel):
     sandbox_concurrency_limit: int | None = Field(default=None, ge=0, le=100)
 
 
-@router.get("/org/sandbox-concurrency")
-async def admin_get_sandbox_concurrency(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> SandboxConcurrencyResponse:
+async def _run_admin_rls_txn(
+    session: AsyncSession,
+    current_user: TenantPrincipal,
+    body: Callable[[], Awaitable[Any]],
+    *,
+    detail_admin: str,
+) -> Any:
+    """Run *body* under the standard admin error contract.
+
+    Shared by the self-service org-config routes (sandbox concurrency, work-item
+    agent minting, run concurrency) so the admin-role gate and the DB→HTTP error
+    mapping live in exactly one place. *body* is a zero-arg awaitable that must
+    establish the org RLS context and open its own ``session.begin()`` (the
+    missing-session-begin gate requires the transaction in the route handler's
+    text). Route-specific errors should be raised from *body* as ``HTTPException``
+    (e.g. a missing-org 404) so they pass through untouched.
+    """
     if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can view sandbox concurrency",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail_admin)
     try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            limit = await get_sandbox_concurrency_limit(session, current_user.organisation_id)
+        return await body()
     except asyncio.CancelledError:
+        raise
+    except HTTPException:
         raise
     except ProgrammingError:
         logger.exception(_CODE_ROUTES_ADMIN)
-
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError:
         logger.exception(_CODE_ROUTES_ADMIN)
-
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from None
     except Exception:
         logger.exception(_CODE_ROUTES_ADMIN)
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
+
+async def _record_org_audit(
+    session: AsyncSession,
+    current_user: TenantPrincipal,
+    event_type: str,
+    payload_json: dict[str, Any],
+) -> None:
+    """Best-effort audit event after a successful org-settings write.
+
+    Mirrors the error-tolerant audit block used by the org-config routes: an
+    audit failure must never mask the already-applied change, so DB errors are
+    logged (exception for integrity, warning for transient) and the route still
+    records the successful update via its own ``info`` line.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await _audit_logger.append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type=event_type,
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json=payload_json,
+            )
+    except IntegrityError:
+        logger.exception("admin.%s.audit", event_type)
+    except ProgrammingError:
+        logger.warning(
+            "%s audit event ProgrammingError — change was applied",
+            event_type,
+            extra={"org_id": str(current_user.organisation_id), **payload_json},
+        )
+    except SQLAlchemyError:
+        logger.warning(
+            "%s audit event SQLAlchemyError — change was applied",
+            event_type,
+            extra={"org_id": str(current_user.organisation_id), **payload_json},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "admin.%s.audit",
+            event_type,
+            extra={"org_id": str(current_user.organisation_id), **payload_json},
+        )
+
+
+@router.get("/org/sandbox-concurrency")
+async def admin_get_sandbox_concurrency(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> SandboxConcurrencyResponse:
+    async def _do_read() -> Any:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            return await get_sandbox_concurrency_limit(session, current_user.organisation_id)
+
+    limit = await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_read,
+        detail_admin="Only admin users can view sandbox concurrency",
+    )
     return SandboxConcurrencyResponse(sandbox_concurrency_limit=limit.cap, is_default=limit.is_default)
 
 
@@ -3664,103 +3739,45 @@ async def admin_update_sandbox_concurrency(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> SandboxConcurrencyResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update sandbox concurrency",
-        )
-    try:
+    async def _do_write() -> None:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            # FAR-589 D3b: row-level lock (SELECT ... FOR UPDATE) so the
-            # read-modify-write of settings_json cannot drop a concurrent
-            # writer's change between the read and the flush.
-            result = await session.execute(
-                select(Organisation).where(Organisation.id == current_user.organisation_id).limit(1).with_for_update()
-            )
-            org = result.scalar_one_or_none()
-            if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-            settings = dict(org.settings_json) if org.settings_json else {}
-            settings["sandbox_concurrency_limit"] = req.sandbox_concurrency_limit
-            org.settings_json = settings
-            await session.flush()
-    except asyncio.CancelledError:
-        raise
-    except IntegrityError:
-        logger.exception("admin.admin_update_sandbox_concurrency")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_ADMIN)
+            try:
+                # FAR-589 D3b: row-level lock (SELECT ... FOR UPDATE) so the
+                # read-modify-write of settings_json cannot drop a concurrent
+                # writer's change between the read and the flush.
+                result = await session.execute(
+                    select(Organisation)
+                    .where(Organisation.id == current_user.organisation_id)
+                    .limit(1)
+                    .with_for_update()
+                )
+                org = result.scalar_one_or_none()
+                if org is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+                settings = dict(org.settings_json) if org.settings_json else {}
+                settings["sandbox_concurrency_limit"] = req.sandbox_concurrency_limit
+                org.settings_json = settings
+                await session.flush()
+            except IntegrityError:
+                logger.exception("admin.admin_update_sandbox_concurrency")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=MSG_RESOURCE_ALREADY_EXISTS,
+                ) from None
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError:
-        logger.exception(_CODE_ROUTES_ADMIN)
-
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(_CODE_ROUTES_ADMIN)
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
-
-    from modulo.core.audit_logger import append_audit_event
-
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-            await append_audit_event(
-                session,
-                org_id=current_user.organisation_id,
-                event_type="org.sandbox_concurrency_updated",
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"sandbox_concurrency_limit": req.sandbox_concurrency_limit},
-            )
-    except IntegrityError:
-        logger.exception("admin.admin_update_sandbox_concurrency.audit")
-    except ProgrammingError:
-        logger.warning(
-            "sandbox_concurrency audit event ProgrammingError — limit was updated",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
-            },
-        )
-    except SQLAlchemyError:
-        logger.warning(
-            "sandbox_concurrency audit event SQLAlchemyError — limit was updated",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
-            },
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception(
-            "admin.admin_update_sandbox_concurrency.audit",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "sandbox_concurrency_limit": req.sandbox_concurrency_limit,
-            },
-        )
-
+    await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_write,
+        detail_admin="Only admin users can update sandbox concurrency",
+    )
+    await _record_org_audit(
+        session,
+        current_user,
+        "org.sandbox_concurrency_updated",
+        {"sandbox_concurrency_limit": req.sandbox_concurrency_limit},
+    )
     logger.info(
         "sandbox_concurrency.updated",
         extra={
@@ -3799,40 +3816,17 @@ async def admin_get_work_item_agent_minting(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkItemAgentMintingResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can view work-item agent minting",
-        )
-    try:
+    async def _do_read() -> Any:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            enabled = await read_org_flag(
-                session,
-                current_user.organisation_id,
-                FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
-            )
-    except asyncio.CancelledError:
-        raise
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_ADMIN)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError:
-        logger.exception(_CODE_ROUTES_ADMIN)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
-    except Exception:
-        logger.exception(_CODE_ROUTES_ADMIN)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+            return await read_org_flag(session, current_user.organisation_id, FLAG_WORK_ITEM_AGENT_MINTING_ENABLED)
 
+    enabled = await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_read,
+        detail_admin="Only admin users can view work-item agent minting",
+    )
     return WorkItemAgentMintingResponse(work_item_agent_minting_enabled=enabled)
 
 
@@ -3842,98 +3836,40 @@ async def admin_update_work_item_agent_minting(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> WorkItemAgentMintingResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update work-item agent minting",
-        )
-    try:
+    async def _do_write() -> None:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            await set_org_flag(
-                session,
-                current_user.organisation_id,
-                FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
-                req.work_item_agent_minting_enabled,
-            )
-    except asyncio.CancelledError:
-        raise
-    except LookupError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=MSG_ORGANISATION_NOT_FOUND,
-        ) from None
-    except IntegrityError:
-        logger.exception("admin.admin_update_work_item_agent_minting")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_ADMIN)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError:
-        logger.exception(_CODE_ROUTES_ADMIN)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(_CODE_ROUTES_ADMIN)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
+            try:
+                await set_org_flag(
+                    session,
+                    current_user.organisation_id,
+                    FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
+                    req.work_item_agent_minting_enabled,
+                )
+            except LookupError:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=MSG_ORGANISATION_NOT_FOUND,
+                ) from None
+            except IntegrityError:
+                logger.exception("admin.admin_update_work_item_agent_minting")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=MSG_RESOURCE_ALREADY_EXISTS,
+                ) from None
 
-    from modulo.core.audit_logger import append_audit_event
-
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-            await append_audit_event(
-                session,
-                org_id=current_user.organisation_id,
-                event_type="org.work_item_agent_minting_updated",
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"work_item_agent_minting_enabled": req.work_item_agent_minting_enabled},
-            )
-    except IntegrityError:
-        logger.exception("admin.admin_update_work_item_agent_minting.audit")
-    except ProgrammingError:
-        logger.warning(
-            "work_item_agent_minting audit event ProgrammingError — flag was updated",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "work_item_agent_minting_enabled": req.work_item_agent_minting_enabled,
-            },
-        )
-    except SQLAlchemyError:
-        logger.warning(
-            "work_item_agent_minting audit event SQLAlchemyError — flag was updated",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "work_item_agent_minting_enabled": req.work_item_agent_minting_enabled,
-            },
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception(
-            "admin.admin_update_work_item_agent_minting.audit",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "work_item_agent_minting_enabled": req.work_item_agent_minting_enabled,
-            },
-        )
-
+    await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_write,
+        detail_admin="Only admin users can update work-item agent minting",
+    )
+    await _record_org_audit(
+        session,
+        current_user,
+        "org.work_item_agent_minting_updated",
+        {"work_item_agent_minting_enabled": req.work_item_agent_minting_enabled},
+    )
     logger.info(
         "work_item_agent_minting.updated",
         extra={
@@ -3965,39 +3901,17 @@ async def admin_get_run_concurrency(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RunConcurrencyResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can view run concurrency",
-        )
-    try:
+    async def _do_read() -> Any:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            limit = await get_org_run_concurrency_limit(session, current_user.organisation_id)
-    except asyncio.CancelledError:
-        raise
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_ADMIN)
+            return await get_org_run_concurrency_limit(session, current_user.organisation_id)
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError:
-        logger.exception(_CODE_ROUTES_ADMIN)
-
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
-    except Exception:
-        logger.exception(_CODE_ROUTES_ADMIN)
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
-
+    limit = await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_read,
+        detail_admin="Only admin users can view run concurrency",
+    )
     return RunConcurrencyResponse(run_concurrency_limit=limit)
 
 
@@ -4007,97 +3921,36 @@ async def admin_update_run_concurrency(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> RunConcurrencyResponse:
-    if current_user.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can update run concurrency",
-        )
-    try:
+    async def _do_write() -> None:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            org = await get_organisation(session, current_user.organisation_id)
-            if org is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
-            settings = dict(org.settings_json) if org.settings_json else {}
-            settings["run_concurrency_limit"] = req.run_concurrency_limit
-            org.settings_json = settings
-            await session.flush()
-    except asyncio.CancelledError:
-        raise
-    except IntegrityError:
-        logger.exception("admin.admin_update_run_concurrency")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=MSG_RESOURCE_ALREADY_EXISTS,
-        ) from None
-    except ProgrammingError:
-        logger.exception(_CODE_ROUTES_ADMIN)
+            try:
+                org = await get_organisation(session, current_user.organisation_id)
+                if org is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+                settings = dict(org.settings_json) if org.settings_json else {}
+                settings["run_concurrency_limit"] = req.run_concurrency_limit
+                org.settings_json = settings
+                await session.flush()
+            except IntegrityError:
+                logger.exception("admin.admin_update_run_concurrency")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=MSG_RESOURCE_ALREADY_EXISTS,
+                ) from None
 
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError:
-        logger.exception(_CODE_ROUTES_ADMIN)
-
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=_MSG_DATABASE_ERROR_OCCURRED_PLEASE,
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception(_CODE_ROUTES_ADMIN)
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=MSG_UNEXPECTED_ERROR,
-        ) from None
-
-    from modulo.core.audit_logger import append_audit_event
-
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
-            await append_audit_event(
-                session,
-                org_id=current_user.organisation_id,
-                event_type="org.run_concurrency_updated",
-                actor_user_id=current_user.account_id,
-                resource_type="organisation",
-                resource_id=current_user.organisation_id,
-                payload_json={"run_concurrency_limit": req.run_concurrency_limit},
-            )
-    except IntegrityError:
-        logger.exception("admin.admin_update_run_concurrency.audit")
-    except ProgrammingError:
-        logger.warning(
-            "run_concurrency audit event ProgrammingError — limit was updated",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "run_concurrency_limit": req.run_concurrency_limit,
-            },
-        )
-    except SQLAlchemyError:
-        logger.warning(
-            "run_concurrency audit event SQLAlchemyError — limit was updated",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "run_concurrency_limit": req.run_concurrency_limit,
-            },
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception(
-            "admin.admin_update_run_concurrency.audit",
-            extra={
-                "org_id": str(current_user.organisation_id),
-                "run_concurrency_limit": req.run_concurrency_limit,
-            },
-        )
-
+    await _run_admin_rls_txn(
+        session,
+        current_user,
+        _do_write,
+        detail_admin="Only admin users can update run concurrency",
+    )
+    await _record_org_audit(
+        session,
+        current_user,
+        "org.run_concurrency_updated",
+        {"run_concurrency_limit": req.run_concurrency_limit},
+    )
     logger.info(
         "run_concurrency.updated",
         extra={
