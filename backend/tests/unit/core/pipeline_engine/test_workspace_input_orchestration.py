@@ -493,7 +493,7 @@ class TestDetectWorkspaceInputDrift:
         results = await detect_workspace_input_drift(sandbox, resolved)
         assert len(results) == 1
         assert results[0].drift_detected is True  # fail-closed
-        assert results[0].final_sha == ""  # unknown
+        assert not results[0].final_sha  # unknown
 
     @pytest.mark.asyncio
     async def test_empty_inputs(self) -> None:
