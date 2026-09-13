@@ -131,14 +131,26 @@ jobs:
             PR_NUM=$(jq -r ".[$i].number" /tmp/dispatch_prs.json)
             BRANCH=$(jq -r ".[$i].headRefName" /tmp/dispatch_prs.json)
 
-            # Skip if a Branch Fixer run is already queued/in-progress for this PR
-            # (check recent workflow runs on the branch)
-            RECENT_RUN=$(gh run list --branch "$BRANCH" --workflow "Fix: Modulo Branch Fixer" \
-              --limit 1 --json status,conclusion --jq '.[0].status // "none"' 2>/dev/null || echo "none")
-            if [ "$RECENT_RUN" = "in_progress" ] || [ "$RECENT_RUN" = "queued" ] || [ "$RECENT_RUN" = "pending" ]; then
-              echo "Skipping PR #$PR_NUM (Branch Fixer already queued/in-progress on branch '$BRANCH')"
-              SKIPPED=$((SKIPPED + 1))
-              continue
+            # Dedup: check if the Branch Fixer was recently active on this PR.
+            # The fixer commits as "modulo-branch-fixer" — fetch the PR's recent
+            # commits and look for the most recent fixer-authored commit date.
+            # This mirrors the committer-name signal used in ci.yml's
+            # notify-pr-failure FIX_COUNT calculation.
+            # Backstop: the Branch Fixer labels unresolvable PRs
+            # "modulo-cannot-fix", which this workflow excludes at the detect
+            # step, so re-dispatch is bounded even if the recency check misses.
+            FIXER_DATE=$(gh api "/repos/farnalabs/modulo/pulls/${PR_NUM}/commits?per_page=100" \
+              --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | last | .commit.committer.date // empty' \
+              2>/dev/null || echo "")
+            if [ -n "$FIXER_DATE" ]; then
+              FIXER_EPOCH=$(date -d "$FIXER_DATE" +%s 2>/dev/null || echo "0")
+              NOW_EPOCH=$(date +%s)
+              AGE_MINUTES=$(( (NOW_EPOCH - FIXER_EPOCH) / 60 ))
+              if [ "$AGE_MINUTES" -lt 30 ]; then
+                echo "Skipping PR #$PR_NUM (Branch Fixer committed ${AGE_MINUTES}m ago — within 30m recency window)"
+                SKIPPED=$((SKIPPED + 1))
+                continue
+              fi
             fi
 
             # Dispatch via webhook (mirrors ci.yml notify-pr-failure pattern)
