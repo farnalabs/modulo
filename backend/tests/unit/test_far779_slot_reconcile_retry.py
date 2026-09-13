@@ -41,6 +41,7 @@ import pytest
 
 import modulo.core.run_admission as ra
 from modulo.core.run_admission import reconcile_pipeline_slots
+from modulo.settings import get_settings
 
 # Mirrors the settings default (HEARTBEAT_STALE_RETRY_BUDGET), raised 1 -> 3
 # by FAR-812. Tests key fixture rows off this so boundary cases pin the exact
@@ -254,10 +255,14 @@ class TestHeartbeatStaleRetry:
 
     def test_retry_budget_default_is_positive(self) -> None:
         """Sanity: the fixture budget mirrors the raised settings default — the
-        budget must be a positive int and exceed the pre-FAR-812 default of 1."""
+        budget must be a positive int and exceed the pre-FAR-812 default of 1,
+        and the fixture constant stays pinned to the real ``Settings`` default so
+        a default change in settings.py forces this test to be updated rather
+        than silently re-pinning every boundary test to a stale budget."""
         assert isinstance(DEFAULT_HEARTBEAT_RETRY_BUDGET, int)
         assert DEFAULT_HEARTBEAT_RETRY_BUDGET >= 1
         assert DEFAULT_HEARTBEAT_RETRY_BUDGET > 1
+        assert get_settings(_fresh=True).heartbeat_stale_retry_budget == DEFAULT_HEARTBEAT_RETRY_BUDGET
 
     # --- FAR-812: raised default keeps earlier claims alive -----------------
 
