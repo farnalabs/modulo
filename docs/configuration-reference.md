@@ -213,6 +213,7 @@ Controls runner-slot reservation for sandbox-agent dispatches (FAR-594 D8).
 | `RUNNER_CAPACITY_GATE_ENABLED` | No | `false` | Enable the runner capacity gate. When ON, sandbox-agent dispatches reserve a runner slot through an atomic transaction. Tier-scoped default: when the org key is absent, the Docker-tier default gates Docker+Local dispatches only (E2B carries its own platform-side quota). |
 | `RUNNER_CAPACITY_LOCK_TIMEOUT_MS` | No | `2000` | Lock timeout in milliseconds for the runner capacity gate transaction. SQLSTATE 55P03 degrades to a retryable capacity denial. Min 100, max 30000. |
 | `RUNNER_MARKER_STALE_SECONDS` | No | `90000` | Stale threshold for runner dispatch markers (marker `written_at`, legacy tier-less fall back to `runs.updated_at`). Markers older than this are cleared by the reconciliation sweep. Min 3600, max 604800. |
+| `RUNNER_MARKER_SWEEP_LOCK_TIMEOUT_SECONDS` | No | `5` | Lock timeout in seconds for the runner marker sweep transaction. Min 1, max 30. |
 | `RUNNER_RECONCILER_DESTROY_ENABLED` | No | `false` | Enable the runner workspace orphan reconciler destroy path. When OFF (default), the reconciler runs in log-only soak mode and does not destroy orphaned workspace containers. |
 | `MODULO_RUNNER_MACHINE_ID` | No | `""` | Deployment-identity label for the runner workspace reconciler. When empty, falls back to the machine hostname. Used to scope container orphan sweeps to a single deployment. |
 
@@ -305,6 +306,8 @@ LOAD.
 | `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` | No | `""` | Endpoint URL for opt-in aggregate product analytics. Empty disables. |
 | `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` | No | `""` | Instance secret for HMAC signing product analytics. Empty disables. |
 | `MODULO_MONITOR_DOMAINS` | No | `""` | Space-separated CSP connect-src expressions (e.g. custom Grafana Faro collectors) |
+| `MODULO_ARTIFACTS_ENABLED` | No | `true` | Enable pipeline artifact storage |
+| `MODULO_ARTIFACTS_DIR` | No | `""` | Base directory for artifact files. Empty defaults to `<backend>/.data/artifacts` resolved by the store factory. |
 
 ---
 

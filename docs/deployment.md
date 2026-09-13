@@ -309,7 +309,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
 | `MODULO_SECRETS_BACKEND` | No | `fernet` | Secrets backend: `fernet`, `vault`, or `aws` |
-| `MODULO_OIDC_PROVIDERS` | For SSO | – | JSON array of OIDC provider configs |
+| `MODULO_OIDC_PROVIDERS` | No | `[]` | JSON array of OIDC provider configs. **Deprecated**; use the admin SSO providers UI. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | – | OTel gRPC/HTTP exporter endpoint |
 | `MODULO_E2B_API_KEY` | For E2B | – | E2B sandbox API key for runtime provider |
 | `MODULO_ADMIN_SECRET` | No | – | Shared secret for `modulo-migrate` CLI auth |
